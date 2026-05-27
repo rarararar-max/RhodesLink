@@ -1,0 +1,51 @@
+249: d=6             Text("💰$[(g.humanPlayer()?.p
+250: d=5         ]
+
+251: d=4     ]
+
+252: d=3 ]
+
+253: d=3 
+
+254: d=4 @Composable fun Bt(t:String,c:Color,m:Mo
+255: d=5     Button(onClick=on,modifier=m.height(
+256: d=5         Text(t,fontSize=12.sp,fontWeight
+257: d=4     ]
+
+258: d=3 ]
+
+259: d=4 @Composable fun HTile52(t:Tile,s:Boolean
+260: d=4     val e by animateFloatAsState(if(s)1f
+261: d=5     Box(modifier=m.offset(y=(-8*e).dp).s
+262: d=5         Text(TileColors.tileText(t),font
+263: d=4     ]
+
+264: d=3 ]
+
+265: d=4 @Composable fun PTile(t:Tile,dora:Boolea
+266: d=5     Box(Modifier.padding(0.5.dp).width(i
+267: d=5         Text(TileColors.tileText(t),font
+268: d=4     ]
+
+269: d=3 ]
+
+270: d=4 @Composable fun BackTile(w:Dp=16.dp,h:Dp
+271: d=5     Box(Modifier.padding(1.dp).width(w).
+272: d=5         Text("◆",fontSize=(w.value*0.55f
+273: d=4     ]
+
+274: d=5 @Composable fun OppMini(name:String,sz:D
+275: d=6     Box(Modifier.size(sz).clip(CircleSha
+276: d=6         Text(name.take(1),color=Color.Wh
+277: d=6         if(tenpai)Text("●",fontSize=7.sp
+278: d=5     ]
+
+279: d=4 ]
+
+280: d=4 
+
+281: d=3 ]
+
+282: d=3 
+
+283: d=3 

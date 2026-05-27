@@ -1,0 +1,61 @@
+L248: d=6                 if(onSave!=null)Bt("??",C2,Modifier.weight(1
+L249: d=5             }
+
+L250: d=5             Text("?${(g.humanPlayer()?.points?:25000)/1000*1
+L251: d=4         }
+
+L252: d=3     }
+
+L253: d=2 }
+
+L254: d=1 }
+
+L255: d=1 
+
+L256: d=2 @Composable fun Bt(t:String,c:Color,m:Modifier,en:Boolean=tr
+L257: d=3     Button(onClick=on,modifier=m.height(34.dp),enabled=en,co
+L258: d=3         Text(t,fontSize=12.sp,fontWeight=FontWeight.Bold,col
+L259: d=2     }
+
+L260: d=1 }
+
+L261: d=2 @Composable fun HTile52(t:Tile,s:Boolean,m:Modifier,on:()->U
+L262: d=2     val e by animateFloatAsState(if(s)1f else 0f)
+
+L263: d=3     Box(modifier=m.offset(y=(-8*e).dp).shadow(if(s)8.dp else
+L264: d=3         Text(TileColors.tileText(t),fontSize=16.sp,fontWeigh
+L265: d=2     }
+
+L266: d=1 }
+
+L267: d=2 @Composable fun PTile(t:Tile,dora:Boolean=false){
+
+L268: d=3     Box(Modifier.padding(0.5.dp).width(if(dora)22.dp else 20
+L269: d=3         Text(TileColors.tileText(t),fontSize=if(dora)12.sp e
+L270: d=2     }
+
+L271: d=1 }
+
+L272: d=2 @Composable fun BackTile(w:Dp=16.dp,h:Dp=22.dp){
+
+L273: d=3     Box(Modifier.padding(1.dp).width(w).height(h).clip(Round
+L274: d=3         Text("?",fontSize=(w.value*0.55f).sp,color=Color(0xF
+L275: d=2     }
+
+L276: d=3 @Composable fun OppMini(name:String,sz:Dp,tenpai:Boolean=fal
+L277: d=4     Box(Modifier.size(sz).clip(CircleShape).background(Prima
+L278: d=4         Text(name.take(1),color=Color.White,fontWeight=FontW
+L279: d=4         if(tenpai)Text("?",fontSize=7.sp,color=Color(0xFFF44
+L280: d=3     }
+
+L281: d=2 }
+
+L282: d=2 
+
+L283: d=1 }
+
+L284: d=1 
+
+L285: d=1 
+
+FINAL: 1

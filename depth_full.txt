@@ -1,0 +1,87 @@
+L200: d=3         // ????? | ?? | ??
+L201: d=4         Row(Modifier.weight(1f).fillMaxWidth().padding(verti
+L202: d=4             // ????????
+L203: d=5             Column(Modifier.width(34.dp).fillMaxHeight().ver
+L204: d=6                     lOp?.let{op->
+L205: d=6                         OppMini(op.name,32.dp,op.isTenpai||E
+L206: d=7                         Column(Modifier.width(34.dp).fillMax
+L207: d=8                 rOp?.let{op->
+L208: d=8                     OppMini(op.name,32.dp,op.isTenpai||Engin
+L209: d=8                     (0 until op.hand.size.coerceAtMost(14)).
+L210: d=7                 }
+L211: d=6             }
+L212: d=5         }
+L213: d=5         // ???
+L214: d=6         Box(Modifier.fillMaxWidth().height(90.dp).background
+L215: d=7             LazyColumn(state=chatState,modifier=Modifier.fil
+L216: d=7                 val msgs = chatMsgs.takeLast(10)
+L217: d=8                 itemsIndexed(msgs){_,m->
+L218: d=8                     val prefix=if(m.isAssistant)"? " else"";
+L219: d=8                     Text("${prefix}${if(!m.isAssistant)"[${m
+L220: d=7                 }
+L221: d=6             }
+L222: d=5         }
+L223: d=5         // ???
+L224: d=5         val hc=u.hand.size;val r1=(hc+1)/2
+L225: d=6         Column(Modifier.fillMaxWidth().background(Color.Blac
+L226: d=7             Row(Modifier.fillMaxWidth().horizontalScroll(rem
+L227: d=7                 u.hand.take(r1).forEachIndexed{i,t->HTile52(
+L228: d=6             }
+L229: d=7             if(hc>r1)Row(Modifier.fillMaxWidth().horizontalS
+L230: d=7                 u.hand.drop(r1).forEachIndexed{i,t->val idx=
+L231: d=6             }
+L232: d=5         }
+L233: d=5         // ???? + ??
+L234: d=6         Row(Modifier.fillMaxWidth().background(Color.Black.c
+L235: d=6             OutlinedTextField(value=chatTxt,onValueChange={c
+L236: d=6             IconButton(onClick={sendChat()},modifier=Modifie
+L237: d=5         }
+L238: d=5         // ???
+L239: d=6         Row(Modifier.fillMaxWidth().background(Color.Black.c
+L240: d=6             val ms=mld
+L241: d=7             if(ms!=null){
+L242: d=7                 if(ms.r)Bt("?",Color(0xFFC62828),Modifier.we
+L243: d=7                 if(ms.k)Bt("?",C3,Modifier.weight(1f)){dm(Me
+L244: d=7                 Bt("?",Color(0xFF37474F),Modifier.weight(1f)
+L245: d=7             }else{
+L246: d=7                 Bt("??",C3,Modifier.weight(1f),isU&&sel!=nul
+L247: d=7                 if(onSave!=null)Bt("??",C2,Modifier.weight(1
+L248: d=6             }
+L249: d=6             Text("?${(g.humanPlayer()?.points?:25000)/1000*1
+L250: d=5         }
+L251: d=4     }
+L252: d=3 }
+L253: d=2 }
+L254: d=2 
+L255: d=3 @Composable fun Bt(t:String,c:Color,m:Modifier,en:Boolean=tr
+L256: d=4     Button(onClick=on,modifier=m.height(34.dp),enabled=en,co
+L257: d=4         Text(t,fontSize=12.sp,fontWeight=FontWeight.Bold,col
+L258: d=3     }
+L259: d=2 }
+L260: d=3 @Composable fun HTile52(t:Tile,s:Boolean,m:Modifier,on:()->U
+L261: d=3     val e by animateFloatAsState(if(s)1f else 0f)
+L262: d=4     Box(modifier=m.offset(y=(-8*e).dp).shadow(if(s)8.dp else
+L263: d=4         Text(TileColors.tileText(t),fontSize=16.sp,fontWeigh
+L264: d=3     }
+L265: d=2 }
+L266: d=3 @Composable fun PTile(t:Tile,dora:Boolean=false){
+L267: d=4     Box(Modifier.padding(0.5.dp).width(if(dora)22.dp else 20
+L268: d=4         Text(TileColors.tileText(t),fontSize=if(dora)12.sp e
+L269: d=3     }
+L270: d=2 }
+L271: d=3 @Composable fun BackTile(w:Dp=16.dp,h:Dp=22.dp){
+L272: d=4     Box(Modifier.padding(1.dp).width(w).height(h).clip(Round
+L273: d=4         Text("?",fontSize=(w.value*0.55f).sp,color=Color(0xF
+L274: d=3     }
+L275: d=4 @Composable fun OppMini(name:String,sz:Dp,tenpai:Boolean=fal
+L276: d=5     Box(Modifier.size(sz).clip(CircleShape).background(Prima
+L277: d=5         Text(name.take(1),color=Color.White,fontWeight=FontW
+L278: d=5         if(tenpai)Text("?",fontSize=7.sp,color=Color(0xFFF44
+L279: d=4     }
+L280: d=3 }
+L281: d=3 
+L282: d=2 }
+L283: d=2 
+L284: d=2 
+L285: d=2 
+FINAL depth: 2

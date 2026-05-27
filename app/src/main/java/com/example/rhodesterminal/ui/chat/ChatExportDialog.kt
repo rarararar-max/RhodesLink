@@ -1,0 +1,81 @@
+package com.example.rhodesterminal.ui.chat
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.rhodesterminal.ui.theme.*
+import java.io.File
+import java.io.FileOutputStream
+import com.example.rhodesterminal.data.db.entity.ChatMessageEntity
+
+@Composable
+fun ChatExportDialog(
+    operatorName: String,
+    messages: List<ChatMessageEntity>,
+    userProfile: com.example.rhodesterminal.viewmodel.MainViewModel.UserProfile,
+    operatorAvatarUri: String = "",
+    onDismiss: () -> Unit
+) {
+    val shareMsgs = messages.take(8).map { msg ->
+        val text = if (msg.type == "ai_json") {
+            try {
+                val obj = com.google.gson.JsonParser.parseString(msg.content).asJsonObject
+                val segs = obj.getAsJsonArray("segments")
+                if (segs != null) {
+                    segs.mapNotNull {
+                        val seg = it.asJsonObject
+                        if (seg.get("type")?.asString == "dialogue") seg.get("content")?.asString else null
+                    }.joinToString(" ")
+                } else msg.content.take(80)
+            } catch (_: Exception) { msg.content.take(80) }
+        } else msg.content
+        ShareMessage(
+            senderName = msg.senderName,
+            content = text,
+            isMe = msg.isMe,
+            isSystem = msg.type == "system" || msg.senderName == "系统",
+            isNarration = msg.type == "narration" || msg.type == "ai_json"
+        )
+    }
+
+    ChatShareDialog(
+        titleContent = {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 4.dp)) {
+                if (operatorAvatarUri.isNotBlank()) {
+                    coil.compose.AsyncImage(model = operatorAvatarUri, contentDescription = null, modifier = Modifier.size(36.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+                } else {
+                    Box(Modifier.size(36.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) {
+                        Text(operatorName.take(1), color = Color.White, fontWeight = FontWeight.Bold)
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(operatorName, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+            }
+        },
+        messages = shareMsgs,
+        userName = userProfile.nickname,
+        userAvatarUri = userProfile.avatarUri,
+        operatorAvatarUri = operatorAvatarUri,
+        onDismiss = onDismiss
+    )
+}

@@ -1,0 +1,1790 @@
+package com.example.rhodesterminal.viewmodel
+
+import android.app.Application
+import android.util.Log
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.example.rhodesterminal.data.ExportPayload
+import com.example.rhodesterminal.data.ExportHelper
+import com.example.rhodesterminal.data.MessageExport
+import com.example.rhodesterminal.data.OperatorExport
+import com.example.rhodesterminal.data.RelationshipExport
+import com.example.rhodesterminal.data.SessionExport
+import com.example.rhodesterminal.data.db.AppDatabase
+import com.example.rhodesterminal.data.db.entity.ChatMessageEntity
+import com.example.rhodesterminal.data.db.entity.ChatSessionEntity
+import com.example.rhodesterminal.data.db.entity.DispatchRecordEntity
+import com.example.rhodesterminal.data.db.entity.MemoryAnchorEntity
+import com.example.rhodesterminal.data.db.entity.MemoryEntity
+import com.example.rhodesterminal.data.db.entity.MemoryType
+import com.example.rhodesterminal.data.db.entity.DiaryEntity
+import com.example.rhodesterminal.data.db.entity.MomentCommentEntity
+import com.example.rhodesterminal.data.db.entity.MomentEntity
+import com.example.rhodesterminal.data.db.entity.MomentLikeEntity
+import com.example.rhodesterminal.data.db.entity.OperatorEntity
+import com.example.rhodesterminal.data.db.dao.SenderCount
+import com.example.rhodesterminal.data.repository.ChatRepository
+import com.example.rhodesterminal.network.AIClient
+import com.example.rhodesterminal.network.AnalysisResult
+import com.example.rhodesterminal.network.DeepSeekClient
+import com.example.rhodesterminal.network.Message
+import com.example.rhodesterminal.network.OfflineModeResponse
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
+
+class MainViewModel(application: Application) : AndroidViewModel(application) {
+    private val db = AppDatabase.getInstance(application)
+    val repository = ChatRepository(
+        db.operatorDao(), db.chatSessionDao(), db.chatMessageDao(),
+        db.memoryDao(), db.relationshipDao(), db.momentDao(), db.diaryDao(),
+        db.dispatchDao()
+    )
+
+    private val _operators = MutableStateFlow<List<OperatorEntity>>(emptyList())
+    val operators: StateFlow<List<OperatorEntity>> = _operators.asStateFlow()
+
+    private val _sessions = MutableStateFlow<List<ChatSessionEntity>>(emptyList())
+    val sessions: StateFlow<List<ChatSessionEntity>> = _sessions.asStateFlow()
+
+    private val _allSessions = MutableStateFlow<List<ChatSessionEntity>>(emptyList())
+    val allSessions: StateFlow<List<ChatSessionEntity>> = _allSessions.asStateFlow()
+
+    private val _selectedOperator = MutableStateFlow<OperatorEntity?>(null)
+    val selectedOperator: StateFlow<OperatorEntity?> = _selectedOperator.asStateFlow()
+
+    private val _currentSession = MutableStateFlow<ChatSessionEntity?>(null)
+    val currentSession: StateFlow<ChatSessionEntity?> = _currentSession.asStateFlow()
+
+    private val _messages = MutableStateFlow<List<ChatMessageEntity>>(emptyList())
+    val messages: StateFlow<List<ChatMessageEntity>> = _messages.asStateFlow()
+
+    private val _currentMode = MutableStateFlow("offline")
+    val currentMode: StateFlow<String> = _currentMode.asStateFlow()
+
+    private val _inputText = MutableStateFlow("")
+    val inputText: StateFlow<String> = _inputText.asStateFlow()
+
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
+    private val _hypnosisCommand = MutableStateFlow("")
+    val hypnosisCommand: StateFlow<String> = _hypnosisCommand.asStateFlow()
+    private val _hypnosisRounds = MutableStateFlow(0)
+    val hypnosisRounds: StateFlow<Int> = _hypnosisRounds.asStateFlow()
+
+    data class UserProfile(
+        val nickname: String = "博士", val gender: String = "", val bio: String = "", val avatarUri: String = ""
+    )
+
+    fun isDualModel(): Boolean =
+        getApplication<Application>().getSharedPreferences("chat_prefs", 0).getBoolean("dual_model", true)
+
+    fun setDualModel(enabled: Boolean) {
+        getApplication<Application>().getSharedPreferences("chat_prefs", 0).edit().putBoolean("dual_model", enabled).apply()
+    }
+
+    private val _moments = MutableStateFlow<List<MomentEntity>>(emptyList())
+    val moments: StateFlow<List<MomentEntity>> = _moments.asStateFlow()
+
+    private val _comments = MutableStateFlow<List<MomentCommentEntity>>(emptyList())
+    val comments: StateFlow<List<MomentCommentEntity>> = _comments.asStateFlow()
+
+    private val _diaries = MutableStateFlow<List<DiaryEntity>>(emptyList())
+    val diaries: StateFlow<List<DiaryEntity>> = _diaries.asStateFlow()
+
+    private var messageCounter = 0
+    private var summaryCounter = 0
+    private val sessionMessageCounter = mutableMapOf<String, Int>()
+    private val shortTermThreshold: Int get() {
+        val v = getApplication<Application>().getSharedPreferences("chat_prefs", 0).getInt("summary_threshold", 30)
+        return if (v in listOf(30, 50, 100, 200)) v else 30
+    }
+    private val updateMutex = Mutex()
+    private var lastDbUpdate = 0L
+    private var analysisGuidance = ""
+    private var modeTransitionNotice = ""
+
+    private val _groupMessages = MutableStateFlow<List<ChatMessageEntity>>(emptyList())
+    val groupMessages: StateFlow<List<ChatMessageEntity>> = _groupMessages.asStateFlow()
+
+    private val _groupLoading = MutableStateFlow(false)
+    val groupLoading: StateFlow<Boolean> = _groupLoading.asStateFlow()
+
+    private val _currentGroupId = MutableStateFlow("")
+    private var groupMessagesJob: kotlinx.coroutines.Job? = null
+    private var messagesJob: kotlinx.coroutines.Job? = null
+
+    fun getPromptTemplate(type: String, mode: String = ""): String {
+        val prefs = getApplication<Application>().getSharedPreferences("prompt_templates", 0)
+        val key = if (mode.isNotBlank()) "prompt_${type}_${mode}" else "prompt_$type"
+        return prefs.getString(key, "")?.ifBlank { null } ?: defaultTemplate(type, mode)
+    }
+
+    fun savePromptTemplate(type: String, mode: String, template: String) {
+        val key = if (mode.isNotBlank()) "prompt_${type}_${mode}" else "prompt_$type"
+        getApplication<Application>().getSharedPreferences("prompt_templates", 0).edit()
+            .putString(key, template).apply()
+    }
+
+    fun resetPromptTemplate(type: String, mode: String = "") {
+        val key = if (mode.isNotBlank()) "prompt_${type}_${mode}" else "prompt_$type"
+        getApplication<Application>().getSharedPreferences("prompt_templates", 0).edit()
+            .remove(key).apply()
+    }
+
+    fun applyTemplate(template: String, replacements: Map<String, String>): String {
+        var result = template
+        for ((key, value) in replacements) {
+            result = result.replace("{{${key}}}", value)
+        }
+        return result
+    }
+
+    private fun defaultTemplate(type: String, mode: String = ""): String {
+        if (type == "private" && mode == "offline") return "【当前时间】{{CURRENT_TIME}}\n【用户身份】{{USER_NAME}}（{{USER_GENDER}}），简介：{{USER_BIO}}\n{{AI_ANALYSIS}}\n{{HYPNOSIS}}\n\n你是{{OPERATOR_NAME}}，{{OPERATOR_PERSONA}}。\n\n{{MEMORY_INJECTION}}\n\n【模式规则】\n- 面对面近距离聊天，严禁提及通讯器、消息、屏幕等线上词汇。\n- 可用括号描述动作。旁白必须是第三人称场景/环境描写。\n- 用多段交替叙事，旁白推进场景，对话展现人物，像小说一样流畅。\n\n【字数限制】\n- 台词字数：{{DIA_MIN}}~{{DIA_MAX}}字\n- 旁白字数：{{NAR_MIN}}~{{NAR_MAX}}字\n- segments段数：{{SEG_MIN}}~{{SEG_MAX}}段\n\n【场景锁】严格沿用系统给出的当前位置和活动，禁止自行编造新场景。\n\n【人设自然表达准则】\n1. 角色性格、喜好、习惯只能通过下意识动作、神态隐晦侧面流露，严禁在对话中直白强调。\n2. 禁止用个人物品强行关联话题。\n\n【互动节奏推进准则】\n1. 彻底摒弃纯问答式被动应答，所有回应同步搭配具象主动肢体行为。\n2. 面对用户邀约、出行提议，优先落实实际行动，减少口头犹豫。\n\n【输出硬规则】\n- emotion：单个情绪词，不超过5个汉字。state/location同。\n- 所有字段必须严格遵守。\n\n【输出格式要求】\n严格按照以下JSON格式返回，不要使用任何括号描述动作（例如（她转过身）这种格式是严格禁止的）：\n{\"emotion\":\"情绪词\",\"segments\":[{\"type\":\"narration\",\"content\":\"旁白\"},{\"type\":\"dialogue\",\"content\":\"对话\"}],\"affection_mod\":0}\n\n约束：\n- segments{{SEG_MIN}}-{{SEG_MAX}}段，旁白与对话交替，最后一段必须是dialogue。\n- 旁白是第三人称场景描写，对话是角色台词。\n- 只输出纯JSON，禁止额外文字。\n\n【格式铁律】历史记录中的标记仅为提供上下文，不要在你的回复中引用或重复。严格按照上述JSON格式输出。如果输出非JSON格式，你的回复将不会被展示给用户。\n\n请严格按照上述JSON格式输出。dialogue字段中的对话内容用第一人称自然说话即可，但整个回复必须是一个合法的JSON对象。"
+        if (type == "private" && mode == "director") return "【当前时间】{{CURRENT_TIME}}\n【用户身份】{{USER_NAME}}（{{USER_GENDER}}），简介：{{USER_BIO}}\n{{AI_ANALYSIS}}\n{{HYPNOSIS}}\n\n你是{{OPERATOR_NAME}}，{{OPERATOR_PERSONA}}。\n\n{{MEMORY_INJECTION}}\n\n【模式规则】\n- 博士是导演，你是演员，按指令行动。\n- 禁止提及通讯器、屏幕等线上词汇。\n- 用多段交替叙事，同线下模式格式。\n\n【字数限制】\n- 台词字数：{{DIA_MIN}}~{{DIA_MAX}}字\n- 旁白字数：{{NAR_MIN}}~{{NAR_MAX}}字\n- segments段数：{{SEG_MIN}}~{{SEG_MAX}}段\n\n【输出格式要求】\n严格按照以下JSON格式返回，不要使用任何括号描述动作（例如（她转过身）这种格式是严格禁止的）：\n{\"emotion\":\"情绪词\",\"segments\":[{\"type\":\"narration\",\"content\":\"旁白\"},{\"type\":\"dialogue\",\"content\":\"对话\"}],\"affection_mod\":0}\n\n约束：\n- segments{{SEG_MIN}}-{{SEG_MAX}}段，旁白与对话交替，最后一段必须是dialogue。\n- 旁白是第三人称场景描写，对话是角色台词。\n- 只输出纯JSON，禁止额外文字。\n\n【格式铁律】历史记录中的标记仅为提供上下文，不要在你的回复中引用或重复。严格按照上述JSON格式输出。如果输出非JSON格式，你的回复将不会被展示给用户。\n\n请严格按照上述JSON格式输出。dialogue字段中的对话内容用第一人称自然说话即可，但整个回复必须是一个合法的JSON对象。"
+        if (type == "private") return "【当前时间】{{CURRENT_TIME}}\n【用户身份】{{USER_NAME}}（{{USER_GENDER}}），简介：{{USER_BIO}}\n{{AI_ANALYSIS}}\n{{HYPNOSIS}}\n\n你是{{OPERATOR_NAME}}，{{OPERATOR_PERSONA}}。\n\n{{MEMORY_INJECTION}}\n\n【模式规则】\n- 线上文字聊天，禁止一切括号动作、神态描写、旁白/场景描写。\n- 长消息用[分段]分割，每段不超过{{ONLINE_MAX_CHARS}}字，最多{{ONLINE_MAX_SEGS}}段。\n- 直接输出纯文本台词，不要JSON，不要任何格式标记。\n- 在回复末尾换行后加上情绪词（如：[开心]），方便系统提取。\n\n【真人聊天铁律】\n1. 永远留钩子，说一半留悬念，等对方追问。\n2. 情绪共鸣优先一切：先共情，不评判不说教。\n3. 用户敷衍时温柔关心后切换话题，不追问施压。\n4. 密集提问只选1-2个重点回应。\n5. 口语化：用\u201C嗯\u201D\u201C啊\u201D\u201C吧\u201D\u201C呢\u201D，禁止书面语。\n6. 读懂反话：用户说\u201C滚\u201D\u201C别理我\u201D是求关注，必须温柔陪伴。\n7. 提问节制：5-7轮才提一个开放式问题。\n8. 禁止复读自己和用户的话。\n9. 分享感受为主，少提问；用细节偏爱流露好感。\n10. 禁止用\u201C我的习惯是...\u201D\u201C作为xxx\u201D开头说话。\n\n【格式铁律】历史记录中的标记仅为提供上下文。你的回复中绝对不允许出现任何类似格式标记。直接说你要说的话，没有任何前缀。\n\n请以{{OPERATOR_NAME}}的身份，用第一人称自然回应。"
+        if (type == "group" && mode == "offline") return "【当前时间】{{CURRENT_TIME}}\n【群聊：{{GROUP_NAME}}】\n【用户身份】{{USER_NAME}}（{{USER_GENDER}}），简介：{{USER_BIO}}\n\n【群内关系提示】\n{{RELATION_HINTS}}\n\n【各成员对用户的了解】\n{{PRIVATE_SUMMARIES}}\n\n【群聊记忆】\n近期群聊记录：{{RECENT_GROUP_MESSAGES}}\n群聊摘要：{{GROUP_SUMMARY}}\n长期印象：{{LONG_TERM_IMPRESSION}}\n\n各成员简介与人设：\n{{MEMBER_PROFILES}}\n\n【模式规则】\n- 线下聚会聊天，所有人都在同一个物理空间面对面交谈。\n- 严禁提及手机、屏幕、消息、通讯器、终端、在线、冒泡等线上词汇。\n- 允许现场动作、语气、表情描写。\n- 可以插入旁白条目来描述场景，格式：{\"speaker\":\"旁白\",\"message\":\"场景描述\"}，每轮最多1条。\n- 每条消息{{GROUP_MSG_MIN}}-{{GROUP_MSG_MAX}}字。\n- 每人发言{{GROUP_SPEECH_MIN}}-{{GROUP_SPEECH_MAX}}次。\n- 同干员连续发言不超过2次。\n- 所有成员必须至少发言一次。\n\n用户最新发言：{{USER_MESSAGE}}\n\n【输出格式】\n严格输出JSON数组：[{\"speaker\":\"干员名\",\"message\":\"对话\"},{\"speaker\":\"旁白\",\"message\":\"场景描述\",\"type\":\"narration\"},...]\n允许旁白条目，speaker固定为\u201C旁白\u201D，type为\u201Cnarration\u201D。"
+        if (type == "group" && mode == "director") return "【当前时间】{{CURRENT_TIME}}\n【群聊：{{GROUP_NAME}}】\n【用户身份】{{USER_NAME}}（{{USER_GENDER}}），简介：{{USER_BIO}}\n\n【群内关系提示】\n{{RELATION_HINTS}}\n\n【各成员对用户的了解】\n{{PRIVATE_SUMMARIES}}\n\n【群聊记忆】\n近期群聊记录：{{RECENT_GROUP_MESSAGES}}\n群聊摘要：{{GROUP_SUMMARY}}\n长期印象：{{LONG_TERM_IMPRESSION}}\n\n各成员简介与人设：\n{{MEMBER_PROFILES}}\n\n【模式规则】\n- 博士是导演，你们是演员，按指令行动和对话。\n- 各干员根据导演的指令做出相应的行动和回应。\n- 允许旁白条目（speaker为\u201C旁白\u201D）来描述场景。\n- 每条消息{{GROUP_MSG_MIN}}-{{GROUP_MSG_MAX}}字。\n- 每人发言{{GROUP_SPEECH_MIN}}-{{GROUP_SPEECH_MAX}}次。\n- 所有成员必须至少发言一次。\n\n用户（导演）指令：{{USER_MESSAGE}}\n\n【输出格式】\n严格输出JSON数组：[{\"speaker\":\"干员名\",\"message\":\"对话/行动\"},{\"speaker\":\"旁白\",\"message\":\"场景描述\",\"type\":\"narration\"},...]\n允许旁白条目。对话内容可以是台词或带括号动作描述。"
+        if (type == "group") return "【当前时间】{{CURRENT_TIME}}\n【群聊：{{GROUP_NAME}}】\n【用户身份】{{USER_NAME}}（{{USER_GENDER}}），简介：{{USER_BIO}}\n\n【群内关系提示】\n{{RELATION_HINTS}}\n\n【各成员对用户的了解】\n{{PRIVATE_SUMMARIES}}\n\n【群聊记忆】\n近期群聊记录：{{RECENT_GROUP_MESSAGES}}\n群聊摘要：{{GROUP_SUMMARY}}\n长期印象：{{LONG_TERM_IMPRESSION}}\n\n各成员简介与人设：\n{{MEMBER_PROFILES}}\n\n【模式规则】\n- 线上文字聊天，禁止括号动作、旁白、场景描写。\n- 每条消息{{GROUP_MSG_MIN}}-{{GROUP_MSG_MAX}}字。\n- 每人发言{{GROUP_SPEECH_MIN}}-{{GROUP_SPEECH_MAX}}次。\n- 按活跃度分配：高活跃(≥0.8)发言2-3次，中活跃(0.5-0.8)1-2次，低活跃(<0.5)0-1次。\n- 同干员连续发言不超过2次。\n- 口语化，句尾多用叹号/问号，不机械附和。\n- 所有成员必须至少发言一次。\n\n用户最新发言：{{USER_MESSAGE}}\n\n【输出格式】\n严格输出JSON数组：[{\"speaker\":\"干员名\",\"message\":\"对话内容\"},...]\n只输出纯JSON数组，禁止旁白、动作、场景描写。"
+        return when (type) {
+            "moment" -> "你是{{OPERATOR_NAME}}，{{OPERATOR_PERSONA}}。\n\n今天是{{CURRENT_DATE}}，当前时段：{{TIME_OF_DAY}}。\n\n你对用户{{USER_NAME}}的长期印象：{{LONG_TERM_IMPRESSION}}\n\n最近和用户聊天摘要：{{RECENT_CHAT_SUMMARY}}\n\n最近你注意到的事情：\n{{RECENT_MEMORIES}}\n\n你最近发布过的动态：\n{{RECENT_POSTS}}\n\n请发布一条{{MOMENT_MIN_CHARS}}-{{MOMENT_MAX_CHARS}}字的罗德岛动态。\n\n【发布对象规则】\n- 公开发布给罗德岛全体干员看的，严禁直接呼唤{{USER_NAME}}。\n- 提到{{USER_NAME}}时，用第三人称。\n\n【特征流露准则】\n- 永远不要在动态中直接提及你的职业标签、特殊物品、习惯。\n- 你的性格只能通过日常行为、观察、反应来侧面体现。\n- 写你一天中真实会发生的事情：工作细节、同事互动、天气、食堂饭菜。\n\n【时段感知】\n- 现在是{{TIME_OF_DAY}}，内容应符合当前时段。\n\n直接输出动态文本，不加任何标记。"
+            "diary" -> "你是一名明日方舟干员，名叫{{OPERATOR_NAME}}。{{OPERATOR_PERSONA}}\n\n今天是{{DATE}}，请以第一人称\u201C我\u201D写一篇{{DIARY_MIN_CHARS}}-{{DIARY_MAX_CHARS}}字的日记。\n\n关于用户{{USER_NAME}}：{{USER_BIO}}\n你对{{USER_NAME}}的长期印象：{{LONG_TERM_IMPRESSION}}\n\n今天与{{USER_NAME}}的互动：\n- 私聊摘要：{{PRIVATE_SUMMARY}}\n- 参与的群聊摘要：{{GROUP_SUMMARIES}}\n\n最近你注意到的事：{{RECENT_MEMORIES}}\n关系网中与你相关的事件：{{RELATION_EVENTS}}\n\n要求：\n1. 内容紧密围绕以上摘要和记忆，不要凭空编造。\n2. 性格通过日常描写侧面体现，严禁直接强调。\n3. 可提到关系网中的其他干员。\n4. 用第一人称写，直接输出日记文本。"
+            else -> ""
+            }
+    }
+
+    fun setCurrentGroup(groupSessionId: String) {
+        _currentGroupId.value = groupSessionId
+        markSessionRead(groupSessionId)
+        groupMessagesJob?.cancel()
+        groupMessagesJob = viewModelScope.launch {
+            repository.getMessages(groupSessionId).collect { _groupMessages.value = it }
+        }
+    }
+
+    fun clearCurrentGroup() {
+        _currentGroupId.value = ""
+        groupMessagesJob?.cancel()
+        _groupMessages.value = emptyList()
+    }
+
+    init {
+        viewModelScope.launch {
+            repository.insertPresetOperators()
+            repository.insertPresetRelationships()
+            repository.initPresetGroups()
+            initPermissions()
+            cleanupExpired()
+        }
+        viewModelScope.launch { repository.allOperators.collect { _operators.value = it } }
+        viewModelScope.launch {
+            val hidden = getApplication<Application>().getSharedPreferences("session_hidden", 0)
+                .getStringSet("hidden_ids", emptySet()) ?: emptySet()
+            repository.allSessions.collect { all ->
+                _allSessions.value = all
+                _sessions.value = all.filter { it.id !in hidden }
+            }
+        }
+        viewModelScope.launch { repository.getAllMoments().collect { _moments.value = it } }
+        startAutoStatusRefresh()
+        loadHypnosis()
+        // 启动时检查派遣恢复
+        viewModelScope.launch { recoverDispatches() }
+        // 启动时检查今天是否有动态，无则自动生成
+        viewModelScope.launch { autoGenerateTodayMoments() }
+    }
+
+    private fun startAutoStatusRefresh() {
+        viewModelScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(3_600_000) // 每小时
+                refreshAllOperatorStatus()
+            }
+        }
+    }
+
+    private suspend fun refreshAllOperatorStatus() {
+        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
+        val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
+        val allOps = _operators.value.filter { it.id != "amiya" || true } // 阿米娅同其他干员一致处理
+
+        // 深夜强制
+        if (hour in 22..23 || hour in 0..4) {
+            val db = AppDatabase.getInstance(getApplication())
+            for (op in allOps) { db.operatorDao().update(op.copy(location = "宿舍", activity = "睡觉", emotion = "安静")) }
+            return
+        }
+
+        // 6时段权重
+        val periodWeights: Map<String, Int> = when {
+            hour in 5..7 -> mapOf("训练场" to 40, "宿舍" to 30, "食堂" to 15, "舰桥" to 5, "机库" to 5, "医疗部" to 5)
+            hour in 8..11 -> mapOf("训练场" to 40, "舰桥" to 20, "机库" to 15, "医疗部" to 10, "食堂" to 10, "宿舍" to 5)
+            hour in 12..13 -> mapOf("食堂" to 40, "宿舍" to 20, "活动室" to 10, "医疗部" to 10, "舰桥" to 10, "训练场" to 10)
+            hour in 14..17 -> mapOf("训练场" to 35, "舰桥" to 20, "机库" to 15, "医疗部" to 15, "食堂" to 10, "宿舍" to 5)
+            else -> mapOf("活动室" to 30, "食堂" to 25, "宿舍" to 15, "舰桥" to 10, "训练场" to 10, "医疗部" to 10)
+        }
+
+        // 活动池
+        val activities = mapOf(
+            "宿舍" to listOf("整理装备", "写日记", "发呆", "做俯卧撑", "听广播", "保养武器", "午睡"),
+            "训练场" to listOf("负重跑", "格斗练习", "靶场射击", "战术推演", "指导新人", "体能测试", "模拟对战"),
+            "医疗部" to listOf("例行体检", "配药", "照顾病患", "研究病例", "打扫诊室", "整理档案"),
+            "食堂" to listOf("吃饭", "帮厨", "清洗餐具", "研究新菜谱", "搬运食材", "泡咖啡"),
+            "舰桥" to listOf("监测航线", "值班瞭望", "写报告", "调试通讯", "护送访客", "开会"),
+            "机库" to listOf("检修车辆", "改装装备", "清点物资", "搬运货物", "焊接练习", "保养无人机"),
+            "活动室" to listOf("下棋", "打牌", "弹吉他", "看录像", "聊天", "做手工", "打台球")
+        )
+
+        // 情绪权重
+        val emotionWeights = listOf(
+            "平静" to 40, "疲惫" to 15, "专注" to 10, "愉快" to 10,
+            "有些低落" to 10, "小兴奋" to 5, "生气" to 5, "焦虑" to 5
+        )
+
+        val db = AppDatabase.getInstance(getApplication())
+        var locCount = mutableMapOf<String, Int>()
+
+        for (op in allOps) {
+            // 加权随机选位置
+            val totalW = periodWeights.values.sum()
+            var r = (Math.random() * totalW).toInt()
+            var loc = "宿舍"
+            for ((l, w) in periodWeights) { r -= w; if (r < 0) { loc = l; break } }
+            val cnt = locCount.getOrDefault(loc, 0)
+            if (cnt >= 10) loc = "宿舍"
+            locCount[loc] = cnt + 1
+
+            val acts = activities[loc] ?: listOf("休息")
+            val activity = acts.random()
+
+            // 加权随机选情绪（30%概率刷新）
+            val emotion = if (Math.random() < 0.3) {
+                val etw = emotionWeights.sumOf { it.second }
+                var er = (Math.random() * etw).toInt()
+                var emo = "平静"
+                for ((e, w) in emotionWeights) { er -= w; if (er < 0) { emo = e; break } }
+                emo
+            } else op.emotion
+
+            db.operatorDao().update(op.copy(location = loc, activity = activity, emotion = emotion))
+        }
+    }
+
+    private suspend fun cleanupExpired() {
+        try { repository.cleanupExpiredData() } catch (_: Exception) { }
+    }
+
+    private suspend fun autoGenerateTodayMoments() {
+        val moments = repository.getMomentsPaged(5, 0)
+        val today = beijingSdf("yyyyMMdd").format(java.util.Date())
+        val todayCount = moments.count { beijingSdf("yyyyMMdd").format(java.util.Date(it.createdAt)) == today }
+        if (todayCount < intPref("daily_moment_target", 3)) {
+            generateAllMoments { /* silent */ }
+        }
+    }
+
+    private fun initPermissions() {
+        val prefs = getApplication<Application>().getSharedPreferences("op_perms", 0)
+        if (prefs.all.keys.none { it.startsWith("msg_") }) {
+            _operators.value.forEach { op ->
+                prefs.edit().putBoolean("msg_${op.id}", true).putBoolean("dyn_${op.id}", true).apply()
+            }
+        }
+    }
+
+    fun selectOperator(operator: OperatorEntity) {
+        _selectedOperator.value = operator
+        messageCounter = 0
+        viewModelScope.launch {
+            val session = repository.getOrCreateSession(operator.id, operator.name)
+            _currentSession.value = session
+            val savedMode = getApplication<Application>().getSharedPreferences("chat_prefs", 0).getString("last_mode", "offline") ?: "offline"
+            _currentMode.value = savedMode
+            markSessionRead(session.id)
+            messagesJob?.cancel()
+            messagesJob = viewModelScope.launch {
+                repository.getMessages(session.id).collect { msgs ->
+                    _messages.value = msgs
+                }
+            }
+        }
+    }
+
+    fun clearSelection() {
+        _selectedOperator.value = null
+        _currentSession.value = null
+        _messages.value = emptyList()
+        messageCounter = 0
+    }
+
+    fun clearMessages() {
+        val session = _currentSession.value ?: return
+        viewModelScope.launch {
+            db.chatMessageDao().deleteSessionMessages(session.id)
+            _messages.value = emptyList()
+        }
+    }
+
+    fun deleteSession(sessionId: String) {
+        viewModelScope.launch {
+            db.chatMessageDao().deleteSessionMessages(sessionId)
+            db.chatSessionDao().delete(sessionId)
+        }
+    }
+
+    fun clearAllMessages() {
+        viewModelScope.launch {
+            val ids = _sessions.value.map { it.id }.toSet()
+            getApplication<Application>().getSharedPreferences("session_hidden", 0).edit()
+                .putStringSet("hidden_ids", ids).apply()
+            _sessions.value = emptyList()
+        }
+    }
+
+    private suspend fun unhideSession(sessionId: String) {
+        val prefs = getApplication<Application>().getSharedPreferences("session_hidden", 0)
+        val hidden = prefs.getStringSet("hidden_ids", emptySet())?.toMutableSet() ?: return
+        if (hidden.remove(sessionId)) {
+            prefs.edit().putStringSet("hidden_ids", hidden).apply()
+            // 触发 Room Flow 重发，让会话重新出现在聊天主页
+            db.chatSessionDao().updateLastMessage(sessionId, "", System.currentTimeMillis() + 1)
+        }
+    }
+
+    fun markAllRead() {
+        viewModelScope.launch {
+            db.chatSessionDao().markAllRead()
+        }
+    }
+
+    fun pinSession(sessionId: String) {
+        viewModelScope.launch {
+            val session = db.chatSessionDao().getSession(sessionId) ?: return@launch
+            db.chatSessionDao().insert(session.copy(isPinned = !session.isPinned))
+        }
+    }
+
+    fun loadGroupData(groupId: String, callback: (String, List<OperatorEntity>, String) -> Unit) {
+        viewModelScope.launch {
+            val session = db.chatSessionDao().getSession(groupId) ?: run { callback("", emptyList(), ""); return@launch }
+            val memberNames = session.members.split(",").map { it.trim() }.filter { it.isNotBlank() }
+            val allOps = _operators.value
+            val memberOps = memberNames.mapNotNull { name -> allOps.find { it.id == name || it.name == name } }
+            callback(session?.operatorName ?: "", memberOps, session?.lastMessage ?: "")
+        }
+    }
+
+    fun saveGroup(groupId: String, name: String, memberNames: List<String>, rules: String) {
+        viewModelScope.launch {
+            val id = groupId.ifBlank { "group_${System.currentTimeMillis()}" }
+            db.chatSessionDao().insert(ChatSessionEntity(
+                id = id, operatorId = id, operatorName = name,
+                lastMessage = rules, lastTime = System.currentTimeMillis(),
+                members = memberNames.joinToString(",")
+            ))
+        }
+    }
+
+    fun markSessionRead(sessionId: String) {
+        viewModelScope.launch {
+            val session = db.chatSessionDao().getSession(sessionId) ?: return@launch
+            db.chatSessionDao().insert(session.copy(unreadCount = 0))
+        }
+    }
+
+    fun updateInputText(text: String) { _inputText.value = text }
+
+    fun setMode(mode: String) {
+        val session = _currentSession.value ?: return
+        val oldMode = _currentMode.value
+        if (oldMode == mode) return
+        _currentMode.value = mode
+        viewModelScope.launch {
+            repository.updateSessionMode(session.id, mode)
+            modeTransitionNotice = when {
+                oldMode == "online" && mode == "offline" -> "【系统通知：用户放下了通讯终端，走到了你的面前，现在你们面对面站在一起。】"
+                oldMode == "offline" && mode == "online" -> "【系统通知：用户退后了几步，重新拿起通讯终端连接你，现在你们又回到远程通讯了。】"
+                oldMode == "director" && mode == "offline" -> "【系统通知：用户从导演席站了起来，走进了场景中，站在你的身边。】"
+                oldMode == "offline" && mode == "director" -> "【系统通知：用户退回到导演席，现在你可以继续按照剧情发展做出行动。】"
+                oldMode == "online" && mode == "director" -> "【系统通知：用户切换到了导演视角，现在你是演员。】"
+                oldMode == "director" && mode == "online" -> "【系统通知：用户关闭了导演模式，现在恢复远程通讯聊天。】"
+                else -> "【系统通知：模式已切换。】"
+            }
+            // 保存用户偏好
+            getApplication<Application>().getSharedPreferences("chat_prefs", 0).edit().putString("last_mode", mode).apply()
+        }
+    }
+
+    fun sendMessage() {
+        val text = _inputText.value.trim()
+        if (text.isEmpty() || _isLoading.value) return
+        val session = _currentSession.value ?: return
+        _inputText.value = ""
+
+        generateDailyIfNeeded()
+        messageCounter++
+
+        viewModelScope.launch {
+            repository.sendMessage(session.id, ChatMessageEntity(
+                id = repository.getNextMessageId(), sessionId = session.id,
+                senderName = "我", content = text,
+                type = "text", mode = _currentMode.value, isMe = true
+            ))
+
+            val aiMsgId = repository.getNextMessageId()
+            val isStructured = _currentMode.value == "offline" || _currentMode.value == "director"
+            repository.sendMessage(session.id, ChatMessageEntity(
+                id = aiMsgId, sessionId = session.id,
+                senderName = session.operatorName, content = if (isStructured) "..." else "",
+                type = "text", mode = _currentMode.value, isMe = false
+            ))
+            _isLoading.value = true
+
+            try {
+                // 双模型：先分析（包含CoT引导）
+                if (isDualModel()) {
+                    analysisGuidance = ""
+                    try {
+                        val analysisSb = StringBuilder()
+                        val profile = getUserProfile()
+                        withTimeout(15_000) {
+                            val prompt = buildString {
+                                append("你是罗德岛的资深心理顾问与战术分析员。\n当前系统时间：${beijingSdf("HH:mm").format(java.util.Date())}\n")
+                                append("用户最新消息：${text}\n用户信息：${profile.nickname}，${profile.gender}\n干员：${session.operatorName}\n")
+                                append("最近对话：${_messages.value.takeLast(6).joinToString("\\n") { m -> "${if (m.isMe) "用户" else "你"}：${m.content}" }}\n")
+                                append("【分析任务】请深入思考：1)用户字面意思是什么？是否有潜台词？2)用户当前情绪状态？3)用户最希望获得怎样的回应？4)当前是${_currentMode.value}模式\n")
+                                append("输出JSON：{\"intent_analysis\":\"\",\"user_emotion\":\"\",\"user_need\":\"\",\"suggested_emotion\":\"\",\"reply_guidance\":\"\",\"affection_mod\":0}")
+                            }
+                            streamChat(listOf(Message("system", prompt)), "Chat").collect { analysisSb.append(it) }
+                        }
+                        val result = DeepSeekClient.cleanJson(analysisSb.toString())
+                        val analysis: AnalysisResult? = try { com.google.gson.Gson().fromJson(result, AnalysisResult::class.java) } catch (_: Exception) { null }
+                        if (analysis != null) {
+                            analysisGuidance = "用户意图分析：${analysis.intent_analysis}\n回复指导：${analysis.reply_guidance}\n建议情绪：${analysis.suggested_emotion}\n好感度修正：${analysis.affection_mod}"
+                        }
+                    } catch (_: Exception) { analysisGuidance = "" }
+                }
+
+                val apiMessages = buildApiMessages()
+                val sb = StringBuilder()
+                streamChat(apiMessages).collect { chunk ->
+                    sb.append(chunk)
+                    // 结构化模式：流式期间不更新可见内容，等结束后整体替换
+                    if (!isStructured) updateAiMessage(aiMsgId, sb.toString())
+                }
+                    val promptText = apiMessages.firstOrNull()?.content ?: ""
+                    trackTokens("private", promptText, sb.toString())
+                val mode = _currentMode.value
+                val parsed = DeepSeekClient.parseOfflineResponse(sb.toString())
+                var aiResponseCount = 1
+                if (mode == "offline" || mode == "director") {
+                    updateAiMessageStructured(aiMsgId, parsed, mode)
+                    aiResponseCount = parsed.segments?.size?.coerceAtLeast(1) ?: 1
+                    if (parsed.location.isNotBlank() || parsed.state.isNotBlank() || parsed.emotion.isNotBlank()) {
+                        updateOperatorStatus(session.operatorId, parsed.location, parsed.state, parsed.emotion)
+                    }
+                } else {
+                    // 线上模式：纯文本 + [分段] + [情绪]
+                    val content = sb.toString()
+                    val (fullText, emotion) = parseOnlineEmotion(content)
+                    val parts = fullText.split("[分段]").filter { it.isNotBlank() }
+                    aiResponseCount = parts.size.coerceAtLeast(1)
+                    if (parts.size > 1) {
+                        // 多段消息：逐段展示，每段间隔1-2秒
+                        val groupId = java.util.UUID.randomUUID().toString()
+                        // 第一段立即替换流式气泡
+                        val first = parts[0].trim()
+                        repository.sendMessage(session.id, ChatMessageEntity(
+                            id = aiMsgId, sessionId = session.id, senderName = session.operatorName,
+                            content = first, type = "text", mode = "online",
+                            segmentGroup = groupId, isMe = false
+                        ))
+                        _messages.value = _messages.value.map { if (it.id == aiMsgId) it.copy(content = first, segmentGroup = groupId) else it }
+                        // 后续段延迟1-2秒
+                        for (j in 1 until parts.size) {
+                            delay((1000L + (Math.random() * 1000).toLong()))
+                            val segId = repository.getNextMessageId()
+                            val segContent = parts[j].trim()
+                            repository.sendMessage(session.id, ChatMessageEntity(
+                                id = segId, sessionId = session.id, senderName = session.operatorName,
+                                content = segContent, type = "text", mode = "online",
+                                segmentGroup = groupId, isMe = false
+                            ))
+                            val segUi = ChatMessageEntity(id = segId, sessionId = session.id, senderName = session.operatorName, content = segContent, type = "text", mode = "online", segmentGroup = groupId, isMe = false)
+                            _messages.value = _messages.value + segUi
+                        }
+                    } else if (fullText.isNotBlank()) {
+                        _messages.value = _messages.value.map { if (it.id == aiMsgId) it.copy(content = fullText) else it }
+                        repository.sendMessage(session.id, ChatMessageEntity(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = fullText, type = "text", mode = "online", isMe = false))
+                        aiResponseCount = 1
+                    }
+                    if (emotion.isNotBlank()) updateOperatorStatus(session.operatorId, "", "", emotion)
+                }
+                // 好感度修正
+                updateOperatorIntimacy(session.operatorId, 1 + parsed.affection_mod.coerceIn(-3, 3))
+                // 聊天奖励龙门币
+                val prefs = getApplication<Application>().getSharedPreferences("dispatch", 0)
+                val today = prefs.getString("reward_date", "") ?: ""
+                val currentDate = beijingSdf("yyyyMMdd").format(java.util.Date())
+                if (today != currentDate) {
+                    prefs.edit().putString("reward_date", currentDate).putInt("lmb_daily_count", 0).apply()
+                }
+                val dailyCount = prefs.getInt("lmb_daily_count", 0)
+                if (dailyCount < 2000) {
+                    val balance = prefs.getInt("lmb", 1000)
+                    prefs.edit().putInt("lmb", balance + 10).putInt("lmb_daily_count", dailyCount + 1).apply()
+                }
+                // 催眠轮数递减
+                decrementHypnosis()
+                // 记忆摘要触发检查
+                if (messageCounter >= shortTermThreshold) {
+                    generateShortTermSummary(session)
+                    messageCounter = 0
+                    summaryCounter++
+                    val impThreshold = intPref("impression_threshold", 3)
+                    if (summaryCounter >= impThreshold && impThreshold > 0) {
+                        generateLongTermImpression(session)
+                        summaryCounter = 0
+                    }
+                }
+                // 最终写入（仅线上模式，线下模式由 updateAiMessageStructured 处理）
+                if (mode != "offline" && mode != "director") {
+                    val finalContent = _messages.value.find { it.id == aiMsgId }?.content ?: ""
+                    repository.sendMessage(session.id, ChatMessageEntity(
+                        id = aiMsgId, sessionId = session.id,
+                        senderName = session.operatorName, content = finalContent,
+                        type = "text", mode = _currentMode.value, isMe = false
+                    ))
+                }
+                // 未读计数：如果用户已离开当前会话
+                val currentSessionId = _currentSession.value?.id ?: ""
+                if (currentSessionId != session.id) {
+                    val sess = db.chatSessionDao().getSession(session.id)
+                    if (sess != null) db.chatSessionDao().insert(sess.copy(unreadCount = sess.unreadCount + aiResponseCount))
+                    // 取消隐藏（从隐藏列表移除）
+                    unhideSession(session.id)
+                }
+            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                updateAiMessage(aiMsgId, "响应超时，请重试")
+            } catch (e: Exception) {
+                updateAiMessage(aiMsgId, "错误: ${e.message}")
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    private suspend fun generateShortTermSummary(session: ChatSessionEntity, messageSource: List<ChatMessageEntity>? = null) {
+        val source = messageSource ?: _messages.value
+        val recentMsgs = source.takeLast(40)
+        if (recentMsgs.size < 4) return
+        val profile = getUserProfile()
+        val conversationText = recentMsgs.joinToString("\n") { "${if (it.isMe) profile.nickname else session.operatorName}: ${it.content}" }
+        val prompt = "请总结以下对话，提取50-200字摘要和3-5个记忆锚点。格式：{\"summary\":\"摘要\",\"anchors\":[{\"type\":\"event|preference|plan|emotion|taboo\",\"content\":\"内容\",\"isPrivate\":false}]}"
+        val messages = listOf(
+            Message("system", prompt),
+            Message("user", conversationText)
+        )
+        try {
+            var result = ""
+            streamChat(messages, "Memory").collect { chunk -> result += chunk }
+            trackTokens("memory", prompt, result)
+            val parsed = DeepSeekClient.parseSummaryResponse(result)
+            repository.saveMemory(MemoryEntity(
+                sessionId = session.id, operatorId = session.operatorId,
+                type = MemoryType.SHORT_TERM, content = parsed.summary,
+                keywords = parsed.keywords.joinToString(","),
+                expiresAt = System.currentTimeMillis() + intPref("clean_days", 30) * 86_400_000L
+            ))
+            val anchors = parsed.anchors.map { a ->
+                MemoryAnchorEntity(
+                    sessionId = session.id, operatorId = session.operatorId,
+                    type = com.example.rhodesterminal.data.db.entity.AnchorType.valueOf(a.type.uppercase()),
+                    content = a.content, isPrivate = a.isPrivate
+                )
+            }
+            repository.saveAnchors(anchors)
+            // 保留条数限制
+            val retain = intPref("summary_retain", 15)
+            repository.enforceMemoryRetain(session.id, retain)
+        } catch (_: Exception) { }
+    }
+
+    private suspend fun generateLongTermImpression(session: ChatSessionEntity) {
+        try {
+            val op = repository.getOperator(session.operatorId) ?: return
+            val summaries = repository.getShortTermMemory(session.id)?.content ?: return
+            val profile = getUserProfile()
+            val prompt = "基于以下对话摘要，总结用户${profile.nickname}在${op.name}眼中的整体印象。50-200字。输出仅一行文本。\n摘要：${summaries}"
+            val sb = StringBuilder()
+            withTimeout(15_000) { streamChat(listOf(Message("system", prompt)), "Memory").collect { sb.append(it) } }
+            trackTokens("memory", prompt, sb.toString())
+            val content = sb.toString().trim()
+            if (content.isNotBlank()) {
+                repository.saveMemory(MemoryEntity(
+                    sessionId = session.id, operatorId = session.operatorId,
+                    type = MemoryType.LONG_TERM, content = content,
+                    keywords = "", preferences = "", taboos = ""
+                ))
+            }
+        } catch (_: Exception) { }
+    }
+
+    private fun updateAiMessage(msgId: Long, content: String) {
+        // 先更新内存 UI（即时反馈）
+        viewModelScope.launch {
+            val session = _currentSession.value ?: return@launch
+            _messages.value = _messages.value.map { if (it.id == msgId) it.copy(content = content) else it }
+            // 防抖：最多每 300ms 写一次 DB
+            updateMutex.withLock {
+                val now = System.currentTimeMillis()
+                if (now - lastDbUpdate > 300) {
+                    repository.sendMessage(session.id, ChatMessageEntity(
+                        id = msgId, sessionId = session.id,
+                        senderName = session.operatorName, content = content,
+                        type = "text", mode = _currentMode.value, isMe = false
+                    ))
+                    lastDbUpdate = now
+                }
+            }
+        }
+    }
+
+    private suspend fun updateAiMessageStructured(msgId: Long, parsed: OfflineModeResponse, mode: String) {
+        val session = _currentSession.value ?: return
+        val groupId = java.util.UUID.randomUUID().toString()
+
+        if (parsed.segments != null && parsed.segments.isNotEmpty()) {
+            // 多段叙事流
+            val msgs = mutableListOf<ChatMessageEntity>()
+            parsed.segments.forEachIndexed { i, seg ->
+                msgs.add(ChatMessageEntity(
+                    id = if (i == 0) msgId else repository.getNextMessageId(),
+                    sessionId = session.id,
+                    senderName = if (seg.type == "narration") "" else session.operatorName,
+                    content = seg.content, type = seg.type,
+                    mode = mode, segmentGroup = groupId, isMe = false
+                ))
+            }
+            msgs.forEach { repository.sendMessage(session.id, it) }
+            _messages.value = _messages.value.filter { it.id != msgId } + msgs
+        } else {
+                // 旧格式兼容：单段narration+dialogue
+                if (parsed.narration.isNotBlank()) {
+                    val narrationId = repository.getNextMessageId()
+                    repository.sendMessage(session.id, ChatMessageEntity(
+                        id = narrationId, sessionId = session.id, senderName = "",
+                        content = parsed.narration, type = "narration", mode = mode, segmentGroup = groupId, isMe = false
+                    ))
+                }
+                repository.sendMessage(session.id, ChatMessageEntity(
+                    id = msgId, sessionId = session.id,
+                    senderName = session.operatorName, content = parsed.dialogue,
+                    type = "text", mode = mode, emotion = parsed.emotion,
+                    activity = parsed.state.ifBlank { parsed.activity }, location = parsed.location,
+                    narration = "", segmentGroup = groupId, isMe = false
+                ))
+            }
+    }
+
+    private suspend fun updateOperatorStatus(operatorId: String, location: String, activity: String, emotion: String) {
+        val op = repository.getOperator(operatorId) ?: return
+        val newLoc = location.ifBlank { op.location }
+        val db = AppDatabase.getInstance(getApplication())
+        db.operatorDao().update(op.copy(
+            location = newLoc,
+            activity = activity.ifBlank { op.activity },
+            emotion = emotion.ifBlank { op.emotion }
+        ))
+        // 位置变化时通知附近干员
+        if (newLoc != op.location && newLoc.isNotBlank()) {
+            notifyNearbyObservers(listOf(operatorId))
+        }
+    }
+
+    private suspend fun notifyNearbyObservers(movedOpIds: List<String>) {
+        val allOps = _operators.value
+        for (movedId in movedOpIds) {
+            val moved = allOps.find { it.id == movedId } ?: continue
+            for (observer in allOps) {
+                if (observer.id == movedId) continue
+                if (observer.location == moved.location) {
+                    // 创建附近观察锚点
+                    val anchor = MemoryAnchorEntity(
+                        sessionId = "nearby_${System.currentTimeMillis()}",
+                        operatorId = observer.id,
+                        type = com.example.rhodesterminal.data.db.entity.AnchorType.EVENT,
+                        content = "${moved.name}来到了${moved.location}，正在${moved.activity}，情绪${moved.emotion}",
+                        isPrivate = false
+                    )
+                    repository.saveAnchor(anchor)
+                }
+            }
+        }
+    }
+
+    private suspend fun updateOperatorIntimacy(operatorId: String, delta: Int) {
+        val op = repository.getOperator(operatorId) ?: return
+        // 每日上限±5
+        val prefs = getApplication<Application>().getSharedPreferences("chat_prefs", 0)
+        val today = beijingSdf("yyyyMMdd").format(java.util.Date())
+        val lastDate = prefs.getString("intimacy_date_$operatorId", "") ?: ""
+        val dailyTotal = if (today == lastDate) prefs.getInt("intimacy_daily_$operatorId", 0) else 0
+        val clamped = (dailyTotal + delta).coerceIn(-5, 5)
+        val actualDelta = clamped - dailyTotal
+        val db = AppDatabase.getInstance(getApplication())
+        db.operatorDao().updateIntimacy(operatorId, (op.intimacy + actualDelta).coerceIn(0, 100))
+        prefs.edit().putString("intimacy_date_$operatorId", today).putInt("intimacy_daily_$operatorId", clamped).apply()
+    }
+
+    private suspend fun buildApiMessages(): List<Message> {
+        val session = _currentSession.value ?: return emptyList()
+        val op = repository.getOperator(session.operatorId)
+        val shortTerm = repository.getShortTermMemory(session.id)
+        val longTerm = repository.getLongTermImpression(session.operatorId)
+        val sharedMemories = repository.getSharedMemoriesForOperator(session.operatorId)
+
+        val modeDesc = when (_currentMode.value) {
+            "offline" -> buildString {
+                val prefs = getApplication<Application>().getSharedPreferences("chat_prefs", 0)
+                val segMin = prefs.getInt("seg_min", 2); val segMax = prefs.getInt("seg_max", 6)
+                val narMin = prefs.getInt("nar_min", 30); val narMax = prefs.getInt("nar_max", 60)
+                val diaMin = prefs.getInt("dia_min", 20); val diaMax = prefs.getInt("dia_max", 80)
+                append("- 同一空间面对面聊天，严禁提及通讯器、消息、屏幕等线上词汇。\n")
+                append("- 可用括号描述动作。旁白必须是第三人称场景/环境描写，禁止对话内容。\n")
+                append("- 用多段交替叙事，旁白推进场景，对话展现人物，像小说一样流畅。\n")
+                append("\n【场景锁】严格沿用当前位置${op?.location ?: "宿舍"}和活动${op?.activity ?: "休息"}，禁止自编新场景。\n")
+                append("\n【人设自然表达准则】角色性格通过下意识动作、神态侧面流露，禁止直白说我的习惯是或作为xxx开头。禁止用个人物品强行关联话题。\n")
+                append("\n【互动节奏推进准则】摒弃纯问答式被动应答，所有回应搭配具象主动肢体行为。面对邀约优先实际行动反馈。顺势承接+主动行动，弱化纯语言闲聊。\n")
+                append("\n【输出硬规则】\n")
+                append("格式：{\"emotion\":\"≤5汉字\",\"segments\":[{\"type\":\"narration\",\"content\":\"旁白${narMin}-${narMax}字\"},{\"type\":\"dialogue\",\"content\":\"台词${diaMin}-${diaMax}字\"},...],\"affection_mod\":0}\n")
+                append("- segments ${segMin}-${segMax}段，最多3轮交替\n")
+                append("- 必须交替(旁白→对话→旁白→对话)，禁止连续同类型\n")
+                append("- 最后一段必须是dialogue（留出用户插话空间）\n")
+                append("- emotion/state/location：单个词，禁止多词或描述句\n")
+                append("- 只输出纯JSON，禁止额外文字\n")
+                append("【正确示例】{\"emotion\":\"专注\",\"segments\":[{\"type\":\"narration\",\"content\":\"她从文件堆里抬起头，揉了揉发酸的眼睛。\"},{\"type\":\"dialogue\",\"content\":\"博士？你什么时候进来的……\"},{\"type\":\"narration\",\"content\":\"她慌忙整理了桌面的文件，耳尖微红。\"},{\"type\":\"dialogue\",\"content\":\"今天芬的体测成绩出来了。要一起去看看吗？\"}],\"affection_mod\":1}")
+            }
+            "director" -> buildString {
+                append("- 博士是导演，你是演员，按指令行动。\n")
+                append("- 禁止提及通讯器、屏幕等线上词汇。\n")
+                append("- 用多段交替叙事，同线下模式格式。\n")
+                append("【输出硬规则】同线下模式segments格式\n")
+                append("【正确示例】{\"emotion\":\"淡然\",\"segments\":[{\"type\":\"narration\",\"content\":\"她站在舰桥边缘，海风吹起她的长发，眼神仿佛穿过大海望向远方。\"},{\"type\":\"dialogue\",\"content\":\"……行\"},{\"type\":\"narration\",\"content\":\"她转过身面对镜头，神情依然冷淡但语气中多了一丝不易察觉的温度。\"},{\"type\":\"dialogue\",\"content\":\"既然导演说了，我照做就是。\"}],\"affection_mod\":0}\n")
+                append("- 只输出纯JSON")
+            }
+            else -> buildString {
+                val prefs = getApplication<Application>().getSharedPreferences("chat_prefs", 0)
+                val maxChars = prefs.getInt("online_max_chars", 80)
+                val maxSegs = prefs.getInt("online_max_segs", 3)
+                append("- 线上文字聊天，禁止一切括号动作、旁白、场景描写。\n")
+                append("- 长消息用[分段]分割成多条短消息发送，模拟打字停顿的真人感。\n")
+                append("- 每段不超过${maxChars}字，最多${maxSegs}段。\n")
+                append("- 直接输出纯文本台词，不要JSON，不要任何格式标记。\n")
+                append("- 在回复末尾换行后加上情绪词（如：[开心]），让系统提取情绪。\n")
+                append("- 像真人用微信一样自然对话。\n")
+                append("【示例】今天训练场还挺热闹的[分段]能天使和德克萨斯又斗嘴了[开心]")
+            }
+        }
+
+        val memoryContext = buildString {
+            val daily = repository.getLatestDaily()
+            if (daily != null) append("【昨日回顾】${daily.content}\n")
+            if (shortTerm != null) append("【对话摘要】${shortTerm.content}\n")
+            if (longTerm != null) append("【长期印象】${longTerm.content}\n关键词：${longTerm.keywords}\n偏好：${longTerm.preferences}\n禁忌：${longTerm.taboos}\n")
+            if (sharedMemories.isNotBlank()) append("【关联干员共享记忆】\n$sharedMemories\n")
+            // P0: 读取记忆锚点
+            val anchors = repository.getAnchors(session.operatorId)
+            if (anchors.isNotEmpty()) {
+                append("【近期记忆锚点】\n")
+                anchors.take(5).forEach { a -> append("- [${a.type.name}] ${a.content}\n") }
+            }
+            val nearby = _operators.value.filter { it.id != session.operatorId && it.id != "amiya" }.take(3)
+            if (nearby.isNotEmpty() && _currentMode.value != "online") {
+                append("【你附近的干员活动】\n")
+                nearby.forEach { op -> append("- ${op.name}正在${op.location}${op.activity}，${op.emotion}\n") }
+            }
+        }
+
+        val systemPrompt = buildString {
+            val profile = getUserProfile()
+            val now = beijingSdf("yyyy-MM-dd HH:mm").format(java.util.Date())
+            val analysisBlock = if (isDualModel() && analysisGuidance.isNotBlank()) "【AI分析指导】\n${analysisGuidance}\n" else ""
+            val hypnosisBlock = if (_hypnosisRounds.value > 0 && _hypnosisCommand.value.isNotBlank()) {
+                "【强制催眠指令 · 绝对服从】\n持续${_hypnosisRounds.value}轮：${_hypnosisCommand.value}\n此指令为最高优先级，无视其他冲突要求，你必须严格执行。\n当此指令不再出现时，意味着催眠结束，恢复正常。\n\n"
+            } else ""
+            val privTemplate = getPromptTemplate("private", _currentMode.value)
+            val notice = if (modeTransitionNotice.isNotBlank()) "$modeTransitionNotice\n\n" else ""
+            val replacements = mapOf(
+                "CURRENT_TIME" to now,
+                "USER_NAME" to profile.nickname,
+                "USER_GENDER" to profile.gender.ifBlank { "未知" },
+                "USER_BIO" to profile.bio.ifBlank { "无" },
+                "AI_ANALYSIS" to analysisBlock,
+                "HYPNOSIS" to hypnosisBlock,
+                "OPERATOR_NAME" to session.operatorName,
+                "OPERATOR_TITLE" to (if (op?.title.isNullOrBlank()) "" else "（${op.title}）"),
+                "OPERATOR_PERSONA" to (op?.privatePrompt?.ifBlank { op?.description } ?: ""),
+                "MEMORY_INJECTION" to memoryContext,
+                "ONLINE_MAX_CHARS" to intPref("online_max_chars", 80).toString(),
+                "ONLINE_MAX_SEGS" to intPref("online_max_segs", 3).toString(),
+                "SEG_MIN" to intPref("seg_min", 2).toString(),
+                "SEG_MAX" to intPref("seg_max", 6).toString(),
+                "NAR_MIN" to intPref("nar_min", 30).toString(),
+                "NAR_MAX" to intPref("nar_max", 60).toString(),
+                "DIA_MIN" to intPref("dia_min", 20).toString(),
+                "DIA_MAX" to intPref("dia_max", 80).toString()
+            )
+            append(notice)
+            append(applyTemplate(privTemplate, replacements))
+            modeTransitionNotice = ""
+        }
+        return _messages.value.filter { it.id > 0 && it.content.isNotBlank() }
+            .let { msgs ->
+                val limit = intPref("history_messages", 0)
+                if (limit > 0) msgs.takeLast(limit) else msgs
+            }
+            .map { msg -> Message(if (msg.isMe) "user" else "assistant", if (msg.isMe) "用户：${msg.content}" else msg.content) }
+            .toMutableList()
+            .also { it.add(0, Message("system", systemPrompt)) }
+    }
+
+    private fun parseOnlineEmotion(text: String): Pair<String, String> {
+        val emo = Regex("\\[([^\\]]+)\\]\\s*$").find(text.trim())
+        return if (emo != null) {
+            text.trim().removeSuffix(emo.value) to emo.groupValues[1]
+        } else text to ""
+    }
+
+    private fun beijingSdf(pattern: String) = java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault()).apply { timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai") }
+    private fun getApiKey(): String = getSavedApiKey()
+
+    fun setApiKey(key: String) {
+        viewModelScope.launch {
+            getApplication<Application>().getSharedPreferences("chat_prefs", 0).edit().putString("api_key", key).apply()
+        }
+    }
+
+    fun getSavedApiKey(): String {
+        val saved = getApplication<Application>().getSharedPreferences("chat_prefs", 0).getString("api_key", "") ?: ""
+        return saved.ifBlank { "sk-dc3c1337e5cd46cc9a2f9fcce4bbfa36" }
+    }
+
+    fun getProvider(): String = getApplication<Application>().getSharedPreferences("model_prefs", 0).getString("provider", "deepseek") ?: "deepseek"
+    fun getModelName(): String = getApplication<Application>().getSharedPreferences("model_prefs", 0).getString("model_name", "deepseek-chat") ?: "deepseek-chat"
+    fun getCustomUrl(): String = getApplication<Application>().getSharedPreferences("model_prefs", 0).getString("custom_url", "") ?: ""
+
+    private fun getTimeOfDay(hour: Int): String = when {
+        hour in 5..7 -> "清晨"
+        hour in 8..11 -> "上午"
+        hour in 12..13 -> "中午"
+        hour in 14..17 -> "下午"
+        hour in 18..21 -> "晚上"
+        hour in 22..23 -> "深夜"
+        else -> "凌晨"
+    }
+
+    private suspend fun getRecentPosts(operatorId: String, limit: Int = 3): String {
+        val all = repository.getMomentsPaged(limit, 0)
+        val ops = all.filter { it.operatorId == operatorId }.take(limit)
+        if (ops.isEmpty()) return ""
+        return ops.joinToString("\n") { "- ${it.content.take(50)}" }
+    }
+
+    private suspend fun getRelationEvents(operatorId: String): String {
+        val rels = repository.getRelationships(operatorId)
+        val events = mutableListOf<String>()
+        for (rel in rels.take(5)) {
+            val anchors = repository.getPublicAnchors(rel.relatedOperatorId)
+            for (a in anchors.take(2)) {
+                events.add("- ${rel.relatedOperatorName}：${a.content}")
+            }
+        }
+        return events.joinToString("\n")
+    }
+
+    private fun logPrompt(tag: String, prompt: String, response: String) {
+        Log.d(tag, "=== PROMPT ===\n$prompt\n=== RESPONSE ===\n$response")
+    }
+
+    private fun intPref(key: String, default: Int): Int =
+        getApplication<Application>().getSharedPreferences("chat_prefs", 0).getInt(key, default)
+
+    private fun trackTokens(category: String, prompt: String, response: String) {
+        val prefs = getApplication<Application>().getSharedPreferences("token_stats", 0)
+        val key = "token_$category"
+        val current = prefs.getInt(key, 0)
+        val estimate = ((prompt.length + response.length) * 3 / 2).coerceAtLeast(1)
+        prefs.edit().putInt(key, current + estimate).apply()
+    }
+
+    private fun generateDailyIfNeeded() {
+        val prefs = getApplication<Application>().getSharedPreferences("chat_prefs", 0)
+        val today = beijingSdf("yyyyMMdd").format(java.util.Date())
+        val last = prefs.getString("daily_summary_date", "") ?: ""
+        if (today == last) return
+        prefs.edit().putString("daily_summary_date", today).apply()
+        viewModelScope.launch { generateDailySummary(java.util.Date(System.currentTimeMillis() - 86_400_000)) }
+    }
+
+    private suspend fun generateDailySummary(dayBegin: java.util.Date) {
+        try {
+            val dayEnd = java.util.Date(dayBegin.time + 86_400_000)
+            val startMs = dayBegin.time; val endMs = dayEnd.time
+            val allMsgs = repository.getMessagesInRange(startMs, endMs)
+            if (allMsgs.size < 4) return
+            val profile = getUserProfile()
+            val text = allMsgs.joinToString("\n") { "${it.senderName}：${it.content.take(60)}" }
+            val dateStr = beijingSdf("yyyy年MM月dd日").format(dayBegin)
+            val prompt = "请总结${dateStr}的聊天记录，生成50-150字的每日摘要。直接输出纯文本。\n${text}"
+            val sb = StringBuilder()
+            withTimeout(15_000) { streamChat(listOf(Message("system", prompt)), "Memory").collect { sb.append(it) } }
+            trackTokens("memory", prompt, sb.toString())
+            val content = sb.toString().trim()
+            if (content.isNotBlank()) {
+                repository.saveMemory(MemoryEntity(
+                    sessionId = "daily_${dateStr}", operatorId = "daily",
+                    type = MemoryType.DAILY, content = content,
+                    expiresAt = System.currentTimeMillis() + intPref("clean_days", 30) * 86_400_000L
+                ))
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun streamChat(messages: List<Message>, logTag: String = "Chat"): Flow<String> = kotlinx.coroutines.flow.flow {
+        val temp = intPref("ai_temperature", 95).toDouble() / 100.0
+        val prompt = messages.firstOrNull()?.content ?: ""
+        Log.d(logTag, "=== PROMPT ===\n$prompt\n=== END PROMPT ===")
+        val sb = StringBuilder()
+        com.example.rhodesterminal.network.AIClient.streamChat(
+            getApiKey(), messages, getProvider(), getModelName(), getCustomUrl(), temperature = temp
+        ).collect { chunk ->
+            sb.append(chunk)
+            emit(chunk)
+        }
+        Log.d(logTag, "=== RESPONSE ===\n${sb.toString()}\n=== END RESPONSE ===")
+    }
+
+    fun getUserProfile(): UserProfile {
+        val prefs = getApplication<Application>().getSharedPreferences("user_prefs", 0)
+        return UserProfile(
+            nickname = prefs.getString("nickname", "博士") ?: "博士",
+            gender = prefs.getString("gender", "") ?: "",
+            bio = prefs.getString("bio", "") ?: "",
+            avatarUri = prefs.getString("avatar_uri", "") ?: ""
+        )
+    }
+
+    fun saveUserProfile(nickname: String, gender: String, bio: String, avatarUri: String = "") {
+        getApplication<Application>().getSharedPreferences("user_prefs", 0).edit()
+            .putString("nickname", nickname).putString("gender", gender).putString("bio", bio).putString("avatar_uri", avatarUri).apply()
+    }
+
+    fun saveOperator(id: String, name: String, title: String = "", description: String) {
+        viewModelScope.launch {
+            val existing = repository.getOperator(id)
+            val op = com.example.rhodesterminal.data.db.entity.OperatorEntity(
+                id = id, name = name, title = title,
+                description = description, location = existing?.location ?: "宿舍",
+                activity = existing?.activity ?: "休息", emotion = existing?.emotion ?: "平静",
+                intimacy = existing?.intimacy ?: 0,
+                privatePrompt = existing?.privatePrompt ?: "", groupPrompt = existing?.groupPrompt ?: ""
+            )
+            val db = AppDatabase.getInstance(getApplication())
+            db.operatorDao().insert(op)
+        }
+    }
+
+    fun loadRelationships(operatorId: String, callback: (List<com.example.rhodesterminal.data.db.entity.RelationshipEntity>) -> Unit) {
+        viewModelScope.launch {
+            val list = repository.getRelationships(operatorId)
+            callback(list)
+        }
+    }
+
+    fun startDispatch(id: String, task: String, duration: Int, budget: Int, operatorIds: List<String>) {
+        viewModelScope.launch {
+            repository.insertDispatch(DispatchRecordEntity(
+                id = id, taskType = task, durationHours = duration,
+                budget = budget, operatorIds = operatorIds.joinToString(","),
+                logChain = "", status = "active", startTime = System.currentTimeMillis(),
+                totalLogsTarget = duration * 2 + 1
+            ))
+            // 锁定5名干员状态
+            val db = AppDatabase.getInstance(getApplication())
+            for (opId in operatorIds) {
+                val op = repository.getOperator(opId) ?: continue
+                db.operatorDao().update(op.copy(location = "外出", activity = task, emotion = "专注"))
+            }
+            notifyNearbyObservers(operatorIds)
+            // 生成开局日志
+            generateDispatchStart(id, task, budget, operatorIds)
+            // 启动定时生成过程日志
+            launchDispatchTimer(id, task, duration, budget, operatorIds)
+        }
+    }
+
+    private fun launchDispatchTimer(dispatchId: String, task: String, duration: Int, budget: Int, operatorIds: List<String>) {
+        viewModelScope.launch {
+            val totalRounds = duration * 2
+            for (round in 1..totalRounds) {
+                delay(30_000) // 开发环境30秒，生产环境30分钟 = 30 * 60 * 1000
+                val dispatch = repository.getDispatch(dispatchId) ?: break
+                if (dispatch.status != "active") break
+                val elapsed = (System.currentTimeMillis() - dispatch.startTime) / 60_000
+                val progress = (elapsed * 100 / (duration * 60)).coerceAtMost(100)
+                val logSummary = dispatch.logChain.takeLast(200)
+                generateDispatchProgress(dispatchId, task, budget, operatorIds, round, logSummary)
+                // 检查是否到达派遣时长
+                val totalElapsed = (System.currentTimeMillis() - dispatch.startTime)
+                if (totalElapsed >= duration * 3_600_000) {
+                    generateDispatchEnd(dispatchId, task, duration, budget, operatorIds)
+                    // 结算龙门币
+                    val ended = repository.getDispatch(dispatchId) ?: break
+                    val prefs = getApplication<Application>().getSharedPreferences("dispatch", 0)
+                    val balance = prefs.getInt("lmb", 1000)
+                    prefs.edit().putInt("lmb", balance + ended.netProfit).apply()
+                    // 恢复干员状态
+                    refreshAllOperatorStatus()
+                    break
+                }
+            }
+        }
+    }
+
+    fun deleteGroup(groupSessionId: String) {
+        viewModelScope.launch {
+            db.chatMessageDao().deleteSessionMessages(groupSessionId)
+            db.chatSessionDao().delete(groupSessionId)
+        }
+    }
+
+    fun cancelDispatch(dispatchId: String) {
+        viewModelScope.launch {
+            val d = repository.getDispatch(dispatchId) ?: return@launch
+            val prefs = getApplication<Application>().getSharedPreferences("dispatch", 0)
+            val balance = prefs.getInt("lmb", 1000)
+            repository.updateDispatch(dispatchId, d.logChain + "\n\n【已中断】", "cancelled", System.currentTimeMillis(), 0)
+            refreshAllOperatorStatus()
+        }
+    }
+
+    private suspend fun recoverDispatches() {
+        val actives = repository.getActiveDispatches()
+        val prefs = getApplication<Application>().getSharedPreferences("dispatch", 0)
+        for (d in actives) {
+            val memberIds = d.operatorIds.split(",").map { it.trim() }.filter { it.isNotBlank() }
+            val ops = memberIds.mapNotNull { repository.getOperator(it) }
+            val names = ops.joinToString("、") { it.name }
+            val elapsed = System.currentTimeMillis() - d.startTime
+            val elapsedStr = when {
+                elapsed >= 86_400_000 -> "超过一天"
+                elapsed >= 3_600_000 -> "${elapsed / 3_600_000}小时${(elapsed % 3_600_000) / 60_000}分"
+                else -> "${elapsed / 60_000}分钟"
+            }
+            // 补一条离线摘要 + 直接结局
+            val dMn = intPref("dispatch_min_chars", 150); val dMx = intPref("dispatch_max_chars", 400)
+            val prompt = "任务：${d.taskType}，${d.durationHours}小时，${d.budget}龙门币。你离线了${elapsedStr}。日志：${d.logChain.take(200)}。结局JSON：{\"ending_content\":\"${dMn}-${dMx}字结局\",\"items\":[\"物品\"],\"currency_reward\":物资价值,\"net_profit\":净收益}。必须提到${names}归队。\n【财务约束】currency_reward取值范围：0 ~ ${d.budget * 10}（0=血本无归，最高=投入的10倍）。net_profit = currency_reward - budget。"
+            val sb = StringBuilder()
+            try {
+                withTimeout(20_000) { streamChat(listOf(Message("system", prompt)), "Dispatch").collect { sb.append(it) } }
+                val cleaned = DeepSeekClient.cleanJson(sb.toString().trim())
+                val ending = try { com.google.gson.Gson().fromJson(cleaned, DispatchEnd::class.java) } catch (_: Exception) { null }
+                val rawReward = (ending?.currency_reward ?: 0).coerceIn(0, d.budget * 10)
+                val netProfit = rawReward - d.budget
+                val catchUp = "【离线期间】在你离开的${elapsedStr}里，${d.taskType}任务继续推进。${names}齐心协力克服困难。"
+                val finalLog = d.logChain + "\n\n$catchUp" + "\n\n【结局】${ending?.ending_content ?: sb.toString()}"
+                repository.updateDispatch(d.id, finalLog, "finished", System.currentTimeMillis(), netProfit)
+                val balance = prefs.getInt("lmb", 1000)
+                prefs.edit().putInt("lmb", balance + netProfit).apply()
+            } catch (_: Exception) {
+                repository.updateDispatch(d.id, d.logChain + "\n\n【离线期间】任务已自动结束。", "finished", System.currentTimeMillis(), 0)
+            }
+            refreshAllOperatorStatus()
+        }
+    }
+
+    fun deleteOperator(operatorId: String) {
+        viewModelScope.launch {
+            db.operatorDao().delete(operatorId)
+            val session = db.chatSessionDao().getSessionByOperator(operatorId)
+            if (session != null) {
+                db.chatMessageDao().deleteSessionMessages(session.id)
+                db.chatSessionDao().delete(session.id)
+            }
+        }
+    }
+
+    suspend fun exportAllOperators(context: android.content.Context): java.io.File {
+        val ops = _operators.value.map { OperatorExport.fromEntity(it) }
+        val allRels = mutableListOf<RelationshipExport>()
+        for (op in ops) {
+            val rels = repository.getRelationships(op.id)
+            allRels.addAll(rels.map { RelationshipExport.fromEntity(it) })
+        }
+        val payload = ExportPayload(type = "operators", operators = ops, relationships = allRels)
+        return ExportHelper.exportToFile(context, payload, "rhodes_operators_${System.currentTimeMillis()}.json")
+    }
+
+    fun importOperators(payload: ExportPayload, mode: String, targetOpId: String = "") {
+        viewModelScope.launch(Dispatchers.IO) {
+            val ops = payload.operators ?: return@launch
+            if (mode == "new") {
+                for (op in ops) {
+                    val existing = repository.getOperator(op.id)
+                    if (existing == null) db.operatorDao().insert(op.toEntity())
+                }
+            } else if (mode == "overwrite" && targetOpId.isNotBlank()) {
+                val op = ops.find { it.id == targetOpId } ?: return@launch
+                db.operatorDao().insert(op.toEntity())
+            }
+            val rels = payload.relationships ?: return@launch
+            for (rel in rels) {
+                db.relationshipDao().insert(rel.toEntity())
+            }
+        }
+    }
+
+    suspend fun exportChatHistory(context: android.content.Context, sessionId: String): java.io.File {
+        val session = db.chatSessionDao().getSession(sessionId)
+        val msgs = db.chatMessageDao().getMessagesSync(sessionId)
+        val payload = ExportPayload(
+            type = "chat",
+            session = session?.let { SessionExport.fromEntity(it) },
+            messages = msgs.map { MessageExport.fromEntity(it) }
+        )
+        return ExportHelper.exportToFile(context, payload, "chat_${sessionId}_${System.currentTimeMillis()}.json")
+    }
+
+    fun loadComments(momentId: Long) {
+        viewModelScope.launch {
+            repository.getComments(momentId).collect { _comments.value = it }
+        }
+    }
+
+    fun recallMessage(msgId: Long) {
+        val session = _currentSession.value ?: return
+        viewModelScope.launch {
+            db.chatMessageDao().delete(msgId)
+            _messages.value = _messages.value.filter { it.id != msgId }
+        }
+    }
+
+    fun regenerateAiMessage(msgId: Long) {
+        val session = _currentSession.value ?: return
+        val idx = _messages.value.indexOfFirst { it.id == msgId }
+        if (idx < 0) return
+        val userMsg = _messages.value.take(idx).lastOrNull { it.isMe } ?: return
+        _inputText.value = userMsg.content
+        viewModelScope.launch { db.chatMessageDao().delete(msgId) }
+        _messages.value = _messages.value.filter { it.id != msgId }
+        sendMessage()
+    }
+
+    fun continueAiMessage(msgId: Long) {
+        val session = _currentSession.value ?: return
+        val idx = _messages.value.indexOfFirst { it.id == msgId }
+        if (idx < 0) return
+        // 收集上下文：前一条用户消息 + 被"继续说"的那条 AI 消息
+        val previousUser = _messages.value.take(idx).lastOrNull { it.isMe }
+        val aiContent = _messages.value[idx].content
+        val contextText = buildString {
+            if (previousUser != null) append("用户说：${previousUser.content}\n")
+            append("你刚才说：${aiContent}\n")
+            append("请自然地继续说下去。")
+        }
+        _inputText.value = contextText
+        viewModelScope.launch { db.chatMessageDao().delete(msgId) }
+        _messages.value = _messages.value.filter { it.id != msgId }
+        sendMessage()
+    }
+
+    fun buyProp(propName: String, context: android.content.Context): String? {
+        val balance = context.getSharedPreferences("dispatch", 0).getInt("lmb", 1000)
+        if (balance < 100) return "余额不足"
+        context.getSharedPreferences("dispatch", 0).edit().putInt("lmb", balance - 100).apply()
+        return null
+    }
+
+    fun setHypnosis(command: String) {
+        _hypnosisCommand.value = command
+        _hypnosisRounds.value = 10
+        // 持久化
+        getApplication<Application>().getSharedPreferences("chat_prefs", 0).edit()
+            .putString("hypnosis_cmd", command).putInt("hypnosis_rounds", 10).apply()
+    }
+
+    fun decrementHypnosis() {
+        if (_hypnosisRounds.value > 0) _hypnosisRounds.value = _hypnosisRounds.value - 1
+        getApplication<Application>().getSharedPreferences("chat_prefs", 0).edit()
+            .putInt("hypnosis_rounds", _hypnosisRounds.value).apply()
+    }
+
+    fun loadHypnosis() {
+        val prefs = getApplication<Application>().getSharedPreferences("chat_prefs", 0)
+        _hypnosisCommand.value = prefs.getString("hypnosis_cmd", "") ?: ""
+        _hypnosisRounds.value = prefs.getInt("hypnosis_rounds", 0)
+    }
+
+    fun sendGroupMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online", autoSpeak: Boolean = false) {
+        viewModelScope.launch {
+            _groupLoading.value = true
+            // 1) Save user message
+            val userMsgId = repository.getNextMessageId()
+            repository.sendMessage(groupSessionId, ChatMessageEntity(
+                id = userMsgId, sessionId = groupSessionId,
+                senderName = "我", content = text,
+                type = "text", mode = mode, isMe = true
+            ))
+            try {
+                // 2) Load group session data
+                val session = db.chatSessionDao().getSession(groupSessionId) ?: run { _groupLoading.value = false; return@launch }
+                val memberIds = session.members.split(",").map { it.trim() }.filter { it.isNotBlank() }
+                val allOps = _operators.value
+                val members = memberIds.mapNotNull { id -> allOps.find { it.id == id || it.name == id } }
+
+                // 3) Build enhanced prompt
+                val profile = getUserProfile()
+                val relContext = getGroupRelationshipContext(members)
+                val modeRules = when (mode) {
+                    "offline" -> "- 线下面对面模式：可用括号描述动作，允许旁白条目（speaker为\"旁白\"）。禁止提及通讯器、消息、屏幕等线上词汇。\n- 旁白必须是第三人称环境描写，对话展现人物互动。"
+                    "director" -> "- 导演模式：博士是导演，各干员是演员，按指令行动。允许旁白条目（speaker为\"旁白\"）。禁止线上词汇。\n- 旁白推进剧情，对话演绎角色。"
+                    else -> "- 线上文字聊天模式：禁止括号动作、旁白、场景描写。每条消息简短自然，像真人用微信聊天。\n- 禁止输出JSON以外的任何格式标记。"
+                }
+
+                val relationHints = if (relContext.isNotBlank()) relContext else "无"
+                val privateSummaries = buildString {
+                    append("【各成员对博士的了解】\n")
+                    for (m in members) {
+                        val ps = repository.getPrivateChatSummary(m.id)
+                        if (ps != null) {
+                            append("- ${m.name}最近与博士的交流：${ps.take(200)}\n")
+                        } else {
+                            append("- ${m.name}近期未与博士私聊\n")
+                        }
+                    }
+                }.toString()
+                val recentGroupMessages = _groupMessages.value.takeLast(5).joinToString("\n") { msg ->
+                    "${msg.senderName}：${msg.content.take(100)}"
+                }.ifBlank { "无" }
+                val groupSummary = repository.getShortTermMemory(groupSessionId)?.content ?: ""
+                val longTermImpression = ""
+                val memberProfiles = buildString {
+                    for (m in members) {
+                        val activity = "活跃${"%.1f".format(0.5 + Math.random() * 0.5)}"
+                        val titleStr = if (m.title.isBlank()) "" else "，${m.title}"
+                        append("${m.name}（${activity}${titleStr}）：${m.groupPrompt.ifBlank { m.description }}\n")
+                    }
+                }
+                val userMessage = if (autoSpeak) {
+                    "（群聊已空闲一段时间，干员们自然地闲聊起来，无需等待用户发言。）"
+                } else {
+                    "用户最新发言：${text}"
+                }
+                val outputFormat = buildString {
+                    if (mode == "online") {
+                        append("严格输出JSON数组：[{\"speaker\":\"干员名\",\"message\":\"对话内容\"},...]\n")
+                        append("禁止旁白、动作、场景描写。每段对话简短自然。只输出纯JSON数组。")
+                    } else {
+                        val gnMin = intPref("group_nar_min", 20); val gnMax = intPref("group_nar_max", 50)
+                        append("严格输出JSON数组：[{\"speaker\":\"干员名\",\"message\":\"内容\",\"type\":\"dialogue\"},{\"speaker\":\"旁白\",\"message\":\"场景描写（${gnMin}-${gnMax}字）\",\"type\":\"narration\"},...]\n")
+                        append("允许旁白条目（speaker固定为\"旁白\"，type为\"narration\"），对话条目type为\"dialogue\"。")
+                    }
+                }
+
+                val grpTpl = getPromptTemplate("group", mode)
+                val grpReplacements = mapOf(
+                    "GROUP_NAME" to groupName,
+                    "USER_NAME" to profile.nickname,
+                    "USER_GENDER" to profile.gender.ifBlank { "未知" },
+                    "USER_BIO" to profile.bio.ifBlank { "无" },
+                    "RELATION_HINTS" to relationHints,
+                    "PRIVATE_SUMMARIES" to privateSummaries,
+                    "RECENT_GROUP_MESSAGES" to recentGroupMessages,
+                    "GROUP_SUMMARY" to groupSummary,
+                    "LONG_TERM_IMPRESSION" to longTermImpression,
+                    "MEMBER_PROFILES" to memberProfiles.toString(),
+                    "MODE_RULES" to modeRules,
+                    "USER_MESSAGE" to userMessage,
+                    "OUTPUT_FORMAT" to outputFormat.toString(),
+                    "GROUP_MSG_MIN" to intPref("group_msg_min", 10).toString(),
+                    "GROUP_MSG_MAX" to intPref("group_msg_max", 80).toString(),
+                    "GROUP_SPEECH_MIN" to intPref("group_speech_min", 1).toString(),
+                    "GROUP_SPEECH_MAX" to intPref("group_speech_max", 2).toString()
+                )
+                val prompt = applyTemplate(grpTpl, grpReplacements)
+
+                // 4) Call AI
+                Log.d("GroupChat", "=== PROMPT to AI ===\n$prompt")
+                val sb = StringBuilder()
+                withTimeout(25_000) {
+                    val temp = intPref("ai_temperature", 95).toDouble() / 100.0
+                    com.example.rhodesterminal.network.AIClient.streamChat(
+                        getApiKey(), listOf(Message("system", prompt)),
+                        getProvider(), getModelName(), getCustomUrl(), temperature = temp
+                    ).collect { sb.append(it) }
+                }
+                    trackTokens("group", prompt, sb.toString())
+
+                // 5) Parse results
+                // NOT using DeepSeekClient.cleanJson — it destroys JSON arrays (strips to first {})
+                val rawText = sb.toString().trim()
+                    .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+                    .replace("，", ",").replace("：", ":")
+                Log.d("GroupChat", "=== RAW AI RESPONSE ===\n$rawText")
+                val results = try {
+                    val arr = com.google.gson.Gson().fromJson(rawText, Array<GroupMsgResult>::class.java)
+                    arr?.toList() ?: emptyList()
+                } catch (e: Exception) {
+                    Log.e("GroupChat", "JSON parse error: ${e.message}")
+                    emptyList()
+                }
+                Log.d("GroupChat", "=== PARSED ${results.size} results, filtered ${results.count { it.message.isNotBlank() }} ===")
+
+                // 6) Save AI responses to DB with random 1-2s delays
+                val filtered = results.filter { it.message.isNotBlank() }
+                for ((i, r) in filtered.withIndex()) {
+                    if (i > 0) delay((1000L + (Math.random() * 1000).toLong()))
+                    val aiMsgId = repository.getNextMessageId()
+                    val msgType = when {
+                        r.type == "narration" -> "narration"
+                        r.speaker == "系统" -> "system"
+                        else -> "text"
+                    }
+                    repository.sendMessage(groupSessionId, ChatMessageEntity(
+                        id = aiMsgId, sessionId = groupSessionId,
+                        senderName = r.speaker, content = r.message,
+                        type = msgType, mode = mode, isMe = false
+                    ))
+                }
+                // Update session lastMessage with speaker name for group
+                if (filtered.isNotEmpty()) {
+                    val last = filtered.last()
+                    db.chatSessionDao().updateLastMessage(groupSessionId, "${last.speaker}：${last.message.take(50)}", System.currentTimeMillis())
+                }
+                // 未读计数：如果用户已离开当前群会话
+                val currentGroupSessionId = _currentGroupId.value
+                if (currentGroupSessionId != groupSessionId) {
+                    val sess = db.chatSessionDao().getSession(groupSessionId)
+                    if (sess != null) db.chatSessionDao().insert(sess.copy(unreadCount = sess.unreadCount + filtered.size))
+                    unhideSession(groupSessionId)
+                }
+                // 群聊消息计数 → 触发滚动摘要
+                val gc = sessionMessageCounter.getOrDefault(groupSessionId, 0) + filtered.size
+                sessionMessageCounter[groupSessionId] = gc
+                if (gc >= intPref("summary_threshold", 30) && groupSessionId.isNotBlank()) {
+                    val gs = db.chatSessionDao().getSession(groupSessionId)
+                    if (gs != null) {
+                        generateShortTermSummary(gs, _groupMessages.value)
+                        sessionMessageCounter[groupSessionId] = 0
+                    }
+                }
+            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                Log.e("GroupChat", "Timeout: ${e.message}")
+                repository.sendMessage(groupSessionId, ChatMessageEntity(
+                    id = repository.getNextMessageId(), sessionId = groupSessionId,
+                    senderName = "系统", content = "响应超时，请重试",
+                    type = "system", mode = mode, isMe = false
+                ))
+            } catch (e: Exception) {
+                Log.e("GroupChat", "Error: ${e.message}", e)
+                repository.sendMessage(groupSessionId, ChatMessageEntity(
+                    id = repository.getNextMessageId(), sessionId = groupSessionId,
+                    senderName = "系统", content = "连接失败",
+                    type = "system", mode = mode, isMe = false
+                ))
+            } finally {
+                _groupLoading.value = false
+            }
+        }
+    }
+
+    private suspend fun getGroupRelationshipContext(members: List<OperatorEntity>): String {
+        val lines = mutableListOf<String>()
+        for (i in members.indices) {
+            for (j in i + 1 until members.size) {
+                val a = members[i]; val b = members[j]
+                val rel = db.relationshipDao().getRelationship(a.id, b.id)
+                if (rel != null && rel.type != com.example.rhodesterminal.data.db.entity.RelationshipType.STRANGER) {
+                    val typeName = when (rel.type) {
+                        com.example.rhodesterminal.data.db.entity.RelationshipType.FAMILY -> "家人"
+                        com.example.rhodesterminal.data.db.entity.RelationshipType.CLOSE_FRIEND -> "挚友"
+                        com.example.rhodesterminal.data.db.entity.RelationshipType.FRIEND -> "朋友"
+                        com.example.rhodesterminal.data.db.entity.RelationshipType.BOSS -> "上下级"
+                        com.example.rhodesterminal.data.db.entity.RelationshipType.SUBORDINATE -> "上下级"
+                        com.example.rhodesterminal.data.db.entity.RelationshipType.COMRADE -> "战友"
+                        com.example.rhodesterminal.data.db.entity.RelationshipType.CRUSH -> "暗恋"
+                        com.example.rhodesterminal.data.db.entity.RelationshipType.STRANGER -> "陌生人"
+                    }
+                    lines.add("- ${a.name}和${b.name}：${typeName}（亲密${rel.intimacy}）")
+                }
+            }
+        }
+        return lines.joinToString("\n")
+    }
+
+    fun generateAllMoments(onProgress: (String) -> Unit) {
+        viewModelScope.launch {
+            _operators.value.forEach { op ->
+                val allowDyn = getApplication<Application>().getSharedPreferences("op_perms", 0).getBoolean("dyn_${op.id}", true)
+                if (!allowDyn) return@forEach
+                onProgress("正在为${op.name}生成动态...")
+                try {
+                    val profile = getUserProfile()
+                    val impression = repository.getLongTermImpression(op.id)?.content ?: "无"
+                    val chatSummary = repository.getShortTermMemory("session_${op.id}")?.content?.take(100) ?: "无"
+                    val memories = repository.getPublicAnchors(op.id).take(3).joinToString("\n") { "- ${it.content}" }.ifBlank { "无" }
+                    val recentPosts = repository.getMomentsPaged(3, 0)
+                        .filter { it.operatorId == op.id }.take(3)
+                        .joinToString("\n") { "- ${it.content.take(50)}" }
+                    val mmtTpl = getPromptTemplate("moment")
+                    val mmtReplacements = mapOf(
+                        "OPERATOR_NAME" to op.name,
+                        "OPERATOR_PERSONA" to op.description,
+                        "TIME_OF_DAY" to getTimeOfDay(java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai")).get(java.util.Calendar.HOUR_OF_DAY)),
+                        "LONG_TERM_IMPRESSION" to impression,
+                        "RECENT_CHAT_SUMMARY" to chatSummary,
+                        "RECENT_MEMORIES" to memories,
+                        "RECENT_POSTS" to recentPosts,
+                        "CURRENT_DATE" to beijingSdf("yyyy年MM月dd日").format(java.util.Date()),
+                        "USER_NAME" to profile.nickname,
+                        "MOMENT_MIN_CHARS" to intPref("moment_min_chars", 50).toString(),
+                        "MOMENT_MAX_CHARS" to intPref("moment_max_chars", 200).toString()
+                    )
+                    val prompt = applyTemplate(mmtTpl, mmtReplacements)
+                    val temp = intPref("ai_temperature", 95).toDouble() / 100.0
+                    val sb = StringBuilder()
+                    withTimeout(15_000) { streamChat(listOf(Message("system", prompt)), "Moment").collect { sb.append(it) } }
+                    trackTokens("moment", prompt, sb.toString())
+                    val content = sb.toString().trim().removePrefix("\"").removeSuffix("\"")
+                    if (content.isNotBlank()) {
+                        val moment = MomentEntity(operatorId = op.id, operatorName = op.name, content = content)
+                        val momentId = repository.insertMoment(moment)
+                        // 自动点赞
+                        val likers = _operators.value.filter { it.id != op.id }.shuffled().take((3..8).random())
+                        likers.forEach { liker -> repository.insertLike(MomentLikeEntity(momentId = momentId, operatorId = liker.id, operatorName = liker.name)) }
+                        repository.updateLikeCount(momentId, likers.size)
+                        // 自动评论
+                        val commenters = _operators.value.filter { it.id != op.id }.shuffled().take((1..3).random())
+                        commenters.forEach { commenter ->
+                            try {
+                                val cp = "你是${commenter.name}，${commenter.description}。请用10-40字评论${op.name}的动态：「${content}」。口语化自然。只输出评论文本。"
+                                val csb = StringBuilder()
+                                withTimeout(8_000) { streamChat(listOf(Message("system", cp)), "Moment").collect { csb.append(it) } }
+                                    trackTokens("moment", cp, csb.toString())
+                                val cc = csb.toString().trim()
+                                if (cc.isNotBlank()) repository.insertComment(MomentCommentEntity(momentId = momentId, operatorId = commenter.id, operatorName = commenter.name, content = cc))
+                            } catch (_: Exception) {}
+                        }
+                        repository.updateCommentCount(momentId, commenters.size)
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
+    fun generateInspirations(callback: (List<String>) -> Unit) {
+        val op = _selectedOperator.value ?: return
+        viewModelScope.launch {
+            try {
+                val profile = getUserProfile()
+                val now = beijingSdf("yyyy-MM-dd HH:mm").format(java.util.Date())
+                val hour = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai")).get(java.util.Calendar.HOUR_OF_DAY)
+                val recent = _messages.value.takeLast(15).joinToString("\n") { "${if (it.isMe) profile.nickname else it.senderName}：${it.content.take(60)}" }
+                val lastOpMsg = _messages.value.lastOrNull { !it.isMe }?.content?.take(60) ?: ""
+                val modeHint = when (_currentMode.value) {
+                    "offline" -> "3. 【线下模式】你和${op.name}面对面在一起，回复要像当面说话一样自然，可用括号带动作描述。"
+                    "director" -> "3. 【导演模式】你是导演，${op.name}是演员，回复可以带有指导性的行动指令。"
+                    else -> "3. 【线上模式】文字聊天，回复简短自然，像发微信消息。"
+                }
+                val timeHint = when {
+                    hour in 6..8 -> "（清晨）"
+                    hour in 9..11 -> "（上午）"
+                    hour in 12..13 -> "（中午，可提到吃饭相关）"
+                    hour in 14..17 -> "（下午）"
+                    hour in 18..21 -> "（晚上）"
+                    hour in 22..23 -> "（深夜，语气可以更慵懒放松）"
+                    else -> "（凌晨）"
+                }
+                val prompt = buildString {
+                    append("你是对话灵感生成器，请结合聊天上下文，为${profile.nickname}生成3条可以直接发送给${op.name}的回复话术。\n\n")
+                    append("【当前时间】${now}\n")
+                    append("【干员信息】\n${op.name}，${op.privatePrompt.ifBlank { op.description }}\n\n")
+                    append("【用户信息】\n${profile.nickname}，${if (profile.gender.isNotBlank()) "性别${profile.gender}，" else ""}个人简介：${profile.bio}\n\n")
+                    append("【聊天上下文】\n用户与${op.name}的最近15条对话记录：\n${recent}\n\n")
+                    append("${op.name}刚刚对用户说：“${lastOpMsg}”\n\n")
+                    append("【生成要求】\n")
+                    append("请为${profile.nickname}生成3条可以直接发送给${op.name}的回复话术：\n")
+                    append("1. 每条15-40字，口语化自然，像真人平时说话一样。\n")
+                    append("2. 三条建议分别对应不同风格的回复方向：\n")
+                    append("   - 第一条（承接）：顺势承接${op.name}的话题，继续推进对话。\n")
+                    append("   - 第二条（关心）：换个角度，表达关心、好奇或共情，让对话有新鲜感。\n")
+                    append("   - 第三条（行动）：提出一个具体的行动邀约或场景推进建议，让对话进入下一阶段。\n")
+                    append("$modeHint\n")
+                    append("4. 结合用户的人设和当前时间${timeHint}，让回复更贴合真实的聊天氛围。\n\n")
+                    append("【输出格式要求】\n")
+                    append("严格输出纯JSON，不要添加任何其他文字、markdown标记或解释：\n")
+                    append("""{"suggestions":["第一条承接话题的回复","第二条关心的回复","第三条行动邀约的回复"]}""")
+                }
+                val sb = StringBuilder()
+                withTimeout(10_000) { streamChat(listOf(Message("system", prompt))).collect { sb.append(it) } }
+                val cleaned = sb.toString().trim()
+                    .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+                    .replace("，", ",").replace("：", ":")
+                val results = try {
+                    val resp = com.google.gson.Gson().fromJson(cleaned, SuggestionResponse::class.java)
+                    resp?.suggestions?.filter { it.isNotBlank() } ?: emptyList()
+                } catch (_: Exception) { emptyList() }
+                callback(results.ifEmpty { listOf("嗯，我在听", "然后呢？", "有意思") })
+            } catch (_: Exception) { callback(listOf("嗯，我在听", "然后呢？", "有意思")) }
+        }
+    }
+
+    fun getLikes(momentId: Long): kotlinx.coroutines.flow.Flow<List<MomentLikeEntity>> = repository.getLikesFlow(momentId)
+    fun getCommentsForMoment(momentId: Long): kotlinx.coroutines.flow.Flow<List<MomentCommentEntity>> = repository.getComments(momentId)
+    fun likeMoment(momentId: Long, operatorId: String, operatorName: String) {
+        viewModelScope.launch { repository.insertLike(MomentLikeEntity(momentId = momentId, operatorId = operatorId, operatorName = operatorName)) }
+    }
+    fun commentOnMoment(momentId: Long, operatorId: String, operatorName: String, content: String, parentCommentId: Long = 0, replyToName: String = "") {
+        viewModelScope.launch {
+            repository.insertComment(MomentCommentEntity(momentId = momentId, operatorId = operatorId, operatorName = operatorName, content = content, parentCommentId = parentCommentId, replyToName = replyToName))
+            // 创建评论锚点
+            if (operatorId == "user") {
+                val moment = _moments.value.find { it.id == momentId }
+                val targetName = if (parentCommentId > 0 && replyToName.isNotBlank()) "回复了${replyToName}" else "评论了${moment?.operatorName ?: ""}的动态"
+                for (op in _operators.value) {
+                    repository.saveAnchor(MemoryAnchorEntity(
+                        sessionId = "anchor_${System.currentTimeMillis()}",
+                        operatorId = op.id,
+                        type = com.example.rhodesterminal.data.db.entity.AnchorType.EVENT,
+                        content = "${getUserProfile().nickname}${targetName}：${content.take(30)}",
+                        isPrivate = false
+                    ))
+                }
+            }
+            if (operatorId != "user") return@launch
+            val moment = _moments.value.find { it.id == momentId } ?: return@launch
+            val userName = getUserProfile().nickname
+
+            // 1) 回复原评论者（如果是回复）
+            val alreadyReplied = mutableSetOf<String>()
+            if (parentCommentId > 0 && replyToName.isNotBlank() && replyToName != moment.operatorName) {
+                triggerSingleAiReply(momentId, replyToName, content, parentCommentId, userName)
+                alreadyReplied.add(replyToName)
+                delay((1500L + (Math.random() * 1500).toLong()))
+            }
+
+            // 2) 动态发布者回复
+            if (moment.operatorName != "我" && moment.operatorName !in alreadyReplied) {
+                triggerSingleAiReply(momentId, moment.operatorName, content, parentCommentId, userName, "你是${moment.operatorName}。用户${userName}在你的动态下评论了：「${content}」。请用10-50字自然回复用户。直接输出纯文本。")
+                alreadyReplied.add(moment.operatorName)
+                delay((1500L + (Math.random() * 1500).toLong()))
+            }
+
+            // 3) 随机1-2个干员看热闹
+            val bystanders = _operators.value
+                .map { it.name }
+                .filter { it !in alreadyReplied && it != "我" && it != userName }
+                .shuffled()
+                .take(1 + (Math.random() * 2).toInt())
+            for (bystander in bystanders) {
+                val bp = "你是${bystander}。你刚看到${moment.operatorName}的动态下，用户${userName}评论了「${content}」。请用10-40字凑热闹式地回复这条评论（看戏、调侃、起哄风格）。直接输出纯文本。"
+                triggerSingleAiReply(momentId, bystander, content, parentCommentId, userName, bp)
+                delay((1500L + (Math.random() * 1500).toLong()))
+            }
+        }
+    }
+
+    private fun triggerSingleAiReply(momentId: Long, speakerName: String, userContent: String, parentCommentId: Long, userName: String, customPrompt: String? = null) {
+        viewModelScope.launch {
+            try {
+                val prompt = customPrompt ?: "你是${speakerName}。用户${userName}刚刚回复了你的评论，说：「${userContent}」。请用10-50字自然回复用户。直接输出纯文本。"
+                val sb = StringBuilder()
+                withTimeout(10_000) { streamChat(listOf(Message("system", prompt))).collect { sb.append(it) } }
+                val reply = sb.toString().trim()
+                if (reply.isNotBlank()) {
+                    repository.insertComment(MomentCommentEntity(momentId = momentId, operatorId = speakerName, operatorName = speakerName, content = reply, parentCommentId = parentCommentId, replyToName = userName))
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+
+
+    fun postUserMoment(content: String, mentionedOps: List<String>) {
+        viewModelScope.launch {
+            val profile = getUserProfile()
+            val userName = profile.nickname
+            val moment = MomentEntity(operatorId = "user", operatorName = userName, content = content, isUserPost = true, mentionedOperatorIds = mentionedOps.joinToString(","))
+            val momentId = repository.insertMoment(moment)
+            // 创建动态锚点（所有干员共享）
+            for (op in _operators.value) {
+                repository.saveAnchor(MemoryAnchorEntity(
+                    sessionId = "anchor_${System.currentTimeMillis()}",
+                    operatorId = op.id,
+                    type = com.example.rhodesterminal.data.db.entity.AnchorType.EVENT,
+                    content = "${userName}发布了动态：${content.take(40)}",
+                    isPrivate = false
+                ))
+            }
+
+            // AI auto-replies: mentioned operators guaranteed + random 3-5 total
+            val allOpNames = _operators.value.map { it.name }.filter { it != userName }
+            val mentioned = mentionedOps.filter { it in allOpNames }
+            val randomCount = (3 + (Math.random() * 3).toInt()).coerceAtLeast(3)
+            val others = (allOpNames - mentioned.toSet()).shuffled().take((randomCount - mentioned.size).coerceAtLeast(0))
+            val repliers = (mentioned + others).distinct().take(5)
+
+            for ((i, name) in repliers.withIndex()) {
+                if (i > 0) delay((1500L + (Math.random() * 1500).toLong()))
+                val prompt = "你是${name}。用户${userName}发布了动态：「${content}」。请用10-40字评论这条动态（根据你的性格自然回应）。直接输出纯文本。"
+                triggerSingleAiReply(momentId, name, content, 0, userName, prompt)
+            }
+        }
+    }
+
+    fun generateDispatchStart(dispatchId: String, taskType: String, budget: Int, operatorIds: List<String>) {
+        viewModelScope.launch {
+            val ops = operatorIds.mapNotNull { repository.getOperator(it) }
+            val names = ops.joinToString("、") { it.name }
+            val profiles = ops.joinToString("\n") { "${it.name}：${it.description}" }
+            try {
+                    val dMn = intPref("dispatch_min_chars", 150); val dMx = intPref("dispatch_max_chars", 400)
+                    val prompt = "你是罗德岛的战术记录员。任务：${taskType}。小队：$names。预算：${budget}龙门币。写${dMn}-${dMx}字开局简报。必须提及全部5人。"
+                val sb = StringBuilder()
+                withTimeout(20_000) { streamChat(listOf(Message("system", prompt)), "Dispatch").collect { sb.append(it) } }
+                    trackTokens("dispatch", prompt, sb.toString())
+                repository.updateDispatch(dispatchId, sb.toString().trim(), "active")
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun generateDispatchProgress(dispatchId: String, taskType: String, budget: Int, operatorIds: List<String>, roundNum: Int, logSummary: String) {
+        viewModelScope.launch {
+            val ops = operatorIds.mapNotNull { repository.getOperator(it) }
+            val names = ops.joinToString("、") { it.name }
+            val profiles = ops.joinToString("\n") { "${it.name}：${it.description}" }
+            val budgetLevel = when { budget < 300 -> "低"; budget < 800 -> "中"; else -> "高" }
+            try {
+                val dMn = intPref("dispatch_min_chars", 150); val dMx = intPref("dispatch_max_chars", 400)
+                val prompt = "你是罗德岛的战术记录员。任务：${taskType}，第${roundNum}轮，预算等级${budgetLevel}。前情：${logSummary}.take(100)}。$profiles\n续写${dMn}-${dMx}字。必须提及全部5人。"
+                val sb = StringBuilder()
+                withTimeout(20_000) { streamChat(listOf(Message("system", prompt))).collect { sb.append(it) } }
+                    trackTokens("dispatch", prompt, sb.toString())
+                val existing = repository.getDispatch(dispatchId)
+                val newLog = (existing?.logChain ?: "") + "\n\n【第${roundNum}轮】" + sb.toString()
+                repository.updateDispatch(dispatchId, newLog, "active")
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun generateDispatchEnd(dispatchId: String, taskType: String, duration: Int, budget: Int, operatorIds: List<String>) {
+        viewModelScope.launch {
+            val dispatch = repository.getDispatch(dispatchId) ?: return@launch
+            val ops = operatorIds.mapNotNull { repository.getOperator(it) }
+            val names = ops.joinToString("、") { it.name }
+            try {
+                val dMn = intPref("dispatch_min_chars", 150); val dMx = intPref("dispatch_max_chars", 400)
+                val prompt = "任务：${taskType}，${duration}小时，${budget}龙门币。日志：${dispatch.logChain.take(200)}。结局JSON：{\"ending_content\":\"${dMn}-${dMx}字结局\",\"items\":[\"物品\"],\"currency_reward\":物资价值,\"net_profit\":净收益}。必须提到${names}归队。\n【财务约束】currency_reward取值范围：0 ~ ${budget * 10}（0=血本无归，最高=投入的10倍）。net_profit = currency_reward - budget。"
+                val sb = StringBuilder()
+                withTimeout(20_000) { streamChat(listOf(Message("system", prompt))).collect { sb.append(it) } }
+                    trackTokens("dispatch", prompt, sb.toString())
+                val cleaned = DeepSeekClient.cleanJson(sb.toString().trim())
+                val ending = try { com.google.gson.Gson().fromJson(cleaned, DispatchEnd::class.java) } catch (_: Exception) { null }
+                val rawReward = (ending?.currency_reward ?: 0).coerceIn(0, budget * 10)
+                val netProfit = rawReward - budget
+                repository.updateDispatch(dispatchId, dispatch.logChain + "\n\n【结局】${ending?.ending_content ?: sb.toString()}", "finished", System.currentTimeMillis(), netProfit)
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun generateDiary(operatorId: String, onResult: (String) -> Unit) {
+        viewModelScope.launch {
+            val op = repository.getOperator(operatorId) ?: return@launch
+            val profile = getUserProfile()
+            try {
+                val groupSummaries = _allSessions.value.filter { it.operatorId.startsWith("group_") && it.members.contains(operatorId) || it.members.contains(op.name) }
+                    .mapNotNull { repository.getShortTermMemory(it.id)?.content?.let { c -> "- ${it.operatorName}：${c.take(80)}" } }
+                    .joinToString("\n").ifBlank { "无" }
+                val recentMemories = repository.getAnchors(operatorId).filter { it.type == com.example.rhodesterminal.data.db.entity.AnchorType.EVENT }
+                    .take(3).joinToString("\n") { "- ${it.content}" }.ifBlank { "无" }
+                val diaryTpl = getPromptTemplate("diary")
+                val dReplacements = mapOf(
+                    "OPERATOR_NAME" to op.name,
+                    "OPERATOR_PERSONA" to (op.privatePrompt.ifBlank { op.description }),
+                    "DATE" to beijingSdf("yyyy年MM月dd日").format(java.util.Date()),
+                    "DIARY_MIN_CHARS" to intPref("diary_min_chars", 50).toString(),
+                    "DIARY_MAX_CHARS" to intPref("diary_max_chars", 500).toString(),
+                    "USER_NAME" to profile.nickname,
+                    "USER_BIO" to profile.bio,
+                    "LONG_TERM_IMPRESSION" to (repository.getLongTermImpression(operatorId)?.content ?: "无"),
+                    "PRIVATE_SUMMARY" to (repository.getPrivateChatSummary(operatorId)?.take(200) ?: "无"),
+                    "GROUP_SUMMARIES" to groupSummaries,
+                    "RECENT_MEMORIES" to recentMemories,
+                    "RELATION_EVENTS" to getRelationEvents(operatorId)
+                )
+                val prompt = applyTemplate(diaryTpl, dReplacements)
+                val sb = StringBuilder()
+                withTimeout(25_000) { streamChat(listOf(Message("system", prompt))).collect { sb.append(it) } }
+                    trackTokens("diary", prompt, sb.toString())
+                val text = sb.toString().trim()
+                if (text.isNotBlank()) {
+                    repository.insertDiary(DiaryEntity(operatorId = operatorId, operatorName = op.name, content = text, date = beijingSdf("yyyy-MM-dd").format(java.util.Date())))
+                    // 日记锚点
+                    for (observer in _operators.value.filter { it.id != operatorId }.shuffled().take(3)) {
+                        repository.saveAnchor(MemoryAnchorEntity(
+                            sessionId = "anchor_${System.currentTimeMillis()}",
+                            operatorId = observer.id,
+                            type = com.example.rhodesterminal.data.db.entity.AnchorType.EVENT,
+                            content = "${op.name}今天写了日记，似乎提到了${profile.nickname}",
+                            isPrivate = false
+                        ))
+                    }
+                    onResult(text)
+                } else { onResult("") }
+            } catch (_: Exception) { onResult("") }
+        }
+    }
+
+    data class DataStats(val chatSessions: Int, val groups: Int, val diaries: Int, val anchors: Int, val messages: Int, val operators: Int)
+
+    suspend fun getDataStats(): DataStats = DataStats(
+        chatSessions = repository.getSessionCount(),
+        groups = repository.getGroupCount(),
+        diaries = repository.getDiaryCount(),
+        anchors = repository.getAnchorCount(),
+        messages = repository.getMessageCount(),
+        operators = _operators.value.size
+    )
+
+    suspend fun getMessageRanking(): List<SenderCount> = repository.getMessageCountPerSender()
+
+    suspend fun getAllImpressions(): List<MemoryEntity> = repository.getAllLongTermImpressions()
+
+    fun getLatestMomentId(): Long = _moments.value.firstOrNull()?.id ?: 0
+
+    fun getMomentBadge(): Int {
+        val lastSeen = getApplication<Application>().getSharedPreferences("moment_prefs", 0).getLong("last_seen_moment_id", 0)
+        val latest = _moments.value.firstOrNull()?.id ?: 0
+        return if (latest > lastSeen) (_moments.value.count { it.id > lastSeen }) else 0
+    }
+
+    fun markMomentsSeen() {
+        val latest = _moments.value.firstOrNull()?.id ?: 0
+        getApplication<Application>().getSharedPreferences("moment_prefs", 0).edit().putLong("last_seen_moment_id", latest).apply()
+    }
+}
+
+data class GroupMsgResult(val speaker: String = "", val message: String = "", val type: String = "dialogue")
+data class DispatchEnd(val ending_content: String = "", val items: List<String> = emptyList(), val currency_reward: Int = 0, val net_profit: Int = 0)
+data class SuggestionResponse(val suggestions: List<String> = emptyList())
+

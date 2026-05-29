@@ -15,3 +15,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "罗德岛终端"
 include(":app")
+include(":shared")

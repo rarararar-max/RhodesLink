@@ -1,0 +1,23 @@
+# Docker Compose — 源码挂载模式
+# 改代码后不需要重新 build 镜像，直接 run 即可
+#
+# 用法:
+#   docker compose build                       # 首次构建环境镜像（仅需一次）
+#   docker compose run --rm build              # 默认: all + debug
+#   docker compose run --rm build arm64 debug  # 指定架构和变体
+#   docker compose run --rm build arm64 release
+
+services:
+  build:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/app                                  # 源码挂载（实时反映本地修改）
+      - gradle-cache:/opt/gradle-cache          # Gradle 依赖缓存（跨 run 持久化）
+    working_dir: /app
+    entrypoint: ["./scripts/build-apk.sh"]
+    command: ["all", "debug"]
+
+volumes:
+  gradle-cache:

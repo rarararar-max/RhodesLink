@@ -1,0 +1,175 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: '选择要构建的架构'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - arm64
+          - amd64
+          - universal
+      build_variant:
+        description: '构建变体（debug 可直接安装，release 需配置签名）'
+        required: true
+        default: 'debug'
+        type: choice
+        options:
+          - debug
+          - release
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: 设置 Gradle 缓存
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: 设置 Android SDK 缓存
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/android-sdk
+            ~/.android
+          key: ${{ runner.os }}-android-sdk-${{ hashFiles('**/build.gradle.kts') }}
+          restore-keys: |
+            ${{ runner.os }}-android-sdk-
+
+      - name: 安装 Android SDK
+        run: |
+          # 检查缓存是否已存在
+          if [ -d "$HOME/android-sdk/cmdline-tools/latest" ]; then
+            echo "Android SDK 已缓存，跳过下载"
+          else
+            # 下载 Android SDK Command Line Tools
+            mkdir -p ~/android-sdk/cmdline-tools
+            wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/cmdline-tools.zip
+            unzip -q /tmp/cmdline-tools.zip -d ~/android-sdk/cmdline-tools
+            mv ~/android-sdk/cmdline-tools/cmdline-tools ~/android-sdk/cmdline-tools/latest
+            rm -f /tmp/cmdline-tools.zip
+          fi
+
+          # 设置环境变量
+          echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
+          echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
+
+          # 接受许可协议并安装 SDK 组件
+          yes | ~/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1
+          ~/android-sdk/cmdline-tools/latest/bin/sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;27.2.12479018"
+
+      - name: 赋予 Gradle 执行权限
+        run: chmod +x gradlew
+
+      - name: 构建 APK - arm64-v8a
+        if: inputs.build_type == 'all' || inputs.build_type == 'arm64'
+        run: |
+          if [ "${{ inputs.build_variant }}" = "release" ]; then
+            ./gradlew assembleRelease -PTARGET_ABI=arm64-v8a --no-daemon
+          else
+            ./gradlew assembleDebug -PTARGET_ABI=arm64-v8a --no-daemon
+          fi
+
+      - name: 构建 APK - x86_64
+        if: inputs.build_type == 'all' || inputs.build_type == 'amd64'
+        run: |
+          if [ "${{ inputs.build_variant }}" = "release" ]; then
+            ./gradlew assembleRelease -PTARGET_ABI=x86_64 --no-daemon
+          else
+            ./gradlew assembleDebug -PTARGET_ABI=x86_64 --no-daemon
+          fi
+
+      - name: 构建 APK - universal
+        if: inputs.build_type == 'all' || inputs.build_type == 'universal'
+        run: |
+          if [ "${{ inputs.build_variant }}" = "release" ]; then
+            ./gradlew assembleRelease --no-daemon
+          else
+            ./gradlew assembleDebug --no-daemon
+          fi
+
+      - name: 重命名 APK 文件
+        run: |
+          mkdir -p apk-output
+          VARIANT="${{ inputs.build_variant }}"
+          APK_DIR="app/build/outputs/apk/${VARIANT}"
+
+          # 检查目录是否存在
+          if [ ! -d "$APK_DIR" ]; then
+            echo "错误: APK 目录不存在: $APK_DIR"
+            exit 1
+          fi
+
+          # 查找并重命名 APK
+          found=0
+          shopt -s nullglob
+          for apk in ${APK_DIR}/*.apk; do
+            if [ -f "$apk" ]; then
+              filename=$(basename "$apk" .apk)
+              found=1
+
+              # 根据文件名判断架构
+              if echo "$filename" | grep -q "arm64"; then
+                cp "$apk" "apk-output/app-arm64-v8a-${VARIANT}.apk"
+                echo "已复制: app-arm64-v8a-${VARIANT}.apk"
+              elif echo "$filename" | grep -q "x86_64"; then
+                cp "$apk" "apk-output/app-x86_64-${VARIANT}.apk"
+                echo "已复制: app-x86_64-${VARIANT}.apk"
+              else
+                cp "$apk" "apk-output/app-universal-${VARIANT}.apk"
+                echo "已复制: app-universal-${VARIANT}.apk"
+              fi
+            fi
+          done
+          shopt -u nullglob
+
+          if [ $found -eq 0 ]; then
+            echo "错误: 未找到 APK 文件"
+            echo "目录内容:"
+            ls -la "$APK_DIR/" || true
+            exit 1
+          fi
+
+          # 列出生成的文件
+          echo ""
+          echo "生成的 APK 文件:"
+          ls -lh apk-output/
+
+      - name: 上传 APK 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk-${{ inputs.build_type }}-${{ inputs.build_variant }}
+          path: apk-output/*.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: 清理构建缓存
+        run: |
+          ./gradlew clean --no-daemon || true

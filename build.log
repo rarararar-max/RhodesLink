@@ -1,0 +1,454 @@
+ Container rohdes-comapp-build-all-run-45be777b65a7 Creating 
+ Container rohdes-comapp-build-all-run-45be777b65a7 Created 
++++ dirname ./scripts/build-apk.sh
+++ cd ./scripts
+++ pwd
++ SCRIPT_DIR=/app/scripts
+++ dirname /app/scripts
++ PROJECT_DIR=/app
++ OUTPUT_DIR=/app/apk-output
++ echo =========================================
+=========================================
+脚本目录: /app/scripts
+项目目录: /app
+输出目录: /app/apk-output
++ echo '脚本目录: /app/scripts'
++ echo '项目目录: /app'
++ echo '输出目录: /app/apk-output'
+++ pwd
+当前工作目录: /app
+=========================================
++ echo '当前工作目录: /app'
++ echo =========================================
++ GREEN='\033[0;32m'
++ YELLOW='\033[1;33m'
++ NC='\033[0m'
++ main all
++ local target=all
++ log_info '构建目标: all'
+[0;32m[INFO][0m 构建目标: all
++ echo -e '\033[0;32m[INFO]\033[0m 构建目标: all'
++ case "$target" in
++ prepare_output
++ mkdir -p /app/apk-output
++ rm -f '/app/apk-output/*.apk'
+[0;32m[INFO][0m 输出目录已准备: /app/apk-output
++ log_info '输出目录已准备: /app/apk-output'
++ echo -e '\033[0;32m[INFO]\033[0m 输出目录已准备: /app/apk-output'
++ build_apk arm64-v8a app-arm64-v8a-release
++ local abi=arm64-v8a
++ local output_name=app-arm64-v8a-release
++ log_info '开始构建 app-arm64-v8a-release (ABI: arm64-v8a)...'
+[0;32m[INFO][0m 开始构建 app-arm64-v8a-release (ABI: arm64-v8a)...
++ echo -e '\033[0;32m[INFO]\033[0m 开始构建 app-arm64-v8a-release (ABI: arm64-v8a)...'
++ cd /app
+++ pwd
+[0;32m[INFO][0m 当前目录: /app
++ log_info '当前目录: /app'
++ echo -e '\033[0;32m[INFO]\033[0m 当前目录: /app'
++ '[' arm64-v8a = universal ']'
++ ./gradlew assembleRelease -PTARGET_ABI=arm64-v8a --no-daemon --stacktrace
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/9.4.1/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+java.lang.UnsupportedOperationException: Cannot convert relative path C:\Users\Administrator\jdk17\jdk-17.0.19+10 to an absolute file.
+
+* Try:
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+> Get more help at https://help.gradle.org.
+
+* Exception is:
+java.lang.UnsupportedOperationException: java.lang.UnsupportedOperationException: Cannot convert relative path C:\Users\Administrator\jdk17\jdk-17.0.19+10 to an absolute file.
+	at java.base/jdk.internal.reflect.DirectConstructorHandleAccessor.newInstance(DirectConstructorHandleAccessor.java:62)
+	at java.base/java.lang.reflect.Constructor.newInstanceWithCaller(Constructor.java:502)
+	at java.base/java.lang.reflect.Constructor.newInstance(Constructor.java:486)
+	at java.base/java.util.concurrent.ForkJoinTask.getThrowableException(ForkJoinTask.java:540)
+	at java.base/java.util.concurrent.ForkJoinTask.reportException(ForkJoinTask.java:567)
+	at java.base/java.util.concurrent.ForkJoinTask.invoke(ForkJoinTask.java:670)
+	at java.base/java.util.stream.ReduceOps$ReduceOp.evaluateParallel(ReduceOps.java:927)
+	at java.base/java.util.stream.AbstractPipeline.evaluate(AbstractPipeline.java:233)
+	at java.base/java.util.stream.ReferencePipeline.collect(ReferencePipeline.java:682)
+	at org.gradle.internal.jvm.inspection.DefaultJavaInstallationRegistry.collectInstallations(DefaultJavaInstallationRegistry.java:174)
+	at org.gradle.internal.jvm.inspection.DefaultJavaInstallationRegistry.maybeCollectInBuildOperation(DefaultJavaInstallationRegistry.java:132)
+	at org.gradle.internal.jvm.inspection.DefaultJavaInstallationRegistry.lambda$new$0(DefaultJavaInstallationRegistry.java:114)
+	at org.gradle.internal.jvm.inspection.DefaultJavaInstallationRegistry$Installations.initIfNeeded(DefaultJavaInstallationRegistry.java:281)
+	at org.gradle.internal.jvm.inspection.DefaultJavaInstallationRegistry$Installations.get(DefaultJavaInstallationRegistry.java:270)
+	at org.gradle.internal.jvm.inspection.DefaultJavaInstallationRegistry.listInstallations(DefaultJavaInstallationRegistry.java:139)
+	at org.gradle.internal.jvm.inspection.DefaultJavaInstallationRegistry.toolchains(DefaultJavaInstallationRegistry.java:145)
+	at org.gradle.jvm.toolchain.internal.JavaToolchainQueryService.findInstalledToolchain(JavaToolchainQueryService.java:209)
+	at org.gradle.jvm.toolchain.internal.JavaToolchainQueryService.query(JavaToolchainQueryService.java:203)
+	at org.gradle.jvm.toolchain.internal.JavaToolchainQueryService.lambda$resolveToolchain$1(JavaToolchainQueryService.java:166)
+	at java.base/java.util.concurrent.ConcurrentHashMap.computeIfAbsent(ConcurrentHashMap.java:1708)
+	at org.gradle.jvm.toolchain.internal.JavaToolchainQueryService.resolveToolchain(JavaToolchainQueryService.java:164)
+	at org.gradle.jvm.toolchain.internal.JavaToolchainQueryService.lambda$findMatchingToolchain$0(JavaToolchainQueryService.java:142)
+	at org.gradle.api.internal.provider.DefaultProvider.calculateOwnValue(DefaultProvider.java:73)
+	at org.gradle.api.internal.provider.AbstractMinimalProvider.calculateOwnPresentValue(AbstractMinimalProvider.java:80)
+	at org.gradle.api.internal.provider.AbstractMinimalProvider.get(AbstractMinimalProvider.java:100)
+	at org.gradle.launcher.daemon.client.DefaultDaemonStarter.startDaemon(DefaultDaemonStarter.java:110)
+	at org.gradle.launcher.daemon.client.DefaultDaemonConnector.doStartDaemon(DefaultDaemonConnector.java:219)
+	at org.gradle.launcher.daemon.client.DefaultDaemonConnector.startSingleUseDaemon(DefaultDaemonConnector.java:244)
+	at org.gradle.launcher.daemon.client.SingleUseDaemonClient.execute(SingleUseDaemonClient.java:60)
+	at org.gradle.launcher.daemon.client.SingleUseDaemonClient.execute(SingleUseDaemonClient.java:37)
+	at org.gradle.launcher.cli.RunBuildAction.run(RunBuildAction.java:56)
+	at org.gradle.internal.Actions$RunnableActionAdapter.execute(Actions.java:167)
+	at org.gradle.launcher.cli.DefaultCommandLineActionFactory$ParseAndBuildAction.execute(DefaultCommandLineActionFactory.java:274)
+	at org.gradle.launcher.cli.DefaultCommandLineActionFactory$ParseAndBuildAction.execute(DefaultCommandLineActionFactory.java:238)
+	at org.gradle.launcher.cli.DebugLoggerWarningAction.execute(DebugLoggerWarningAction.java:74)
+	at org.gradle.launcher.cli.DebugLoggerWarningAction.execute(DebugLoggerWarningAction.java:30)
+	at org.gradle.launcher.cli.WelcomeMessageAction.execute(WelcomeMessageAction.java:97)
+	at org.gradle.launcher.cli.WelcomeMessageAction.execute(WelcomeMessageAction.java:40)
+	at org.gradle.launcher.cli.NativeServicesInitializingAction.execute(NativeServicesInitializingAction.java:50)
+	at org.gradle.launcher.cli.NativeServicesInitializingAction.execute(NativeServicesInitializingAction.java:27)
+	at org.gradle.launcher.cli.ExceptionReportingAction.execute(ExceptionReportingAction.java:41)
+	at org.gradle.launcher.cli.ExceptionReportingAction.execute(ExceptionReportingAction.java:26)
+	at org.gradle.launcher.cli.DefaultCommandLineActionFactory$WithLogging.execute(DefaultCommandLineActionFactory.java:386)
+	at org.gradle.launcher.Main.doAction(Main.java:35)
+	at org.gradle.launcher.bootstrap.EntryPoint.run(EntryPoint.java:53)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.gradle.launcher.bootstrap.ProcessBootstrap.runNoExit(ProcessBootstrap.java:72)
+	at org.gradle.launcher.bootstrap.ProcessBootstrap.run(ProcessBootstrap.java:39)
+	at org.gradle.launcher.GradleMain.main(GradleMain.java:26)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.gradle.wrapper.GradleWrapperMain.main(SourceFile:70)
+Caused by: java.lang.UnsupportedOperationException: Cannot convert relative path C:\Users\Administrator\jdk17\jdk-17.0.19+10 to an absolute file.
+	at org.gradle.api.internal.file.IdentityFileResolver.doResolve(IdentityFileResolver.java:30)
+	at org.gradle.api.internal.file.AbstractFileResolver.resolveFile(AbstractFileResolver.java:103)
+	at org.gradle.api.internal.file.AbstractFileResolver.resolve(AbstractFileResolver.java:84)
+	at org.gradle.api.internal.file.AbstractFileResolver.resolve(AbstractFileResolver.java:57)
+	at org.gradle.jvm.toolchain.internal.LocationListInstallationSupplier.asInstallations(LocationListInstallationSupplier.java:54)
+	at java.base/java.util.stream.ReferencePipeline$3$1.accept(ReferencePipeline.java:197)
+	at java.base/java.util.stream.ReferencePipeline$2$1.accept(ReferencePipeline.java:179)
+	at java.base/java.util.Spliterators$ArraySpliterator.forEachRemaining(Spliterators.java:1024)
+	at java.base/java.util.stream.AbstractPipeline.copyInto(AbstractPipeline.java:509)
+	at java.base/java.util.stream.AbstractPipeline.wrapAndCopyInto(AbstractPipeline.java:499)
+	at java.base/java.util.stream.ReduceOps$ReduceOp.evaluateSequential(ReduceOps.java:921)
+	at java.base/java.util.stream.AbstractPipeline.evaluate(AbstractPipeline.java:234)
+	at java.base/java.util.stream.ReferencePipeline.collect(ReferencePipeline.java:682)
+	at org.gradle.jvm.toolchain.internal.LocationListInstallationSupplier.get(LocationListInstallationSupplier.java:50)
+	at org.gradle.jvm.toolchain.internal.LocationListInstallationSupplier.get(LocationListInstallationSupplier.java:26)
+	at java.base/java.util.stream.ReferencePipeline$3$1.accept(ReferencePipeline.java:197)
+	at java.base/java.util.stream.ReferencePipeline$15$1.accept(ReferencePipeline.java:541)
+	at java.base/java.util.ArrayList$ArrayListSpliterator.forEachRemaining(ArrayList.java:1708)
+	at java.base/java.util.stream.AbstractPipeline.copyInto(AbstractPipeline.java:509)
+	at java.base/java.util.stream.AbstractPipeline.wrapAndCopyInto(AbstractPipeline.java:499)
+	at java.base/java.util.stream.ReduceOps$ReduceTask.doLeaf(ReduceOps.java:960)
+	at java.base/java.util.stream.ReduceOps$ReduceTask.doLeaf(ReduceOps.java:934)
+	at java.base/java.util.stream.AbstractTask.compute(AbstractTask.java:327)
+	at java.base/java.util.concurrent.CountedCompleter.exec(CountedCompleter.java:754)
+	at java.base/java.util.concurrent.ForkJoinTask.doExec(ForkJoinTask.java:387)
+	at java.base/java.util.concurrent.ForkJoinPool$WorkQueue.topLevelExec(ForkJoinPool.java:1312)
+	at java.base/java.util.concurrent.ForkJoinPool.scan(ForkJoinPool.java:1843)
+	at java.base/java.util.concurrent.ForkJoinPool.runWorker(ForkJoinPool.java:1808)
+	at java.base/java.util.concurrent.ForkJoinWorkerThread.run(ForkJoinWorkerThread.java:188)
+
++ log_info 'Gradle 构建完成，开始查找 APK...'
++ echo -e '\033[0;32m[INFO]\033[0m Gradle 构建完成，开始查找 APK...'
++ log_info $'\346\236\204\345\273\272\350\276\223\345\207\272\347\233\256\345\275\225\347\273\223\346\236\204:'
++ echo -e '\033[0;32m[INFO]\033[0m 构建输出目录结构:'
++ find /app/app/build/outputs -type f -name '*.apk'
+[0;32m[INFO][0m Gradle 构建完成，开始查找 APK...
+[0;32m[INFO][0m 构建输出目录结构:
++ true
++ local apk_path=
++ for search_dir in "$PROJECT_DIR/app/build/outputs/apk/release" "$PROJECT_DIR/app/build/outputs/apk/debug"
++ '[' -d /app/app/build/outputs/apk/release ']'
++ for search_dir in "$PROJECT_DIR/app/build/outputs/apk/release" "$PROJECT_DIR/app/build/outputs/apk/debug"
++ '[' -d /app/app/build/outputs/apk/debug ']'
++ '[' -z '' ']'
++ log_warn '未找到 app-arm64-v8a-release 的 APK 文件'
+[1;33m[WARN][0m 未找到 app-arm64-v8a-release 的 APK 文件
+[0;32m[INFO][0m 搜索路径: /app/app/build/outputs/apk/
++ echo -e '\033[1;33m[WARN]\033[0m 未找到 app-arm64-v8a-release 的 APK 文件'
++ log_info '搜索路径: /app/app/build/outputs/apk/'
++ echo -e '\033[0;32m[INFO]\033[0m 搜索路径: /app/app/build/outputs/apk/'
++ find /app/app/build/outputs/ -type f
++ true
++ return 1
++ true
++ build_apk x86_64 app-x86_64-release
++ local abi=x86_64
++ local output_name=app-x86_64-release
++ log_info '开始构建 app-x86_64-release (ABI: x86_64)...'
++ echo -e '\033[0;32m[INFO]\033[0m 开始构建 app-x86_64-release (ABI: x86_64)...'
++ cd /app
+[0;32m[INFO][0m 开始构建 app-x86_64-release (ABI: x86_64)...
+++ pwd
++ log_info '当前目录: /app'
++ echo -e '\033[0;32m[INFO]\033[0m 当前目录: /app'
++ '[' x86_64 = universal ']'
++ ./gradlew assembleRelease -PTARGET_ABI=x86_64 --no-daemon --stacktrace
+[0;32m[INFO][0m 当前目录: /app
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/9.4.1/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+java.lang.UnsupportedOperationException: Cannot convert relative path C:\Users\Administrator\jdk17\jdk-17.0.19+10 to an absolute file.
+
+* Try:
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+> Get more help at https://help.gradle.org.
+
+* Exception is:
+java.lang.UnsupportedOperationException: java.lang.UnsupportedOperationException: Cannot convert relative path C:\Users\Administrator\jdk17\jdk-17.0.19+10 to an absolute file.
+	at java.base/jdk.internal.reflect.DirectConstructorHandleAccessor.newInstance(DirectConstructorHandleAccessor.java:62)
+	at java.base/java.lang.reflect.Constructor.newInstanceWithCaller(Constructor.java:502)
+	at java.base/java.lang.reflect.Constructor.newInstance(Constructor.java:486)
+	at java.base/java.util.concurrent.ForkJoinTask.getThrowableException(ForkJoinTask.java:540)
+	at java.base/java.util.concurrent.ForkJoinTask.reportException(ForkJoinTask.java:567)
+	at java.base/java.util.concurrent.ForkJoinTask.invoke(ForkJoinTask.java:670)
+	at java.base/java.util.stream.ReduceOps$ReduceOp.evaluateParallel(ReduceOps.java:927)
+	at java.base/java.util.stream.AbstractPipeline.evaluate(AbstractPipeline.java:233)
+	at java.base/java.util.stream.ReferencePipeline.collect(ReferencePipeline.java:682)
+	at org.gradle.internal.jvm.inspection.DefaultJavaInstallationRegistry.collectInstallations(DefaultJavaInstallationRegistry.java:174)
+	at org.gradle.internal.jvm.inspection.DefaultJavaInstallationRegistry.maybeCollectInBuildOperation(DefaultJavaInstallationRegistry.java:132)
+	at org.gradle.internal.jvm.inspection.DefaultJavaInstallationRegistry.lambda$new$0(DefaultJavaInstallationRegistry.java:114)
+	at org.gradle.internal.jvm.inspection.DefaultJavaInstallationRegistry$Installations.initIfNeeded(DefaultJavaInstallationRegistry.java:281)
+	at org.gradle.internal.jvm.inspection.DefaultJavaInstallationRegistry$Installations.get(DefaultJavaInstallationRegistry.java:270)
+	at org.gradle.internal.jvm.inspection.DefaultJavaInstallationRegistry.listInstallations(DefaultJavaInstallationRegistry.java:139)
+	at org.gradle.internal.jvm.inspection.DefaultJavaInstallationRegistry.toolchains(DefaultJavaInstallationRegistry.java:145)
+	at org.gradle.jvm.toolchain.internal.JavaToolchainQueryService.findInstalledToolchain(JavaToolchainQueryService.java:209)
+	at org.gradle.jvm.toolchain.internal.JavaToolchainQueryService.query(JavaToolchainQueryService.java:203)
+	at org.gradle.jvm.toolchain.internal.JavaToolchainQueryService.lambda$resolveToolchain$1(JavaToolchainQueryService.java:166)
+	at java.base/java.util.concurrent.ConcurrentHashMap.computeIfAbsent(ConcurrentHashMap.java:1708)
+	at org.gradle.jvm.toolchain.internal.JavaToolchainQueryService.resolveToolchain(JavaToolchainQueryService.java:164)
+	at org.gradle.jvm.toolchain.internal.JavaToolchainQueryService.lambda$findMatchingToolchain$0(JavaToolchainQueryService.java:142)
+	at org.gradle.api.internal.provider.DefaultProvider.calculateOwnValue(DefaultProvider.java:73)
+	at org.gradle.api.internal.provider.AbstractMinimalProvider.calculateOwnPresentValue(AbstractMinimalProvider.java:80)
+	at org.gradle.api.internal.provider.AbstractMinimalProvider.get(AbstractMinimalProvider.java:100)
+	at org.gradle.launcher.daemon.client.DefaultDaemonStarter.startDaemon(DefaultDaemonStarter.java:110)
+	at org.gradle.launcher.daemon.client.DefaultDaemonConnector.doStartDaemon(DefaultDaemonConnector.java:219)
+	at org.gradle.launcher.daemon.client.DefaultDaemonConnector.startSingleUseDaemon(DefaultDaemonConnector.java:244)
+	at org.gradle.launcher.daemon.client.SingleUseDaemonClient.execute(SingleUseDaemonClient.java:60)
+	at org.gradle.launcher.daemon.client.SingleUseDaemonClient.execute(SingleUseDaemonClient.java:37)
+	at org.gradle.launcher.cli.RunBuildAction.run(RunBuildAction.java:56)
+	at org.gradle.internal.Actions$RunnableActionAdapter.execute(Actions.java:167)
+	at org.gradle.launcher.cli.DefaultCommandLineActionFactory$ParseAndBuildAction.execute(DefaultCommandLineActionFactory.java:274)
+	at org.gradle.launcher.cli.DefaultCommandLineActionFactory$ParseAndBuildAction.execute(DefaultCommandLineActionFactory.java:238)
+	at org.gradle.launcher.cli.DebugLoggerWarningAction.execute(DebugLoggerWarningAction.java:74)
+	at org.gradle.launcher.cli.DebugLoggerWarningAction.execute(DebugLoggerWarningAction.java:30)
+	at org.gradle.launcher.cli.WelcomeMessageAction.execute(WelcomeMessageAction.java:97)
+	at org.gradle.launcher.cli.WelcomeMessageAction.execute(WelcomeMessageAction.java:40)
+	at org.gradle.launcher.cli.NativeServicesInitializingAction.execute(NativeServicesInitializingAction.java:50)
+	at org.gradle.launcher.cli.NativeServicesInitializingAction.execute(NativeServicesInitializingAction.java:27)
+	at org.gradle.launcher.cli.ExceptionReportingAction.execute(ExceptionReportingAction.java:41)
+	at org.gradle.launcher.cli.ExceptionReportingAction.execute(ExceptionReportingAction.java:26)
+	at org.gradle.launcher.cli.DefaultCommandLineActionFactory$WithLogging.execute(DefaultCommandLineActionFactory.java:386)
+	at org.gradle.launcher.Main.doAction(Main.java:35)
+	at org.gradle.launcher.bootstrap.EntryPoint.run(EntryPoint.java:53)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.gradle.launcher.bootstrap.ProcessBootstrap.runNoExit(ProcessBootstrap.java:72)
+	at org.gradle.launcher.bootstrap.ProcessBootstrap.run(ProcessBootstrap.java:39)
+	at org.gradle.launcher.GradleMain.main(GradleMain.java:26)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.gradle.wrapper.GradleWrapperMain.main(SourceFile:70)
+Caused by: java.lang.UnsupportedOperationException: Cannot convert relative path C:\Users\Administrator\jdk17\jdk-17.0.19+10 to an absolute file.
+	at org.gradle.api.internal.file.IdentityFileResolver.doResolve(IdentityFileResolver.java:30)
+	at org.gradle.api.internal.file.AbstractFileResolver.resolveFile(AbstractFileResolver.java:103)
+	at org.gradle.api.internal.file.AbstractFileResolver.resolve(AbstractFileResolver.java:84)
+	at org.gradle.api.internal.file.AbstractFileResolver.resolve(AbstractFileResolver.java:57)
+	at org.gradle.jvm.toolchain.internal.LocationListInstallationSupplier.asInstallations(LocationListInstallationSupplier.java:54)
+	at java.base/java.util.stream.ReferencePipeline$3$1.accept(ReferencePipeline.java:197)
+	at java.base/java.util.stream.ReferencePipeline$2$1.accept(ReferencePipeline.java:179)
+	at java.base/java.util.Spliterators$ArraySpliterator.forEachRemaining(Spliterators.java:1024)
+	at java.base/java.util.stream.AbstractPipeline.copyInto(AbstractPipeline.java:509)
+	at java.base/java.util.stream.AbstractPipeline.wrapAndCopyInto(AbstractPipeline.java:499)
+	at java.base/java.util.stream.ReduceOps$ReduceOp.evaluateSequential(ReduceOps.java:921)
+	at java.base/java.util.stream.AbstractPipeline.evaluate(AbstractPipeline.java:234)
+	at java.base/java.util.stream.ReferencePipeline.collect(ReferencePipeline.java:682)
+	at org.gradle.jvm.toolchain.internal.LocationListInstallationSupplier.get(LocationListInstallationSupplier.java:50)
+	at org.gradle.jvm.toolchain.internal.LocationListInstallationSupplier.get(LocationListInstallationSupplier.java:26)
+	at java.base/java.util.stream.ReferencePipeline$3$1.accept(ReferencePipeline.java:197)
+	at java.base/java.util.stream.ReferencePipeline$15$1.accept(ReferencePipeline.java:541)
+	at java.base/java.util.ArrayList$ArrayListSpliterator.forEachRemaining(ArrayList.java:1708)
+	at java.base/java.util.stream.AbstractPipeline.copyInto(AbstractPipeline.java:509)
+	at java.base/java.util.stream.AbstractPipeline.wrapAndCopyInto(AbstractPipeline.java:499)
+	at java.base/java.util.stream.ReduceOps$ReduceTask.doLeaf(ReduceOps.java:960)
+	at java.base/java.util.stream.ReduceOps$ReduceTask.doLeaf(ReduceOps.java:934)
+	at java.base/java.util.stream.AbstractTask.compute(AbstractTask.java:327)
+	at java.base/java.util.concurrent.CountedCompleter.exec(CountedCompleter.java:754)
+	at java.base/java.util.concurrent.ForkJoinTask.doExec(ForkJoinTask.java:387)
+	at java.base/java.util.concurrent.ForkJoinPool$WorkQueue.topLevelExec(ForkJoinPool.java:1312)
+	at java.base/java.util.concurrent.ForkJoinPool.scan(ForkJoinPool.java:1843)
+	at java.base/java.util.concurrent.ForkJoinPool.runWorker(ForkJoinPool.java:1808)
+	at java.base/java.util.concurrent.ForkJoinWorkerThread.run(ForkJoinWorkerThread.java:188)
+
+[0;32m[INFO][0m Gradle 构建完成，开始查找 APK...
+[0;32m[INFO][0m 构建输出目录结构:
++ log_info 'Gradle 构建完成，开始查找 APK...'
++ echo -e '\033[0;32m[INFO]\033[0m Gradle 构建完成，开始查找 APK...'
++ log_info $'\346\236\204\345\273\272\350\276\223\345\207\272\347\233\256\345\275\225\347\273\223\346\236\204:'
++ echo -e '\033[0;32m[INFO]\033[0m 构建输出目录结构:'
++ find /app/app/build/outputs -type f -name '*.apk'
++ true
++ local apk_path=
++ for search_dir in "$PROJECT_DIR/app/build/outputs/apk/release" "$PROJECT_DIR/app/build/outputs/apk/debug"
++ '[' -d /app/app/build/outputs/apk/release ']'
++ for search_dir in "$PROJECT_DIR/app/build/outputs/apk/release" "$PROJECT_DIR/app/build/outputs/apk/debug"
++ '[' -d /app/app/build/outputs/apk/debug ']'
++ '[' -z '' ']'
++ log_warn '未找到 app-x86_64-release 的 APK 文件'
++ echo -e '\033[1;33m[WARN]\033[0m 未找到 app-x86_64-release 的 APK 文件'
++ log_info '搜索路径: /app/app/build/outputs/apk/'
++ echo -e '\033[0;32m[INFO]\033[0m 搜索路径: /app/app/build/outputs/apk/'
++ find /app/app/build/outputs/ -type f
+[1;33m[WARN][0m 未找到 app-x86_64-release 的 APK 文件
+[0;32m[INFO][0m 搜索路径: /app/app/build/outputs/apk/
++ true
++ return 1
++ true
++ build_apk universal app-universal-release
++ local abi=universal
++ local output_name=app-universal-release
++ log_info '开始构建 app-universal-release (ABI: universal)...'
++ echo -e '\033[0;32m[INFO]\033[0m 开始构建 app-universal-release (ABI: universal)...'
++ cd /app
+[0;32m[INFO][0m 开始构建 app-universal-release (ABI: universal)...
+++ pwd
+[0;32m[INFO][0m 当前目录: /app
++ log_info '当前目录: /app'
++ echo -e '\033[0;32m[INFO]\033[0m 当前目录: /app'
++ '[' universal = universal ']'
++ ./gradlew assembleRelease --no-daemon --stacktrace
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/9.4.1/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+java.lang.UnsupportedOperationException: Cannot convert relative path C:\Users\Administrator\jdk17\jdk-17.0.19+10 to an absolute file.
+
+* Try:
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights from a Build Scan (powered by Develocity).
+> Get more help at https://help.gradle.org.
+
+* Exception is:
+java.lang.UnsupportedOperationException: java.lang.UnsupportedOperationException: Cannot convert relative path C:\Users\Administrator\jdk17\jdk-17.0.19+10 to an absolute file.
+	at java.base/jdk.internal.reflect.DirectConstructorHandleAccessor.newInstance(DirectConstructorHandleAccessor.java:62)
+	at java.base/java.lang.reflect.Constructor.newInstanceWithCaller(Constructor.java:502)
+	at java.base/java.lang.reflect.Constructor.newInstance(Constructor.java:486)
+	at java.base/java.util.concurrent.ForkJoinTask.getThrowableException(ForkJoinTask.java:540)
+	at java.base/java.util.concurrent.ForkJoinTask.reportException(ForkJoinTask.java:567)
+	at java.base/java.util.concurrent.ForkJoinTask.invoke(ForkJoinTask.java:670)
+	at java.base/java.util.stream.ReduceOps$ReduceOp.evaluateParallel(ReduceOps.java:927)
+	at java.base/java.util.stream.AbstractPipeline.evaluate(AbstractPipeline.java:233)
+	at java.base/java.util.stream.ReferencePipeline.collect(ReferencePipeline.java:682)
+	at org.gradle.internal.jvm.inspection.DefaultJavaInstallationRegistry.collectInstallations(DefaultJavaInstallationRegistry.java:174)
+	at org.gradle.internal.jvm.inspection.DefaultJavaInstallationRegistry.maybeCollectInBuildOperation(DefaultJavaInstallationRegistry.java:132)
+	at org.gradle.internal.jvm.inspection.DefaultJavaInstallationRegistry.lambda$new$0(DefaultJavaInstallationRegistry.java:114)
+	at org.gradle.internal.jvm.inspection.DefaultJavaInstallationRegistry$Installations.initIfNeeded(DefaultJavaInstallationRegistry.java:281)
+	at org.gradle.internal.jvm.inspection.DefaultJavaInstallationRegistry$Installations.get(DefaultJavaInstallationRegistry.java:270)
+	at org.gradle.internal.jvm.inspection.DefaultJavaInstallationRegistry.listInstallations(DefaultJavaInstallationRegistry.java:139)
+	at org.gradle.internal.jvm.inspection.DefaultJavaInstallationRegistry.toolchains(DefaultJavaInstallationRegistry.java:145)
+	at org.gradle.jvm.toolchain.internal.JavaToolchainQueryService.findInstalledToolchain(JavaToolchainQueryService.java:209)
+	at org.gradle.jvm.toolchain.internal.JavaToolchainQueryService.query(JavaToolchainQueryService.java:203)
+	at org.gradle.jvm.toolchain.internal.JavaToolchainQueryService.lambda$resolveToolchain$1(JavaToolchainQueryService.java:166)
+	at java.base/java.util.concurrent.ConcurrentHashMap.computeIfAbsent(ConcurrentHashMap.java:1708)
+	at org.gradle.jvm.toolchain.internal.JavaToolchainQueryService.resolveToolchain(JavaToolchainQueryService.java:164)
+	at org.gradle.jvm.toolchain.internal.JavaToolchainQueryService.lambda$findMatchingToolchain$0(JavaToolchainQueryService.java:142)
+	at org.gradle.api.internal.provider.DefaultProvider.calculateOwnValue(DefaultProvider.java:73)
+	at org.gradle.api.internal.provider.AbstractMinimalProvider.calculateOwnPresentValue(AbstractMinimalProvider.java:80)
+	at org.gradle.api.internal.provider.AbstractMinimalProvider.get(AbstractMinimalProvider.java:100)
+	at org.gradle.launcher.daemon.client.DefaultDaemonStarter.startDaemon(DefaultDaemonStarter.java:110)
+	at org.gradle.launcher.daemon.client.DefaultDaemonConnector.doStartDaemon(DefaultDaemonConnector.java:219)
+	at org.gradle.launcher.daemon.client.DefaultDaemonConnector.startSingleUseDaemon(DefaultDaemonConnector.java:244)
+	at org.gradle.launcher.daemon.client.SingleUseDaemonClient.execute(SingleUseDaemonClient.java:60)
+	at org.gradle.launcher.daemon.client.SingleUseDaemonClient.execute(SingleUseDaemonClient.java:37)
+	at org.gradle.launcher.cli.RunBuildAction.run(RunBuildAction.java:56)
+	at org.gradle.internal.Actions$RunnableActionAdapter.execute(Actions.java:167)
+	at org.gradle.launcher.cli.DefaultCommandLineActionFactory$ParseAndBuildAction.execute(DefaultCommandLineActionFactory.java:274)
+	at org.gradle.launcher.cli.DefaultCommandLineActionFactory$ParseAndBuildAction.execute(DefaultCommandLineActionFactory.java:238)
+	at org.gradle.launcher.cli.DebugLoggerWarningAction.execute(DebugLoggerWarningAction.java:74)
+	at org.gradle.launcher.cli.DebugLoggerWarningAction.execute(DebugLoggerWarningAction.java:30)
+	at org.gradle.launcher.cli.WelcomeMessageAction.execute(WelcomeMessageAction.java:97)
+	at org.gradle.launcher.cli.WelcomeMessageAction.execute(WelcomeMessageAction.java:40)
+	at org.gradle.launcher.cli.NativeServicesInitializingAction.execute(NativeServicesInitializingAction.java:50)
+	at org.gradle.launcher.cli.NativeServicesInitializingAction.execute(NativeServicesInitializingAction.java:27)
+	at org.gradle.launcher.cli.ExceptionReportingAction.execute(ExceptionReportingAction.java:41)
+	at org.gradle.launcher.cli.ExceptionReportingAction.execute(ExceptionReportingAction.java:26)
+	at org.gradle.launcher.cli.DefaultCommandLineActionFactory$WithLogging.execute(DefaultCommandLineActionFactory.java:386)
+	at org.gradle.launcher.Main.doAction(Main.java:35)
+	at org.gradle.launcher.bootstrap.EntryPoint.run(EntryPoint.java:53)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.gradle.launcher.bootstrap.ProcessBootstrap.runNoExit(ProcessBootstrap.java:72)
+	at org.gradle.launcher.bootstrap.ProcessBootstrap.run(ProcessBootstrap.java:39)
+	at org.gradle.launcher.GradleMain.main(GradleMain.java:26)
+	at java.base/jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:580)
+	at org.gradle.wrapper.GradleWrapperMain.main(SourceFile:70)
+Caused by: java.lang.UnsupportedOperationException: Cannot convert relative path C:\Users\Administrator\jdk17\jdk-17.0.19+10 to an absolute file.
+	at org.gradle.api.internal.file.IdentityFileResolver.doResolve(IdentityFileResolver.java:30)
+	at org.gradle.api.internal.file.AbstractFileResolver.resolveFile(AbstractFileResolver.java:103)
+	at org.gradle.api.internal.file.AbstractFileResolver.resolve(AbstractFileResolver.java:84)
+	at org.gradle.api.internal.file.AbstractFileResolver.resolve(AbstractFileResolver.java:57)
+	at org.gradle.jvm.toolchain.internal.LocationListInstallationSupplier.asInstallations(LocationListInstallationSupplier.java:54)
+	at java.base/java.util.stream.ReferencePipeline$3$1.accept(ReferencePipeline.java:197)
+	at java.base/java.util.stream.ReferencePipeline$2$1.accept(ReferencePipeline.java:179)
+	at java.base/java.util.Spliterators$ArraySpliterator.forEachRemaining(Spliterators.java:1024)
+	at java.base/java.util.stream.AbstractPipeline.copyInto(AbstractPipeline.java:509)
+	at java.base/java.util.stream.AbstractPipeline.wrapAndCopyInto(AbstractPipeline.java:499)
+	at java.base/java.util.stream.ReduceOps$ReduceOp.evaluateSequential(ReduceOps.java:921)
+	at java.base/java.util.stream.AbstractPipeline.evaluate(AbstractPipeline.java:234)
+	at java.base/java.util.stream.ReferencePipeline.collect(ReferencePipeline.java:682)
+	at org.gradle.jvm.toolchain.internal.LocationListInstallationSupplier.get(LocationListInstallationSupplier.java:50)
+	at org.gradle.jvm.toolchain.internal.LocationListInstallationSupplier.get(LocationListInstallationSupplier.java:26)
+	at java.base/java.util.stream.ReferencePipeline$3$1.accept(ReferencePipeline.java:197)
+	at java.base/java.util.stream.ReferencePipeline$15$1.accept(ReferencePipeline.java:541)
+	at java.base/java.util.ArrayList$ArrayListSpliterator.forEachRemaining(ArrayList.java:1708)
+	at java.base/java.util.stream.AbstractPipeline.copyInto(AbstractPipeline.java:509)
+	at java.base/java.util.stream.AbstractPipeline.wrapAndCopyInto(AbstractPipeline.java:499)
+	at java.base/java.util.stream.ReduceOps$ReduceTask.doLeaf(ReduceOps.java:960)
+	at java.base/java.util.stream.ReduceOps$ReduceTask.doLeaf(ReduceOps.java:934)
+	at java.base/java.util.stream.AbstractTask.compute(AbstractTask.java:327)
+	at java.base/java.util.concurrent.CountedCompleter.exec(CountedCompleter.java:754)
+	at java.base/java.util.concurrent.ForkJoinTask.doExec(ForkJoinTask.java:387)
+	at java.base/java.util.concurrent.ForkJoinPool$WorkQueue.topLevelExec(ForkJoinPool.java:1312)
+	at java.base/java.util.concurrent.ForkJoinPool.scan(ForkJoinPool.java:1843)
+	at java.base/java.util.concurrent.ForkJoinPool.runWorker(ForkJoinPool.java:1808)
+	at java.base/java.util.concurrent.ForkJoinWorkerThread.run(ForkJoinWorkerThread.java:188)
+
++ log_info 'Gradle 构建完成，开始查找 APK...'
++ echo -e '\033[0;32m[INFO]\033[0m Gradle 构建完成，开始查找 APK...'
++ log_info $'\346\236\204\345\273\272\350\276\223\345\207\272\347\233\256\345\275\225\347\273\223\346\236\204:'
++ echo -e '\033[0;32m[INFO]\033[0m 构建输出目录结构:'
++ find /app/app/build/outputs -type f -name '*.apk'
+[0;32m[INFO][0m Gradle 构建完成，开始查找 APK...
+[0;32m[INFO][0m 构建输出目录结构:
+[1;33m[WARN][0m 未找到 app-universal-release 的 APK 文件
+[0;32m[INFO][0m 搜索路径: /app/app/build/outputs/apk/
++ true
++ local apk_path=
++ for search_dir in "$PROJECT_DIR/app/build/outputs/apk/release" "$PROJECT_DIR/app/build/outputs/apk/debug"
++ '[' -d /app/app/build/outputs/apk/release ']'
++ for search_dir in "$PROJECT_DIR/app/build/outputs/apk/release" "$PROJECT_DIR/app/build/outputs/apk/debug"
++ '[' -d /app/app/build/outputs/apk/debug ']'
++ '[' -z '' ']'
++ log_warn '未找到 app-universal-release 的 APK 文件'
++ echo -e '\033[1;33m[WARN]\033[0m 未找到 app-universal-release 的 APK 文件'
++ log_info '搜索路径: /app/app/build/outputs/apk/'
++ echo -e '\033[0;32m[INFO]\033[0m 搜索路径: /app/app/build/outputs/apk/'
++ find /app/app/build/outputs/ -type f
+[0;32m[INFO][0m 所有架构构建完成！
+
+[0;32m[INFO][0m 生成的 APK 文件:
++ true
++ return 1
++ true
++ log_info $'\346\211\200\346\234\211\346\236\266\346\236\204\346\236\204\345\273\272\345\256\214\346\210\220\357\274\201'
++ echo -e '\033[0;32m[INFO]\033[0m 所有架构构建完成！'
++ echo ''
++ log_info '生成的 APK 文件:'
++ echo -e '\033[0;32m[INFO]\033[0m 生成的 APK 文件:'
++ ls -lh '/app/apk-output/*.apk'
+[1;33m[WARN][0m 未找到 APK 文件
++ log_warn '未找到 APK 文件'
++ echo -e '\033[1;33m[WARN]\033[0m 未找到 APK 文件'

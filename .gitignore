@@ -13,3 +13,16 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# 构建产物
+/apk-output/
+*.apk
+*.aab
+
+# Docker
+docker-compose.override.yml
+
+# 系统文件
+*.swp
+*.swo
+*~

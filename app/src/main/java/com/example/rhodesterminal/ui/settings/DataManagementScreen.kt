@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.graphics.Color
 import com.example.rhodesterminal.ui.theme.*
 import com.example.rhodesterminal.viewmodel.MainViewModel
+import com.example.rhodesterminal.viewmodel.DataViewModel
 
 data class CleanupItem(
     val icon: androidx.compose.ui.graphics.vector.ImageVector,
@@ -42,7 +43,7 @@ fun DataManagementScreen(
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("chat_prefs", 0) }
-    var stats by remember { mutableStateOf(MainViewModel.DataStats(0,0,0,0,0,0)) }
+    var stats by remember { mutableStateOf(DataViewModel.DataStats(0,0,0,0,0,0)) }
     var refreshKey by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(refreshKey) { stats = viewModel.getDataStats() }

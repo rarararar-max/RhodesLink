@@ -25,7 +25,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.rhodesterminal.network.providers
+import com.example.rhodesterminal.shared.network.providers
 import com.example.rhodesterminal.ui.theme.*
 
 @Composable

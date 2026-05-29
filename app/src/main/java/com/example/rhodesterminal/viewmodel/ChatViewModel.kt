@@ -10,7 +10,7 @@ import com.example.rhodesterminal.shared.model.MemoryAnchor
 import com.example.rhodesterminal.shared.model.Memory
 import com.example.rhodesterminal.shared.model.MemoryType
 import com.example.rhodesterminal.shared.model.Operator
-import com.example.rhodesterminal.data.repository.ChatRepository
+import com.example.rhodesterminal.shared.data.ChatRepository
 import com.example.rhodesterminal.network.AnalysisResult
 import com.example.rhodesterminal.shared.network.AIService
 import com.example.rhodesterminal.shared.model.AiMessage
@@ -303,7 +303,7 @@ class ChatViewModel(
 
     fun recallMessage(msgId: Long) {
         viewModelScope.launch {
-            db.chatMessageDao().delete(msgId)
+            repository.deleteMessage(msgId)
             _messages.value = _messages.value.filter { it.id != msgId }
         }
     }
@@ -313,7 +313,7 @@ class ChatViewModel(
         val idx = _messages.value.indexOfFirst { it.id == msgId }
         if (idx < 0) return
         val userMsg = _messages.value.take(idx).lastOrNull { it.isMe } ?: return
-        viewModelScope.launch { db.chatMessageDao().delete(msgId); db.chatMessageDao().delete(userMsg.id) }
+        viewModelScope.launch { repository.deleteMessage(msgId); repository.deleteMessage(userMsg.id) }
         _messages.value = _messages.value.filter { it.id != msgId && it.id != userMsg.id }
         _inputText.value = userMsg.content
         sendMessage()

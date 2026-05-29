@@ -10,8 +10,9 @@ import com.example.rhodesterminal.data.MessageExport
 import com.example.rhodesterminal.data.OperatorExport
 import com.example.rhodesterminal.data.RelationshipExport
 import com.example.rhodesterminal.data.SessionExport
-import com.example.rhodesterminal.data.repository.ChatRepository
+import com.example.rhodesterminal.shared.data.ChatRepository
 import com.example.rhodesterminal.shared.network.AIService
+import com.example.rhodesterminal.shared.model.ChatMessage
 import com.example.rhodesterminal.shared.model.ChatSession
 import com.example.rhodesterminal.shared.model.DispatchRecord
 import com.example.rhodesterminal.shared.model.MemoryAnchor
@@ -55,8 +56,6 @@ class MainViewModel(
     val sharedUtils: SharedUtils,
     val operatorStateUpdater: OperatorStateUpdater
 ) : AndroidViewModel(application) {
-    // Type aliases for backward compatibility
-    typealias UserProfile = com.example.rhodesterminal.viewmodel.shared.UserProfile
     data class DataStats(
         val chatSessions: Int, val groups: Int, val diaries: Int, val anchors: Int,
         val messages: Int, val operators: Int, val moments: Int = 0, val dispatches: Int = 0

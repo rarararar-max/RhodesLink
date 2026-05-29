@@ -7,7 +7,7 @@ import com.example.rhodesterminal.shared.model.ChatSession
 import com.example.rhodesterminal.shared.model.MemoryAnchor
 import com.example.rhodesterminal.shared.model.Operator
 import com.example.rhodesterminal.shared.model.RelationshipType
-import com.example.rhodesterminal.data.repository.ChatRepository
+import com.example.rhodesterminal.shared.data.ChatRepository
 import com.example.rhodesterminal.shared.network.AIService
 import com.example.rhodesterminal.shared.model.AiMessage
 import com.example.rhodesterminal.viewmodel.shared.AppStateHolder
@@ -304,7 +304,7 @@ class GroupChatViewModel(
                         }
                     }
                     val last = filtered.last()
-                    db.chatSessionDao().updateLastMessage(groupSessionId, "${last.speaker}：${last.message.take(50)}", System.currentTimeMillis())
+                    repository.updateLastMessage(groupSessionId, "${last.speaker}：${last.message.take(50)}", System.currentTimeMillis())
                 }
                 if (_currentGroupId.value != groupSessionId && filtered.isNotEmpty()) {
                     val sess = repository.getSession(groupSessionId)
@@ -339,7 +339,7 @@ class GroupChatViewModel(
         for (i in members.indices) {
             for (j in i + 1 until members.size) {
                 val a = members[i]; val b = members[j]
-                val rel = db.relationshipDao().getRelationship(a.id, b.id)
+                val rel = repository.getRelationship(a.id, b.id)
                 if (rel != null && rel.type != RelationshipType.STRANGER) {
                     val desc = sharedUtils.relationshipGroupDesc(a.name, b.name, rel.type)
                     lines.add("- $desc（亲密${rel.intimacy}）")

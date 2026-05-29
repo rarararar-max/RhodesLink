@@ -3,7 +3,7 @@ package com.example.rhodesterminal.viewmodel.shared
 import com.example.rhodesterminal.shared.model.Moment
 import com.example.rhodesterminal.shared.model.Operator
 import com.example.rhodesterminal.shared.model.ChatSession
-import com.example.rhodesterminal.data.repository.ChatRepository
+import com.example.rhodesterminal.shared.data.ChatRepository
 import com.example.rhodesterminal.shared.settings.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow

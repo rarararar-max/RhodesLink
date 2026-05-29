@@ -8,7 +8,7 @@ import com.example.rhodesterminal.data.RelationshipExport
 import com.example.rhodesterminal.data.SessionExport
 import com.example.rhodesterminal.shared.data.SenderCount
 import com.example.rhodesterminal.shared.model.Memory
-import com.example.rhodesterminal.data.repository.ChatRepository
+import com.example.rhodesterminal.shared.data.ChatRepository
 import com.example.rhodesterminal.viewmodel.shared.Prefs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

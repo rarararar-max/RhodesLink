@@ -41,7 +41,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import com.example.rhodesterminal.data.db.dao.SenderCount
+import com.example.rhodesterminal.shared.data.SenderCount
 import com.example.rhodesterminal.ui.theme.*
 import com.example.rhodesterminal.viewmodel.MainViewModel
 

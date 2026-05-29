@@ -1,11 +1,13 @@
 package com.example.rhodesterminal.di
 
-import com.example.rhodesterminal.data.repository.ChatRepository
 import com.example.rhodesterminal.viewmodel.MainViewModel
 import com.example.rhodesterminal.viewmodel.shared.AppStateHolder
 import com.example.rhodesterminal.viewmodel.shared.OperatorStateUpdater
 import com.example.rhodesterminal.viewmodel.shared.Prefs
 import com.example.rhodesterminal.viewmodel.shared.SharedUtils
+import com.example.rhodesterminal.shared.data.ChatRepository
+import com.example.rhodesterminal.shared.settings.SettingsRepository
+import com.example.rhodesterminal.shared.network.AIService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -15,25 +17,22 @@ import org.koin.dsl.module
 
 val appModule = module {
 
-    // === ChatRepository (wraps shared ChatRepository) ===
-    single { ChatRepository(get<com.example.rhodesterminal.shared.data.ChatRepository>()) }
-
     // === Prefs (temporary, will be replaced by SettingsRepository) ===
     single { Prefs(androidApplication()) }
 
     // === Infrastructure ===
     single<CoroutineScope> { CoroutineScope(SupervisorJob() + Dispatchers.Default) }
 
-    single { AppStateHolder(get(), get<com.example.rhodesterminal.shared.data.ChatRepository>(), get()) }
+    single { AppStateHolder(get(), get(), get<SettingsRepository>()) }
 
     single {
         val appState = get<AppStateHolder>()
-        SharedUtils(get<com.example.rhodesterminal.shared.data.ChatRepository>(), get(), get()) { appState.operators.value }
+        SharedUtils(get(), get<SettingsRepository>(), get<AIService>()) { appState.operators.value }
     }
 
     single {
         val appState = get<AppStateHolder>()
-        OperatorStateUpdater(get<com.example.rhodesterminal.shared.data.ChatRepository>(), get(), get()) { appState.operators.value }
+        OperatorStateUpdater(get(), get<SettingsRepository>(), get()) { appState.operators.value }
     }
 
     // === MainViewModel ===

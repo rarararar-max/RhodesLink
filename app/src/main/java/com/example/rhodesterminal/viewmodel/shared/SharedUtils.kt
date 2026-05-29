@@ -5,7 +5,7 @@ import com.example.rhodesterminal.shared.model.AnchorType
 import com.example.rhodesterminal.shared.model.MemoryAnchor
 import com.example.rhodesterminal.shared.model.RelationshipType
 import com.example.rhodesterminal.shared.model.AiMessage
-import com.example.rhodesterminal.data.repository.ChatRepository
+import com.example.rhodesterminal.shared.data.ChatRepository
 import com.example.rhodesterminal.shared.network.AIService
 import com.example.rhodesterminal.shared.settings.SettingsRepository
 import kotlinx.coroutines.flow.Flow

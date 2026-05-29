@@ -169,7 +169,13 @@ private fun JsonBubble(message: ChatMessageEntity, aiAvatarUri: String, userAvat
             result = parse(cleaned)
         }
         if (result.first == null) {
-            result = parse(com.example.rhodesterminal.network.DeepSeekClient.cleanJson(content))
+            var s = content.trim()
+                .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+                .replace("，", ",").replace("：", ":")
+            s = s.replace(", }", "}").replace(",}", "}")
+            if (!s.startsWith("{")) { val start = s.indexOf('{'); if (start >= 0) s = s.substring(start) }
+            if (!s.endsWith("}")) { val end = s.lastIndexOf('}'); if (end >= 0) s = s.substring(0, end + 1) }
+            result = parse(s)
         }
         result
     }

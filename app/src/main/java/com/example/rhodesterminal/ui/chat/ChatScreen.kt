@@ -1,4 +1,5 @@
 package com.example.rhodesterminal.ui.chat
+import com.example.rhodesterminal.shared.model.AiMessage
 
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -436,9 +437,9 @@ ${recentChats.ifBlank { "暂无" }}
                                     android.util.Log.d("AI调试输出", "║ [InnerThoughts]")
                                     android.util.Log.d("AI调试输出", "╠══ PROMPT ══════════════════════════════════")
                                     innerPrompt.lines().forEach { android.util.Log.d("AI调试输出", "║ $it") }
-                                    com.example.rhodesterminal.network.AIClient.streamChat(viewModel.getSavedApiKey(), listOf(
-                                        Message("system", innerPrompt)
-                                    ), temperature = temp).collect { result.append(it) }
+                                    viewModel.sharedUtils.streamChat(listOf(
+                                        AiMessage("system", innerPrompt)
+                                    ), "InnerThoughts").collect { result.append(it) }
                                     innerThoughts = result.toString()
                                     val thoughtText = innerThoughts
                                     // 设置读心效果

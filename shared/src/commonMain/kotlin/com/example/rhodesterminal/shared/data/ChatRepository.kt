@@ -144,6 +144,19 @@ class ChatRepository(private val wrapper: DatabaseWrapper) {
         db.chatSessionsQueries.updateLastMessage(lastMessage, lastTime, sessionId)
     }
 
+    suspend fun getSessionByOperator(operatorId: String): ChatSession? = withContext(Dispatchers.Default) {
+        db.chatSessionsQueries.getSessionByOperator(operatorId) { id, opId, opName, lastMsg, lastTime, mode, isPinned, unreadCount, members, rules, avatar, muted ->
+            ChatSession(id, opId, opName, lastMsg, lastTime, mode, isPinned != 0L, unreadCount.toInt(), members, rules, avatar, muted)
+        }.executeAsOneOrNull()
+    }
+
+    suspend fun getLastUserMessageTime(sessionId: String): Long? = withContext(Dispatchers.Default) {
+        val msgs = db.chatMessagesQueries.getMessagesSync(sessionId) { id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe ->
+            ChatMessage(id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange.toInt(), timestamp, isMe != 0L)
+        }.executeAsList()
+        msgs.filter { it.isMe }.maxOfOrNull { it.timestamp }
+    }
+
     // --- Messages ---
     fun getMessages(sessionId: String): Flow<List<ChatMessage>> = run {
         val results = db.chatMessagesQueries.getMessages(sessionId) { id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe ->
@@ -311,6 +324,12 @@ class ChatRepository(private val wrapper: DatabaseWrapper) {
         db.relationshipsQueries.getReverseRelationshipsSync(opId) { id, opId, relOpId, relOpName, type, intimacy, isPreset, note ->
             mapRelationship(id, opId, relOpId, relOpName, type, intimacy, isPreset, note)
         }.executeAsList()
+    }
+
+    suspend fun getRelationship(operatorId: String, relatedOperatorId: String): Relationship? = withContext(Dispatchers.Default) {
+        db.relationshipsQueries.getRelationship(operatorId, relatedOperatorId) { id, opId, relOpId, relOpName, type, intimacy, isPreset, note ->
+            mapRelationship(id, opId, relOpId, relOpName, type, intimacy, isPreset, note)
+        }.executeAsOneOrNull()
     }
 
     suspend fun insertRelationship(rel: Relationship) = withContext(Dispatchers.Default) {

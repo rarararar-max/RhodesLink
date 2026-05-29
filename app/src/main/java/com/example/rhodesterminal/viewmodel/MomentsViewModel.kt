@@ -3,7 +3,7 @@ package com.example.rhodesterminal.viewmodel
 import android.util.Log
 import com.example.rhodesterminal.shared.model.MomentComment
 import com.example.rhodesterminal.shared.model.MomentLike
-import com.example.rhodesterminal.data.repository.ChatRepository
+import com.example.rhodesterminal.shared.data.ChatRepository
 import com.example.rhodesterminal.viewmodel.shared.AppStateHolder
 import com.example.rhodesterminal.viewmodel.shared.Prefs
 import com.example.rhodesterminal.viewmodel.shared.UserProfile

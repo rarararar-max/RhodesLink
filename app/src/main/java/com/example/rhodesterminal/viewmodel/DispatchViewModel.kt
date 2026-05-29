@@ -3,7 +3,7 @@ package com.example.rhodesterminal.viewmodel
 import com.example.rhodesterminal.shared.model.AnchorType
 import com.example.rhodesterminal.shared.model.DispatchRecord
 import com.example.rhodesterminal.shared.model.MemoryAnchor
-import com.example.rhodesterminal.data.repository.ChatRepository
+import com.example.rhodesterminal.shared.data.ChatRepository
 import com.example.rhodesterminal.shared.network.AIService
 import com.example.rhodesterminal.shared.model.AiMessage
 import com.example.rhodesterminal.viewmodel.shared.AppStateHolder

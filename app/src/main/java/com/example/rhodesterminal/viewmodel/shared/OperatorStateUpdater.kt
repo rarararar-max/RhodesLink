@@ -3,7 +3,7 @@ package com.example.rhodesterminal.viewmodel.shared
 import com.example.rhodesterminal.shared.model.AnchorType
 import com.example.rhodesterminal.shared.model.MemoryAnchor
 import com.example.rhodesterminal.shared.model.Operator
-import com.example.rhodesterminal.data.repository.ChatRepository
+import com.example.rhodesterminal.shared.data.ChatRepository
 import com.example.rhodesterminal.shared.settings.SettingsRepository
 
 class OperatorStateUpdater(

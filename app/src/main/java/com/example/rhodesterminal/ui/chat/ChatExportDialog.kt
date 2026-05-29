@@ -32,7 +32,7 @@ import com.example.rhodesterminal.data.db.entity.ChatMessageEntity
 fun ChatExportDialog(
     operatorName: String,
     messages: List<ChatMessageEntity>,
-    userProfile: com.example.rhodesterminal.viewmodel.MainViewModel.UserProfile,
+    userProfile: com.example.rhodesterminal.viewmodel.shared.UserProfile,
     operatorAvatarUri: String = "",
     onDismiss: () -> Unit
 ) {

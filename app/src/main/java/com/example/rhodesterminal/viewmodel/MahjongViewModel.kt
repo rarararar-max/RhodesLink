@@ -4,7 +4,7 @@ import com.example.rhodesterminal.shared.model.AnchorType
 import com.example.rhodesterminal.shared.model.MahjongSave
 import com.example.rhodesterminal.shared.model.MemoryAnchor
 import com.example.rhodesterminal.shared.model.Moment
-import com.example.rhodesterminal.data.repository.ChatRepository
+import com.example.rhodesterminal.shared.data.ChatRepository
 import com.example.rhodesterminal.viewmodel.shared.Prefs
 import com.example.rhodesterminal.viewmodel.shared.SharedUtils
 import kotlinx.coroutines.CoroutineScope
@@ -31,15 +31,15 @@ class MahjongViewModel(
     }
 
     fun saveMahjongGame(json: String, ruleType: String) {
-        scope.launch { db.mahjongSaveDao().save(MahjongSave(saveJson = json, ruleType = ruleType)) }
+        scope.launch { repository.saveMahjong(MahjongSave(saveJson = json, ruleType = ruleType)) }
     }
 
     fun loadMahjongSave(callback: (MahjongSave?) -> Unit) {
-        scope.launch { callback(db.mahjongSaveDao().getSave()) }
+        scope.launch { callback(repository.getMahjongSave()) }
     }
 
     fun deleteMahjongSave() {
-        scope.launch { db.mahjongSaveDao().deleteSave() }
+        scope.launch { repository.deleteMahjongSave() }
     }
 
     fun createMahjongAnchor(content: String) {

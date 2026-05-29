@@ -2,7 +2,7 @@ package com.example.rhodesterminal.viewmodel
 
 import com.example.rhodesterminal.shared.model.ChatSession
 import com.example.rhodesterminal.shared.model.Operator
-import com.example.rhodesterminal.data.repository.ChatRepository
+import com.example.rhodesterminal.shared.data.ChatRepository
 import com.example.rhodesterminal.viewmodel.shared.AppStateHolder
 import com.example.rhodesterminal.viewmodel.shared.Prefs
 import kotlinx.coroutines.CoroutineScope

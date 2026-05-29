@@ -1,0 +1,58 @@
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id INTEGER NOT NULL PRIMARY KEY,
+    sessionId TEXT NOT NULL,
+    senderId TEXT NOT NULL DEFAULT '',
+    senderName TEXT NOT NULL,
+    content TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'text',
+    mode TEXT NOT NULL DEFAULT 'online',
+    emotion TEXT NOT NULL DEFAULT '',
+    activity TEXT NOT NULL DEFAULT '',
+    location TEXT NOT NULL DEFAULT '',
+    narration TEXT NOT NULL DEFAULT '',
+    segmentGroup TEXT NOT NULL DEFAULT '',
+    intimacyChange INTEGER NOT NULL DEFAULT 0,
+    timestamp INTEGER NOT NULL DEFAULT 0,
+    isMe INTEGER NOT NULL
+);
+
+getMessages:
+SELECT * FROM chat_messages WHERE sessionId = ? ORDER BY timestamp ASC;
+
+getMessagesSync:
+SELECT * FROM chat_messages WHERE sessionId = ? ORDER BY timestamp ASC;
+
+getMaxId:
+SELECT MAX(id) FROM chat_messages;
+
+getLastUserMessageTime:
+SELECT MAX(timestamp) FROM chat_messages WHERE sessionId = ? AND isMe = 1;
+
+getMessageCount:
+SELECT COUNT(*) FROM chat_messages;
+
+getMessageCountPerSender:
+SELECT senderName, COUNT(*) AS cnt FROM chat_messages WHERE isMe = 0 AND senderName != '' AND senderName != '系统' GROUP BY senderName ORDER BY cnt DESC;
+
+getMessagesInRange:
+SELECT * FROM chat_messages WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp ASC;
+
+insertMessage:
+INSERT OR REPLACE INTO chat_messages(id, sessionId, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+deleteSessionMessages:
+DELETE FROM chat_messages WHERE sessionId = ?;
+
+deleteMessage:
+DELETE FROM chat_messages WHERE id = ?;
+
+deleteAllMessages:
+DELETE FROM chat_messages;
+
+insertAllMessages:
+INSERT OR REPLACE INTO chat_messages(id, sessionId, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+updateContent:
+UPDATE chat_messages SET content = ? WHERE id = ?;

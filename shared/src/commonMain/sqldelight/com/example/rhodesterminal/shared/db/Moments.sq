@@ -1,0 +1,39 @@
+CREATE TABLE IF NOT EXISTS moments (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    operatorId TEXT NOT NULL,
+    operatorName TEXT NOT NULL,
+    content TEXT NOT NULL,
+    isUserPost INTEGER NOT NULL DEFAULT 0,
+    mentionedOperatorIds TEXT NOT NULL DEFAULT '',
+    likeCount INTEGER NOT NULL DEFAULT 0,
+    commentCount INTEGER NOT NULL DEFAULT 0,
+    createdAt INTEGER NOT NULL DEFAULT 0
+);
+
+getAllMoments:
+SELECT * FROM moments ORDER BY createdAt DESC;
+
+getMomentsPaged:
+SELECT * FROM moments ORDER BY createdAt DESC LIMIT ? OFFSET ?;
+
+getMoment:
+SELECT * FROM moments WHERE id = ?;
+
+getMomentsByOperator:
+SELECT * FROM moments WHERE operatorId = ? ORDER BY createdAt DESC;
+
+insertMoment:
+INSERT OR REPLACE INTO moments(operatorId, operatorName, content, isUserPost, mentionedOperatorIds, likeCount, commentCount, createdAt)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+updateLikeCount:
+UPDATE moments SET likeCount = ? WHERE id = ?;
+
+updateCommentCount:
+UPDATE moments SET commentCount = ? WHERE id = ?;
+
+deleteOldMoments:
+DELETE FROM moments WHERE createdAt < ?;
+
+getLastInsertRowId:
+SELECT last_insert_rowid();

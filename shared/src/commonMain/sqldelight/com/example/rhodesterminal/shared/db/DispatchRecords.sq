@@ -1,0 +1,35 @@
+CREATE TABLE IF NOT EXISTS dispatch_records (
+    id TEXT NOT NULL PRIMARY KEY,
+    taskType TEXT NOT NULL,
+    durationHours INTEGER NOT NULL,
+    budget INTEGER NOT NULL,
+    netProfit INTEGER NOT NULL DEFAULT 0,
+    operatorIds TEXT NOT NULL DEFAULT '',
+    logChain TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'active',
+    startTime INTEGER NOT NULL DEFAULT 0,
+    endTime INTEGER NOT NULL DEFAULT 0,
+    totalSegments INTEGER NOT NULL DEFAULT 0,
+    segmentInterval INTEGER NOT NULL DEFAULT 0,
+    items TEXT NOT NULL DEFAULT ''
+);
+
+getActiveDispatches:
+SELECT * FROM dispatch_records WHERE status IN ('active', 'generating') ORDER BY startTime DESC;
+
+getHistoryDispatches:
+SELECT * FROM dispatch_records WHERE status NOT IN ('active', 'generating') ORDER BY startTime DESC;
+
+getDispatch:
+SELECT * FROM dispatch_records WHERE id = ?;
+
+insertDispatch:
+INSERT OR REPLACE INTO dispatch_records(id, taskType, durationHours, budget, netProfit, operatorIds, logChain, status, startTime, endTime, totalSegments, segmentInterval, items)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+updateDispatch:
+UPDATE dispatch_records SET logChain = ?, status = ?, endTime = ?, netProfit = ?
+WHERE id = ?;
+
+deleteOldDispatches:
+DELETE FROM dispatch_records WHERE status NOT IN ('active', 'generating') AND endTime > 0 AND endTime < ?;

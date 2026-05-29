@@ -1,0 +1,39 @@
+CREATE TABLE IF NOT EXISTS moment_comments (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    momentId INTEGER NOT NULL,
+    operatorId TEXT NOT NULL,
+    operatorName TEXT NOT NULL,
+    content TEXT NOT NULL,
+    parentCommentId INTEGER NOT NULL DEFAULT 0,
+    replyToName TEXT NOT NULL DEFAULT '',
+    createdAt INTEGER NOT NULL DEFAULT 0,
+    isRead INTEGER NOT NULL DEFAULT 0
+);
+
+getComments:
+SELECT * FROM moment_comments WHERE momentId = ? ORDER BY createdAt ASC;
+
+getInboxComments:
+SELECT * FROM moment_comments WHERE createdAt > ? AND (momentId IN (SELECT id FROM moments WHERE operatorId = 'user') OR replyToName = ?) ORDER BY createdAt DESC;
+
+getUnreadCommentCount:
+SELECT COUNT(*) FROM moment_comments WHERE isRead = 0 AND createdAt > ? AND (momentId IN (SELECT id FROM moments WHERE operatorId = 'user') OR replyToName = ?);
+
+getMaxCommentId:
+SELECT MAX(id) FROM moment_comments;
+
+insertComment:
+INSERT OR REPLACE INTO moment_comments(momentId, operatorId, operatorName, content, parentCommentId, replyToName, createdAt, isRead)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+markCommentRead:
+UPDATE moment_comments SET isRead = 1 WHERE id = ?;
+
+markAllCommentsRead:
+UPDATE moment_comments SET isRead = 1 WHERE id > 0 AND (momentId IN (SELECT id FROM moments WHERE operatorId = 'user') OR replyToName = ?);
+
+deleteOldUserComments:
+DELETE FROM moment_comments WHERE createdAt < ? AND (replyToName = ? OR momentId IN (SELECT id FROM moments WHERE operatorId = 'user'));
+
+getLastInsertRowId:
+SELECT last_insert_rowid();

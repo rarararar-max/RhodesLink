@@ -1,0 +1,27 @@
+CREATE TABLE IF NOT EXISTS diaries (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    operatorId TEXT NOT NULL,
+    operatorName TEXT NOT NULL,
+    content TEXT NOT NULL,
+    date TEXT NOT NULL,
+    createdAt INTEGER NOT NULL DEFAULT 0
+);
+
+getDiariesByOperator:
+SELECT * FROM diaries WHERE operatorId = ? ORDER BY date DESC;
+
+getDiary:
+SELECT * FROM diaries WHERE operatorId = ? AND date = ?;
+
+getDiaryDates:
+SELECT DISTINCT date FROM diaries WHERE operatorId = ? ORDER BY date DESC;
+
+getCount:
+SELECT COUNT(*) FROM diaries;
+
+insertDiary:
+INSERT OR REPLACE INTO diaries(operatorId, operatorName, content, date, createdAt)
+VALUES (?, ?, ?, ?, ?);
+
+deleteOldDiaries:
+DELETE FROM diaries WHERE createdAt < ?;

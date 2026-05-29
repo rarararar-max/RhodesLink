@@ -1,0 +1,54 @@
+CREATE TABLE IF NOT EXISTS operators (
+    id TEXT NOT NULL PRIMARY KEY,
+    name TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    avatarUri TEXT NOT NULL DEFAULT '',
+    location TEXT NOT NULL DEFAULT '宿舍',
+    activity TEXT NOT NULL DEFAULT '休息',
+    emotion TEXT NOT NULL DEFAULT '平静',
+    intimacy INTEGER NOT NULL DEFAULT 0,
+    privatePrompt TEXT NOT NULL DEFAULT '',
+    groupPrompt TEXT NOT NULL DEFAULT '',
+    userRelation TEXT NOT NULL DEFAULT '',
+    lmb INTEGER NOT NULL DEFAULT 10000,
+    attack REAL NOT NULL DEFAULT 0.5,
+    defense REAL NOT NULL DEFAULT 0.5,
+    meldPref TEXT NOT NULL DEFAULT 'medium'
+);
+
+getAllOperators:
+SELECT * FROM operators ORDER BY name ASC;
+
+getRecentChatOperators:
+SELECT * FROM operators WHERE id IN (SELECT DISTINCT operatorId FROM chat_sessions) ORDER BY (SELECT lastTime FROM chat_sessions WHERE operatorId = operators.id ORDER BY lastTime DESC LIMIT 1) DESC;
+
+getOperator:
+SELECT * FROM operators WHERE id = ?;
+
+getCount:
+SELECT COUNT(*) FROM operators;
+
+insertOperator:
+INSERT OR REPLACE INTO operators(id, name, title, description, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, userRelation, lmb, attack, defense, meldPref)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+updateOperator:
+UPDATE operators SET name = ?, title = ?, description = ?, avatarUri = ?, location = ?, activity = ?, emotion = ?, intimacy = ?, privatePrompt = ?, groupPrompt = ?, userRelation = ?, lmb = ?, attack = ?, defense = ?, meldPref = ?
+WHERE id = ?;
+
+updateIntimacy:
+UPDATE operators SET intimacy = ? WHERE id = ?;
+
+updatePrompts:
+UPDATE operators SET privatePrompt = ?, groupPrompt = ? WHERE id = ?;
+
+deleteOperator:
+DELETE FROM operators WHERE id = ?;
+
+insertAllOperators:
+INSERT OR REPLACE INTO operators(id, name, title, description, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, userRelation, lmb, attack, defense, meldPref)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+deleteAllOperators:
+DELETE FROM operators;

@@ -1,0 +1,58 @@
+CREATE TABLE IF NOT EXISTS relationships (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    operatorId TEXT NOT NULL,
+    relatedOperatorId TEXT NOT NULL,
+    relatedOperatorName TEXT NOT NULL,
+    type TEXT NOT NULL,
+    intimacy INTEGER NOT NULL DEFAULT 0,
+    isPreset INTEGER NOT NULL DEFAULT 0,
+    note TEXT NOT NULL DEFAULT ''
+);
+
+getRelationships:
+SELECT * FROM relationships WHERE operatorId = ? ORDER BY intimacy DESC;
+
+getRelationshipsSync:
+SELECT * FROM relationships WHERE operatorId = ? ORDER BY intimacy DESC;
+
+getReverseRelationshipsSync:
+SELECT * FROM relationships WHERE relatedOperatorId = ?;
+
+getRelationship:
+SELECT * FROM relationships WHERE operatorId = ? AND relatedOperatorId = ?;
+
+getRelationshipCount:
+SELECT COUNT(*) FROM relationships WHERE operatorId = ?;
+
+getCount:
+SELECT COUNT(*) FROM relationships;
+
+getPresetCount:
+SELECT COUNT(*) FROM relationships WHERE isPreset = 1;
+
+insertRelationship:
+INSERT OR REPLACE INTO relationships(operatorId, relatedOperatorId, relatedOperatorName, type, intimacy, isPreset, note)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+updateRelationship:
+UPDATE relationships SET type = ?, intimacy = ?, note = ?
+WHERE operatorId = ? AND relatedOperatorId = ?;
+
+deleteRelationship:
+DELETE FROM relationships WHERE operatorId = ? AND relatedOperatorId = ?;
+
+deleteByOperator:
+DELETE FROM relationships WHERE operatorId = ?;
+
+deleteByType:
+DELETE FROM relationships WHERE type = ?;
+
+deletePresets:
+DELETE FROM relationships WHERE isPreset = 1;
+
+insertAllRelationships:
+INSERT OR REPLACE INTO relationships(operatorId, relatedOperatorId, relatedOperatorName, type, intimacy, isPreset, note)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+deleteAllRelationships:
+DELETE FROM relationships;

@@ -1,0 +1,36 @@
+CREATE TABLE IF NOT EXISTS memory_anchors (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    sessionId TEXT NOT NULL,
+    operatorId TEXT NOT NULL,
+    type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    isPrivate INTEGER NOT NULL DEFAULT 0,
+    createdAt INTEGER NOT NULL DEFAULT 0,
+    expiresAt INTEGER NOT NULL DEFAULT 0
+);
+
+getPublicAnchors:
+SELECT * FROM memory_anchors WHERE operatorId = ? AND isPrivate = 0 AND expiresAt > ? ORDER BY createdAt DESC;
+
+getAllAnchors:
+SELECT * FROM memory_anchors WHERE operatorId = ? AND expiresAt > ? ORDER BY createdAt DESC;
+
+getRecentAnchors:
+SELECT * FROM memory_anchors WHERE sessionId = ? AND type = ? AND createdAt > ? ORDER BY createdAt DESC;
+
+getAnchorCount:
+SELECT COUNT(*) FROM memory_anchors;
+
+insertAnchor:
+INSERT OR REPLACE INTO memory_anchors(sessionId, operatorId, type, content, isPrivate, createdAt, expiresAt)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+deleteExpiredAnchors:
+DELETE FROM memory_anchors WHERE expiresAt < ?;
+
+deleteOldAnchors:
+DELETE FROM memory_anchors WHERE createdAt < ?;
+
+insertAllAnchors:
+INSERT OR REPLACE INTO memory_anchors(sessionId, operatorId, type, content, isPrivate, createdAt, expiresAt)
+VALUES (?, ?, ?, ?, ?, ?, ?);

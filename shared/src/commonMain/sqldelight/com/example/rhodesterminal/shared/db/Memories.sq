@@ -1,0 +1,43 @@
+CREATE TABLE IF NOT EXISTS memories (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    sessionId TEXT NOT NULL,
+    operatorId TEXT NOT NULL,
+    type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    keywords TEXT NOT NULL DEFAULT '',
+    preferences TEXT NOT NULL DEFAULT '',
+    taboos TEXT NOT NULL DEFAULT '',
+    createdAt INTEGER NOT NULL DEFAULT 0,
+    expiresAt INTEGER NOT NULL DEFAULT 9223372036854775807
+);
+
+getLatestMemory:
+SELECT * FROM memories WHERE sessionId = ? AND type = ? ORDER BY createdAt DESC LIMIT 1;
+
+getMemories:
+SELECT * FROM memories WHERE sessionId = ? AND type = ? ORDER BY createdAt DESC;
+
+getLatestLongTermImpression:
+SELECT * FROM memories WHERE operatorId = ? AND type = 'LONG_TERM' ORDER BY createdAt DESC LIMIT 1;
+
+getAllLongTerm:
+SELECT * FROM memories WHERE type = 'LONG_TERM' ORDER BY createdAt DESC;
+
+getLatestDaily:
+SELECT * FROM memories WHERE type = 'DAILY' ORDER BY createdAt DESC LIMIT 1;
+
+getMemoriesBySession:
+SELECT * FROM memories WHERE sessionId = ? AND type = ? ORDER BY createdAt ASC;
+
+insertMemory:
+INSERT OR REPLACE INTO memories(sessionId, operatorId, type, content, keywords, preferences, taboos, createdAt, expiresAt)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+deleteExpired:
+DELETE FROM memories WHERE expiresAt < ?;
+
+deleteMemory:
+DELETE FROM memories WHERE id = ?;
+
+deleteAllLongTerm:
+DELETE FROM memories WHERE type = 'LONG_TERM';

@@ -41,7 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.viewmodel.compose.viewModel
+import org.koin.compose.viewmodel.koinViewModel
 import com.example.rhodesterminal.viewmodel.MainViewModel
 import com.example.rhodesterminal.ui.chat.ChatScreen
 import com.example.rhodesterminal.ui.chatsettings.ChatSettingsScreen
@@ -115,7 +115,7 @@ sealed class SubScreen {
 }
 
 @Composable
-fun MainApp(viewModel: MainViewModel = viewModel()) {
+fun MainApp(viewModel: MainViewModel = koinViewModel()) {
     val selectedOperator by viewModel.selectedOperator.collectAsState()
     var subScreen by remember { mutableStateOf<SubScreen>(SubScreen.None) }
     var activeTab by rememberSaveable { mutableIntStateOf(0) }

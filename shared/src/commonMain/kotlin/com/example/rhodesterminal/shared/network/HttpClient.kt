@@ -13,6 +13,7 @@ fun createHttpClient(): HttpClient = HttpClient(createPlatformEngine()) {
         json(Json {
             ignoreUnknownKeys = true
             isLenient = true
+            encodeDefaults = true
         })
     }
 }

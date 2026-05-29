@@ -27,7 +27,7 @@ val appModule = module {
 
     single {
         val appState = get<AppStateHolder>()
-        SharedUtils(get(), get<SettingsRepository>(), get<AIService>()) { appState.operators.value }
+        SharedUtils(get(), get<SettingsRepository>(), get<AIService>(), get<Prefs>()) { appState.operators.value }
     }
 
     single {

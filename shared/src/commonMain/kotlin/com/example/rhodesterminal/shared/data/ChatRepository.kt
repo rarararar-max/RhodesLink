@@ -4,8 +4,9 @@ import com.example.rhodesterminal.shared.db.DatabaseWrapper
 import com.example.rhodesterminal.shared.db.RhodesDatabase
 import com.example.rhodesterminal.shared.model.*
 import kotlinx.coroutines.Dispatchers
+import app.cash.sqldelight.coroutines.asFlow
+import app.cash.sqldelight.coroutines.mapToList
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
@@ -29,12 +30,10 @@ class ChatRepository(private val wrapper: DatabaseWrapper) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     // --- Operators ---
-    val allOperators: Flow<List<Operator>> = run {
-        val results = db.operatorsQueries.getAllOperators { id, name, title, description, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, userRelation, lmb, attack, defense, meldPref ->
+    val allOperators: Flow<List<Operator>> =
+        db.operatorsQueries.getAllOperators { id, name, title, description, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, userRelation, lmb, attack, defense, meldPref ->
             Operator(id, name, title, description, avatarUri, location, activity, emotion, intimacy.toInt(), privatePrompt, groupPrompt, userRelation, lmb.toInt(), attack.toFloat(), defense.toFloat(), meldPref)
-        }.executeAsList()
-        flowOf(results)
-    }
+        }.asFlow().mapToList(Dispatchers.Default)
 
     suspend fun getOperator(id: String): Operator? = withContext(Dispatchers.Default) {
         db.operatorsQueries.getOperator(id) { id_, name, title, description, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, userRelation, lmb, attack, defense, meldPref ->
@@ -97,12 +96,10 @@ class ChatRepository(private val wrapper: DatabaseWrapper) {
     }
 
     // --- Sessions ---
-    val allSessions: Flow<List<ChatSession>> = run {
-        val results = db.chatSessionsQueries.getAllSessions { id, operatorId, operatorName, lastMessage, lastTime, mode, isPinned, unreadCount, members, rules, avatarUri, mutedMembers ->
+    val allSessions: Flow<List<ChatSession>> =
+        db.chatSessionsQueries.getAllSessions { id, operatorId, operatorName, lastMessage, lastTime, mode, isPinned, unreadCount, members, rules, avatarUri, mutedMembers ->
             ChatSession(id, operatorId, operatorName, lastMessage, lastTime, mode, isPinned != 0L, unreadCount.toInt(), members, rules, avatarUri, mutedMembers)
-        }.executeAsList()
-        flowOf(results)
-    }
+        }.asFlow().mapToList(Dispatchers.Default)
 
     suspend fun getOrCreateSession(operatorId: String, operatorName: String, avatarUri: String = ""): ChatSession = withContext(Dispatchers.Default) {
         val existing = db.chatSessionsQueries.getSessionByOperator(operatorId) { id, opId, opName, lastMsg, lastTime, mode, isPinned, unreadCount, members, rules, avatar, muted ->
@@ -158,12 +155,10 @@ class ChatRepository(private val wrapper: DatabaseWrapper) {
     }
 
     // --- Messages ---
-    fun getMessages(sessionId: String): Flow<List<ChatMessage>> = run {
-        val results = db.chatMessagesQueries.getMessages(sessionId) { id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe ->
+    fun getMessages(sessionId: String): Flow<List<ChatMessage>> =
+        db.chatMessagesQueries.getMessages(sessionId) { id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe ->
             ChatMessage(id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange.toInt(), timestamp, isMe != 0L)
-        }.executeAsList()
-        flowOf(results)
-    }
+        }.asFlow().mapToList(Dispatchers.Default)
 
     suspend fun getMessagesSync(sessionId: String): List<ChatMessage> = withContext(Dispatchers.Default) {
         db.chatMessagesQueries.getMessagesSync(sessionId) { id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe ->
@@ -176,10 +171,11 @@ class ChatRepository(private val wrapper: DatabaseWrapper) {
     }
 
     suspend fun sendMessage(sessionId: String, message: ChatMessage) = withContext(Dispatchers.Default) {
+        val ts = if (message.timestamp > 0) message.timestamp else System.currentTimeMillis()
         db.chatMessagesQueries.insertMessage(
             message.id, message.sessionId, message.senderId, message.senderName, message.content,
             message.type, message.mode, message.emotion, message.activity, message.location,
-            message.narration, message.segmentGroup, message.intimacyChange.toLong(), message.timestamp,
+            message.narration, message.segmentGroup, message.intimacyChange.toLong(), ts,
             if (message.isMe) 1L else 0L
         )
         val preview = if (message.type == "ai_json") {
@@ -193,7 +189,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper) {
                 } else message.content.take(50)
             } catch (_: Exception) { message.content.take(50) }
         } else message.content.take(50)
-        db.chatSessionsQueries.updateLastMessage(preview, message.timestamp, sessionId)
+        db.chatSessionsQueries.updateLastMessage(preview, ts, sessionId)
     }
 
     suspend fun getNextMessageId(): Long = withContext(Dispatchers.Default) {
@@ -388,26 +384,20 @@ class ChatRepository(private val wrapper: DatabaseWrapper) {
         db.momentsQueries.getLastInsertRowId().executeAsOne()
     }
 
-    fun getAllMoments(): Flow<List<Moment>> = run {
-        val results = db.momentsQueries.getAllMoments { id, opId, opName, content, isUserPost, mentionedIds, likeCount, commentCount, createdAt ->
+    fun getAllMoments(): Flow<List<Moment>> =
+        db.momentsQueries.getAllMoments { id, opId, opName, content, isUserPost, mentionedIds, likeCount, commentCount, createdAt ->
             Moment(id, opId, opName, content, isUserPost != 0L, mentionedIds, likeCount.toInt(), commentCount.toInt(), createdAt)
-        }.executeAsList()
-        flowOf(results)
-    }
+        }.asFlow().mapToList(Dispatchers.Default)
 
-    fun getLikesFlow(momentId: Long): Flow<List<MomentLike>> = run {
-        val results = db.momentLikesQueries.getLikesFlow(momentId) { id, mId, opId, opName, createdAt ->
+    fun getLikesFlow(momentId: Long): Flow<List<MomentLike>> =
+        db.momentLikesQueries.getLikesFlow(momentId) { id, mId, opId, opName, createdAt ->
             MomentLike(id, mId, opId, opName, createdAt)
-        }.executeAsList()
-        flowOf(results)
-    }
+        }.asFlow().mapToList(Dispatchers.Default)
 
-    fun getComments(momentId: Long): Flow<List<MomentComment>> = run {
-        val results = db.momentCommentsQueries.getComments(momentId) { id, mId, opId, opName, content, parentCommentId, replyToName, createdAt, isRead ->
+    fun getComments(momentId: Long): Flow<List<MomentComment>> =
+        db.momentCommentsQueries.getComments(momentId) { id, mId, opId, opName, content, parentCommentId, replyToName, createdAt, isRead ->
             MomentComment(id, mId, opId, opName, content, parentCommentId, replyToName, createdAt, isRead != 0L)
-        }.executeAsList()
-        flowOf(results)
-    }
+        }.asFlow().mapToList(Dispatchers.Default)
 
     suspend fun insertLike(like: MomentLike) = withContext(Dispatchers.Default) {
         db.momentLikesQueries.insertLike(like.momentId, like.operatorId, like.operatorName, like.createdAt)
@@ -478,12 +468,10 @@ class ChatRepository(private val wrapper: DatabaseWrapper) {
         }.executeAsOneOrNull()
     }
 
-    fun getDiariesByOperator(operatorId: String): Flow<List<Diary>> = run {
-        val results = db.diariesQueries.getDiariesByOperator(operatorId) { id, opId, opName, content, date, createdAt ->
+    fun getDiariesByOperator(operatorId: String): Flow<List<Diary>> =
+        db.diariesQueries.getDiariesByOperator(operatorId) { id, opId, opName, content, date, createdAt ->
             Diary(id, opId, opName, content, date, createdAt)
-        }.executeAsList()
-        flowOf(results)
-    }
+        }.asFlow().mapToList(Dispatchers.Default)
 
     suspend fun getDiaryDates(operatorId: String): List<String> = withContext(Dispatchers.Default) {
         db.diariesQueries.getDiaryDates(operatorId).executeAsList()

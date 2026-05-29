@@ -15,6 +15,7 @@ class SharedUtils(
     private val repository: ChatRepository,
     private val settings: SettingsRepository,
     val aiService: AIService,
+    private val prefs: Prefs,
     private val operatorsProvider: () -> List<com.example.rhodesterminal.shared.model.Operator> = { emptyList() }
 ) {
     companion object {
@@ -29,7 +30,7 @@ class SharedUtils(
         logAiCall("→$logTag", prompt, "(streaming...)", messages)
         val sb = StringBuilder()
         aiService.streamChat(
-            settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl, temperature = temp
+            prefs.apiKey(), messages, prefs.provider(), prefs.modelName(), prefs.customUrl(), temperature = temp
         ).collect { chunk ->
             sb.append(chunk)
             emit(chunk)
@@ -72,10 +73,10 @@ class SharedUtils(
 
     // === 配置访问 ===
 
-    fun getApiKey(): String = settings.apiKey
-    fun getProvider(): String = settings.provider
-    fun getModelName(): String = settings.modelName
-    fun getCustomUrl(): String = settings.customUrl
+    fun getApiKey(): String = prefs.apiKey()
+    fun getProvider(): String = prefs.provider()
+    fun getModelName(): String = prefs.modelName()
+    fun getCustomUrl(): String = prefs.customUrl()
 
     // === 纯工具函数 ===
 

@@ -61,14 +61,15 @@ class SharedUtils(
     }
 
     fun trackTokens(category: String, prompt: String, response: String) {
+        val tp = prefs.tokens
         val key = "token_$category"
-        val current = settings.getInt(key, 0)
+        val current = tp.getInt(key, 0)
         val estimate = ((prompt.length + response.length) * 3 / 2).coerceAtLeast(1)
-        settings.putInt(key, current + estimate)
+        tp.edit().putInt(key, current + estimate).apply()
         val today = beijingSdf("yyyy-MM-dd").format(java.util.Date())
         val dailyKey = "daily_${category}_$today"
-        val dailyCurrent = settings.getInt(dailyKey, 0)
-        settings.putInt(dailyKey, dailyCurrent + estimate)
+        val dailyCurrent = tp.getInt(dailyKey, 0)
+        tp.edit().putInt(dailyKey, dailyCurrent + estimate).apply()
     }
 
     // === 配置访问 ===

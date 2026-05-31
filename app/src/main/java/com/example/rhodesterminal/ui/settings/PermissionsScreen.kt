@@ -17,11 +17,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import androidx.compose.ui.layout.ContentScale
 import com.example.rhodesterminal.data.db.entity.ChatSessionEntity
 import com.example.rhodesterminal.ui.theme.*
+import com.example.rhodesterminal.shared.settings.SettingsRepository
 import com.example.rhodesterminal.viewmodel.MainViewModel
+import org.koin.compose.koinInject
 
 @Composable
 fun PermissionsScreen(
@@ -58,7 +60,7 @@ fun PermissionsScreen(
 
 @Composable
 private fun OperatorPermTab(operators: List<com.example.rhodesterminal.data.db.entity.OperatorEntity>) {
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val settings: SettingsRepository = koinInject()
 
     Column {
         Text("批量设置干员的主动消息和自动动态权限", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
@@ -71,9 +73,8 @@ private fun OperatorPermTab(operators: List<com.example.rhodesterminal.data.db.e
 
         LazyColumn {
             items(operators) { op ->
-                val prefs = context.getSharedPreferences("op_perms", 0)
-                var allowMsg by remember(op.id) { mutableStateOf(prefs.getBoolean("msg_${op.id}", true)) }
-                var allowDyn by remember(op.id) { mutableStateOf(prefs.getBoolean("dyn_${op.id}", true)) }
+                var allowMsg by remember(op.id) { mutableStateOf(settings.getOperatorMsgPermission(op.id)) }
+                var allowDyn by remember(op.id) { mutableStateOf(settings.getOperatorDynPermission(op.id)) }
                 Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (op.avatarUri.isNotBlank()) {
                         AsyncImage(model = op.avatarUri, contentDescription = null, modifier = Modifier.size(32.dp).clip(CircleShape), contentScale = ContentScale.Crop)
@@ -82,8 +83,8 @@ private fun OperatorPermTab(operators: List<com.example.rhodesterminal.data.db.e
                     }
                     Spacer(Modifier.width(10.dp))
                     Text(op.name, fontSize = 14.sp, color = TextPrimary, modifier = Modifier.weight(1f))
-                    Switch(checked = allowMsg, onCheckedChange = { b -> allowMsg = b; context.getSharedPreferences("op_perms", 0).edit().putBoolean("msg_${op.id}", b).apply() }, modifier = Modifier.width(56.dp), colors = SwitchDefaults.colors(checkedThumbColor = Primary, checkedTrackColor = PrimaryContainer))
-                    Switch(checked = allowDyn, onCheckedChange = { b -> allowDyn = b; context.getSharedPreferences("op_perms", 0).edit().putBoolean("dyn_${op.id}", b).apply() }, modifier = Modifier.width(56.dp), colors = SwitchDefaults.colors(checkedThumbColor = AccentOrange, checkedTrackColor = AccentOrange.copy(alpha = 0.2f)))
+                    Switch(checked = allowMsg, onCheckedChange = { b -> allowMsg = b; settings.putOperatorMsgPermission(op.id, b) }, modifier = Modifier.width(56.dp), colors = SwitchDefaults.colors(checkedThumbColor = Primary, checkedTrackColor = PrimaryContainer))
+                    Switch(checked = allowDyn, onCheckedChange = { b -> allowDyn = b; settings.putOperatorDynPermission(op.id, b) }, modifier = Modifier.width(56.dp), colors = SwitchDefaults.colors(checkedThumbColor = AccentOrange, checkedTrackColor = AccentOrange.copy(alpha = 0.2f)))
                 }
                 HorizontalDivider(color = Divider)
             }
@@ -93,7 +94,7 @@ private fun OperatorPermTab(operators: List<com.example.rhodesterminal.data.db.e
 
 @Composable
 private fun GroupPermTab(groups: List<com.example.rhodesterminal.data.db.entity.ChatSessionEntity>) {
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val settings: SettingsRepository = koinInject()
 
     Column {
         Text("控制各群聊是否开启自动聊天（发送消息后自动触发干员闲聊）", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
@@ -105,8 +106,7 @@ private fun GroupPermTab(groups: List<com.example.rhodesterminal.data.db.entity.
         } else {
             LazyColumn {
                 items(groups, key = { it.id }) { g ->
-                    val key = "group_auto_${g.id}"
-                    var autoSpeak by remember(g.id) { mutableStateOf(context.getSharedPreferences("chat_prefs", 0).getBoolean(key, true)) }
+                    var autoSpeak by remember(g.id) { mutableStateOf(settings.getGroupAuto(g.id)) }
                     Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                         if (g.avatarUri.isNotBlank()) {
                             AsyncImage(model = g.avatarUri, contentDescription = null, modifier = Modifier.size(36.dp).clip(CircleShape), contentScale = ContentScale.Crop)
@@ -122,7 +122,7 @@ private fun GroupPermTab(groups: List<com.example.rhodesterminal.data.db.entity.
                         }
                         Switch(checked = autoSpeak, onCheckedChange = { b ->
                             autoSpeak = b
-                            context.getSharedPreferences("chat_prefs", 0).edit().putBoolean(key, b).apply()
+                            settings.putGroupAuto(g.id, b)
                         }, colors = SwitchDefaults.colors(checkedThumbColor = Primary, checkedTrackColor = PrimaryContainer))
                     }
                     HorizontalDivider(color = Divider)

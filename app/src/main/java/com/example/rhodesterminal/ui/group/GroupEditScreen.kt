@@ -54,7 +54,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.rhodesterminal.data.db.entity.OperatorEntity
 import com.example.rhodesterminal.ui.theme.*
+import com.example.rhodesterminal.shared.settings.SettingsRepository
 import com.example.rhodesterminal.viewmodel.MainViewModel
+import org.koin.compose.koinInject
 
 data class MemberState(val op: OperatorEntity, val muted: Boolean = false)
 
@@ -65,6 +67,7 @@ fun GroupEditScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val settings: SettingsRepository = koinInject()
     val operators by viewModel.operators.collectAsState()
     var groupName by remember { mutableStateOf("") }
     val members = remember { mutableStateListOf<MemberState>() }
@@ -72,7 +75,7 @@ fun GroupEditScreen(
     var showPicker by remember { mutableStateOf(false) }
     var showDismissConfirm by remember { mutableStateOf(false) }
     val ctx = LocalContext.current
-    var autoSpeak by remember { mutableStateOf(ctx.getSharedPreferences("chat_prefs", 0).getBoolean("group_auto_${groupId}", false)) }
+    var autoSpeak by remember { mutableStateOf(settings.getGroupAuto(groupId)) }
     var avatarUri by remember { mutableStateOf("") }
     var cropTarget by remember { mutableStateOf<android.net.Uri?>(null) }
     val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> cropTarget = uri }
@@ -99,7 +102,7 @@ fun GroupEditScreen(
             Spacer(modifier = Modifier.weight(1f))
             TextButton(onClick = {
                 viewModel.saveGroup(groupId, groupName, members.map { it.op.name }, rules, avatarUri, members.filter { it.muted }.map { it.op.name })
-                ctx.getSharedPreferences("chat_prefs", 0).edit().putBoolean("group_auto_${groupId}", autoSpeak).apply()
+                settings.putGroupAuto(groupId, autoSpeak)
                 onBack()
             }) {
                 Icon(Icons.Default.Check, null, tint = Primary, modifier = Modifier.size(20.dp))
@@ -115,7 +118,7 @@ fun GroupEditScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(modifier = Modifier.size(52.dp).clip(CircleShape).background(Primary).clickable { avatarPicker.launch("image/*") }, contentAlignment = Alignment.Center) {
                         if (avatarUri.isNotBlank()) {
-                            coil.compose.AsyncImage(model = avatarUri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+                            coil3.compose.AsyncImage(model = avatarUri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
                         } else {
                             Icon(Icons.Default.Groups, null, tint = Color.White, modifier = Modifier.size(28.dp))
                         }

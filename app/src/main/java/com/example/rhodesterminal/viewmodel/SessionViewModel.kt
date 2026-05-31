@@ -4,13 +4,13 @@ import com.example.rhodesterminal.shared.model.ChatSession
 import com.example.rhodesterminal.shared.model.Operator
 import com.example.rhodesterminal.shared.data.ChatRepository
 import com.example.rhodesterminal.viewmodel.shared.AppStateHolder
-import com.example.rhodesterminal.viewmodel.shared.Prefs
+import com.example.rhodesterminal.shared.settings.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 class SessionViewModel(
     private val repository: ChatRepository,
-    private val prefs: Prefs,
+    private val settings: SettingsRepository,
     private val appState: AppStateHolder,
     private val scope: CoroutineScope
 ) {
@@ -26,7 +26,7 @@ class SessionViewModel(
     fun clearAllMessages() {
         scope.launch {
             val ids = appState.sessions.value.map { it.id }.toSet()
-            prefs.hidden.edit().putStringSet("hidden_ids", ids).apply()
+            settings.hiddenIds = ids
             appState.clearSessions()
         }
     }

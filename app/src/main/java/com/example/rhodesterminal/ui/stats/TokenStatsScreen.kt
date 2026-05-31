@@ -46,7 +46,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.rhodesterminal.ui.theme.*
+import com.example.rhodesterminal.shared.settings.SettingsRepository
 import com.example.rhodesterminal.viewmodel.MainViewModel
+import org.koin.compose.koinInject
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -60,8 +62,7 @@ fun TokenStatsScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-    val prefs = context.getSharedPreferences("token_stats", 0)
+    val settings: SettingsRepository = koinInject()
     val bjSdf = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply { timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai") } }
     val cal = remember { Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai")) }
 
@@ -84,7 +85,7 @@ fun TokenStatsScreen(
     val todayStr = remember { bjSdf.format(Date()) }
     val todayData = remember {
         allCategories.map { cat ->
-            cat.copy(tokens = prefs.getInt("daily_${cat.key}_$todayStr", 0))
+            cat.copy(tokens = settings.getDailyTokenCount(cat.key, todayStr))
         }
     }
 
@@ -100,7 +101,7 @@ fun TokenStatsScreen(
             val today = Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
             while (c <= today) {
                 val d = bjSdf.format(c.time)
-                sum += prefs.getInt("daily_${cat.key}_$d", 0)
+                sum += settings.getDailyTokenCount(cat.key, d)
                 c.add(Calendar.DAY_OF_MONTH, 1)
             }
             cat.copy(tokens = sum)
@@ -110,7 +111,7 @@ fun TokenStatsScreen(
     // 读取全部数据
     val allData = remember {
         allCategories.map { cat ->
-            cat.copy(tokens = prefs.getInt("token_${cat.key}", 0))
+            cat.copy(tokens = settings.getTokenCount(cat.key))
         }
     }
 
@@ -131,7 +132,7 @@ fun TokenStatsScreen(
             while (scan.time <= weekEnd) {
                 val d = bjSdf.format(scan.time)
                 for (cat in allCategories) {
-                    sum += prefs.getInt("daily_${cat.key}_$d", 0)
+                    sum += settings.getDailyTokenCount(cat.key, d)
                 }
                 scan.add(Calendar.DAY_OF_MONTH, 1)
             }

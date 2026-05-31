@@ -41,8 +41,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
+import com.example.rhodesterminal.shared.settings.SettingsRepository
 import com.example.rhodesterminal.ui.theme.*
+import org.koin.compose.koinInject
 
 data class SettingEntry(val icon: ImageVector, val title: String, val desc: String, val iconColor: Color = Blue400)
 
@@ -53,8 +55,8 @@ fun SettingsScreen(
     onPermissions: () -> Unit = {}, onCredits: () -> Unit = {},
     userNickname: String = "博士", userGender: String = "", userAvatarUri: String = "", modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-    val balance = remember { context.getSharedPreferences("dispatch", 0).getInt("lmb", 1000) }
+    val settings: SettingsRepository = koinInject()
+    val balance = settings.lmb
     Column(modifier = modifier.fillMaxSize().background(BG)) {
         Row(modifier = Modifier.fillMaxWidth().background(Surface).clickable(onClick = onProfile).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             if (userAvatarUri.isNotBlank()) {

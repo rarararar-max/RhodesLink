@@ -26,26 +26,27 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.rhodesterminal.shared.network.providers
+import com.example.rhodesterminal.shared.settings.SettingsRepository
 import com.example.rhodesterminal.ui.theme.*
+import org.koin.compose.koinInject
 
 @Composable
 fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
+    val settings: SettingsRepository = koinInject()
     val ctx = LocalContext.current
-    val prefs = remember { ctx.getSharedPreferences("model_prefs", 0) }
-    val chatPrefs = remember { ctx.getSharedPreferences("chat_prefs", 0) }
 
     val providerIds = providers.keys.toList()
     val providerNames = providerIds.map { providers[it]!!.name }
 
-    var selectedProvider by remember { mutableIntStateOf(providerIds.indexOf(prefs.getString("provider", "deepseek"))) }
+    var selectedProvider by remember { mutableIntStateOf(providerIds.indexOf(settings.provider)) }
     val currentProviderId = providerIds[selectedProvider]
     val currentConfig = providers[currentProviderId]!!
 
-    val savedModel = prefs.getString("model_name", "") ?: ""
+    val savedModel = settings.modelName
     var selectedModelIdx by remember { mutableIntStateOf(currentConfig.models.indexOf(savedModel).coerceAtLeast(0)) }
     var customModelName by remember { mutableStateOf(savedModel) }
-    var customUrl by remember { mutableStateOf(prefs.getString("custom_url", "") ?: "") }
-    var apiKey by remember { mutableStateOf(chatPrefs.getString("api_key", "") ?: "") }
+    var customUrl by remember { mutableStateOf(settings.customUrl) }
+    var apiKey by remember { mutableStateOf(settings.apiKey) }
     var showKey by remember { mutableStateOf(false) }
 
     val isCustom = currentProviderId == "custom"
@@ -56,10 +57,10 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
             Spacer(Modifier.weight(1f)); Text("模型设置", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary); Spacer(Modifier.weight(1f))
             TextButton(onClick = {
-                prefs.edit().putString("provider", currentProviderId)
-                    .putString("model_name", if (isCustom || selectedModelIdx >= currentConfig.models.size) customModelName else currentConfig.models[selectedModelIdx])
-                    .putString("custom_url", customUrl).apply()
-                chatPrefs.edit().putString("api_key", apiKey).apply()
+                settings.provider = currentProviderId
+                settings.modelName = if (isCustom || selectedModelIdx >= currentConfig.models.size) customModelName else currentConfig.models[selectedModelIdx]
+                settings.customUrl = customUrl
+                settings.apiKey = apiKey
                 onBack()
             }) { Icon(Icons.Default.Check, null, tint = Primary, modifier = Modifier.size(20.dp)); Text("保存", color = Primary, fontWeight = FontWeight.SemiBold) }
         }

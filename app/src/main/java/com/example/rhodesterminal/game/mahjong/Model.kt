@@ -1,15 +1,21 @@
 package com.example.rhodesterminal.game.mahjong
 
 import kotlin.random.Random
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+
+private val json = Json { ignoreUnknownKeys = true }
 
 object GameSerializer {
-    private val gson = com.google.gson.Gson()
-    fun serialize(game: GameState): String = gson.toJson(game)
-    fun deserialize(json: String): GameState = gson.fromJson(json, GameState::class.java)
+    fun serialize(game: GameState): String = json.encodeToString(game)
+    fun deserialize(jsonStr: String): GameState = json.decodeFromString(jsonStr)
 }
 
+@Serializable
 enum class Suit { MAN, PIN, SOU, WIND, DRAGON }
 
+@Serializable
 data class Tile(val suit: Suit, val number: Int) : Comparable<Tile> {
     companion object {
         fun allTiles() = listOf(
@@ -39,11 +45,15 @@ data class Tile(val suit: Suit, val number: Int) : Comparable<Tile> {
     override fun toString() = tileName(this)
 }
 
+@Serializable
 enum class MeldType { CHI, PON, KAN, ANKAN }
+@Serializable
 data class Meld(val type: MeldType, val tiles: List<Tile>, val fromSeat: Seat)
 
+@Serializable
 enum class Seat { EAST, SOUTH, WEST, NORTH }
 
+@Serializable
 data class PlayerState(
     val opId: String, val name: String, val seat: Seat,
     val hand: MutableList<Tile> = mutableListOf(),
@@ -56,6 +66,7 @@ data class PlayerState(
     val meldPref: String = "medium", val specialTraits: List<String> = emptyList()
 )
 
+@Serializable
 data class GameState(
     val players: MutableList<PlayerState> = mutableListOf(),
     val ruleType: String = "riichi",
@@ -100,22 +111,26 @@ data class GameState(
     }
 }
 
+@Serializable
 data class SettlementResult(
     val rankings: List<PlayerResult>, val userNetGain: Int,
     val exchangeRate: Int = 100, val basePoints: Int = 25000,
     val chatLog: List<String> = emptyList()
 )
+@Serializable
 data class PlayerResult(
     val name: String, val finalPoints: Int, val netGain: Int, val rank: Int,
     val yakus: List<String> = emptyList(), val han: Int = 0
 )
 
+@Serializable
 data class GameStateCreateParams(
     val opIds: List<String>, val opNames: List<String>,
     val styles: List<Triple<Float, Float, String>>,
     val userId: String, val userName: String, val assistantId: String
 )
 
+@Serializable
 data class MahjongHistoryEntry(
     val time: Long, val opponents: List<String>, val userRank: Int,
     val userNetGain: Int, val userPoints: Int, val winType: String = "",

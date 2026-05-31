@@ -16,11 +16,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Assignment
+import androidx.compose.material.icons.automirrored.filled.Assignment
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.EmojiEvents
-import androidx.compose.material.icons.filled.MenuBook
-import androidx.compose.material.icons.filled.SendToMobile
+import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.automirrored.filled.SendToMobile
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material3.HorizontalDivider
@@ -70,10 +70,10 @@ fun FeaturesScreen(
 
         Column(modifier = Modifier.verticalScroll(rememberScrollState()).padding(vertical = 8.dp)) {
             FeatureButton(FeatureEntry(Icons.Default.Share, "动态广场", "查看所有干员发布的动态", badge = momentBadge, iconColor = Primary), commentBadge = commentBadge, onClick = onMoments)
-            FeatureButton(FeatureEntry(Icons.Default.MenuBook, "干员日记", "查看干员们的内心独白", iconColor = Primary), onClick = onDiary)
+            FeatureButton(FeatureEntry(Icons.AutoMirrored.Filled.MenuBook, "干员日记", "查看干员们的内心独白", iconColor = Primary), onClick = onDiary)
             FeatureButton(FeatureEntry(Icons.Default.EmojiEvents, "聊天排行榜", "昨日聊天数据排名", iconColor = Primary), onClick = onRanking)
-            FeatureButton(FeatureEntry(Icons.Default.Assignment, "大家的印象", "干员对你的长期印象总结", iconColor = Primary), onClick = onImpressions)
-            FeatureButton(FeatureEntry(Icons.Default.SendToMobile, "干员派遣", "组建小队执行任务", iconColor = Primary), onClick = onDispatch)
+            FeatureButton(FeatureEntry(Icons.AutoMirrored.Filled.Assignment, "大家的印象", "干员对你的长期印象总结", iconColor = Primary), onClick = onImpressions)
+            FeatureButton(FeatureEntry(Icons.AutoMirrored.Filled.SendToMobile, "干员派遣", "组建小队执行任务", iconColor = Primary), onClick = onDispatch)
             FeatureButton(FeatureEntry(Icons.Default.BarChart, "消费统计", "Token消耗分析", iconColor = Primary), onClick = onTokenStats)
             FeatureButton(FeatureEntry(Icons.Default.EmojiEvents, "打麻将", "在活动室和干员们打一局麻将", iconColor = AccentOrange), onClick = onMahjong)
         }

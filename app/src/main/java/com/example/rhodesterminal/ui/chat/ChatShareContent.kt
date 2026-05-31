@@ -225,7 +225,7 @@ private fun SharePreview(titleContent: @Composable () -> Unit, messages: List<Sh
                 Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.Top, horizontalArrangement = if (msg.isMe) Arrangement.End else Arrangement.Start) {
                     if (!msg.isMe) {
                         if (operatorAvatarUri.isNotBlank()) {
-                            coil.compose.AsyncImage(model = operatorAvatarUri, contentDescription = null, modifier = Modifier.size(28.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+                            coil3.compose.AsyncImage(model = operatorAvatarUri, contentDescription = null, modifier = Modifier.size(28.dp).clip(CircleShape), contentScale = ContentScale.Crop)
                         } else {
                             Box(Modifier.size(28.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) {
                                 Text(msg.senderName.take(1), fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
@@ -239,7 +239,7 @@ private fun SharePreview(titleContent: @Composable () -> Unit, messages: List<Sh
                     if (msg.isMe) {
                         Spacer(Modifier.width(6.dp))
                         if (userAvatarUri.isNotBlank()) {
-                            coil.compose.AsyncImage(model = userAvatarUri, contentDescription = null, modifier = Modifier.size(28.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+                            coil3.compose.AsyncImage(model = userAvatarUri, contentDescription = null, modifier = Modifier.size(28.dp).clip(CircleShape), contentScale = ContentScale.Crop)
                         } else {
                             Box(Modifier.size(28.dp).clip(CircleShape).background(Color(0xFF6B7280)), contentAlignment = Alignment.Center) {
                                 Icon(Icons.Default.Person, null, tint = Color.White, modifier = Modifier.size(16.dp))

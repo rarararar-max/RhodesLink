@@ -18,6 +18,12 @@ import com.example.rhodesterminal.shared.model.DispatchRecord
 import com.example.rhodesterminal.shared.model.MemoryAnchor
 import com.example.rhodesterminal.shared.model.Memory
 import com.example.rhodesterminal.shared.model.MemoryType
+import com.example.rhodesterminal.shared.model.ImpressionResponse
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 import com.example.rhodesterminal.shared.model.Diary
 import com.example.rhodesterminal.shared.model.MomentComment
 import com.example.rhodesterminal.shared.model.Moment
@@ -27,7 +33,7 @@ import com.example.rhodesterminal.shared.data.SenderCount
 import com.example.rhodesterminal.shared.data.BfsNode
 import com.example.rhodesterminal.viewmodel.shared.AppStateHolder
 import com.example.rhodesterminal.viewmodel.shared.OperatorStateUpdater
-import com.example.rhodesterminal.viewmodel.shared.Prefs
+import com.example.rhodesterminal.shared.settings.SettingsRepository
 import com.example.rhodesterminal.viewmodel.shared.PromptTemplates
 import com.example.rhodesterminal.viewmodel.shared.SharedUtils
 import com.example.rhodesterminal.viewmodel.shared.UserProfile
@@ -48,10 +54,12 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 
+private val json = Json { ignoreUnknownKeys = true }
+
 class MainViewModel(
     application: Application,
     val repository: ChatRepository,
-    val prefs: Prefs,
+    val settings: SettingsRepository,
     val appState: AppStateHolder,
     val sharedUtils: SharedUtils,
     val operatorStateUpdater: OperatorStateUpdater
@@ -64,23 +72,23 @@ class MainViewModel(
         /** 全局调试开关，上线前改为 false */
         const val DEBUG = true
     }
-    val dataViewModel = DataViewModel(repository, prefs, viewModelScope)
-    val mahjongViewModel = MahjongViewModel(repository, prefs, sharedUtils, viewModelScope) { appState.operators.value }
-    val sessionViewModel = SessionViewModel(repository, prefs, appState, viewModelScope)
-    val operatorViewModel = OperatorViewModel(repository, prefs, appState, viewModelScope) { op ->
+    val dataViewModel = DataViewModel(repository, settings, viewModelScope)
+    val mahjongViewModel = MahjongViewModel(repository, settings, sharedUtils, viewModelScope) { appState.operators.value }
+    val sessionViewModel = SessionViewModel(repository, settings, appState, viewModelScope)
+    val operatorViewModel = OperatorViewModel(repository, settings, appState, viewModelScope) { op ->
         if (op != null && op.id == chatViewModel.selectedOperator.value?.id) {
             chatViewModel.updateSelectedOperator(op)
         }
     }
-    val chatViewModel = ChatViewModel(application, repository, prefs, sharedUtils, operatorStateUpdater, appState,
+    val chatViewModel = ChatViewModel(application, repository, settings, sharedUtils, operatorStateUpdater, appState,
         onShowToast = { msg -> android.widget.Toast.makeText(application, msg, android.widget.Toast.LENGTH_SHORT).show() },
         onUnhideSession = { unhideSession(it) },
         onRefreshOperatorStatus = { refreshAllOperatorStatus() }
     )
     private val sessionMessageCounter = mutableMapOf<String, Int>()
-    val momentsViewModel = MomentsViewModel(repository, prefs, appState, viewModelScope) { getUserProfile() }
-    val dispatchViewModel = DispatchViewModel(repository, prefs, sharedUtils, operatorStateUpdater, appState, viewModelScope, { refreshAllOperatorStatus() }) { getUserProfile() }
-    val groupChatViewModel = GroupChatViewModel(repository, prefs, sharedUtils, appState, viewModelScope, { chatViewModel.markSessionRead(it) }, { unhideSession(it) }, { getUserProfile() }, { t, m -> chatViewModel.getPromptTemplate(t, m) }, { s, msgs -> chatViewModel.generateShortTermSummary(s, msgs) }, sessionMessageCounter)
+    val momentsViewModel = MomentsViewModel(repository, settings, appState, viewModelScope) { getUserProfile() }
+    val dispatchViewModel = DispatchViewModel(repository, settings, sharedUtils, operatorStateUpdater, appState, viewModelScope, { refreshAllOperatorStatus() }) { getUserProfile() }
+    val groupChatViewModel = GroupChatViewModel(repository, settings, sharedUtils, appState, viewModelScope, { chatViewModel.markSessionRead(it) }, { unhideSession(it) }, { getUserProfile() }, { t, m -> chatViewModel.getPromptTemplate(t, m) }, { s, msgs -> chatViewModel.generateShortTermSummary(s, msgs) }, sessionMessageCounter)
 
     // Chat state delegates to ChatViewModel
     private val _selectedOperator get() = chatViewModel.selectedOperator
@@ -113,9 +121,9 @@ class MainViewModel(
     private val _moments get() = appState.moments
     val moments: StateFlow<List<Moment>> get() = appState.moments
 
-    fun isDualModel(): Boolean = prefs.isDualModel()
+    fun isDualModel(): Boolean = settings.dualModel
 
-    fun setDualModel(enabled: Boolean) = prefs.setDualModel(enabled)
+    fun setDualModel(enabled: Boolean) { settings.dualModel = enabled }
 
     private val _comments = MutableStateFlow<List<MomentComment>>(emptyList())
     val comments: StateFlow<List<MomentComment>> = _comments.asStateFlow()
@@ -124,12 +132,12 @@ class MainViewModel(
     val diaries: StateFlow<List<Diary>> = _diaries.asStateFlow()
 
     private var messageCounter: Int
-        get() = prefs.messageCounter
-        set(v) { prefs.messageCounter = v }
+        get() = settings.messageCounter
+        set(v) { settings.messageCounter = v }
     private var impressionMsgCounter: Int
-        get() = prefs.impressionMsgCounter
-        set(v) { prefs.impressionMsgCounter = v }
-    private val shortTermThreshold: Int get() = prefs.shortTermThreshold
+        get() = settings.impressionMsgCounter
+        set(v) { settings.impressionMsgCounter = v }
+    private val shortTermThreshold: Int get() = settings.summaryThreshold
     private val updateMutex = Mutex()
     private var lastDbUpdate = 0L
     private var analysisGuidance = ""
@@ -143,21 +151,18 @@ class MainViewModel(
     private val _currentGroupId get() = groupChatViewModel.currentGroupId
 
     fun getPromptTemplate(type: String, mode: String = ""): String {
-        val prefs = prefs.promptTemplates
         val key = if (mode.isNotBlank()) "prompt_${type}_${mode}" else "prompt_$type"
-        return prefs.getString(key, "")?.ifBlank { null } ?: defaultTemplate(type, mode)
+        return settings.getString(key, "")?.ifBlank { null } ?: defaultTemplate(type, mode)
     }
 
     fun savePromptTemplate(type: String, mode: String, template: String) {
         val key = if (mode.isNotBlank()) "prompt_${type}_${mode}" else "prompt_$type"
-        prefs.promptTemplates.edit()
-            .putString(key, template).apply()
+        settings.putString(key, template)
     }
 
     fun resetPromptTemplate(type: String, mode: String = "") {
         val key = if (mode.isNotBlank()) "prompt_${type}_${mode}" else "prompt_$type"
-        prefs.promptTemplates.edit()
-            .remove(key).apply()
+        settings.remove(key)
     }
 
     fun applyTemplate(template: String, replacements: Map<String, String>): String =
@@ -182,7 +187,7 @@ class MainViewModel(
             repository.initPresetGroups()
             initPermissions()
             cleanupExpired()
-            prefs.chat.edit().putInt("dispatch_fast_mode", 0).apply()
+            settings.dispatchFastMode = false
         }
         startAutoStatusRefresh()
         loadHypnosis()
@@ -221,7 +226,6 @@ class MainViewModel(
 
     /** 干员主动私聊：筛选候选 → 随机选 0-2 人 → 错峰发送 */
     private suspend fun checkAndTriggerProactiveMessages() {
-        val prefs = prefs.opPerms
         val now = System.currentTimeMillis()
         val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
         val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
@@ -234,7 +238,7 @@ class MainViewModel(
         }.toSet()
         // 筛选候选（冷却时间从用户最近一次发言算）
         val candidates = _operators.value.filter { op ->
-            if (!prefs.getBoolean("msg_${op.id}", true)) return@filter false
+            if (!settings.getOperatorMsgPermission(op.id)) return@filter false
             if (op.id in dispatchedOpIds) return@filter false
             val session = repository.getSessionByOperator(op.id)
             if (session == null) return@filter true
@@ -404,19 +408,16 @@ class MainViewModel(
         if (target <= 0) return
         generateAllMoments(target, dateKey) { /* silent */ }
         // 清理 7 天前的计数
-        val prefsKey = prefs.chat
         val weekAgo = beijingSdf("yyyyMMdd").format(java.util.Date(System.currentTimeMillis() - 7 * 86400000L))
         for (op in _operators.value) {
-            prefsKey.edit().remove("moment_count_${op.id}_$weekAgo").apply()
+            settings.removeMomentCount(op.id, weekAgo)
         }
     }
 
     private fun initPermissions() {
-        val prefs = prefs.opPerms
-        if (prefs.all.keys.none { it.startsWith("msg_") }) {
-            _operators.value.forEach { op ->
-                prefs.edit().putBoolean("msg_${op.id}", true).putBoolean("dyn_${op.id}", true).apply()
-            }
+        _operators.value.forEach { op ->
+            settings.putOperatorMsgPermission(op.id, true)
+            settings.putOperatorDynPermission(op.id, true)
         }
     }
 
@@ -429,10 +430,9 @@ class MainViewModel(
 
     fun clearMessages() = chatViewModel.clearMessages()
     private suspend fun unhideSession(sessionId: String) {
-        val prefs = prefs.hidden
-        val hidden = prefs.getStringSet("hidden_ids", emptySet())?.toMutableSet() ?: return
+        val hidden = settings.hiddenIds.toMutableSet()
         if (hidden.remove(sessionId)) {
-            prefs.edit().putStringSet("hidden_ids", hidden).apply()
+            settings.hiddenIds = hidden
             // 触发 Room Flow 重发，让会话重新出现在聊天主页
             repository.updateSessionMode(sessionId, "")
         }
@@ -461,10 +461,9 @@ class MainViewModel(
     fun setMode(mode: String) = chatViewModel.setMode(mode)
 
     fun buyProp(propName: String, context: android.content.Context): String? {
-        val dp = context.getSharedPreferences("dispatch", 0)
-        val balance = dp.getInt("lmb", 1000)
+        val balance = settings.lmb
         if (balance < 100) return "余额不足"
-        dp.edit().putInt("lmb", balance - 100).apply()
+        settings.lmb = balance - 100
         return null
     }
 
@@ -482,22 +481,22 @@ class MainViewModel(
             }
             val content = if (msg.type == "ai_json") {
                 try {
-                    val tree = com.google.gson.JsonParser.parseString(msg.content)
-                    if (tree.isJsonArray) {
-                        tree.asJsonArray.mapNotNull { el ->
-                            val obj = el.asJsonObject
-                            "${obj.get("speaker")?.asString ?: "?"}：${obj.get("message")?.asString?.take(60) ?: ""}"
+                    val tree = Json.parseToJsonElement(msg.content)
+                    if (tree is JsonArray) {
+                        tree.mapNotNull { el ->
+                            val obj = el.jsonObject
+                            "${obj["speaker"]?.jsonPrimitive?.content ?: "?"}：${obj["message"]?.jsonPrimitive?.content?.take(60) ?: ""}"
                         }.joinToString(" | ")
                     } else {
-                        val obj = tree.asJsonObject
-                        val segments = obj.get("segments")?.asJsonArray
+                        val obj = tree.jsonObject
+                        val segments = obj["segments"] as? JsonArray
                         if (segments != null) {
                             segments.mapNotNull { seg ->
-                                val s = seg.asJsonObject
-                                "${s.get("type")?.asString ?: "?"}：${s.get("content")?.asString?.take(60) ?: ""}"
+                                val s = seg.jsonObject
+                                "${s["type"]?.jsonPrimitive?.content ?: "?"}：${s["content"]?.jsonPrimitive?.content?.take(60) ?: ""}"
                             }.joinToString(" | ")
                         } else {
-                            obj.get("dialogue")?.asString?.take(80) ?: msg.content.take(80)
+                            obj["dialogue"]?.jsonPrimitive?.content?.take(80) ?: msg.content.take(80)
                         }
                     }
                 } catch (_: Exception) { msg.content.take(80) }
@@ -601,7 +600,7 @@ ${summaries}
             withTimeout(15_000) { streamChat(listOf(AiMessage("system", prompt)), "Memory").collect { sb.append(it) } }
             trackTokens("memory", prompt, sb.toString())
             val cleaned = sharedUtils.aiService.cleanJson(sb.toString().trim())
-            val parsed = try { com.google.gson.Gson().fromJson(cleaned, ImpressionResponse::class.java) } catch (_: Exception) { null }
+            val parsed = try { json.decodeFromString<ImpressionResponse>(cleaned) } catch (_: Exception) { null }
             if (parsed != null && parsed.impression.isNotBlank()) {
                 repository.saveMemory(Memory(
                     sessionId = session.id, operatorId = session.operatorId,
@@ -761,7 +760,7 @@ ${summaries}
 
     fun setApiKey(key: String) {
         viewModelScope.launch {
-            prefs.chat.edit().putString("api_key", key).apply()
+            settings.apiKey = key
         }
     }
 
@@ -785,8 +784,6 @@ ${summaries}
     /** 转储全部调试状态到 logcat */
     fun dumpDebugState() {
         if (!DEBUG) return
-        val prefs = prefs.chat
-        val opPrefs = this.prefs.opPerms
         val aiTag = "AI调试输出"
         val sb = StringBuilder()
         sb.appendLine("╔══ 调试状态转储 ═════════════════════════════")
@@ -796,28 +793,30 @@ ${summaries}
         // 设置参数
         sb.appendLine("╠══ 参数设置 ════════════════════════════════")
         val keys = listOf(
-            "summary_threshold" to 20, "summary_retain" to 5, "impression_threshold" to 20,
-            "history_messages" to 30, "online_min_chars" to 5, "online_max_chars" to 300,
-            "online_min_segs" to 1, "online_max_segs" to 10,
-            "nar_seg_min" to 1, "nar_seg_max" to 2, "nar_min" to 50, "nar_max" to 150,
-            "dia_seg_min" to 1, "dia_seg_max" to 2, "dia_min" to 10, "dia_max" to 150,
-            "group_msg_min" to 10, "group_msg_max" to 150,
-            "group_speech_min" to 1, "group_speech_max" to 2,
-            "group_nar_seg_min" to 1, "group_nar_seg_max" to 2,
-            "group_nar_min" to 100, "group_nar_max" to 250,
-            "group_chat_min_interval" to 30, "group_chat_max_interval" to 120,
-            "group_auto_min" to 20, "group_auto_max" to 120,
-            "moment_min_chars" to 100, "moment_max_chars" to 300,
-            "diary_min_chars" to 200, "diary_max_chars" to 500,
-            "dispatch_min_chars" to 200, "dispatch_max_chars" to 600,
-            "daily_moment_target" to 2, "clean_days" to 30,
-            "intimacy_daily_cap" to 5, "ai_temperature" to 95,
-            "dual_model" to 0
+            "summary_threshold" to settings.summaryThreshold, "summary_retain" to settings.summaryRetain,
+            "impression_threshold" to settings.impressionThreshold, "history_messages" to settings.historyMessages,
+            "online_min_chars" to settings.onlineMinChars, "online_max_chars" to settings.onlineMaxChars,
+            "online_min_segs" to settings.onlineMinSegs, "online_max_segs" to settings.onlineMaxSegs,
+            "nar_seg_min" to settings.narSegMin, "nar_seg_max" to settings.narSegMax,
+            "nar_min" to settings.narMin, "nar_max" to settings.narMax,
+            "dia_seg_min" to settings.diaSegMin, "dia_seg_max" to settings.diaSegMax,
+            "dia_min" to settings.diaMin, "dia_max" to settings.diaMax,
+            "group_msg_min" to settings.groupMsgMin, "group_msg_max" to settings.groupMsgMax,
+            "group_speech_min" to settings.groupSpeechMin, "group_speech_max" to settings.groupSpeechMax,
+            "group_nar_seg_min" to settings.groupNarSegMin, "group_nar_seg_max" to settings.groupNarSegMax,
+            "group_nar_min" to settings.groupNarMin, "group_nar_max" to settings.groupNarMax,
+            "group_chat_min_interval" to settings.groupChatMinInterval, "group_chat_max_interval" to settings.groupChatMaxInterval,
+            "group_auto_min" to settings.groupAutoMin, "group_auto_max" to settings.groupAutoMax,
+            "moment_min_chars" to settings.momentMinChars, "moment_max_chars" to settings.momentMaxChars,
+            "diary_min_chars" to settings.diaryMinChars, "diary_max_chars" to settings.diaryMaxChars,
+            "dispatch_min_chars" to settings.dispatchMinChars, "dispatch_max_chars" to settings.dispatchMaxChars,
+            "daily_moment_target" to settings.dailyMomentTarget, "clean_days" to settings.cleanDays,
+            "daily_intimacy_cap" to settings.dailyIntimacyCap, "ai_temperature" to settings.aiTemperature.toInt()
         )
-        for ((k, d) in keys) {
-            val v = if (k == "dual_model") prefs.getBoolean(k, false) else prefs.getInt(k, d)
+        for ((k, v) in keys) {
             sb.appendLine("║ $k = $v")
         }
+        sb.appendLine("║ dual_model = ${settings.dualModel}")
         sb.appendLine("║ messageCounter = $messageCounter")
         sb.appendLine("║ impressionMsgCounter = $impressionMsgCounter")
         sb.appendLine("║ shortTermThreshold = $shortTermThreshold")
@@ -843,8 +842,8 @@ ${summaries}
         }
         sb.appendLine("╠══ 权限开关 ════════════════════════════════")
         for (op in _operators.value.take(10)) {
-            val msg = opPrefs.getBoolean("msg_${op.id}", true)
-            val dyn = opPrefs.getBoolean("dyn_${op.id}", true)
+            val msg = settings.getOperatorMsgPermission(op.id)
+            val dyn = settings.getOperatorDynPermission(op.id)
             sb.appendLine("║ ${op.name.take(8)} | 主动:$msg | 动态:$dyn")
         }
         sb.appendLine("╚══════════════════════════════════════════════")
@@ -853,7 +852,7 @@ ${summaries}
 
     private fun runBlockingCatching(block: suspend () -> Unit) = sharedUtils.runBlockingCatching(block)
 
-    private fun intPref(key: String, default: Int): Int = prefs.intPref(key, default)
+    private fun intPref(key: String, default: Int): Int = settings.getInt(key, default)
 
     private fun trackTokens(category: String, prompt: String, response: String) =
         sharedUtils.trackTokens(category, prompt, response)
@@ -871,11 +870,10 @@ ${summaries}
         sharedUtils.relationshipGroupDesc(aName, bName, type)
 
     private fun generateDailyIfNeeded() {
-        val prefs = prefs.chat
         val today = beijingSdf("yyyyMMdd").format(java.util.Date())
-        val last = prefs.getString("daily_summary_date", "") ?: ""
+        val last = settings.dailySummaryDate
         if (today == last) return
-        prefs.edit().putString("daily_summary_date", today).apply()
+        settings.dailySummaryDate = today
         viewModelScope.launch { generateDailySummary(java.util.Date(System.currentTimeMillis() - 86_400_000)) }
     }
 
@@ -909,8 +907,10 @@ ${summaries}
     fun getUserProfile(): UserProfile = appState.userProfile.value
 
     fun saveUserProfile(nickname: String, gender: String, bio: String, avatarUri: String = "") {
-        prefs.user.edit()
-            .putString("nickname", nickname).putString("gender", gender).putString("bio", bio).putString("avatar_uri", avatarUri).apply()
+        settings.userName = nickname
+        settings.userGender = gender
+        settings.userSignature = bio
+        settings.userAvatarUri = avatarUri
         appState.refreshUserProfile()
     }
 
@@ -1002,16 +1002,14 @@ ${summaries}
     fun generateAllMoments(target: Int = 1, dateKey: String = "", onProgress: (String) -> Unit = {}) {
         val isAuto = dateKey.isNotBlank()
         val today = dateKey.ifBlank { beijingSdf("yyyyMMdd").format(java.util.Date()) }
-        val prefsKey = prefs.chat
         val slotHours = listOf(9, 10, 14, 15, 17, 19, 20, 21, 22)
         val slotNames = listOf("上午", "上午", "下午", "下午", "傍晚", "晚上", "晚上", "晚上", "深夜")
         viewModelScope.launch {
             for (op in _operators.value) {
-                val allowDyn = prefs.opPerms.getBoolean("dyn_${op.id}", true)
+                val allowDyn = settings.getOperatorDynPermission(op.id)
                 if (!allowDyn) continue
                 val startIdx = if (isAuto) {
-                    val countKey = "moment_count_${op.id}_$today"
-                    val d = prefsKey.getInt(countKey, 0)
+                    val d = settings.getMomentCount(op.id, today)
                     if (d >= target) continue
                     d
                 } else 0
@@ -1089,7 +1087,7 @@ ${summaries}
                             repository.updateCommentCount(momentId, commenters.size)
                         }
                     } catch (_: Exception) {}
-                    if (isAuto) prefsKey.edit().putInt("moment_count_${op.id}_$today", i + 1).apply()
+                    if (isAuto) settings.putMomentCount(op.id, today, i + 1)
                 }
             }
             onProgress("全部完成")
@@ -1247,8 +1245,8 @@ ${summaries}
                     "OPERATOR_NAME" to op.name,
                     "OPERATOR_PERSONA" to (op.privatePrompt.ifBlank { op.description }),
                     "DATE" to sharedUtils.beijingSdf("yyyy年MM月dd日").format(java.util.Date()),
-                    "DIARY_MIN_CHARS" to prefs.intPref("diary_min_chars", 50).toString(),
-                    "DIARY_MAX_CHARS" to prefs.intPref("diary_max_chars", 500).toString(),
+                    "DIARY_MIN_CHARS" to settings.diaryMinChars.toString(),
+                    "DIARY_MAX_CHARS" to settings.diaryMaxChars.toString(),
                     "USER_NAME" to profile.nickname,
                     "USER_BIO" to profile.bio,
                     "LONG_TERM_IMPRESSION" to (repository.getLongTermImpression(operatorId)?.content ?: "无"),
@@ -1277,12 +1275,4 @@ ${summaries}
         }
     }
 }
-
-data class DispatchSegment(val type: String = "", val content: String = "", val operator_states: List<DispatchOperatorState>? = null)
-data class DispatchOperatorState(val name: String = "", val emotion: String = "")
-data class DispatchResponse(val segments: List<DispatchSegment>? = null, val items: List<String>? = null, val currency_reward: Int? = 0, val net_profit: Int? = 0)
-data class GroupMsgResult(val speaker: String = "", val message: String = "", val type: String = "dialogue")
-data class DispatchEnd(val ending_content: String = "", val items: List<String> = emptyList(), val currency_reward: Int = 0, val net_profit: Int = 0)
-data class SuggestionResponse(val suggestions: List<String> = emptyList())
-data class ImpressionResponse(val impression: String = "", val keywords: List<String> = emptyList(), val preferences: List<String> = emptyList(), val taboos: List<String> = emptyList())
 

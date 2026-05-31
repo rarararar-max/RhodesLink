@@ -10,8 +10,9 @@ import com.example.rhodesterminal.shared.model.RelationshipType
 import com.example.rhodesterminal.shared.data.ChatRepository
 import com.example.rhodesterminal.shared.network.AIService
 import com.example.rhodesterminal.shared.model.AiMessage
+import com.example.rhodesterminal.shared.model.GroupMsgResult
 import com.example.rhodesterminal.viewmodel.shared.AppStateHolder
-import com.example.rhodesterminal.viewmodel.shared.Prefs
+import com.example.rhodesterminal.shared.settings.SettingsRepository
 import com.example.rhodesterminal.viewmodel.shared.SharedUtils
 import com.example.rhodesterminal.viewmodel.shared.UserProfile
 import kotlinx.coroutines.CoroutineScope
@@ -23,10 +24,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.Json
+
+private val json = Json { ignoreUnknownKeys = true }
 
 class GroupChatViewModel(
     private val repository: ChatRepository,
-    private val prefs: Prefs,
+    private val settings: SettingsRepository,
     private val sharedUtils: SharedUtils,
     private val appState: AppStateHolder,
     private val scope: CoroutineScope,
@@ -81,7 +85,7 @@ class GroupChatViewModel(
 
     fun deleteGroup(groupSessionId: String) {
         stopAutoGroupChat(groupSessionId)
-        prefs.chat.edit().remove("group_auto_$groupSessionId").apply()
+        settings.remove("group_auto_$groupSessionId")
         scope.launch {
             repository.deleteSessionMessages(groupSessionId)
             repository.deleteSession(groupSessionId)
@@ -89,10 +93,10 @@ class GroupChatViewModel(
     }
 
     fun isAutoGroupChatEnabled(groupId: String): Boolean =
-        prefs.chat.getBoolean("group_auto_$groupId", false)
+        settings.getGroupAuto(groupId)
 
     fun setAutoGroupChatEnabled(groupId: String, enabled: Boolean) {
-        prefs.chat.edit().putBoolean("group_auto_$groupId", enabled).apply()
+        settings.putGroupAuto(groupId, enabled)
         if (enabled) {
             scope.launch {
                 val session = repository.getSession(groupId)
@@ -107,8 +111,8 @@ class GroupChatViewModel(
         stopAutoGroupChat(groupId)
         val generation = (autoChatGenerations[groupId] ?: 0L) + 1L
         autoChatGenerations[groupId] = generation
-        val minMs = prefs.intPref("group_chat_min_interval", 30) * 1000L
-        val maxMs = prefs.intPref("group_chat_max_interval", 120) * 1000L
+        val minMs = settings.groupChatMinInterval * 1000L
+        val maxMs = settings.groupChatMaxInterval * 1000L
         autoGroupChatJobs[groupId] = scope.launch {
             val sinceLastMsg = System.currentTimeMillis() - (lastUserMsgTime[groupId] ?: 0L)
             val firstDelay = if (sinceLastMsg < 30_000) 30_000 - sinceLastMsg else 10_000L
@@ -145,7 +149,7 @@ class GroupChatViewModel(
     }
 
     private fun getGroupChatMode(groupId: String): String =
-        prefs.chat.getString("group_mode_$groupId", "online") ?: "online"
+        settings.getGroupMode(groupId)
 
     fun stopAutoGroupChat(groupId: String) {
         autoChatGenerations[groupId] = (autoChatGenerations[groupId] ?: 0L) + 1L
@@ -160,9 +164,8 @@ class GroupChatViewModel(
     }
 
     fun refreshAutoGroupChats() {
-        val cp = prefs.chat
         appState.sessions.value.filter { it.operatorId.startsWith("group_") || it.operatorId.startsWith("group") }.forEach { group ->
-            if (cp.getBoolean("group_auto_${group.id}", false)) {
+            if (settings.getGroupAuto(group.id)) {
                 startAutoGroupChat(group.id, group.operatorName)
             } else {
                 stopAutoGroupChat(group.id)
@@ -238,20 +241,20 @@ class GroupChatViewModel(
                     "DAILY_SUMMARY" to (repository.getLatestDaily()?.content ?: "无"),
                     "LONG_TERM_IMPRESSION" to longTermImpression,
                     "MEMBER_PROFILES" to memberProfiles.toString(),
-                    "GROUP_NAR_SEG_MIN" to prefs.intPref("group_nar_seg_min", 1).toString(),
-                    "GROUP_NAR_SEG_MAX" to prefs.intPref("group_nar_seg_max", 3).toString(),
-                    "GROUP_NAR_MIN" to prefs.intPref("group_nar_min", 20).toString(),
-                    "GROUP_NAR_MAX" to prefs.intPref("group_nar_max", 50).toString(),
-                    "GROUP_MSG_MIN" to prefs.intPref("group_msg_min", 10).toString(),
-                    "GROUP_MSG_MAX" to prefs.intPref("group_msg_max", 80).toString(),
-                    "GROUP_SPEECH_MIN" to prefs.intPref("group_speech_min", 1).toString(),
-                    "GROUP_SPEECH_MAX" to prefs.intPref("group_speech_max", 2).toString(),
+                    "GROUP_NAR_SEG_MIN" to settings.groupNarSegMin.toString(),
+                    "GROUP_NAR_SEG_MAX" to settings.groupNarSegMax.toString(),
+                    "GROUP_NAR_MIN" to settings.groupNarMin.toString(),
+                    "GROUP_NAR_MAX" to settings.groupNarMax.toString(),
+                    "GROUP_MSG_MIN" to settings.groupMsgMin.toString(),
+                    "GROUP_MSG_MAX" to settings.groupMsgMax.toString(),
+                    "GROUP_SPEECH_MIN" to settings.groupSpeechMin.toString(),
+                    "GROUP_SPEECH_MAX" to settings.groupSpeechMax.toString(),
                     "USER_MESSAGE" to userMessage, "USER_OBSERVING" to userObserving,
                     "GROUP_MODE_FORMAT" to grpModeFormat
                 )
                 val systemPrompt = sharedUtils.applyTemplate(grpTpl, grpReplacements)
                 val apiMessages = mutableListOf(AiMessage("system", systemPrompt))
-                val historyLimit = prefs.intPref("history_messages", 30)
+                val historyLimit = settings.historyMessages
                 val allHistory = repository.getMessagesSync(groupSessionId).let { msgs ->
                     if (historyLimit > 0) msgs.takeLast(historyLimit) else msgs
                 }
@@ -268,7 +271,7 @@ class GroupChatViewModel(
                 if (DEBUG) sharedUtils.logAiCall("GroupChat", promptText, "(streaming...)", apiMessages)
                 val sb = StringBuilder()
                 withTimeout(25_000) {
-                    val temp = prefs.intPref("ai_temperature", 95).toDouble() / 100.0
+                    val temp = settings.aiTemperature
                     sharedUtils.streamChat(apiMessages, "GroupChat").collect { sb.append(it) }
                 }
                 sharedUtils.trackTokens("group", promptText, sb.toString())
@@ -278,8 +281,8 @@ class GroupChatViewModel(
                 var results: List<GroupMsgResult> = emptyList()
                 for (cleaned in listOf(rawBase, rawBase.replace("，", ",").replace("：", ":"))) {
                     try {
-                        val arr = com.google.gson.Gson().fromJson(cleaned, Array<GroupMsgResult>::class.java)
-                        results = arr?.toList() ?: emptyList()
+                        val arr = json.decodeFromString<List<GroupMsgResult>>(cleaned)
+                        results = arr
                         if (results.isNotEmpty()) break
                     } catch (_: Exception) {}
                 }
@@ -313,7 +316,7 @@ class GroupChatViewModel(
                 }
                 val gc = sessionMessageCounter.getOrDefault(groupSessionId, 0) + 1
                 sessionMessageCounter[groupSessionId] = gc
-                if (gc >= prefs.intPref("summary_threshold", 20) && groupSessionId.isNotBlank()) {
+                if (gc >= settings.summaryThreshold && groupSessionId.isNotBlank()) {
                     val gs = repository.getSession(groupSessionId)
                     if (gs != null) {
                         val freshMsgs = repository.getMessagesSync(gs.id)

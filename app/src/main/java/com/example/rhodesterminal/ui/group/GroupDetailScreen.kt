@@ -47,31 +47,39 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import com.example.rhodesterminal.data.db.entity.ChatMessageEntity
 import com.example.rhodesterminal.ui.chat.ChatShareDialog
 import com.example.rhodesterminal.ui.chat.ShareMessage
 import com.example.rhodesterminal.ui.chat.formatChatTime
 import com.example.rhodesterminal.viewmodel.MainViewModel
 import com.example.rhodesterminal.ui.theme.*
+import com.example.rhodesterminal.shared.settings.SettingsRepository
+import org.koin.compose.koinInject
 import kotlinx.coroutines.delay
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 
 data class GMsg(val id: Long, val senderName: String, val senderColor: Color, val content: String, val ts: Long = System.currentTimeMillis(), val isSystem: Boolean = false, val isMe: Boolean = false, val avatarUri: String = "")
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () -> Unit, onEditGroup: (String) -> Unit, groupId: String = "", modifier: Modifier = Modifier, onOperatorClick: (String) -> Unit = {}) {
+    val settings: SettingsRepository = koinInject()
     val listState = rememberLazyListState()
     var showMenu by remember { mutableStateOf(false) }
     val ctx = LocalContext.current
-    var bgUri by remember { mutableStateOf<String?>(ctx.getSharedPreferences("chat_prefs", 0).getString("gbg_$groupId", null)) }
+    var bgUri by remember { mutableStateOf<String?>(settings.getString("gbg_$groupId", "")) }
     var cropTarget by remember { mutableStateOf<android.net.Uri?>(null) }
     val bgPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> cropTarget = uri }
     var showBgReset by remember { mutableStateOf(false) }
     var showShare by remember { mutableStateOf(false) }
     var showClearConfirm by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
-    var currentMode by remember { mutableStateOf(ctx.getSharedPreferences("chat_prefs", 0).getString("group_mode_$groupId", "online") ?: "online") }
+    var currentMode by remember { mutableStateOf(settings.getGroupMode(groupId)) }
 
     val groupMessages by viewModel.groupMessages.collectAsState()
     val groupLoading by viewModel.groupLoading.collectAsState()
@@ -86,10 +94,9 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
     // Auto-speak timer
     LaunchedEffect(groupId, groupLoading) {
         if (groupId.isBlank()) return@LaunchedEffect
-        val prefs = ctx.getSharedPreferences("chat_prefs", 0)
-        if (!prefs.getBoolean("group_auto_$groupId", true)) return@LaunchedEffect
-        val minMs = prefs.getInt("group_auto_min", 20) * 1000L
-        val maxMs = prefs.getInt("group_auto_max", 60) * 1000L
+        if (!settings.getGroupAuto(groupId)) return@LaunchedEffect
+        val minMs = settings.groupAutoMin * 1000L
+        val maxMs = settings.groupAutoMax * 1000L
         while (true) {
             val interval = minMs + (Math.random() * (maxMs - minMs)).toLong()
             delay(interval)
@@ -118,12 +125,12 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
             when {
                 msg.type == "ai_json" -> {
                     try {
-                        val arr = com.google.gson.JsonParser.parseString(msg.content).asJsonArray
+                        val arr = Json.parseToJsonElement(msg.content) as JsonArray
                         arr.mapIndexedNotNull { idx, el ->
-                            val obj = el.asJsonObject
-                            val name = obj.get("speaker")?.asString ?: return@mapIndexedNotNull null
-                            val content = obj.get("message")?.asString ?: return@mapIndexedNotNull null
-                            val msgType = obj.get("type")?.asString ?: "dialogue"
+                            val obj = el.jsonObject
+                            val name = obj["speaker"]?.jsonPrimitive?.content ?: return@mapIndexedNotNull null
+                            val content = obj["message"]?.jsonPrimitive?.content ?: return@mapIndexedNotNull null
+                            val msgType = obj["type"]?.jsonPrimitive?.content ?: "dialogue"
                             if (content.isBlank()) return@mapIndexedNotNull null
                             if (isOnline && (msgType == "narration" || name == "旁白")) return@mapIndexedNotNull null
                             val gid = msg.id * 1000 + idx
@@ -258,7 +265,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
 
                 GroupInputBar(
                     currentMode = currentMode,
-                    onModeChange = { currentMode = it; ctx.getSharedPreferences("chat_prefs", 0).edit().putString("group_mode_$groupId", it).apply() },
+                    onModeChange = { currentMode = it; settings.putGroupMode(groupId, it) },
                     onSend = { text ->
                         if (text.isNotBlank() && groupId.isNotBlank()) {
                             lastActivity = System.currentTimeMillis()
@@ -277,7 +284,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
         }
     }
 
-    if (showBgReset) AlertDialog(onDismissRequest = { showBgReset = false }, title = { Text("恢复默认背景", color = TextPrimary) }, text = { Text("将移除当前背景图", color = TextSecondary) }, confirmButton = { TextButton(onClick = { bgUri = null; ctx.getSharedPreferences("chat_prefs", 0).edit().remove("gbg_$groupId").apply(); showBgReset = false }) { Text("确认", color = Primary) } }, dismissButton = { TextButton(onClick = { showBgReset = false }) { Text("取消", color = TextSecondary) } })
+    if (showBgReset) AlertDialog(onDismissRequest = { showBgReset = false }, title = { Text("恢复默认背景", color = TextPrimary) }, text = { Text("将移除当前背景图", color = TextSecondary) }, confirmButton = { TextButton(onClick = { bgUri = null; settings.remove("gbg_$groupId"); showBgReset = false }) { Text("确认", color = Primary) } }, dismissButton = { TextButton(onClick = { showBgReset = false }) { Text("取消", color = TextSecondary) } })
 
     if (showShare) {
         val profile by viewModel.userProfile.collectAsState()
@@ -315,7 +322,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
     cropTarget?.let { uri ->
         com.example.rhodesterminal.ui.common.ImageCropperDialog(
             imageUri = uri, aspectX = 9f, aspectY = 16f,
-            onConfirm = { cropped -> val s = com.example.rhodesterminal.util.copyToInternalStorage(ctx, cropped); bgUri = s; ctx.getSharedPreferences("chat_prefs", 0).edit().putString("gbg_$groupId", s).apply(); cropTarget = null },
+            onConfirm = { cropped -> val s = com.example.rhodesterminal.util.copyToInternalStorage(ctx, cropped); bgUri = s; settings.putString("gbg_$groupId", s); cropTarget = null },
             onCancel = { cropTarget = null }
         )
     }

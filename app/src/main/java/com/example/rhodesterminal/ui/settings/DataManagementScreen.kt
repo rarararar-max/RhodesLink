@@ -8,6 +8,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.automirrored.filled.SendToMobile
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -20,8 +22,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.graphics.Color
 import com.example.rhodesterminal.ui.theme.*
+import com.example.rhodesterminal.shared.settings.SettingsRepository
 import com.example.rhodesterminal.viewmodel.MainViewModel
 import com.example.rhodesterminal.viewmodel.DataViewModel
+import org.koin.compose.koinInject
 
 data class CleanupItem(
     val icon: androidx.compose.ui.graphics.vector.ImageVector,
@@ -41,8 +45,7 @@ fun DataManagementScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("chat_prefs", 0) }
+    val settings: SettingsRepository = koinInject()
     var stats by remember { mutableStateOf(DataViewModel.DataStats(0,0,0,0,0,0)) }
     var refreshKey by remember { mutableIntStateOf(0) }
 
@@ -52,9 +55,9 @@ fun DataManagementScreen(
         listOf(
             CleanupItem(Icons.Default.AutoDelete, "记忆锚点", stats.anchors, "clean_days_anchors", 3),
             CleanupItem(Icons.Default.Forum, "聊天摘要", stats.messages, "clean_days_messages", 30),
-            CleanupItem(Icons.Default.MenuBook, "干员日记", stats.diaries, "clean_days_diaries", 30),
+            CleanupItem(Icons.AutoMirrored.Filled.MenuBook, "干员日记", stats.diaries, "clean_days_diaries", 30),
             CleanupItem(Icons.Default.Share, "动态记录", stats.moments, "clean_days_moments", 30),
-            CleanupItem(Icons.Default.SendToMobile, "派遣历史", stats.dispatches, "clean_days_dispatches", 30)
+            CleanupItem(Icons.AutoMirrored.Filled.SendToMobile, "派遣历史", stats.dispatches, "clean_days_dispatches", 30)
         )
     }
 
@@ -68,7 +71,7 @@ fun DataManagementScreen(
 
         Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
             items.forEach { item ->
-                val current = prefs.getInt(item.prefKey, item.defaultDays)
+                val current = settings.getInt(item.prefKey, item.defaultDays)
                 Spacer(Modifier.height(8.dp))
                 Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Card).padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -93,7 +96,7 @@ fun DataManagementScreen(
                                 modifier = Modifier.clip(RoundedCornerShape(6.dp))
                                     .background(if (selected) PrimaryContainer else Color.Transparent)
                                     .clickable {
-                                        prefs.edit().putInt(item.prefKey, days).apply()
+                                        settings.putInt(item.prefKey, days)
                                         viewModel.cleanupAllExpired()
                                         refreshKey++
                                     }.padding(horizontal = 8.dp, vertical = 4.dp)

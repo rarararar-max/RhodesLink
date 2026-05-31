@@ -9,7 +9,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Cancel
-import androidx.compose.material.icons.filled.SendToMobile
+import androidx.compose.material.icons.automirrored.filled.SendToMobile
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -22,6 +22,11 @@ import androidx.compose.ui.unit.sp
 import com.example.rhodesterminal.ui.theme.*
 import com.example.rhodesterminal.viewmodel.MainViewModel
 import kotlinx.coroutines.delay
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 
 @Composable
 fun DispatchProgressScreen(
@@ -76,13 +81,13 @@ fun DispatchProgressScreen(
         totalSeg = finalRec.totalSegments
         // 解析 segments
         try {
-            val arr = com.google.gson.JsonParser.parseString(finalRec.logChain).asJsonArray
-            if (arr.size() == 0) { errorMsg = "故事数据异常"; return@LaunchedEffect }
+            val arr = Json.parseToJsonElement(finalRec.logChain) as JsonArray
+            if (arr.isEmpty()) { errorMsg = "故事数据异常"; return@LaunchedEffect }
             val list = mutableListOf<Map<String, Any?>>()
             for (el in arr) {
-                val obj = el.asJsonObject
-                val segType = obj.get("type")?.asString ?: ""
-                val content = obj.get("content")?.asString ?: ""
+                val obj = el.jsonObject
+                val segType = obj["type"]?.jsonPrimitive?.content ?: ""
+                val content = obj["content"]?.jsonPrimitive?.content ?: ""
                 list.add(mapOf("type" to segType, "content" to content))
             }
             segments = list
@@ -109,7 +114,7 @@ fun DispatchProgressScreen(
         Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
             Spacer(Modifier.width(4.dp))
-            Icon(Icons.Default.SendToMobile, null, tint = Primary, modifier = Modifier.size(22.dp))
+            Icon(Icons.AutoMirrored.Filled.SendToMobile, null, tint = Primary, modifier = Modifier.size(22.dp))
             Spacer(Modifier.width(6.dp))
             Column {
                 Text(taskType.ifBlank { "野外物资搜集" }, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)

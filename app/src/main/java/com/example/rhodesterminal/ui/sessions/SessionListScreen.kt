@@ -46,7 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import com.example.rhodesterminal.data.db.entity.ChatSessionEntity
 import com.example.rhodesterminal.ui.theme.*
 import com.example.rhodesterminal.viewmodel.MainViewModel

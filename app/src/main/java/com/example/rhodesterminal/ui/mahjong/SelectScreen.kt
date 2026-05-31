@@ -27,14 +27,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import com.example.rhodesterminal.ui.theme.*
+import com.example.rhodesterminal.shared.settings.SettingsRepository
 import com.example.rhodesterminal.data.db.entity.OperatorEntity
 import com.example.rhodesterminal.game.mahjong.GameState
 import com.example.rhodesterminal.game.mahjong.MahjongHistoryEntry
 import com.example.rhodesterminal.game.mahjong.GameSerializer
+import org.koin.compose.koinInject
+import kotlinx.serialization.json.Json
 import java.text.SimpleDateFormat
 import java.util.*
+
+private val json = Json { ignoreUnknownKeys = true }
 
 @Composable
 fun SelectScreen(
@@ -48,14 +53,13 @@ fun SelectScreen(
     val opponentIds = remember { mutableStateListOf<String>() }
     var assistantId by remember { mutableStateOf("") }
     var showHistory by remember { mutableStateOf(false) }
-    val ctx = androidx.compose.ui.platform.LocalContext.current
-    val lmbPrefs = ctx.getSharedPreferences("op_lmb", 0)
+    val settings: SettingsRepository = koinInject()
+    val lmbPrefs = settings
     val historyEntries = remember(showHistory) {
         if (!showHistory) emptyList<MahjongHistoryEntry>()
         else try {
-            val prefs = ctx.getSharedPreferences("mahjong_history", 0)
-            val json = prefs.getString("games", "[]") ?: "[]"
-            com.google.gson.Gson().fromJson(json, Array<MahjongHistoryEntry>::class.java)?.toList() ?: emptyList()
+            val jsonStr = settings.mahjongHistoryJson.ifBlank { "[]" }
+            json.decodeFromString<List<MahjongHistoryEntry>>(jsonStr)
         } catch (_: Exception) { emptyList() }
     }
 

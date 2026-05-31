@@ -24,7 +24,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.SendToMobile
+import androidx.compose.material.icons.automirrored.filled.SendToMobile
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.History
@@ -60,7 +60,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import androidx.compose.ui.layout.ContentScale
 import com.example.rhodesterminal.data.db.entity.OperatorEntity
 import com.example.rhodesterminal.data.db.entity.DispatchRecordEntity
@@ -76,7 +76,9 @@ import com.example.rhodesterminal.ui.theme.SurfaceVariant
 import com.example.rhodesterminal.ui.theme.TextPrimary
 import com.example.rhodesterminal.ui.theme.TextSecondary
 import com.example.rhodesterminal.ui.theme.TextTertiary
+import com.example.rhodesterminal.shared.settings.SettingsRepository
 import com.example.rhodesterminal.viewmodel.MainViewModel
+import org.koin.compose.koinInject
 import java.util.UUID
 
 private val tasks = listOf("野外物资搜集", "矿区勘探调查", "城市街区巡逻", "遗迹浅层探索", "后勤物资押运")
@@ -90,9 +92,9 @@ fun DispatchScreen(
     onHistory: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val settings: SettingsRepository = koinInject()
     val operators by viewModel.operators.collectAsState()
-    val context = LocalContext.current
-    val balance = remember { mutableIntStateOf(getBalance(context)) }
+    val balance = remember { mutableIntStateOf(settings.lmb) }
     var activeDispatch by remember { mutableStateOf<DispatchRecordEntity?>(null) }
 
     LaunchedEffect(Unit) {
@@ -114,7 +116,7 @@ fun DispatchScreen(
     Column(modifier = modifier.fillMaxSize().background(BG)) {
         Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
-            Icon(Icons.Filled.SendToMobile, null, tint = Primary, modifier = Modifier.size(22.dp))
+            Icon(Icons.AutoMirrored.Filled.SendToMobile, null, tint = Primary, modifier = Modifier.size(22.dp))
             Spacer(modifier = Modifier.width(6.dp))
             Text("干员派遣", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
             Spacer(modifier = Modifier.weight(1f))
@@ -127,7 +129,7 @@ fun DispatchScreen(
         // Active dispatch banner (after header, before content)
         if (activeDispatch != null) {
             Row(modifier = Modifier.fillMaxWidth().background(PrimaryContainer).clickable { onStart(activeDispatch!!.id) }.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.SendToMobile, null, tint = Primary, modifier = Modifier.size(18.dp))
+                Icon(Icons.AutoMirrored.Filled.SendToMobile, null, tint = Primary, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
                     Text("小队1 · ${activeDispatch!!.taskType}", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Primary)
@@ -292,5 +294,11 @@ private fun SectionCard(title: String, content: @Composable () -> Unit) {
     }
 }
 
-fun getBalance(context: Context): Int = context.getSharedPreferences("dispatch", 0).getInt("lmb", 1000)
-fun saveBalance(context: Context, value: Int) { context.getSharedPreferences("dispatch", 0).edit().putInt("lmb", value).apply() }
+fun getBalance(context: Context): Int {
+    val settings: SettingsRepository = org.koin.java.KoinJavaComponent.get(SettingsRepository::class.java)
+    return settings.lmb
+}
+fun saveBalance(context: Context, value: Int) {
+    val settings: SettingsRepository = org.koin.java.KoinJavaComponent.get(SettingsRepository::class.java)
+    settings.lmb = value
+}

@@ -14,7 +14,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -31,7 +31,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import com.example.rhodesterminal.ui.theme.*
 import com.example.rhodesterminal.viewmodel.MainViewModel
 import kotlinx.coroutines.Dispatchers
@@ -97,7 +97,7 @@ fun DiaryScreen(
         HorizontalDivider(color = Divider)
 
         Row(modifier = Modifier.fillMaxWidth().background(Surface).clickable { showPanel = !showPanel }.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Default.MenuBook, null, tint = Primary, modifier = Modifier.size(18.dp))
+            Icon(Icons.AutoMirrored.Filled.MenuBook, null, tint = Primary, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(8.dp))
             Text(if (showPanel) "选择干员：$selectedName" else "显示干员列表", fontSize = 13.sp, color = Primary, fontWeight = FontWeight.Medium)
             Spacer(modifier = Modifier.weight(1f))
@@ -186,7 +186,7 @@ fun DiaryScreen(
                                     isLoading = false
                                 }
                             }, colors = ButtonDefaults.buttonColors(containerColor = Primary)) {
-                                Icon(Icons.Default.MenuBook, null, modifier = Modifier.size(18.dp))
+                                Icon(Icons.AutoMirrored.Filled.MenuBook, null, modifier = Modifier.size(18.dp))
                                 Spacer(Modifier.width(6.dp))
                                 Text("偷看日记", fontWeight = FontWeight.SemiBold)
                             }

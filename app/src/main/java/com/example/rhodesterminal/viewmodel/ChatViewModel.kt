@@ -11,18 +11,23 @@ import com.example.rhodesterminal.shared.model.Memory
 import com.example.rhodesterminal.shared.model.MemoryType
 import com.example.rhodesterminal.shared.model.Operator
 import com.example.rhodesterminal.shared.data.ChatRepository
-import com.example.rhodesterminal.network.AnalysisResult
+import com.example.rhodesterminal.shared.model.AnalysisResult
+import com.example.rhodesterminal.shared.model.SuggestionResponse
 import com.example.rhodesterminal.shared.network.AIService
 import com.example.rhodesterminal.shared.model.AiMessage
 import com.example.rhodesterminal.viewmodel.shared.AppStateHolder
 import com.example.rhodesterminal.viewmodel.shared.OperatorStateUpdater
-import com.example.rhodesterminal.viewmodel.shared.Prefs
+import com.example.rhodesterminal.shared.settings.SettingsRepository
 import com.example.rhodesterminal.viewmodel.shared.PromptTemplates
 import com.example.rhodesterminal.viewmodel.shared.SharedUtils
 import com.example.rhodesterminal.viewmodel.shared.UserProfile
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.int
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -34,10 +39,12 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 
+private val json = Json { ignoreUnknownKeys = true }
+
 class ChatViewModel(
     application: Application,
     private val repository: ChatRepository,
-    private val prefs: Prefs,
+    private val settings: SettingsRepository,
     private val sharedUtils: SharedUtils,
     private val operatorStateUpdater: OperatorStateUpdater,
     private val appState: AppStateHolder,
@@ -84,7 +91,7 @@ class ChatViewModel(
     private var messageCounter = 0
     private var impressionMsgCounter = 0
     private val sessionMessageCounter = mutableMapOf<String, Int>()
-    private val shortTermThreshold: Int get() = prefs.shortTermThreshold
+    private val shortTermThreshold: Int get() = settings.summaryThreshold
     private val updateMutex = Mutex()
     private var lastDbUpdate = 0L
     private var analysisGuidance = ""
@@ -111,15 +118,14 @@ class ChatViewModel(
     fun getCurrentMode(): String = _currentMode.value
 
     fun getPromptTemplate(type: String, mode: String = ""): String {
-        val p = prefs.promptTemplates
         val key = if (mode.isNotBlank()) "prompt_${type}_${mode}" else "prompt_$type"
-        return p.getString(key, "")?.ifBlank { null } ?: PromptTemplates.get(type, mode)
+        return settings.getString(key, "")?.ifBlank { null } ?: PromptTemplates.get(type, mode)
     }
 
     suspend fun generateShortTermSummary(session: ChatSession, messageSource: List<ChatMessage>? = null) {
         try {
             val msgs = messageSource ?: repository.getMessagesSync(session.id)
-            val retain = prefs.intPref("summary_retain", 5)
+            val retain = settings.summaryRetain
             val recent = msgs.takeLast(retain)
             val older = msgs.dropLast(retain)
             if (older.isEmpty()) return
@@ -130,7 +136,7 @@ class ChatViewModel(
             sharedUtils.trackTokens("memory", prompt, sb.toString())
             val content = sb.toString().trim()
             if (content.isNotBlank()) {
-                repository.saveMemory(Memory(sessionId = session.id, operatorId = session.operatorId, type = MemoryType.SHORT_TERM, content = content, expiresAt = System.currentTimeMillis() + prefs.intPref("clean_days", 30) * 86_400_000L))
+                repository.saveMemory(Memory(sessionId = session.id, operatorId = session.operatorId, type = MemoryType.SHORT_TERM, content = content, expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L))
             }
         } catch (_: Exception) {}
     }
@@ -144,11 +150,12 @@ class ChatViewModel(
         _hypnosisRounds.value = 0
         _mindReadRounds.value = 0
         _mindReadContent.value = ""
-        prefs.chat.edit().putString("hypnosis_cmd", "").putInt("hypnosis_rounds", 0).apply()
+        settings.hypnosisCmd = ""
+        settings.hypnosisRound = 0
         viewModelScope.launch {
             val session = repository.getOrCreateSession(operator.id, operator.name, operator.avatarUri)
             _currentSession.value = session
-            val savedMode = prefs.chat.getString("last_mode", "offline") ?: "offline"
+            val savedMode = settings.lastMode
             _currentMode.value = savedMode
             markSessionRead(session.id)
             messagesJob?.cancel()
@@ -191,7 +198,7 @@ class ChatViewModel(
                 oldMode == "director" && mode == "online" -> "【眼前的场景像雾气一样散去，你回到了罗德岛的走廊，通讯器里传来用户的声音。】"
                 else -> "【系统通知：模式已切换。】"
             }
-            prefs.chat.edit().putString("last_mode", mode).apply()
+            settings.lastMode = mode
         }
     }
 
@@ -228,7 +235,7 @@ class ChatViewModel(
             _loadingSessions.value = _loadingSessions.value + session.id
 
             try {
-                if (prefs.isDualModel()) {
+                if (settings.dualModel) {
                     analysisGuidance = ""
                     try {
                         val analysisSb = StringBuilder()
@@ -245,7 +252,7 @@ class ChatViewModel(
                             sharedUtils.streamChat(listOf(AiMessage("system", prompt)), "Chat").collect { analysisSb.append(it) }
                         }
                         val result = sharedUtils.aiService.cleanJson(analysisSb.toString())
-                        val analysis: AnalysisResult? = try { com.google.gson.Gson().fromJson(result, AnalysisResult::class.java) } catch (_: Exception) { null }
+                        val analysis: AnalysisResult? = try { json.decodeFromString<AnalysisResult>(result) } catch (_: Exception) { null }
                         if (analysis != null) {
                             analysisGuidance = "【用户意图分析】${analysis.intent_analysis}\n【用户情绪】${analysis.user_emotion}\n【核心需求】${analysis.user_need}\n【建议干员情绪】${analysis.suggested_emotion}\n【回复策略】${analysis.reply_guidance}\n【好感度修正】${analysis.affection_mod}"
                         }
@@ -275,19 +282,18 @@ class ChatViewModel(
                     }
                     aiResponseCount = 1
                 }
-                val affectionMod = try { val obj = com.google.gson.JsonParser.parseString(sb.toString()).asJsonObject; obj.get("affection_mod")?.asInt ?: 0 } catch (_: Exception) { 0 }
+                val affectionMod = try { val obj = Json.parseToJsonElement(sb.toString()).jsonObject; obj["affection_mod"]?.jsonPrimitive?.int ?: 0 } catch (_: Exception) { 0 }
                 operatorStateUpdater.updateOperatorIntimacy(session.operatorId, 1 + affectionMod.coerceIn(-3, 3))
-                val dp = prefs.dispatch
-                val today = dp.getString("reward_date", "") ?: ""
+                val today = settings.rewardDate
                 val currentDate = sharedUtils.beijingSdf("yyyyMMdd").format(java.util.Date())
-                if (today != currentDate) dp.edit().putString("reward_date", currentDate).putInt("lmb_daily_count", 0).apply()
-                val dailyCount = dp.getInt("lmb_daily_count", 0)
-                if (dailyCount < 2000) { val balance = dp.getInt("lmb", 1000); dp.edit().putInt("lmb", balance + 10).putInt("lmb_daily_count", dailyCount + 1).apply() }
+                if (today != currentDate) { settings.rewardDate = currentDate; settings.dailyLmbCount = 0 }
+                val dailyCount = settings.dailyLmbCount
+                if (dailyCount < 2000) { val balance = settings.lmb; settings.lmb = balance + 10; settings.dailyLmbCount = dailyCount + 1 }
                 decrementHypnosis()
                 decrementMindRead()
                 if (messageCounter >= shortTermThreshold) { generateShortTermSummary(session); messageCounter = 0 }
                 impressionMsgCounter++
-                val impThreshold = prefs.intPref("impression_threshold", 20)
+                val impThreshold = settings.impressionThreshold
                 if (impThreshold > 0 && impressionMsgCounter >= impThreshold) { generateLongTermImpression(session); impressionMsgCounter = 0 }
                 val currentSessionId = _currentSession.value?.id ?: ""
                 if (currentSessionId != session.id) {
@@ -348,9 +354,9 @@ class ChatViewModel(
         }
     }
 
-    fun setHypnosis(command: String) { _hypnosisCommand.value = command; _hypnosisRounds.value = 10; prefs.chat.edit().putString("hypnosis_cmd", command).putInt("hypnosis_rounds", 10).apply() }
-    fun decrementHypnosis() { if (_hypnosisRounds.value > 0) _hypnosisRounds.value = _hypnosisRounds.value - 1; prefs.chat.edit().putInt("hypnosis_rounds", _hypnosisRounds.value).apply() }
-    fun loadHypnosis() { val p = prefs.chat; _hypnosisCommand.value = p.getString("hypnosis_cmd", "") ?: ""; _hypnosisRounds.value = p.getInt("hypnosis_rounds", 0) }
+    fun setHypnosis(command: String) { _hypnosisCommand.value = command; _hypnosisRounds.value = 10; settings.hypnosisCmd = command; settings.hypnosisRound = 10 }
+    fun decrementHypnosis() { if (_hypnosisRounds.value > 0) _hypnosisRounds.value = _hypnosisRounds.value - 1; settings.hypnosisRound = _hypnosisRounds.value }
+    fun loadHypnosis() { _hypnosisCommand.value = settings.hypnosisCmd; _hypnosisRounds.value = settings.hypnosisRound }
     fun setMindRead(innerThought: String) { _mindReadContent.value = innerThought; _mindReadRounds.value = 3 }
     fun decrementMindRead() { if (_mindReadRounds.value > 0) _mindReadRounds.value = _mindReadRounds.value - 1 }
 
@@ -368,7 +374,7 @@ class ChatViewModel(
                 val sb = StringBuilder()
                 withTimeout(10_000) { sharedUtils.streamChat(listOf(AiMessage("system", prompt))).collect { sb.append(it) } }
                 val cleaned = sb.toString().trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim().replace("，", ",").replace("：", ":")
-                val results = try { val resp = com.google.gson.Gson().fromJson(cleaned, SuggestionResponse::class.java); resp?.suggestions?.filter { it.isNotBlank() } ?: emptyList() } catch (_: Exception) { emptyList() }
+                val results = try { val resp = json.decodeFromString<SuggestionResponse>(cleaned); resp.suggestions.filter { it.isNotBlank() } } catch (_: Exception) { emptyList() }
                 callback(results.ifEmpty { listOf("嗯，我在听", "然后呢？", "有意思") })
             } catch (_: Exception) { callback(listOf("嗯，我在听", "然后呢？", "有意思")) }
         }
@@ -399,7 +405,7 @@ class ChatViewModel(
         val anchors = repository.getAnchors(session.operatorId)
         val nearby = appState.operators.value.filter { it.id != session.operatorId && it.id != "amiya" }.take(3)
         val profile = appState.userProfile.value
-        val analysisBlock = if (prefs.isDualModel() && analysisGuidance.isNotBlank()) "【AI分析指导】\n${analysisGuidance}\n" else ""
+        val analysisBlock = if (settings.dualModel && analysisGuidance.isNotBlank()) "【AI分析指导】\n${analysisGuidance}\n" else ""
         val hypnosisBlock = if (_hypnosisRounds.value > 0) "【催眠状态】\n${_hypnosisCommand.value}\n剩余${_hypnosisRounds.value}轮\n" else ""
         val mindReadBlock = if (_mindReadRounds.value > 0) "【读心术生效中】\n你能看到${profile.nickname}的内心独白：${_mindReadContent.value}\n剩余${_mindReadRounds.value}轮\n" else ""
         val mode = _currentMode.value
@@ -417,15 +423,15 @@ class ChatViewModel(
             "SHORT_TERM_SUMMARY" to (shortTerm?.content ?: "无"),
             "NEARBY_OPERATORS" to nearby.joinToString("\n") { "- ${it.name}正在${it.location}${it.activity}，${it.emotion}" }.ifBlank { "" },
             "USER_RELATION" to (op?.userRelation?.ifBlank { "未知" } ?: "未知"),
-            "NAR_SEG_MIN" to prefs.intPref("nar_seg_min", 1).toString(), "NAR_SEG_MAX" to prefs.intPref("nar_seg_max", 3).toString(),
-            "NAR_MIN" to prefs.intPref("nar_min", 50).toString(), "NAR_MAX" to prefs.intPref("nar_max", 300).toString(),
-            "DIA_SEG_MIN" to prefs.intPref("dia_seg_min", 1).toString(), "DIA_SEG_MAX" to prefs.intPref("dia_seg_max", 3).toString(),
-            "DIA_MIN" to prefs.intPref("dia_min", 10).toString(), "DIA_MAX" to prefs.intPref("dia_max", 300).toString(),
-            "SEG_MIN" to (prefs.intPref("nar_seg_min", 1) + prefs.intPref("dia_seg_min", 1)).toString(),
-            "SEG_MAX" to (prefs.intPref("nar_seg_max", 3) + prefs.intPref("dia_seg_max", 3)).toString()
+            "NAR_SEG_MIN" to settings.narSegMin.toString(), "NAR_SEG_MAX" to settings.narSegMax.toString(),
+            "NAR_MIN" to settings.narMin.toString(), "NAR_MAX" to settings.narMax.toString(),
+            "DIA_SEG_MIN" to settings.diaSegMin.toString(), "DIA_SEG_MAX" to settings.diaSegMax.toString(),
+            "DIA_MIN" to settings.diaMin.toString(), "DIA_MAX" to settings.diaMax.toString(),
+            "SEG_MIN" to (settings.narSegMin + settings.diaSegMin).toString(),
+            "SEG_MAX" to (settings.narSegMax + settings.diaSegMax).toString()
         ))
         val messages = repository.getMessagesSync(session.id).let { msgs ->
-            val limit = prefs.intPref("history_messages", 30)
+            val limit = settings.historyMessages
             if (limit > 0) msgs.takeLast(limit) else msgs
         }.map { msg -> AiMessage(if (msg.isMe) "user" else "assistant", if (msg.isMe) "用户：${msg.content}" else msg.content) }.toMutableList()
         messages.add(0, AiMessage("system", systemPrompt))
@@ -433,11 +439,10 @@ class ChatViewModel(
     }
 
     private fun generateDailyIfNeeded() {
-        val cp = prefs.chat
         val today = sharedUtils.beijingSdf("yyyyMMdd").format(java.util.Date())
-        val last = cp.getString("daily_summary_date", "") ?: ""
+        val last = settings.dailySummaryDate
         if (today == last) return
-        cp.edit().putString("daily_summary_date", today).apply()
+        settings.dailySummaryDate = today
         viewModelScope.launch { generateDailySummary(java.util.Date(System.currentTimeMillis() - 86_400_000)) }
     }
 
@@ -453,7 +458,7 @@ class ChatViewModel(
             withTimeout(15_000) { sharedUtils.streamChat(listOf(AiMessage("system", prompt)), "Memory").collect { sb.append(it) } }
             sharedUtils.trackTokens("memory", prompt, sb.toString())
             val content = sb.toString().trim()
-            if (content.isNotBlank()) { repository.saveMemory(Memory(sessionId = "daily_${dateStr}", operatorId = "daily", type = MemoryType.DAILY, content = content, expiresAt = System.currentTimeMillis() + prefs.intPref("clean_days", 30) * 86_400_000L)) }
+            if (content.isNotBlank()) { repository.saveMemory(Memory(sessionId = "daily_${dateStr}", operatorId = "daily", type = MemoryType.DAILY, content = content, expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L)) }
         } catch (_: Exception) {}
     }
 
@@ -478,7 +483,7 @@ class ChatViewModel(
             sharedUtils.trackTokens("memory", prompt, sb.toString())
             val content = sb.toString().trim()
             if (content.isNotBlank()) {
-                repository.saveMemory(Memory(sessionId = session.id, operatorId = session.operatorId, type = MemoryType.LONG_TERM, content = content, expiresAt = System.currentTimeMillis() + prefs.intPref("clean_days", 30) * 86_400_000L))
+                repository.saveMemory(Memory(sessionId = session.id, operatorId = session.operatorId, type = MemoryType.LONG_TERM, content = content, expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L))
             }
         } catch (_: Exception) {}
     }

@@ -2,23 +2,33 @@ package com.example.rhodesterminal.viewmodel
 
 import com.example.rhodesterminal.shared.model.AnchorType
 import com.example.rhodesterminal.shared.model.DispatchRecord
+import com.example.rhodesterminal.shared.model.DispatchResponse
+import com.example.rhodesterminal.shared.model.DispatchEnd
 import com.example.rhodesterminal.shared.model.MemoryAnchor
 import com.example.rhodesterminal.shared.data.ChatRepository
 import com.example.rhodesterminal.shared.network.AIService
 import com.example.rhodesterminal.shared.model.AiMessage
 import com.example.rhodesterminal.viewmodel.shared.AppStateHolder
 import com.example.rhodesterminal.viewmodel.shared.OperatorStateUpdater
-import com.example.rhodesterminal.viewmodel.shared.Prefs
+import com.example.rhodesterminal.shared.settings.SettingsRepository
 import com.example.rhodesterminal.viewmodel.shared.SharedUtils
 import com.example.rhodesterminal.viewmodel.shared.UserProfile
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
+
+private val json = Json { ignoreUnknownKeys = true }
 
 class DispatchViewModel(
     private val repository: ChatRepository,
-    private val prefs: Prefs,
+    private val settings: SettingsRepository,
     private val sharedUtils: SharedUtils,
     private val operatorStateUpdater: OperatorStateUpdater,
     private val appState: AppStateHolder,
@@ -29,7 +39,7 @@ class DispatchViewModel(
     fun startDispatch(id: String, task: String, duration: Int, budget: Int, operatorIds: List<String>, onSuccess: () -> Unit = {}) {
         val segmentsPerHour = mapOf(1 to 5, 2 to 6, 3 to 8)
         val totalSeg = segmentsPerHour[duration] ?: 5
-        val interval = if (prefs.intPref("dispatch_fast_mode", 0) == 1) 30_000L
+        val interval = if (settings.dispatchFastMode) 30_000L
             else (duration.toLong() * 3_600_000 / totalSeg)
         scope.launch {
             repository.insertDispatch(DispatchRecord(
@@ -41,10 +51,9 @@ class DispatchViewModel(
             onSuccess()
         }
         scope.launch {
-            val dp = prefs.dispatch
-            val balance = dp.getInt("lmb", 1000)
+            val balance = settings.lmb
             if (balance < budget) { return@launch }
-            dp.edit().putInt("lmb", balance - budget).apply()
+            settings.lmb = balance - budget
             for (opId in operatorIds) {
                 val op = repository.getOperator(opId) ?: continue
                 repository.updateOperator(op.copy(location = "外出", activity = task, emotion = "专注"))
@@ -54,7 +63,7 @@ class DispatchViewModel(
             val names = ops.joinToString("、") { it.name }
             val memberCount = ops.size
             val profiles = ops.joinToString("\n") { "${it.name}：${it.description}" }
-            val dMn = prefs.intPref("dispatch_min_chars", 150); val dMx = prefs.intPref("dispatch_max_chars", 400)
+            val dMn = settings.dispatchMinChars; val dMx = settings.dispatchMaxChars
             val budgetLevel = when { budget < 300 -> "低（≤300）"; budget < 800 -> "中（300~800）"; else -> "高（≥800）" }
             val storyStructure = when (duration) {
                 1 -> "写出5段故事：1段准备阶段 + 3段过程 + 1段结局。\n- 准备阶段（${dMn}~${dMx}字）\n- 过程阶段（3段，每段${dMn}~${dMx}字）\n- 结局阶段（${dMn}~${dMx}字）"
@@ -82,10 +91,11 @@ segments共${totalSeg}段，第1段type="prep"，中间type="progress"，最后t
                 withTimeout(90_000) { sharedUtils.streamChat(listOf(AiMessage("system", prompt)), "Dispatch").collect { sb.append(it) } }
                 sharedUtils.trackTokens("dispatch", prompt, sb.toString())
                 val cleaned = sharedUtils.aiService.cleanJson(sb.toString().trim())
-                val resp = try { com.google.gson.Gson().fromJson(cleaned, DispatchResponse::class.java) } catch (_: Exception) { null }
-                if (resp != null && resp.segments != null && resp.segments.size == totalSeg) {
-                    val logJson = com.google.gson.Gson().toJson(resp.segments)
-                    val itemsJson = com.google.gson.Gson().toJson(resp.items ?: emptyList<String>())
+                val resp = try { json.decodeFromString<DispatchResponse>(cleaned) } catch (_: Exception) { null }
+                val segments = resp?.segments
+                if (resp != null && segments != null && segments.size == totalSeg) {
+                    val logJson = json.encodeToString(segments)
+                    val itemsJson = json.encodeToString(resp.items ?: emptyList<String>())
                     val rawReward = (resp.currency_reward ?: 0).coerceIn(0, budget * 10)
                     val netP = rawReward - budget
                     repository.insertDispatch(DispatchRecord(id = id, taskType = task, durationHours = duration, budget = budget, netProfit = netP, operatorIds = operatorIds.joinToString(","), logChain = logJson, status = "active", startTime = System.currentTimeMillis(), totalSegments = totalSeg, segmentInterval = interval, items = itemsJson))
@@ -93,8 +103,8 @@ segments共${totalSeg}段，第1段type="prep"，中间type="progress"，最后t
                     repository.insertDispatch(DispatchRecord(id = id, taskType = task, durationHours = duration, budget = budget, operatorIds = operatorIds.joinToString(","), logChain = "", status = "cancelled", startTime = System.currentTimeMillis(), totalSegments = 0, segmentInterval = 0, items = "[]"))
                 }
             } catch (e: Exception) {
-                val cur = prefs.dispatch.getInt("lmb", 1000)
-                prefs.dispatch.edit().putInt("lmb", cur + budget).apply()
+                val cur = settings.lmb
+                settings.lmb = cur + budget
                 refreshAllOperatorStatus()
                 repository.insertDispatch(DispatchRecord(id = id, taskType = task, durationHours = duration, budget = budget, operatorIds = operatorIds.joinToString(","), logChain = "", status = "cancelled", startTime = System.currentTimeMillis(), totalSegments = 0, segmentInterval = 0, items = "[]"))
             }
@@ -106,11 +116,10 @@ segments共${totalSeg}段，第1段type="prep"，中间type="progress"，最后t
             val d = repository.getDispatch(dispatchId) ?: return@launch
             if (d.status != "active") return@launch
             refreshAllOperatorStatus()
-            val dp = prefs.dispatch
-            val balance = dp.getInt("lmb", 1000)
-            dp.edit().putInt("lmb", balance + d.netProfit).apply()
+            val balance = settings.lmb
+            settings.lmb = balance + d.netProfit
             val profile = getUserProfile()
-            val items = try { val arr = com.google.gson.JsonParser.parseString(d.items).asJsonArray; arr.map { it.asString }.take(3).joinToString("、") } catch (_: Exception) { "未知" }
+            val items = try { val arr = Json.parseToJsonElement(d.items) as JsonArray; arr.map { it.jsonPrimitive.content }.take(3).joinToString("、") } catch (_: Exception) { "未知" }
             val allOps = appState.operators.value
             val memberIds = d.operatorIds.split(",").map { it.trim() }.filter { it.isNotBlank() }
             val memberNames = memberIds.mapNotNull { id -> allOps.find { it.id == id || it.name == id }?.name }.take(3).joinToString("、")
@@ -152,7 +161,7 @@ segments共${totalSeg}段，第1段type="prep"，中间type="progress"，最后t
             val profiles = ops.joinToString("\n") { "${it.name}：${it.description}" }
             repeat(3) { attempt ->
                 try {
-                    val dMn = prefs.intPref("dispatch_min_chars", 150); val dMx = prefs.intPref("dispatch_max_chars", 400)
+                    val dMn = settings.dispatchMinChars; val dMx = settings.dispatchMaxChars
                     val prompt = """你是罗德岛的战术记录员，也是冒险小说作家。为以下派遣任务撰写开局简报。
 
 任务类型：${taskType}，小队成员：${names}（共${memberCount}人），投入预算：${budget}龙门币
@@ -185,7 +194,7 @@ segments共${totalSeg}段，第1段type="prep"，中间type="progress"，最后t
             val budgetLevel = when { budget < 300 -> "低"; budget < 800 -> "中"; else -> "高" }
             repeat(3) { attempt ->
                 try {
-                    val dMn = prefs.intPref("dispatch_min_chars", 150); val dMx = prefs.intPref("dispatch_max_chars", 400)
+                    val dMn = settings.dispatchMinChars; val dMx = settings.dispatchMaxChars
                     val prompt = """你是罗德岛的战术记录员，也是冒险小说作家。续写派遣冒险的第${roundNum}轮过程日志。
 
 任务类型：${taskType}，预算等级：${budgetLevel}，前情提要：${logSummary.take(100)}
@@ -214,7 +223,7 @@ segments共${totalSeg}段，第1段type="prep"，中间type="progress"，最后t
             val profiles = ops.joinToString("\n") { "${it.name}：${it.description}" }
             repeat(3) { attempt ->
                 try {
-                    val dMn = prefs.intPref("dispatch_min_chars", 150); val dMx = prefs.intPref("dispatch_max_chars", 400)
+                    val dMn = settings.dispatchMinChars; val dMx = settings.dispatchMaxChars
                     val prompt = """你是罗德岛的战术记录员，也是冒险小说作家。为即将结束的派遣行动撰写结局。
 
 任务类型：${taskType}，耗时：${duration}小时，投入预算：${budget}龙门币，小队成员：${names}（共${memberCount}人）
@@ -232,7 +241,7 @@ currency_reward范围0~${budget * 10}，net_profit必须等于currency_reward - 
                     withTimeout(20_000) { sharedUtils.streamChat(listOf(AiMessage("system", prompt))).collect { sb.append(it) } }
                     sharedUtils.trackTokens("dispatch", prompt, sb.toString())
                     val cleaned = sharedUtils.aiService.cleanJson(sb.toString().trim())
-                    val ending = try { com.google.gson.Gson().fromJson(cleaned, DispatchEnd::class.java) } catch (_: Exception) { null }
+                    val ending = try { json.decodeFromString<DispatchEnd>(cleaned) } catch (_: Exception) { null }
                     val rawReward = (ending?.currency_reward ?: 0).coerceIn(0, budget * 10)
                     val netProfit = rawReward - budget
                     repository.updateDispatch(dispatchId, dispatch.logChain + "\n\n【结局】${ending?.ending_content ?: sb.toString()}", "finished", System.currentTimeMillis(), netProfit)

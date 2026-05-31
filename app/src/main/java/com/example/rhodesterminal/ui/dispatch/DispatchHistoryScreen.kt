@@ -8,7 +8,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.SendToMobile
+import androidx.compose.material.icons.automirrored.filled.SendToMobile
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -23,6 +23,11 @@ import androidx.compose.ui.unit.sp
 import com.example.rhodesterminal.data.db.entity.DispatchRecordEntity
 import com.example.rhodesterminal.ui.theme.*
 import com.example.rhodesterminal.viewmodel.MainViewModel
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -52,7 +57,7 @@ fun DispatchHistoryScreen(
         Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { if (selected != null) selected = null else onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
             Spacer(Modifier.width(4.dp))
-            Icon(Icons.Default.SendToMobile, null, tint = Primary, modifier = Modifier.size(22.dp))
+            Icon(Icons.AutoMirrored.Filled.SendToMobile, null, tint = Primary, modifier = Modifier.size(22.dp))
             Spacer(Modifier.width(6.dp))
             Text(if (selected != null) "派遣详情" else "派遣历史", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
         }
@@ -61,10 +66,10 @@ fun DispatchHistoryScreen(
         if (selected != null) {
             val entry = selected!!
             val segments = try {
-                val arr = com.google.gson.JsonParser.parseString(entry.logChain).asJsonArray
+                val arr = Json.parseToJsonElement(entry.logChain) as JsonArray
                 arr.map { obj ->
-                    val o = obj.asJsonObject
-                    Triple(o.get("type")?.asString ?: "", o.get("content")?.asString ?: "", "")
+                    val o = obj.jsonObject
+                    Triple(o["type"]?.jsonPrimitive?.content ?: "", o["content"]?.jsonPrimitive?.content ?: "", "")
                 }
             } catch (_: Exception) {
                 entry.logChain.split("\n\n").filter { it.isNotBlank() }.map { Triple("", it, "") }

@@ -73,10 +73,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import com.example.rhodesterminal.network.Message
+import com.example.rhodesterminal.shared.settings.SettingsRepository
 import com.example.rhodesterminal.ui.theme.*
 import com.example.rhodesterminal.viewmodel.MainViewModel
+import org.koin.compose.koinInject
 import kotlinx.coroutines.launch
 
 @Composable
@@ -86,6 +88,7 @@ fun ChatScreen(
     onExportChat: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val settings: SettingsRepository = koinInject()
     val operator by viewModel.selectedOperator.collectAsState()
     val messages by viewModel.messages.collectAsState()
     val inputText by viewModel.inputText.collectAsState()
@@ -114,7 +117,7 @@ fun ChatScreen(
         }
     }
 
-    var bgUri by remember { mutableStateOf<String?>(context.getSharedPreferences("chat_prefs", 0).getString("bg_${op.id}", null)) }
+    var bgUri by remember { mutableStateOf<String?>(settings.getString("bg_${op.id}", "")) }
     var cropTarget by remember { mutableStateOf<android.net.Uri?>(null) }
     val bgPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> cropTarget = uri }
     var showBgReset by remember { mutableStateOf(false) }
@@ -190,7 +193,7 @@ fun ChatScreen(
     if (showBgReset) {
         AlertDialog(onDismissRequest = { showBgReset = false }, title = { Text("恢复默认背景", color = TextPrimary) },
             text = { Text("将移除当前背景图", color = TextSecondary) },
-            confirmButton = { TextButton(onClick = { bgUri = null; context.getSharedPreferences("chat_prefs", 0).edit().remove("bg_${op.id}").apply(); showBgReset = false }) { Text("确认", color = Primary) } },
+            confirmButton = { TextButton(onClick = { bgUri = null; settings.remove("bg_${op.id}"); showBgReset = false }) { Text("确认", color = Primary) } },
             dismissButton = { TextButton(onClick = { showBgReset = false }) { Text("取消", color = TextSecondary) } })
     }
     if (showExport) {
@@ -201,7 +204,7 @@ fun ChatScreen(
     cropTarget?.let { uri ->
         com.example.rhodesterminal.ui.common.ImageCropperDialog(
             imageUri = uri, aspectX = 9f, aspectY = 16f,
-            onConfirm = { cropped -> val s = com.example.rhodesterminal.util.copyToInternalStorage(context, cropped); bgUri = s; context.getSharedPreferences("chat_prefs", 0).edit().putString("bg_${op.id}", s).apply(); cropTarget = null },
+            onConfirm = { cropped -> val s = com.example.rhodesterminal.util.copyToInternalStorage(context, cropped); bgUri = s; settings.putString("bg_${op.id}", s); cropTarget = null },
             onCancel = { cropTarget = null }
         )
     }
@@ -318,7 +321,8 @@ private fun PropShopDialog(
     var showHypnotizeInput by remember { mutableStateOf(false) }
     var innerThoughts by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
-    val balance = remember { mutableStateOf(context.getSharedPreferences("dispatch", 0).getInt("lmb", 1000)) }
+    val settings: SettingsRepository = koinInject()
+    val balance = remember { mutableStateOf(settings.lmb) }
 
     AlertDialog(onDismissRequest = onDismiss, title = { Row { Icon(Icons.Default.ShoppingCart, null, tint = AccentOrange, modifier = Modifier.size(20.dp)); Spacer(modifier = Modifier.width(6.dp)); Text("道具商店", color = TextPrimary) } },
         text = {
@@ -347,7 +351,7 @@ private fun PropShopDialog(
                                 val err = viewModel.buyProp("催眠怀表", context)
                                 if (err != null) { Toast.makeText(context, err, Toast.LENGTH_SHORT).show(); return@TextButton }
                                 viewModel.setHypnosis(hypnotizeInput)
-                                balance.value = context.getSharedPreferences("dispatch", 0).getInt("lmb", 1000)
+                                balance.value = settings.lmb
                                 showHypnotizeInput = false; hypnotizeInput = ""
                                 onDismiss()
                             }) { Text("确认", color = Primary) }
@@ -382,12 +386,12 @@ private fun PropShopDialog(
                         Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(PrimaryContainer).clickable {
                             if (balance.value < 100) { Toast.makeText(context, "余额不足", Toast.LENGTH_SHORT).show(); return@clickable }
                             viewModel.buyProp("看穿眼镜", context)
-                            balance.value = context.getSharedPreferences("dispatch", 0).getInt("lmb", 1000)
+                            balance.value = settings.lmb
                             loading = true
                             scope.launch {
                                 val result = StringBuilder()
                                 try {
-                                    val temp = context.getSharedPreferences("chat_prefs", 0).getInt("ai_temperature", 95).toDouble() / 100.0
+                                    val temp = settings.aiTemperature
                                     val op = viewModel.selectedOperator.value
                                     val mood = op?.emotion ?: "平静"
                                     val loc = op?.location ?: "罗德岛"

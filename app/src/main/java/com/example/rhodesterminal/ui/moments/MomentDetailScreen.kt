@@ -26,7 +26,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import com.example.rhodesterminal.data.db.entity.MomentCommentEntity
 import com.example.rhodesterminal.data.db.entity.MomentEntity
 import com.example.rhodesterminal.ui.theme.*

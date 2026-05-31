@@ -9,14 +9,14 @@ import com.example.rhodesterminal.data.SessionExport
 import com.example.rhodesterminal.shared.data.SenderCount
 import com.example.rhodesterminal.shared.model.Memory
 import com.example.rhodesterminal.shared.data.ChatRepository
-import com.example.rhodesterminal.viewmodel.shared.Prefs
+import com.example.rhodesterminal.shared.settings.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 class DataViewModel(
     private val repository: ChatRepository,
-    private val prefs: Prefs,
+    private val settings: SettingsRepository,
     private val scope: CoroutineScope
 ) {
     data class DataStats(
@@ -37,17 +37,16 @@ class DataViewModel(
 
     fun cleanupAllExpired() {
         scope.launch {
-            val chatPrefs = prefs.chat
             val now = System.currentTimeMillis()
-            val msgDays = chatPrefs.getInt("clean_days_messages", 30)
+            val msgDays = settings.cleanDaysMessages
             repository.enforceMemoryRetain("", 0)
-            val anchorDays = chatPrefs.getInt("clean_days_anchors", 3)
+            val anchorDays = settings.cleanDaysAnchors
             repository.deleteOldAnchors(now - anchorDays * 86400000L)
-            val diaryDays = chatPrefs.getInt("clean_days_diaries", 30)
+            val diaryDays = settings.cleanDaysDiaries
             repository.deleteOldDiaries(now - diaryDays * 86400000L)
-            val momentDays = chatPrefs.getInt("clean_days_moments", 30)
+            val momentDays = settings.cleanDaysMoments
             repository.deleteOldMoments(now - momentDays * 86400000L)
-            val dispatchDays = chatPrefs.getInt("clean_days_dispatches", 30)
+            val dispatchDays = settings.cleanDaysDispatches
             repository.deleteOldDispatches(now - dispatchDays * 86400000L)
         }
     }

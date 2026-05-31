@@ -170,7 +170,7 @@ fun OperatorEditScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(modifier = Modifier.size(80.dp).clip(CircleShape).background(Gray100).clickable { avatarPicker.launch("image/*") }, contentAlignment = Alignment.Center) {
                         if (avatarUri.isNotBlank()) {
-                            coil.compose.AsyncImage(model = avatarUri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+                            coil3.compose.AsyncImage(model = avatarUri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
                         } else {
                             Text(name.take(1), fontSize = 28.sp, fontWeight = FontWeight.Bold, color = TextSecondary)
                         }
@@ -310,7 +310,7 @@ private fun AvatarSection(avatarUri: String, onPick: () -> Unit) {
             contentAlignment = Alignment.Center
         ) {
             if (avatarUri.isNotBlank()) {
-                coil.compose.AsyncImage(model = avatarUri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+                coil3.compose.AsyncImage(model = avatarUri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
             } else {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(Icons.Default.PhotoCamera, null, tint = TextTertiary, modifier = Modifier.size(32.dp))

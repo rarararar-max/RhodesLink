@@ -27,6 +27,11 @@ import com.example.rhodesterminal.ui.theme.*
 import java.io.File
 import java.io.FileOutputStream
 import com.example.rhodesterminal.data.db.entity.ChatMessageEntity
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 
 @Composable
 fun ChatExportDialog(
@@ -39,12 +44,12 @@ fun ChatExportDialog(
     val shareMsgs = messages.take(8).map { msg ->
         val text = if (msg.type == "ai_json") {
             try {
-                val obj = com.google.gson.JsonParser.parseString(msg.content).asJsonObject
-                val segs = obj.getAsJsonArray("segments")
+                val obj = Json.parseToJsonElement(msg.content).jsonObject
+                val segs = obj["segments"] as? JsonArray
                 if (segs != null) {
                     segs.mapNotNull {
-                        val seg = it.asJsonObject
-                        if (seg.get("type")?.asString == "dialogue") seg.get("content")?.asString else null
+                        val seg = it.jsonObject
+                        if (seg["type"]?.jsonPrimitive?.content == "dialogue") seg["content"]?.jsonPrimitive?.content else null
                     }.joinToString(" ")
                 } else msg.content.take(80)
             } catch (_: Exception) { msg.content.take(80) }
@@ -62,7 +67,7 @@ fun ChatExportDialog(
         titleContent = {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 4.dp)) {
                 if (operatorAvatarUri.isNotBlank()) {
-                    coil.compose.AsyncImage(model = operatorAvatarUri, contentDescription = null, modifier = Modifier.size(36.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+                    coil3.compose.AsyncImage(model = operatorAvatarUri, contentDescription = null, modifier = Modifier.size(36.dp).clip(CircleShape), contentScale = ContentScale.Crop)
                 } else {
                     Box(Modifier.size(36.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) {
                         Text(operatorName.take(1), color = Color.White, fontWeight = FontWeight.Bold)

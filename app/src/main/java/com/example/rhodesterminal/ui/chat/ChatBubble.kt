@@ -46,12 +46,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
+import coil3.compose.AsyncImage
 import com.example.rhodesterminal.data.db.entity.ChatMessageEntity
 import com.example.rhodesterminal.ui.theme.*
-import com.google.gson.Gson
-import com.google.gson.JsonParser
 import com.example.rhodesterminal.network.Segment
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -155,10 +157,11 @@ private fun TextBubble(message: ChatMessageEntity, aiAvatarUri: String, userAvat
 private fun JsonBubble(message: ChatMessageEntity, aiAvatarUri: String, userAvatarUri: String = "", onRecall: (Long) -> Unit, onRegenerate: (Long) -> Unit, onContinue: (Long) -> Unit, showTime: Boolean, modifier: Modifier) {
     val jsonSegments = remember(message.content) {
         val content = message.content
+        val json = Json { ignoreUnknownKeys = true }
         fun parse(raw: String): Pair<String?, List<Segment>> = try {
-            val obj = JsonParser.parseString(raw).asJsonObject
-            val emotion = obj.get("emotion")?.asString ?: ""
-            val segments = Gson().fromJson(obj.get("segments"), Array<Segment>::class.java)?.toList() ?: emptyList()
+            val obj = json.parseToJsonElement(raw).jsonObject
+            val emotion = obj["emotion"]?.jsonPrimitive?.content ?: ""
+            val segments = (obj["segments"] as? JsonArray)?.map { json.decodeFromString<Segment>(it.toString()) } ?: emptyList()
             emotion to segments
         } catch (_: Exception) { null to emptyList<Segment>() }
         var result = parse(content)

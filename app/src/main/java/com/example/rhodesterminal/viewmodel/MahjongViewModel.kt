@@ -5,24 +5,23 @@ import com.example.rhodesterminal.shared.model.MahjongSave
 import com.example.rhodesterminal.shared.model.MemoryAnchor
 import com.example.rhodesterminal.shared.model.Moment
 import com.example.rhodesterminal.shared.data.ChatRepository
-import com.example.rhodesterminal.viewmodel.shared.Prefs
+import com.example.rhodesterminal.shared.settings.SettingsRepository
 import com.example.rhodesterminal.viewmodel.shared.SharedUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 class MahjongViewModel(
     private val repository: ChatRepository,
-    private val prefs: Prefs,
+    private val settings: SettingsRepository,
     private val sharedUtils: SharedUtils,
     private val scope: CoroutineScope,
     private val operatorsProvider: () -> List<com.example.rhodesterminal.shared.model.Operator>
 ) {
     suspend fun refreshDailyLmb() {
-        val dp = prefs.dispatch
         val today = sharedUtils.beijingSdf("yyyyMMdd").format(java.util.Date())
-        val lastRefresh = dp.getString("lmb_refresh_date", "") ?: ""
+        val lastRefresh = settings.lmbRefreshDate
         if (lastRefresh == today) return
-        dp.edit().putString("lmb_refresh_date", today).apply()
+        settings.lmbRefreshDate = today
         for (op in operatorsProvider()) {
             if (op.lmb < 2000) {
                 repository.updateOperator(op.copy(lmb = 2000))

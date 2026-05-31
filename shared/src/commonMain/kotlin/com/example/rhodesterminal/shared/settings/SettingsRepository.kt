@@ -277,6 +277,133 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = getStringSet("hidden_ids")
         set(value) = putStringSet("hidden_ids", value)
 
+    // === 动态 ID 计数 ===
+    var lastSeenMomentId: Long
+        get() = getLong("last_seen_moment_id", 0)
+        set(value) = putLong("last_seen_moment_id", value)
+
+    var lastSeenCommentId: Long
+        get() = getLong("last_seen_comment_id", 0)
+        set(value) = putLong("last_seen_comment_id", value)
+
+    // === 麻将历史 ===
+    var mahjongHistoryJson: String
+        get() = getString("mahjong_history_json", "")
+        set(value) = putString("mahjong_history_json", value)
+
+    // === 群聊自动参数 ===
+    var groupAutoMin: Int
+        get() = getInt("group_auto_min", 20)
+        set(value) = putInt("group_auto_min", value)
+
+    var groupAutoMax: Int
+        get() = getInt("group_auto_max", 120)
+        set(value) = putInt("group_auto_max", value)
+
+    var groupMsgMin: Int
+        get() = getInt("group_msg_min", 10)
+        set(value) = putInt("group_msg_min", value)
+
+    var groupMsgMax: Int
+        get() = getInt("group_msg_max", 80)
+        set(value) = putInt("group_msg_max", value)
+
+    var groupSpeechMin: Int
+        get() = getInt("group_speech_min", 1)
+        set(value) = putInt("group_speech_min", value)
+
+    var groupSpeechMax: Int
+        get() = getInt("group_speech_max", 2)
+        set(value) = putInt("group_speech_max", value)
+
+    var groupNarSegMin: Int
+        get() = getInt("group_nar_seg_min", 1)
+        set(value) = putInt("group_nar_seg_min", value)
+
+    var groupNarSegMax: Int
+        get() = getInt("group_nar_seg_max", 3)
+        set(value) = putInt("group_nar_seg_max", value)
+
+    var groupNarMin: Int
+        get() = getInt("group_nar_min", 20)
+        set(value) = putInt("group_nar_min", value)
+
+    var groupNarMax: Int
+        get() = getInt("group_nar_max", 50)
+        set(value) = putInt("group_nar_max", value)
+
+    var commentMinChars: Int
+        get() = getInt("comment_min_chars", 10)
+        set(value) = putInt("comment_min_chars", value)
+
+    var commentMaxChars: Int
+        get() = getInt("comment_max_chars", 40)
+        set(value) = putInt("comment_max_chars", value)
+
+    // === 动态键方法（per-operator, per-group）===
+
+    fun getOperatorMsgPermission(operatorId: String): Boolean =
+        getBoolean("msg_$operatorId", true)
+
+    fun putOperatorMsgPermission(operatorId: String, value: Boolean) =
+        putBoolean("msg_$operatorId", value)
+
+    fun getOperatorDynPermission(operatorId: String): Boolean =
+        getBoolean("dyn_$operatorId", true)
+
+    fun putOperatorDynPermission(operatorId: String, value: Boolean) =
+        putBoolean("dyn_$operatorId", value)
+
+    fun getGroupAuto(groupId: String): Boolean =
+        getBoolean("group_auto_$groupId", false)
+
+    fun putGroupAuto(groupId: String, value: Boolean) =
+        putBoolean("group_auto_$groupId", value)
+
+    fun getGroupMode(groupId: String): String =
+        getString("group_mode_$groupId", "online")
+
+    fun putGroupMode(groupId: String, value: String) =
+        putString("group_mode_$groupId", value)
+
+    fun getPromptTemplate(type: String, mode: String = ""): String {
+        val key = if (mode.isNotBlank()) "prompt_${type}_${mode}" else "prompt_$type"
+        return getString(key, "")
+    }
+
+    fun putPromptTemplate(type: String, mode: String, value: String) {
+        val key = if (mode.isNotBlank()) "prompt_${type}_${mode}" else "prompt_$type"
+        putString(key, value)
+    }
+
+    fun removePromptTemplate(type: String, mode: String = "") {
+        val key = if (mode.isNotBlank()) "prompt_${type}_${mode}" else "prompt_$type"
+        remove(key)
+    }
+
+    fun getMomentCount(operatorId: String, date: String): Int =
+        getInt("moment_count_${operatorId}_$date", 0)
+
+    fun putMomentCount(operatorId: String, date: String, value: Int) =
+        putInt("moment_count_${operatorId}_$date", value)
+
+    fun removeMomentCount(operatorId: String, date: String) =
+        remove("moment_count_${operatorId}_$date")
+
+    // === Token 追踪 ===
+
+    fun getTokenCount(category: String): Int =
+        getInt("token_$category", 0)
+
+    fun putTokenCount(category: String, value: Int) =
+        putInt("token_$category", value)
+
+    fun getDailyTokenCount(category: String, date: String): Int =
+        getInt("daily_${category}_$date", 0)
+
+    fun putDailyTokenCount(category: String, date: String, value: Int) =
+        putInt("daily_${category}_$date", value)
+
     // === 通用方法 ===
     fun getString(key: String, default: String = ""): String =
         settings.getString(key, default)

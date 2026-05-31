@@ -3,7 +3,6 @@ package com.example.rhodesterminal.di
 import com.example.rhodesterminal.viewmodel.MainViewModel
 import com.example.rhodesterminal.viewmodel.shared.AppStateHolder
 import com.example.rhodesterminal.viewmodel.shared.OperatorStateUpdater
-import com.example.rhodesterminal.viewmodel.shared.Prefs
 import com.example.rhodesterminal.viewmodel.shared.SharedUtils
 import com.example.rhodesterminal.shared.data.ChatRepository
 import com.example.rhodesterminal.shared.settings.SettingsRepository
@@ -17,9 +16,6 @@ import org.koin.dsl.module
 
 val appModule = module {
 
-    // === Prefs (temporary, will be replaced by SettingsRepository) ===
-    single { Prefs(androidApplication()) }
-
     // === Infrastructure ===
     single<CoroutineScope> { CoroutineScope(SupervisorJob() + Dispatchers.Default) }
 
@@ -27,7 +23,7 @@ val appModule = module {
 
     single {
         val appState = get<AppStateHolder>()
-        SharedUtils(get(), get<SettingsRepository>(), get<AIService>(), get<Prefs>()) { appState.operators.value }
+        SharedUtils(get(), get<SettingsRepository>(), get<AIService>()) { appState.operators.value }
     }
 
     single {
@@ -37,6 +33,6 @@ val appModule = module {
 
     // === MainViewModel ===
     viewModel {
-        MainViewModel(get(), get(), get(), get(), get(), get())
+        MainViewModel(get(), get(), get<SettingsRepository>(), get(), get(), get())
     }
 }

@@ -5,7 +5,7 @@ import com.example.rhodesterminal.shared.model.MomentComment
 import com.example.rhodesterminal.shared.model.MomentLike
 import com.example.rhodesterminal.shared.data.ChatRepository
 import com.example.rhodesterminal.viewmodel.shared.AppStateHolder
-import com.example.rhodesterminal.viewmodel.shared.Prefs
+import com.example.rhodesterminal.shared.settings.SettingsRepository
 import com.example.rhodesterminal.viewmodel.shared.UserProfile
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
@@ -15,7 +15,7 @@ import kotlinx.coroutines.Dispatchers
 
 class MomentsViewModel(
     private val repository: ChatRepository,
-    private val prefs: Prefs,
+    private val settings: SettingsRepository,
     private val appState: AppStateHolder,
     private val scope: CoroutineScope,
     private val getUserProfile: () -> UserProfile
@@ -41,8 +41,7 @@ class MomentsViewModel(
     fun getLatestMomentId(): Long = appState.moments.value.firstOrNull()?.id ?: 0
 
     fun getMomentBadge(): Int {
-        val mp = prefs.moment
-        val lastSeenMoment = mp.getLong("last_seen_moment_id", 0)
+        val lastSeenMoment = settings.lastSeenMomentId
         val latest = appState.moments.value.firstOrNull()?.id ?: 0
         val momentBadge = if (latest > lastSeenMoment) (appState.moments.value.count { it.id > lastSeenMoment && !it.isUserPost }) else 0
         val commentBadge = getUnreadCommentCount()
@@ -72,7 +71,7 @@ class MomentsViewModel(
 
     fun markMomentsSeen() {
         val latest = appState.moments.value.firstOrNull()?.id ?: 0
-        prefs.moment.edit().putLong("last_seen_moment_id", latest).apply()
+        settings.lastSeenMomentId = latest
     }
 
     fun markCommentRead(commentId: Long) {
@@ -87,7 +86,7 @@ class MomentsViewModel(
             repository.deleteOldUserComments(cutoff, userName)
             val maxId = repository.getMaxCommentId()
             if (maxId != null && maxId > 0) {
-                prefs.moment.edit().putLong("last_seen_comment_id", maxId).apply()
+                settings.lastSeenCommentId = maxId
             }
         }
     }

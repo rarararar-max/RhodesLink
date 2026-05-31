@@ -15,7 +15,6 @@ class SharedUtils(
     private val repository: ChatRepository,
     private val settings: SettingsRepository,
     val aiService: AIService,
-    private val prefs: Prefs,
     private val operatorsProvider: () -> List<com.example.rhodesterminal.shared.model.Operator> = { emptyList() }
 ) {
     companion object {
@@ -30,7 +29,7 @@ class SharedUtils(
         logAiCall("→$logTag", prompt, "(streaming...)", messages)
         val sb = StringBuilder()
         aiService.streamChat(
-            prefs.apiKey(), messages, prefs.provider(), prefs.modelName(), prefs.customUrl(), temperature = temp
+            settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl, temperature = temp
         ).collect { chunk ->
             sb.append(chunk)
             emit(chunk)
@@ -61,23 +60,21 @@ class SharedUtils(
     }
 
     fun trackTokens(category: String, prompt: String, response: String) {
-        val tp = prefs.tokens
         val key = "token_$category"
-        val current = tp.getInt(key, 0)
+        val current = settings.getTokenCount(category)
         val estimate = ((prompt.length + response.length) * 3 / 2).coerceAtLeast(1)
-        tp.edit().putInt(key, current + estimate).apply()
+        settings.putTokenCount(category, current + estimate)
         val today = beijingSdf("yyyy-MM-dd").format(java.util.Date())
-        val dailyKey = "daily_${category}_$today"
-        val dailyCurrent = tp.getInt(dailyKey, 0)
-        tp.edit().putInt(dailyKey, dailyCurrent + estimate).apply()
+        val dailyCurrent = settings.getDailyTokenCount(category, today)
+        settings.putDailyTokenCount(category, today, dailyCurrent + estimate)
     }
 
     // === 配置访问 ===
 
-    fun getApiKey(): String = prefs.apiKey()
-    fun getProvider(): String = prefs.provider()
-    fun getModelName(): String = prefs.modelName()
-    fun getCustomUrl(): String = prefs.customUrl()
+    fun getApiKey(): String = settings.apiKey
+    fun getProvider(): String = settings.provider
+    fun getModelName(): String = settings.modelName
+    fun getCustomUrl(): String = settings.customUrl
 
     // === 纯工具函数 ===
 

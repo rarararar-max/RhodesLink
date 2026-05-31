@@ -5,13 +5,13 @@ import com.example.rhodesterminal.shared.model.Relationship
 import com.example.rhodesterminal.shared.data.BfsNode
 import com.example.rhodesterminal.shared.data.ChatRepository
 import com.example.rhodesterminal.viewmodel.shared.AppStateHolder
-import com.example.rhodesterminal.viewmodel.shared.Prefs
+import com.example.rhodesterminal.shared.settings.SettingsRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 class OperatorViewModel(
     private val repository: ChatRepository,
-    private val prefs: Prefs,
+    private val settings: SettingsRepository,
     private val appState: AppStateHolder,
     private val scope: CoroutineScope,
     private val onSelectedOperatorUpdated: ((Operator?) -> Unit)? = null
@@ -40,10 +40,8 @@ class OperatorViewModel(
                 meldPref = existing?.meldPref ?: "medium"
             )
             repository.insertOperator(op)
-            prefs.opPerms.edit()
-                .putBoolean("dyn_$id", autoPost)
-                .putBoolean("msg_$id", allowChat)
-                .apply()
+            settings.putOperatorDynPermission(id, autoPost)
+            settings.putOperatorMsgPermission(id, allowChat)
             repository.deleteRelationshipByOperator(id)
             for (rel in relationships) {
                 repository.insertRelationship(rel.copy(operatorId = id))

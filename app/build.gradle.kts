@@ -13,15 +13,15 @@ kotlin {
 }
 
 android {
-    namespace = "com.example.rhodesterminal"
+    namespace = "com.rhodes.privatechat"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.rhodesterminal"
+        applicationId = "com.rhodes.privatechat"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 4
+        versionName = "0.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -33,9 +33,22 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = rootProject.file("release-key.jks")
+            storePassword = "rhodes2026"
+            keyAlias = "rhodesChat"
+            keyPassword = "rhodes2026"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("release")
+        }
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -62,7 +75,6 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
-    implementation(libs.okhttp)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.coil3)
     implementation(libs.androidx.compose.material.icons.extended)

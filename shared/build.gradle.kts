@@ -10,7 +10,7 @@ plugins {
 sqldelight {
     databases {
         create("RhodesDatabase") {
-            packageName.set("com.example.rhodesterminal.shared.db")
+            packageName.set("com.rhodes.privatechat.shared.db")
         }
     }
 }
@@ -48,7 +48,7 @@ kotlin {
 }
 
 android {
-    namespace = "com.example.rhodesterminal.shared"
+    namespace = "com.rhodes.privatechat.shared"
     compileSdk = 35
 
     defaultConfig {

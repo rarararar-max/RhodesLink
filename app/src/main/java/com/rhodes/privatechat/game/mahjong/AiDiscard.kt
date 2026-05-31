@@ -1,0 +1,71 @@
+package com.rhodes.privatechat.game.mahjong
+
+import android.util.Log
+import kotlin.random.Random
+
+object AiDiscard {
+    private const val TAG = "麻将"
+    data class DiscardOption(val tile: Tile, val shantenAfter: Int, val dangerScore: Int, val isSafe: Boolean)
+
+    fun decideDiscard(player: PlayerState, gameState: GameState): Tile {
+        val hand = player.hand.toList()
+        Log.d(TAG, "${player.name} 出牌决策开始，手牌：${hand.size}张，向听：${Engine.shanten(hand)}，进攻：${player.attack}，防守：${player.defense}")
+        val options = hand.map { tile ->
+            val remaining = hand.toMutableList().also { it.remove(tile) }
+            val sh = Engine.shanten(remaining)
+            val danger = gameState.players.filter { it != player }.maxOfOrNull { Engine.dangerLevel(tile, it) } ?: 0
+            DiscardOption(tile, sh, danger, danger == 0)
+        }
+        val minShanten = options.minOf { it.shantenAfter }
+        val bestOptions = options.filter { it.shantenAfter == minShanten }
+        val effA = effectiveAttack(player, gameState)
+        val effD = effectiveDefense(player, gameState)
+
+        val scored = bestOptions.map { opt ->
+            var score = 0f
+            score += effA * (5 - opt.shantenAfter.coerceAtMost(5)) * 20f
+            if (opt.isSafe) score += effD * 50f
+            if (opt.shantenAfter < Engine.shanten(hand) && !opt.isSafe) score -= effD * 30f
+            Pair(opt, score)
+        }.sortedByDescending { it.second }
+
+        if (player.specialTraits.any { it.contains("随机") || it.contains("疯狂") }) {
+            if (Random.nextFloat() < 0.3f) return bestOptions.random().tile
+        }
+        if (player.specialTraits.any { it.contains("紧张") || it.contains("打错") }) {
+            if (Random.nextFloat() < 0.15f) return hand.random()
+        }
+        val chosen = scored.firstOrNull()?.first?.tile ?: bestOptions.first().tile
+        Log.d(TAG, "${player.name} 选择打出 ${Tile.tileName(chosen)}，向听变为 ${Engine.shanten(hand.filter{it!=chosen})}，有效进攻${effectiveAttack(player,gameState)} 有效防守${effectiveDefense(player,gameState)}")
+        return chosen
+    }
+
+    fun effectiveAttack(player: PlayerState, gameState: GameState): Float {
+        var a = player.attack
+        if (player.isTenpai || Engine.isTenpai(player.hand)) a += 0.2f
+        if (player.points > 40000) a += 0.1f
+        return a.coerceIn(0f, 1f)
+    }
+
+    fun effectiveDefense(player: PlayerState, gameState: GameState): Float {
+        var d = player.defense
+        val dealer = gameState.dealer()
+        if (dealer.isRiichi || Engine.isTenpai(dealer.hand)) d += 0.25f
+        if (player.points < 10000) d += 0.15f
+        if (player.points < 5000) d += 0.3f
+        return d.coerceIn(0f, 1f)
+    }
+
+    fun decideMeld(player: PlayerState, meldType: MeldType, gameState: GameState): Boolean {
+        val pref = player.meldPref
+        val baseChance = when (meldType) {
+            MeldType.KAN -> when (pref) { "high" -> 0.8f; "medium" -> 0.5f; "low" -> 0.2f; else -> 0.5f }
+            MeldType.PON -> when (pref) { "high" -> 0.9f; "medium" -> 0.6f; "low" -> 0.2f; else -> Random.nextFloat() }
+            MeldType.CHI -> when (pref) { "high" -> 0.7f; "medium" -> 0.4f; "low" -> 0.1f; else -> Random.nextFloat() }
+            else -> 0f
+        }
+        if (effectiveDefense(player, gameState) > 0.7f) return false
+        if (Engine.isTenpai(player.hand)) return false
+        return Random.nextFloat() < baseChance
+    }
+}

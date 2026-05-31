@@ -1,0 +1,289 @@
+package com.rhodes.privatechat.ui.chat.component
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import coil3.compose.AsyncImage
+import com.rhodes.privatechat.ui.chat.formatChatTime
+import com.rhodes.privatechat.ui.chat.model.ChatUiMessage
+import com.rhodes.privatechat.ui.theme.*
+
+/**
+ * 私聊和群聊共用的消息列表。
+ *
+ * @param messages 已解析的 ChatUiMessage 列表
+ * @param listState LazyListState
+ * @param onRecall 撤回回调（传入 originalMessageId）
+ * @param onRegenerate 重说回调（私聊专用，null 则不显示）
+ * @param onContinue 继续说回调（私聊专用，null 则不显示）
+ * @param onSenderClick 点击发送者头像/名称回调（群聊专用，null 则不响应点击）
+ * @param progressiveDisplay 是否启用渐进展示（群聊专用）
+ */
+@Composable
+fun MessageList(
+    messages: List<ChatUiMessage>,
+    listState: LazyListState,
+    onRecall: (Long) -> Unit,
+    onRegenerate: ((Long) -> Unit)? = null,
+    onContinue: ((Long) -> Unit)? = null,
+    onSenderClick: ((String) -> Unit)? = null,
+    progressiveDisplay: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
+    // 渐进展示逻辑
+    var prevRawSize by remember { mutableIntStateOf(0) }
+    var displayCount by remember { mutableIntStateOf(Int.MAX_VALUE) }
+    if (progressiveDisplay) {
+        LaunchedEffect(messages) {
+            if (prevRawSize == 0 || messages.size < prevRawSize) {
+                displayCount = messages.size
+            } else if (messages.size > prevRawSize) {
+                displayCount = prevRawSize + 1
+                for (i in (prevRawSize + 1) until messages.size) {
+                    kotlinx.coroutines.delay((500L + (Math.random() * 2000)).toLong())
+                    displayCount = i + 1
+                }
+            }
+            prevRawSize = messages.size
+        }
+    } else {
+        displayCount = messages.size
+    }
+    val displayMessages = messages.take(displayCount)
+
+    // 自动滚动到底部
+    LaunchedEffect(displayMessages.size) {
+        if (displayMessages.isNotEmpty()) {
+            listState.animateScrollToItem(displayMessages.size - 1)
+        }
+    }
+
+    LazyColumn(state = listState, modifier = modifier.fillMaxWidth()) {
+        item { Spacer(modifier = Modifier.height(8.dp)) }
+        items(displayMessages.size, key = { displayMessages[it].id }) { i ->
+            val msg = displayMessages[i]
+            val prevTime = if (i > 0) displayMessages[i - 1].timestamp else 0L
+            val showTime = prevTime == 0L || (msg.timestamp - prevTime) > 3 * 60 * 1000
+
+            MessageBubble(
+                message = msg,
+                showTime = showTime,
+                onRecall = { onRecall(msg.originalMessageId) },
+                onRegenerate = if (onRegenerate != null && !msg.isMe) { { onRegenerate(msg.originalMessageId) } } else null,
+                onContinue = if (onContinue != null && !msg.isMe) { { onContinue(msg.originalMessageId) } } else null,
+                onSenderClick = onSenderClick,
+            )
+        }
+        item { Spacer(modifier = Modifier.height(8.dp)) }
+    }
+}
+
+/**
+ * 单条消息气泡，根据 ChatUiMessage 的属性自动选择渲染方式。
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun MessageBubble(
+    message: ChatUiMessage,
+    showTime: Boolean,
+    onRecall: () -> Unit,
+    onRegenerate: (() -> Unit)?,
+    onContinue: (() -> Unit)?,
+    onSenderClick: ((String) -> Unit)?,
+) {
+    if (message.isSystem) {
+        if (message.isNarration) {
+            // 旁白：左对齐卡片
+            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp), horizontalArrangement = Arrangement.Start) {
+                Spacer(modifier = Modifier.width(42.dp))
+                Box(modifier = Modifier.widthIn(max = 260.dp).clip(RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp)).background(Card).padding(horizontal = 12.dp, vertical = 8.dp)) {
+                    Text(message.content, fontSize = 13.sp, fontStyle = FontStyle.Italic, color = TextTertiary)
+                }
+            }
+        } else {
+            // 系统消息：居中
+            Text(message.content, fontSize = 12.sp, color = TextTertiary,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 6.dp),
+                textAlign = TextAlign.Center)
+        }
+        return
+    }
+
+    val context = LocalContext.current
+    var showMenu by remember { mutableStateOf(false) }
+    val isMe = message.isMe
+    val bubbleColor = if (isMe) Color(0xFF95EC69) else Card
+    val bubbleShape = if (isMe) RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp) else RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp)
+
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp)) {
+        if (showTime) {
+            Text(formatChatTime(message.timestamp), fontSize = 12.sp, color = TextTertiary,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), textAlign = TextAlign.Center)
+        }
+
+        Box {
+            Row(
+                modifier = Modifier.fillMaxWidth().combinedClickable(onLongClick = { showMenu = true }, onClick = {}),
+                horizontalArrangement = if (isMe) Arrangement.End else Arrangement.Start,
+                verticalAlignment = Alignment.Top
+            ) {
+                if (!isMe) {
+                    // AI/他人头像
+                    val avatarModifier = if (onSenderClick != null) {
+                        Modifier.size(36.dp).clip(CircleShape).clickable { onSenderClick(message.senderName) }
+                    } else {
+                        Modifier.size(36.dp).clip(CircleShape)
+                    }
+                    if (message.avatarUri.isNotBlank()) {
+                        AsyncImage(model = message.avatarUri, contentDescription = null,
+                            modifier = avatarModifier, contentScale = ContentScale.Crop)
+                    } else {
+                        Box(modifier = avatarModifier.background(message.senderColor), contentAlignment = Alignment.Center) {
+                            Text(message.senderName.take(1), color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+
+                Column(horizontalAlignment = if (isMe) Alignment.End else Alignment.Start) {
+                    // 群聊：显示发送者名称 + 时间
+                    if (!isMe && onSenderClick != null) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(message.senderName, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                                color = message.senderColor,
+                                modifier = Modifier.clickable { onSenderClick(message.senderName) })
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(formatChatTime(message.timestamp), fontSize = 10.sp, color = TextTertiary)
+                        }
+                        Spacer(modifier = Modifier.height(2.dp))
+                    }
+                    // 私聊：显示离线信息
+                    if (!isMe && onSenderClick == null && message.mode == "offline") {
+                        OfflineInfo(message = message)
+                    }
+                    // 气泡
+                    Box(modifier = Modifier.widthIn(max = if (onSenderClick != null) 240.dp else 260.dp)
+                        .clip(bubbleShape).background(bubbleColor)
+                        .padding(horizontal = if (onSenderClick != null) 12.dp else 14.dp, vertical = if (onSenderClick != null) 8.dp else 10.dp)) {
+                        Text(message.content.ifEmpty { if (isMe) "" else "..." },
+                            fontSize = if (onSenderClick != null) 15.sp else 16.sp,
+                            color = if (isMe) Color(0xFF1C1C1E) else TextPrimary,
+                            fontWeight = FontWeight.Normal)
+                    }
+                }
+
+                if (isMe) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    if (message.avatarUri.isNotBlank()) {
+                        AsyncImage(model = message.avatarUri, contentDescription = null,
+                            modifier = Modifier.size(36.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+                    } else {
+                        Box(modifier = Modifier.size(36.dp).clip(CircleShape).background(Color(0xFF6B7280)),
+                            contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.Person, "我的头像", tint = Color.White, modifier = Modifier.size(20.dp))
+                        }
+                    }
+                }
+            }
+
+            // 上下文菜单
+            DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                DropdownMenuItem(text = { Row { Icon(Icons.Default.ContentCopy, null, tint = TextPrimary, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text("复制", color = TextPrimary) } },
+                    onClick = {
+                        (context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager)
+                            ?.setPrimaryClip(ClipData.newPlainText("msg", message.content))
+                        Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+                        showMenu = false
+                    })
+                DropdownMenuItem(text = { Row { Icon(Icons.Default.Delete, null, tint = ErrorRed, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text("撤回", color = ErrorRed) } },
+                    onClick = { onRecall(); showMenu = false })
+                if (onRegenerate != null) {
+                    DropdownMenuItem(text = { Row { Icon(Icons.Default.Refresh, null, tint = Primary, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text("重说", color = Primary) } },
+                        onClick = { onRegenerate(); showMenu = false })
+                }
+                if (onContinue != null) {
+                    DropdownMenuItem(text = { Row { Icon(Icons.Default.SkipNext, null, tint = Primary, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text("继续说", color = Primary) } },
+                        onClick = { onContinue(); showMenu = false })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OfflineInfo(message: ChatUiMessage) {
+    Column(modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)) {
+        if (message.emotion.isNotBlank()) {
+            Text(message.emotion, fontSize = 12.sp, color = TextSecondary, fontStyle = FontStyle.Italic,
+                modifier = Modifier.padding(bottom = 2.dp))
+        }
+        if (message.location.isNotBlank() || message.activity.isNotBlank()) {
+            Row(modifier = Modifier.padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (message.location.isNotBlank()) {
+                    InfoBadge(message.location, Color(0xFFE0E7FF), Color(0xFF4338CA))
+                    Spacer(modifier = Modifier.width(4.dp))
+                }
+                if (message.activity.isNotBlank()) {
+                    InfoBadge(message.activity, Color(0xFFFEE2E2), Color(0xFFB91C1C))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InfoBadge(text: String, color: Color, textColor: Color) {
+    Text(text, fontSize = 10.sp, color = textColor, fontWeight = FontWeight.Medium,
+        modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(color)
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+            .border(0.5.dp, textColor.copy(alpha = 0.3f), RoundedCornerShape(6.dp)))
+}

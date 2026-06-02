@@ -8,8 +8,6 @@ import com.rhodes.privatechat.shared.model.AiMessage
 import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.shared.network.AIService
 import com.rhodes.privatechat.shared.settings.SettingsRepository
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
 
 class SharedUtils(
     private val repository: ChatRepository,
@@ -23,18 +21,29 @@ class SharedUtils(
 
     // === AI 调用 ===
 
-    fun streamChat(messages: List<AiMessage>, logTag: String = "Chat"): Flow<String> = flow {
+    /** 非流式聊天：发送请求，等待完整响应后返回 */
+    suspend fun chat(messages: List<AiMessage>, logTag: String = "Chat"): String {
         val temp = settings.aiTemperature
         val prompt = messages.firstOrNull()?.content ?: ""
-        logAiCall("→$logTag", prompt, "(streaming...)", messages)
-        val sb = StringBuilder()
-        aiService.streamChat(
+        logAiCall("→$logTag", prompt, "(requesting...)", messages)
+        val result = aiService.chat(
             settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl, temperature = temp
-        ).collect { chunk ->
-            sb.append(chunk)
-            emit(chunk)
-        }
-        if (DEBUG) logAiCall("←$logTag", prompt, sb.toString(), messages)
+        )
+        if (DEBUG) logAiCall("←$logTag", prompt, result, messages)
+        return result
+    }
+
+    /** 非流式聊天 + JSON解析重试：解析失败时重新请求，最多重试3次 */
+    suspend fun chatWithRetry(messages: List<AiMessage>, logTag: String = "Chat"): com.rhodes.privatechat.shared.model.OfflineModeResponse {
+        val temp = settings.aiTemperature
+        val prompt = messages.firstOrNull()?.content ?: ""
+        logAiCall("→$logTag", prompt, "(requesting with retry...)", messages)
+        val result = aiService.chatWithRetry(
+            settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl,
+            temperature = temp, logTag = logTag
+        )
+        if (DEBUG) logAiCall("←$logTag", prompt, result.toString(), messages)
+        return result
     }
 
     fun logAiCall(tag: String, prompt: String, response: String, allMessages: List<AiMessage>? = null) {
@@ -60,9 +69,19 @@ class SharedUtils(
     }
 
     fun trackTokens(category: String, prompt: String, response: String) {
-        val key = "token_$category"
-        val current = settings.getTokenCount(category)
         val estimate = ((prompt.length + response.length) * 3 / 2).coerceAtLeast(1)
+        addTokenEstimate(category, estimate)
+    }
+
+    /** 统计完整消息列表的token消耗（包含系统提示词+聊天历史+响应） */
+    fun trackTokens(category: String, messages: List<AiMessage>, response: String) {
+        val totalInput = messages.sumOf { it.content.length }
+        val estimate = ((totalInput + response.length) * 3 / 2).coerceAtLeast(1)
+        addTokenEstimate(category, estimate)
+    }
+
+    private fun addTokenEstimate(category: String, estimate: Int) {
+        val current = settings.getTokenCount(category)
         settings.putTokenCount(category, current + estimate)
         val today = beijingSdf("yyyy-MM-dd").format(java.util.Date())
         val dailyCurrent = settings.getDailyTokenCount(category, today)
@@ -84,6 +103,20 @@ class SharedUtils(
             result = result.replace("{{${key}}}", value)
         }
         return result
+    }
+
+    /** 移除模板中内容为空的段落及其节标题，减少无效token消耗 */
+    fun compactTemplate(text: String): String {
+        var result = text
+        // 1. 移除只有占位文字（暂无/无/空）的行
+        result = result.replace(Regex("""\n[ \t]*(暂无|无)\s*\n"""), "\n")
+        // 2. 移除空的可选块（双换行包围的纯空白）
+        result = result.replace(Regex("""\n\n\s*\n"""), "\n")
+        // 3. 移除后面紧跟空行或另一节标题的孤立节标题
+        result = result.replace(Regex("""\n(【[^】]+】)\n(?=\n|【|$)"""), "\n")
+        // 4. 清理多余连续空行
+        result = result.replace(Regex("""\n{3,}"""), "\n\n")
+        return result.trim()
     }
 
     fun beijingSdf(pattern: String) = java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault())

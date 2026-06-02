@@ -10,9 +10,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentPaste
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -52,17 +50,17 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     val isCustom = currentProviderId == "custom"
     val modelOptions = if (isCustom) listOf("自填") else currentConfig.models + "自填"
 
-    Column(modifier = modifier.fillMaxSize().systemBarsPadding().background(BG)) {
+    Box(modifier = modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
         Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
-            Spacer(Modifier.weight(1f)); Text("模型设置", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary); Spacer(Modifier.weight(1f))
-            TextButton(onClick = {
+            IconButton(onClick = {
                 settings.provider = currentProviderId
                 settings.modelName = if (isCustom || selectedModelIdx >= currentConfig.models.size) customModelName else currentConfig.models[selectedModelIdx]
                 settings.customUrl = customUrl
                 settings.apiKey = apiKey
                 onBack()
-            }) { Icon(Icons.Default.Check, null, tint = Primary, modifier = Modifier.size(20.dp)); Text("保存", color = Primary, fontWeight = FontWeight.SemiBold) }
+            }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
+            Text("模型设置", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
         }
         HorizontalDivider(color = Divider)
 
@@ -100,6 +98,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             Spacer(Modifier.height(12.dp))
         }
     }
+    }
 }
 
 @Composable private fun DropDown(label: String, options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
@@ -109,7 +108,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         Spacer(Modifier.height(4.dp))
         Box {
             Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Card).clickable { expanded = true }.padding(14.dp), horizontalArrangement = Arrangement.SpaceBetween) { Text(options[selected], fontSize = 14.sp, color = TextPrimary); Text("▼", fontSize = 10.sp, color = TextTertiary) }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, containerColor = Surface) {
                 options.forEachIndexed { i, opt -> DropdownMenuItem(text = { Text(opt, fontWeight = if (i == selected) FontWeight.Bold else FontWeight.Normal, color = if (i == selected) Primary else TextPrimary) }, onClick = { onSelect(i); expanded = false }) }
             }
         }

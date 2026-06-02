@@ -31,7 +31,7 @@ class MomentsViewModel(
         scope.launch {
             val existing = repository.getLike(momentId, operatorId)
             if (existing == null) {
-                repository.insertLike(MomentLike(momentId = momentId, operatorId = operatorId, operatorName = operatorName))
+                repository.insertLike(MomentLike(momentId = momentId, operatorId = operatorId, operatorName = operatorName, createdAt = System.currentTimeMillis()))
             }
             val count = repository.getLikeCount(momentId)
             repository.updateLikeCount(momentId, count)

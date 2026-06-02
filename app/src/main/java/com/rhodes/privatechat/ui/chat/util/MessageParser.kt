@@ -72,10 +72,10 @@ object MessageParser {
                 val uid = msg.id * 1000 + idx
                 if (msgType == "narration" || name == "旁白") {
                     ChatUiMessage(uid, "旁白", TextTertiary, content, msg.timestamp,
-                        isSystem = true, isNarration = true, mode = msg.mode, originalMessageId = msg.id)
+                        isSystem = true, isNarration = true, mode = msg.mode, originalMessageId = msg.id, segmentIndex = idx)
                 } else {
                     ChatUiMessage(uid, name, senderColor(name), content, msg.timestamp,
-                        avatarUri = senderAvatar(name), mode = msg.mode, originalMessageId = msg.id)
+                        avatarUri = senderAvatar(name), mode = msg.mode, originalMessageId = msg.id, segmentIndex = idx)
                 }
             }
         } catch (_: Exception) {
@@ -109,7 +109,7 @@ object MessageParser {
                 if (!isOnline) {
                     result.add(ChatUiMessage(
                         msg.id * 1000 + segIdx, "旁白", TextTertiary, seg.content, msg.timestamp,
-                        isNarration = true, mode = msg.mode, originalMessageId = msg.id
+                        isSystem = true, isNarration = true, mode = msg.mode, originalMessageId = msg.id, segmentIndex = segIdx
                     ))
                 }
             } else {
@@ -120,7 +120,7 @@ object MessageParser {
                     emotion = if (isFirstDialogue) emotion else "",
                     activity = if (isFirstDialogue) msg.activity else "",
                     location = if (isFirstDialogue) msg.location else "",
-                    originalMessageId = msg.id
+                    originalMessageId = msg.id, segmentIndex = segIdx
                 ))
             }
             segIdx++
@@ -136,7 +136,16 @@ object MessageParser {
             val segments = (obj["segments"] as? JsonArray)?.map {
                 json.decodeFromString<com.rhodes.privatechat.network.Segment>(it.toString())
             } ?: emptyList()
-            emotion to segments
+            if (segments.isEmpty()) {
+                val dialogue = obj["dialogue"]?.jsonPrimitive?.content
+                if (!dialogue.isNullOrBlank()) {
+                    emotion to listOf(com.rhodes.privatechat.network.Segment(type = "dialogue", content = dialogue))
+                } else {
+                    emotion to segments
+                }
+            } else {
+                emotion to segments
+            }
         } catch (_: Exception) { null to emptyList() }
 
         var result = parse(content)

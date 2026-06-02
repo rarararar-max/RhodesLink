@@ -37,5 +37,9 @@ class DispatchRepository(private val wrapper: DatabaseWrapper) {
         db.dispatchRecordsQueries.updateDispatch(logChain, status, endTime, netProfit.toLong(), id)
     }
 
+    suspend fun updateDispatchFull(id: String, logChain: String, status: String, endTime: Long = 0, netProfit: Int = 0, totalSegments: Int = 0, segmentInterval: Long = 0) = withContext(Dispatchers.Default) {
+        db.dispatchRecordsQueries.updateDispatchFull(logChain, status, endTime, netProfit.toLong(), totalSegments.toLong(), segmentInterval, id)
+    }
+
     suspend fun deleteOldDispatches(cutoff: Long) = withContext(Dispatchers.Default) { db.dispatchRecordsQueries.deleteOldDispatches(cutoff) }
 }

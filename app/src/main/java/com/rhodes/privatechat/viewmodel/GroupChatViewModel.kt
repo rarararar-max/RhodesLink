@@ -83,6 +83,53 @@ class GroupChatViewModel(
         _groupMessages.value = _groupMessages.value.filter { it.id != msgId }
     }
 
+    /** 撤回群聊多段消息中的单个段落 */
+    fun recallMessageSegment(msgId: Long, segmentIndex: Int) {
+        if (segmentIndex < 0) { removeMessage(msgId); scope.launch { repository.deleteMessage(msgId) }; return }
+        val msg = _groupMessages.value.find { it.id == msgId } ?: return
+        if (msg.type != "ai_json") { removeMessage(msgId); scope.launch { repository.deleteMessage(msgId) }; return }
+        scope.launch {
+            val newContent = removeSegmentFromArray(msg.content, segmentIndex)
+            if (newContent == null) {
+                repository.deleteMessage(msgId)
+                _groupMessages.value = _groupMessages.value.filter { it.id != msgId }
+            } else {
+                repository.updateMessageContent(msgId, newContent)
+                _groupMessages.value = _groupMessages.value.map { if (it.id == msgId) it.copy(content = newContent) else it }
+            }
+        }
+    }
+
+    private fun removeSegmentFromArray(content: String, segmentIndex: Int): String? {
+        return try {
+            val arr = json.parseToJsonElement(content) as? kotlinx.serialization.json.JsonArray ?: return null
+            val list = arr.toMutableList()
+            if (segmentIndex in list.indices) list.removeAt(segmentIndex)
+            if (list.isEmpty()) null else list.joinToString(",", "[", "]") { it.toString() }
+        } catch (_: Exception) {
+            tryRemoveSegmentLenient(content, segmentIndex)
+        }
+    }
+
+    private fun tryRemoveSegmentLenient(content: String, segmentIndex: Int): String? {
+        var s = content.trim()
+            .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+            .replace("，", ",").replace("：", ":")
+        s = s.replace(", ]", "]").replace(",]", "]")
+        if (!s.startsWith("[")) { val start = s.indexOf('['); if (start >= 0) s = s.substring(start) }
+        if (!s.endsWith("]")) { val end = s.lastIndexOf(']'); if (end >= 0) s = s.substring(0, end + 1) }
+        return try {
+            val arr = json.parseToJsonElement(s) as? kotlinx.serialization.json.JsonArray ?: return null
+            val list = arr.toMutableList()
+            if (segmentIndex in list.indices) list.removeAt(segmentIndex)
+            if (list.isEmpty()) null else list.joinToString(",", "[", "]") { it.toString() }
+        } catch (_: Exception) { null }
+    }
+
+    fun clearGroupMessages(groupId: String) {
+        scope.launch { repository.deleteSessionMessages(groupId) }
+    }
+
     fun deleteGroup(groupSessionId: String) {
         stopAutoGroupChat(groupSessionId)
         settings.remove("group_auto_$groupSessionId")
@@ -252,7 +299,7 @@ class GroupChatViewModel(
                     "USER_MESSAGE" to userMessage, "USER_OBSERVING" to userObserving,
                     "GROUP_MODE_FORMAT" to grpModeFormat
                 )
-                val systemPrompt = sharedUtils.applyTemplate(grpTpl, grpReplacements)
+                val systemPrompt = sharedUtils.compactTemplate(sharedUtils.applyTemplate(grpTpl, grpReplacements))
                 val apiMessages = mutableListOf(AiMessage("system", systemPrompt))
                 val historyLimit = settings.historyMessages
                 val allHistory = repository.getMessagesSync(groupSessionId).let { msgs ->
@@ -268,16 +315,11 @@ class GroupChatViewModel(
                     apiMessages.add(AiMessage("user", "用户：$userMsg"))
                 }
                 val promptText = apiMessages.firstOrNull()?.content ?: ""
-                if (DEBUG) sharedUtils.logAiCall("GroupChat", promptText, "(streaming...)", apiMessages)
-                val sb = StringBuilder()
-                withTimeout(25_000) {
-                    val temp = settings.aiTemperature
-                    sharedUtils.streamChat(apiMessages, "GroupChat").collect { sb.append(it) }
-                }
-                sharedUtils.trackTokens("group", promptText, sb.toString())
-                if (DEBUG) sharedUtils.logAiCall("GroupChat", promptText, sb.toString(), apiMessages)
-
-                val rawBase = sb.toString().trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+                if (DEBUG) sharedUtils.logAiCall("GroupChat", promptText, "(requesting...)", apiMessages)
+                val rawBase = withTimeout(25_000) { sharedUtils.chat(apiMessages, "GroupChat") }.trim()
+                    .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+                sharedUtils.trackTokens("group", apiMessages, rawBase)
+                if (DEBUG) sharedUtils.logAiCall("GroupChat", promptText, rawBase, apiMessages)
                 var results: List<GroupMsgResult> = emptyList()
                 for (cleaned in listOf(rawBase, rawBase.replace("，", ",").replace("：", ":"))) {
                     try {

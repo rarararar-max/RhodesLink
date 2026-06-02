@@ -2,6 +2,7 @@ package com.rhodes.privatechat.ui.prompt
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -136,7 +137,8 @@ fun PromptEditorScreen(
         "{{DIARY_MAX_CHARS}}" to "日记字数上限"
     )
 
-    Column(modifier = modifier.fillMaxSize().systemBarsPadding().background(BG)) {
+    Box(modifier = modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
         Row(
             modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -147,7 +149,7 @@ fun PromptEditorScreen(
                     viewModel.savePromptTemplate(currentType(), currentMode(), textFieldValue.text)
                 }
                 onBack()
-            }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
+            }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Spacer(modifier = Modifier.weight(1f))
             Text("提示词模板编辑", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
             Spacer(modifier = Modifier.weight(1f))
@@ -305,6 +307,7 @@ fun PromptEditorScreen(
                 }
             }
         }
+    }
     }
     }
 

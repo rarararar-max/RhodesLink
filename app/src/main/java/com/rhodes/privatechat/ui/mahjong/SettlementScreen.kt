@@ -26,9 +26,10 @@ fun SettlementScreen(
     onBack: () -> Unit,
     onPlayAgain: (() -> Unit)? = null
 ) {
-    Column(modifier = Modifier.fillMaxSize().systemBarsPadding().background(BG)) {
+    Box(Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
         Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Text("牌局结算", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
         }
         HorizontalDivider(color = Divider)
@@ -88,5 +89,6 @@ fun SettlementScreen(
             }
         }
         Spacer(Modifier.height(16.dp))
+    }
     }
 }

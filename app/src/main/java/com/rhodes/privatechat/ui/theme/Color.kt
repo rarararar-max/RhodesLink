@@ -5,6 +5,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 
+// -- 深色模式全局状态（响应式，切换时自动触发重组） --
+var isDarkMode by mutableStateOf(true)
+
 // -- 颜色状态（响应式，切换主题时自动触发重组） --
 var BG by mutableStateOf(Color(0xFFF2F2F7))   // 底背景
 var Surface by mutableStateOf(Color(0xFFFFFFFF)) // 表面
@@ -33,6 +36,8 @@ var Gray500 by mutableStateOf(Color(0xFFA0A0A4))
 
 var Blue400 by mutableStateOf(Color(0xFF4A7FDC))
 
+var NavBarBg by mutableStateOf(Color(0xFF252529))   // 底部导航栏背景
+
 // -- 深色主题 --
 fun applyDarkTheme() {
     BG          = Color(0xFF1A1A1E)
@@ -55,6 +60,7 @@ fun applyDarkTheme() {
     Gray100 = Color(0xFF353538)
     Gray500 = Color(0xFF6A6A70)
     Blue400 = Color(0xFF6B8CFF)
+    NavBarBg = Color(0xFF1A1A1E)
 }
 
 // -- 浅色主题（默认） --
@@ -79,4 +85,5 @@ fun applyLightTheme() {
     Gray100 = Color(0xFFF2F2F7)
     Gray500 = Color(0xFFA0A0A4)
     Blue400 = Color(0xFF4A7FDC)
+    NavBarBg = Color(0xFF252529)
 }

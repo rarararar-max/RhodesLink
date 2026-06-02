@@ -86,9 +86,10 @@ fun OperatorDetailScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
         }
     }
 
-    Column(modifier = modifier.fillMaxSize().systemBarsPadding().background(BG)) {
+    Box(modifier = modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
         Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Spacer(modifier = Modifier.width(4.dp))
             Text(currentOperator.name, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
         }
@@ -102,6 +103,7 @@ fun OperatorDetailScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
             item { SharedMemorySection(memories = sharedMemories) }
             item { Spacer(modifier = Modifier.height(24.dp)) }
         }
+    }
     }
 }
 
@@ -287,7 +289,8 @@ private fun bfsLabel(parentName: String, childName: String, type: RelationshipTy
                 ) {
                     val cx = boxWidth / 2f + panOffset.x
                     val cy = boxHeight / 2f + panOffset.y
-                    val baseRadius = (220f / maxDepth).coerceAtLeast(400f) * zoomScale
+                    val maxR = (minOf(boxWidth, boxHeight) / 2f - 80f).coerceAtLeast(100f)
+                    val baseRadius = (maxR / maxDepth).coerceIn(120f, 400f) * zoomScale
                     // 按 depth 分组并分配角度
                     val depthGroups = displayNodes.groupBy { it.depth }
                     val positioned = depthGroups.flatMap { (depth, grp) ->

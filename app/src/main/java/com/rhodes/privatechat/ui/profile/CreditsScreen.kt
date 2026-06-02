@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -46,9 +47,10 @@ fun CreditsScreen(
         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
     }
 
-    Column(modifier = modifier.fillMaxSize().systemBarsPadding().background(BG)) {
+    Box(modifier = modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Text("关于", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
         }
         HorizontalDivider(color = Color(0xFF3A3A3E))
@@ -105,5 +107,6 @@ fun CreditsScreen(
             Text("版本 1.0", fontSize = 12.sp, color = Color(0xFF636366))
             Text("© 2026 Rhodes Terminal", fontSize = 12.sp, color = Color(0xFF636366))
         }
+    }
     }
 }

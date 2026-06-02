@@ -16,6 +16,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -26,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.rhodes.privatechat.ui.chat.ChatShareDialog
 import com.rhodes.privatechat.ui.chat.ShareMessage
+import com.rhodes.privatechat.ui.chat.component.ChatDropdownMenuItem
 import com.rhodes.privatechat.ui.chat.component.ChatHeader
 import com.rhodes.privatechat.ui.chat.component.ChatInputBar
 import com.rhodes.privatechat.ui.chat.component.MenuChip
@@ -92,15 +94,17 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
         }
     }
     val allOperators by viewModel.operators.collectAsState()
+    val profile by viewModel.userProfile.collectAsState()
     fun senderAvatar(name: String): String = allOperators.find { it.name == name || it.id == name }?.avatarUri ?: ""
 
     // 使用 MessageParser 将原始消息转换为统一 UI 模型
-    val uiMessages = remember(groupMessages, allOperators) {
+    val uiMessages = remember(groupMessages, allOperators, profile) {
         MessageParser.parse(
             messages = groupMessages,
             isGroup = true,
             senderColor = senderColor,
-            senderAvatar = ::senderAvatar
+            senderAvatar = ::senderAvatar,
+            userAvatarUri = profile.avatarUri
         )
     }
 
@@ -111,7 +115,8 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
         }
     }
 
-    Box(modifier = modifier.fillMaxSize().systemBarsPadding().background(BG).clickable(
+    Box(modifier = modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding().clickable(
         interactionSource = remember { MutableInteractionSource() },
         indication = null
     ) { focusManager.clearFocus() }) {
@@ -125,19 +130,19 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                 showGroupIcon = true,
                 onBack = onBack,
                 menuContent = {
-                    DropdownMenuItem(text = { Text("编辑群聊") }, onClick = { onEditGroup(groupId) })
-                    DropdownMenuItem(text = { Text("更换背景图") }, onClick = { bgPicker.launch("image/*") })
-                    if (bgUri != null) DropdownMenuItem(text = { Text("恢复默认背景") }, onClick = { showBgReset = true })
-                    DropdownMenuItem(text = { Text("分享") }, onClick = { showShare = true })
-                    DropdownMenuItem(text = { Text("清除聊天记录") }, onClick = { showClearConfirm = true })
+                    ChatDropdownMenuItem(text = { Text("编辑群聊") }, onClick = { onEditGroup(groupId) })
+                    ChatDropdownMenuItem(text = { Text("更换背景图") }, onClick = { bgPicker.launch("image/*") })
+                    if (bgUri != null) ChatDropdownMenuItem(text = { Text("恢复默认背景") }, onClick = { showBgReset = true })
+                    ChatDropdownMenuItem(text = { Text("分享") }, onClick = { showShare = true })
+                    ChatDropdownMenuItem(text = { Text("清除聊天记录") }, onClick = { showClearConfirm = true })
                 }
             )
 
-            Column(modifier = Modifier.weight(1f).imePadding()) {
+            Column(modifier = Modifier.weight(1f).imePadding().clipToBounds()) {
                 MessageList(
                     messages = uiMessages,
                     listState = listState,
-                    onRecall = { viewModel.recallMessage(it) },
+                    onRecall = { msgId, segIdx -> viewModel.recallMessageSegment(msgId, segIdx) },
                     onSenderClick = onOperatorClick,
                     progressiveDisplay = true,
                     modifier = Modifier.weight(1f)
@@ -163,20 +168,20 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
             }
         }
     }
+    }
 
     // 对话框
     if (showClearConfirm) AlertDialog(
         onDismissRequest = { showClearConfirm = false },
         title = { Text("清除聊天记录", color = TextPrimary) },
         text = { Text("将清除本群聊全部聊天记录，此操作不可撤销。", color = TextSecondary) },
-        confirmButton = { TextButton(onClick = { viewModel.clearMessages(); showClearConfirm = false }) { Text("确认清除", color = ErrorRed) } },
+        confirmButton = { TextButton(onClick = { viewModel.clearGroupMessages(groupId); showClearConfirm = false }) { Text("确认清除", color = ErrorRed) } },
         dismissButton = { TextButton(onClick = { showClearConfirm = false }) { Text("取消", color = TextSecondary) } }
     )
 
     if (showBgReset) AlertDialog(onDismissRequest = { showBgReset = false }, title = { Text("恢复默认背景", color = TextPrimary) }, text = { Text("将移除当前背景图", color = TextSecondary) }, confirmButton = { TextButton(onClick = { bgUri = null; settings.remove("gbg_$groupId"); showBgReset = false }) { Text("确认", color = Primary) } }, dismissButton = { TextButton(onClick = { showBgReset = false }) { Text("取消", color = TextSecondary) } })
 
     if (showShare) {
-        val profile by viewModel.userProfile.collectAsState()
         val shareMsgs = uiMessages.map { msg ->
             ShareMessage(
                 senderName = msg.senderName,

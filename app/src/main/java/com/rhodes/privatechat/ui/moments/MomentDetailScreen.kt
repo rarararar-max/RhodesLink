@@ -66,9 +66,10 @@ fun MomentDetailScreen(
         return
     }
 
-    Column(Modifier.fillMaxSize().systemBarsPadding().background(BG)) {
+    Box(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
         Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Text("动态详情", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
         }
         HorizontalDivider(color = Divider)
@@ -110,6 +111,7 @@ fun MomentDetailScreen(
                 inputText = ""; replyTarget = Triple(0L, "", "")
             }) { Icon(Icons.AutoMirrored.Filled.Send, "发送", tint = if (inputText.isNotBlank()) Primary else TextSecondary) }
         }
+    }
     }
 }
 

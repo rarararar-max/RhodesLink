@@ -151,9 +151,10 @@ fun TokenStatsScreen(
     }
     val total = currentData.sumOf { it.tokens }
 
-    Column(modifier = modifier.fillMaxSize().systemBarsPadding().background(BG)) {
+    Box(modifier = modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
         Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Icon(Icons.Default.BarChart, null, tint = Primary, modifier = Modifier.size(22.dp))
             Spacer(modifier = Modifier.width(6.dp))
             Text("消费统计", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
@@ -214,9 +215,12 @@ fun TokenStatsScreen(
                             }
                         }
                         // 周标签
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                            weeklyLabels.forEach { label ->
-                                Text(label, fontSize = 10.sp, color = TextSecondary)
+                        Canvas(modifier = Modifier.fillMaxWidth().height(16.dp)) {
+                            val count = weeklyLabels.size
+                            val w = size.width / count
+                            weeklyLabels.forEachIndexed { i, label ->
+                                drawContext.canvas.nativeCanvas.drawText(label, i * w + w / 2, 12f,
+                                    android.graphics.Paint().apply { color = TextSecondary.hashCode(); textSize = 28f; textAlign = android.graphics.Paint.Align.CENTER })
                             }
                         }
                     }
@@ -238,9 +242,12 @@ fun TokenStatsScreen(
                             drawRect(cat.color, Offset(x, size.height - h - 20), Size(w - 16, h.coerceAtLeast(0f)))
                         }
                     }
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                        currentData.forEach { cat ->
-                            Text(cat.name, fontSize = 9.sp, color = TextSecondary)
+                    // 分类标签
+                    Canvas(modifier = Modifier.fillMaxWidth().height(16.dp)) {
+                        val w = size.width / currentData.size
+                        currentData.forEachIndexed { i, cat ->
+                            drawContext.canvas.nativeCanvas.drawText(cat.name, i * w + w / 2, 12f,
+                                android.graphics.Paint().apply { color = TextSecondary.hashCode(); textSize = 26f; textAlign = android.graphics.Paint.Align.CENTER })
                         }
                     }
                 }
@@ -265,6 +272,7 @@ fun TokenStatsScreen(
             }
             Spacer(Modifier.height(24.dp))
         }
+    }
     }
 }
 

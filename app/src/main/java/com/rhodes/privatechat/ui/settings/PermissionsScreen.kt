@@ -38,9 +38,10 @@ fun PermissionsScreen(
     val tabs = listOf("干员", "群聊")
     var tabIndex by remember { mutableIntStateOf(0) }
 
-    Column(modifier = modifier.fillMaxSize().systemBarsPadding().background(BG)) {
+    Box(modifier = modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
         Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Text("权限管理", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
         }
         HorizontalDivider(color = Divider)
@@ -55,6 +56,7 @@ fun PermissionsScreen(
             0 -> OperatorPermTab(operators = operators)
             1 -> GroupPermTab(groups = groups)
         }
+    }
     }
 }
 
@@ -83,8 +85,8 @@ private fun OperatorPermTab(operators: List<com.rhodes.privatechat.data.db.entit
                     }
                     Spacer(Modifier.width(10.dp))
                     Text(op.name, fontSize = 14.sp, color = TextPrimary, modifier = Modifier.weight(1f))
-                    Switch(checked = allowMsg, onCheckedChange = { b -> allowMsg = b; settings.putOperatorMsgPermission(op.id, b) }, modifier = Modifier.width(56.dp), colors = SwitchDefaults.colors(checkedThumbColor = Primary, checkedTrackColor = PrimaryContainer))
-                    Switch(checked = allowDyn, onCheckedChange = { b -> allowDyn = b; settings.putOperatorDynPermission(op.id, b) }, modifier = Modifier.width(56.dp), colors = SwitchDefaults.colors(checkedThumbColor = AccentOrange, checkedTrackColor = AccentOrange.copy(alpha = 0.2f)))
+                    Switch(checked = allowMsg, onCheckedChange = { b -> allowMsg = b; settings.putOperatorMsgPermission(op.id, b) }, modifier = Modifier.width(56.dp), colors = SwitchDefaults.colors(checkedThumbColor = Primary, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
+                    Switch(checked = allowDyn, onCheckedChange = { b -> allowDyn = b; settings.putOperatorDynPermission(op.id, b) }, modifier = Modifier.width(56.dp), colors = SwitchDefaults.colors(checkedThumbColor = AccentOrange, checkedTrackColor = AccentOrange.copy(alpha = 0.2f), uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
                 }
                 HorizontalDivider(color = Divider)
             }
@@ -123,7 +125,7 @@ private fun GroupPermTab(groups: List<com.rhodes.privatechat.data.db.entity.Chat
                         Switch(checked = autoSpeak, onCheckedChange = { b ->
                             autoSpeak = b
                             settings.putGroupAuto(g.id, b)
-                        }, colors = SwitchDefaults.colors(checkedThumbColor = Primary, checkedTrackColor = PrimaryContainer))
+                        }, colors = SwitchDefaults.colors(checkedThumbColor = Primary, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
                     }
                     HorizontalDivider(color = Divider)
                 }

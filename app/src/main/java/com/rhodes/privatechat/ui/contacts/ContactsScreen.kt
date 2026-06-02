@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -60,7 +61,8 @@ fun ContactsScreen(viewModel: MainViewModel, onOperatorClick: (OperatorEntity) -
     var searchText by remember { mutableStateOf("") }
     val filtered = if (searchText.isBlank()) operators else operators.filter { it.name.contains(searchText, ignoreCase = true) }
 
-    Column(modifier = modifier.fillMaxSize().background(BG)) {
+    Box(modifier = modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(BG).statusBarsPadding()) {
         Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 16.dp, vertical = 12.dp)) { Text("通讯录", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = TextPrimary) }
         HorizontalDivider(color = Divider)
         Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -79,6 +81,7 @@ fun ContactsScreen(viewModel: MainViewModel, onOperatorClick: (OperatorEntity) -
             items(filtered, key = { it.id }) { op -> OperatorItem(op) { onOperatorClick(op) } }
             item { Spacer(modifier = Modifier.height(16.dp)) }
         }
+    }
     }
 }
 

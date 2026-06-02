@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -59,7 +60,8 @@ fun FeaturesScreen(
     onMahjong: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    Column(modifier = modifier.fillMaxSize().background(BG)) {
+    Box(modifier = modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(BG).statusBarsPadding()) {
         Row(
             modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 16.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -77,6 +79,7 @@ fun FeaturesScreen(
             FeatureButton(FeatureEntry(Icons.Default.BarChart, "消费统计", "Token消耗分析", iconColor = Primary), onClick = onTokenStats)
             FeatureButton(FeatureEntry(Icons.Default.EmojiEvents, "打麻将", "在活动室和干员们打一局麻将", iconColor = AccentOrange), onClick = onMahjong)
         }
+    }
     }
 }
 

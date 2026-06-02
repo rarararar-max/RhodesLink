@@ -4,11 +4,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
-import com.rhodes.privatechat.shared.settings.SettingsRepository
-import org.koin.compose.koinInject
+import androidx.compose.foundation.text.selection.LocalTextSelectionColors
+import androidx.compose.foundation.text.selection.TextSelectionColors
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.WindowCompat
 
 private fun comfortDark() = darkColorScheme(
     primary = Primary,
@@ -54,11 +56,25 @@ private fun comfortLight() = lightColorScheme(
 
 @Composable
 fun 罗德岛终端Theme(content: @Composable () -> Unit) {
-    val settings: SettingsRepository = koinInject()
-    val isDark = settings.darkMode
-    if (isDark) applyDarkTheme() else applyLightTheme()
-    MaterialTheme(
-        colorScheme = if (isDark) comfortDark() else comfortLight(),
-        typography = Typography, content = content
+    if (isDarkMode) applyDarkTheme() else applyLightTheme()
+    val view = LocalView.current
+    val context = LocalContext.current
+    SideEffect {
+        val activity = context as android.app.Activity
+        val controller = WindowCompat.getInsetsController(activity.window, view)
+        controller.isAppearanceLightStatusBars = !isDarkMode
+        controller.isAppearanceLightNavigationBars = !isDarkMode
+    }
+    val textSelectionColors = TextSelectionColors(
+        handleColor = Primary,
+        backgroundColor = Primary.copy(alpha = 0.4f)
     )
+    MaterialTheme(
+        colorScheme = if (isDarkMode) comfortDark() else comfortLight(),
+        typography = Typography
+    ) {
+        CompositionLocalProvider(LocalTextSelectionColors provides textSelectionColors) {
+            content()
+        }
+    }
 }

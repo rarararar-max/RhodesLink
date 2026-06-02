@@ -61,9 +61,10 @@ fun DataManagementScreen(
         )
     }
 
-    Column(modifier = modifier.fillMaxSize().systemBarsPadding().background(BG)) {
+    Box(modifier = modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
         Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Spacer(Modifier.width(4.dp))
             Text("数据管理", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
         }
@@ -116,5 +117,6 @@ fun DataManagementScreen(
                 Text("立即清理所有过期数据", fontWeight = FontWeight.SemiBold)
             }
         }
+    }
     }
 }

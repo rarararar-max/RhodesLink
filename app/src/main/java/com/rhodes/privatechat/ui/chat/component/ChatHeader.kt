@@ -22,6 +22,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,6 +39,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.rhodes.privatechat.ui.theme.*
+
+/** 供 ChatDropdownMenuItem 使用的菜单关闭回调 */
+val LocalDismissMenu = compositionLocalOf<(() -> Unit)?> { null }
 
 /**
  * 私聊和群聊共用的顶部栏。
@@ -124,11 +129,37 @@ fun ChatHeader(
                 IconButton(onClick = { showMenu = true }) {
                     Icon(Icons.Default.MoreVert, null, tint = TextPrimary)
                 }
-                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                    menuContent()
+                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }, containerColor = Surface) {
+                    CompositionLocalProvider(LocalDismissMenu provides { showMenu = false }) {
+                        menuContent()
+                    }
                 }
             }
         }
         HorizontalDivider(color = Divider)
     }
+}
+
+/**
+ * 自动关闭菜单的 DropdownMenuItem，配合 ChatHeader 使用。
+ * 点击时先关闭菜单，再执行 onClick。
+ */
+@Composable
+fun ChatDropdownMenuItem(
+    text: @Composable () -> Unit,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    leadingIcon: @Composable (() -> Unit)? = null,
+    trailingIcon: @Composable (() -> Unit)? = null,
+    enabled: Boolean = true,
+) {
+    val dismissMenu = LocalDismissMenu.current
+    DropdownMenuItem(
+        text = text,
+        onClick = { dismissMenu?.invoke(); onClick() },
+        modifier = modifier,
+        leadingIcon = leadingIcon,
+        trailingIcon = trailingIcon,
+        enabled = enabled,
+    )
 }

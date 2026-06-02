@@ -126,6 +126,7 @@ class ChatRepository(wrapper: DatabaseWrapper) {
     suspend fun getDispatch(id: String) = dispatches.getDispatch(id)
     suspend fun insertDispatch(record: DispatchRecord) = dispatches.insertDispatch(record)
     suspend fun updateDispatch(id: String, logChain: String, status: String, endTime: Long = 0, netProfit: Int = 0) = dispatches.updateDispatch(id, logChain, status, endTime, netProfit)
+    suspend fun updateDispatchFull(id: String, logChain: String, status: String, endTime: Long = 0, netProfit: Int = 0, totalSegments: Int = 0, segmentInterval: Long = 0) = dispatches.updateDispatchFull(id, logChain, status, endTime, netProfit, totalSegments, segmentInterval)
     suspend fun deleteOldDispatches(cutoff: Long) = dispatches.deleteOldDispatches(cutoff)
 
     suspend fun getMahjongSave() = mahjong.getMahjongSave()

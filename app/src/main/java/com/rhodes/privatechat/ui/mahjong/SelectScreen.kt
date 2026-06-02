@@ -63,9 +63,10 @@ fun SelectScreen(
         } catch (_: Exception) { emptyList() }
     }
 
-    Column(modifier = Modifier.fillMaxSize().systemBarsPadding().background(BG)) {
+    Box(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
         Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Text("选择对手", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, modifier = Modifier.weight(1f))
             IconButton(onClick = { showHistory = true }) { Icon(Icons.Default.History, "历史记录", tint = TextSecondary) }
         }
@@ -145,6 +146,7 @@ fun SelectScreen(
                 Text("开始牌局", fontWeight = FontWeight.SemiBold)
             }
         }
+    }
     }
 
     // 历史记录弹窗

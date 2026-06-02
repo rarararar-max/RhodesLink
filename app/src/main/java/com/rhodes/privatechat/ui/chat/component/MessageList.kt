@@ -62,7 +62,7 @@ import com.rhodes.privatechat.ui.theme.*
  *
  * @param messages 已解析的 ChatUiMessage 列表
  * @param listState LazyListState
- * @param onRecall 撤回回调（传入 originalMessageId）
+ * @param onRecall 撤回回调（传入 originalMessageId, segmentIndex）
  * @param onRegenerate 重说回调（私聊专用，null 则不显示）
  * @param onContinue 继续说回调（私聊专用，null 则不显示）
  * @param onSenderClick 点击发送者头像/名称回调（群聊专用，null 则不响应点击）
@@ -72,7 +72,7 @@ import com.rhodes.privatechat.ui.theme.*
 fun MessageList(
     messages: List<ChatUiMessage>,
     listState: LazyListState,
-    onRecall: (Long) -> Unit,
+    onRecall: (Long, Int) -> Unit,
     onRegenerate: ((Long) -> Unit)? = null,
     onContinue: ((Long) -> Unit)? = null,
     onSenderClick: ((String) -> Unit)? = null,
@@ -117,7 +117,7 @@ fun MessageList(
             MessageBubble(
                 message = msg,
                 showTime = showTime,
-                onRecall = { onRecall(msg.originalMessageId) },
+                onRecall = { onRecall(msg.originalMessageId, msg.segmentIndex) },
                 onRegenerate = if (onRegenerate != null && !msg.isMe) { { onRegenerate(msg.originalMessageId) } } else null,
                 onContinue = if (onContinue != null && !msg.isMe) { { onContinue(msg.originalMessageId) } } else null,
                 onSenderClick = onSenderClick,
@@ -142,11 +142,10 @@ private fun MessageBubble(
 ) {
     if (message.isSystem) {
         if (message.isNarration) {
-            // 旁白：左对齐卡片
-            Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp), horizontalArrangement = Arrangement.Start) {
-                Spacer(modifier = Modifier.width(42.dp))
-                Box(modifier = Modifier.widthIn(max = 260.dp).clip(RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp)).background(Card).padding(horizontal = 12.dp, vertical = 8.dp)) {
-                    Text(message.content, fontSize = 13.sp, fontStyle = FontStyle.Italic, color = TextTertiary)
+            // 旁白：屏幕居中，圆角矩形半透明气泡，文字左对齐
+            Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), contentAlignment = Alignment.Center) {
+                Box(modifier = Modifier.fillMaxWidth(0.9f).clip(RoundedCornerShape(12.dp)).background(TextTertiary.copy(alpha = 0.1f)).padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    Text(message.content, fontSize = 14.sp, color = TextPrimary, fontStyle = FontStyle.Italic, textAlign = TextAlign.Start, lineHeight = 20.sp)
                 }
             }
         } else {
@@ -236,7 +235,7 @@ private fun MessageBubble(
             }
 
             // 上下文菜单
-            DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+            DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }, containerColor = Surface) {
                 DropdownMenuItem(text = { Row { Icon(Icons.Default.ContentCopy, null, tint = TextPrimary, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text("复制", color = TextPrimary) } },
                     onClick = {
                         (context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager)

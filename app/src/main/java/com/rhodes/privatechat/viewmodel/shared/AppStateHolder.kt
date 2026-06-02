@@ -38,8 +38,8 @@ class AppStateHolder(
     init {
         scope.launch { repository.allOperators.collect { _operators.value = it } }
         scope.launch {
-            val hidden = settings.hiddenIds
             repository.allSessions.collect { all ->
+                val hidden = settings.hiddenIds
                 _allSessions.value = all
                 _sessions.value = all.filter { it.id !in hidden }
             }
@@ -62,6 +62,7 @@ class AppStateHolder(
 
     fun clearSessions() {
         _sessions.value = emptyList()
+        _allSessions.value = emptyList()
     }
 
     private fun loadUserProfile(): UserProfile {

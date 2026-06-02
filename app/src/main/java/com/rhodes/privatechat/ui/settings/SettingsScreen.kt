@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -57,7 +58,8 @@ fun SettingsScreen(
 ) {
     val settings: SettingsRepository = koinInject()
     val balance = settings.lmb
-    Column(modifier = modifier.fillMaxSize().background(BG)) {
+    Box(modifier = modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(BG).statusBarsPadding()) {
         Row(modifier = Modifier.fillMaxWidth().background(Surface).clickable(onClick = onProfile).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             if (userAvatarUri.isNotBlank()) {
                 AsyncImage(model = userAvatarUri, contentDescription = null, modifier = Modifier.size(48.dp).clip(CircleShape), contentScale = ContentScale.Crop)
@@ -89,6 +91,7 @@ fun SettingsScreen(
             SettingItem(SettingEntry(Icons.Default.Build, "权限管理", "干员主动消息与动态权限", iconColor = Color(0xFFFF9800)), onClick = onPermissions)
             SettingItem(SettingEntry(Icons.Default.Info, "关于", "作者与开源组件致谢", iconColor = TextSecondary), onClick = onCredits)
         }
+    }
     }
 }
 

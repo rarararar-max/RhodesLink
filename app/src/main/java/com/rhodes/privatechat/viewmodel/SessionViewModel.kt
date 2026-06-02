@@ -25,8 +25,12 @@ class SessionViewModel(
 
     fun clearAllMessages() {
         scope.launch {
-            val ids = appState.sessions.value.map { it.id }.toSet()
-            settings.hiddenIds = ids
+            val sessions = appState.sessions.value.toList()
+            for (session in sessions) {
+                repository.deleteSessionMessages(session.id)
+                repository.deleteSession(session.id)
+            }
+            settings.hiddenIds = emptySet()
             appState.clearSessions()
         }
     }
@@ -75,9 +79,11 @@ class SessionViewModel(
                 mutedMembers = mutedMembers.joinToString(",")
             ))
             if (added.isNotEmpty() || removed.isNotEmpty()) {
+                val allOps = appState.operators.value
+                fun resolveName(id: String) = allOps.find { it.id == id || it.name == id }?.name ?: id
                 val parts = mutableListOf<String>()
-                if (added.isNotEmpty()) parts.add("欢迎新成员：${added.joinToString("、")}加入群聊。")
-                if (removed.isNotEmpty()) parts.add("以下成员已离开：${removed.joinToString("、")}。")
+                if (added.isNotEmpty()) parts.add("欢迎新成员：${added.joinToString("、") { resolveName(it) }}加入群聊。")
+                if (removed.isNotEmpty()) parts.add("以下成员已离开：${removed.joinToString("、") { resolveName(it) }}。")
                 val sysId = repository.getNextMessageId()
                 repository.sendMessage(id, com.rhodes.privatechat.shared.model.ChatMessage(
                     id = sysId, sessionId = id,

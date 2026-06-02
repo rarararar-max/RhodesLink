@@ -1,5 +1,6 @@
 package com.rhodes.privatechat.ui.dispatch
 
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -28,6 +29,8 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 
+private const val TAG = "Dispatch"
+
 @Composable
 fun DispatchProgressScreen(
     viewModel: MainViewModel,
@@ -53,10 +56,12 @@ fun DispatchProgressScreen(
 
     // 加载派遣记录（含等待 AI 生成）
     LaunchedEffect(dispatchId) {
+        Log.i(TAG, "[ProgressScreen] 开始加载 dispatchId=$dispatchId")
         // 轮询等待记录出现（AI 生成中 status="generating"）
         var rec = viewModel.repository.getDispatch(dispatchId)
         while (rec == null) { delay(500); rec = viewModel.repository.getDispatch(dispatchId) }
         val r = rec!!
+        Log.d(TAG, "[ProgressScreen] 记录已加载 status=${r.status} task=${r.taskType} segs=${r.totalSegments} logLen=${r.logChain.length}")
         taskType = r.taskType
         budget = r.budget
         interval = r.segmentInterval
@@ -64,14 +69,17 @@ fun DispatchProgressScreen(
         loaded = true
         // 等待 AI 生成完成（status 变为 active 或 cancelled）
         if (r.status == "generating") {
+            Log.d(TAG, "[ProgressScreen] 等待AI生成完成...")
             while (true) {
                 delay(1000)
                 val updated = viewModel.repository.getDispatch(dispatchId) ?: break
                 if (updated.status != "generating") { rec = updated; break }
             }
+            Log.i(TAG, "[ProgressScreen] AI生成完成 status=${rec?.status}")
         }
         val finalRec = rec!!
         if (finalRec.status == "cancelled" || finalRec.status == "finished") {
+            Log.d(TAG, "[ProgressScreen] 已结束 status=${finalRec.status}，直接显示")
             done = true; visibleCount = totalSeg
             netProfit = finalRec.netProfit; items = finalRec.items
             return@LaunchedEffect
@@ -82,7 +90,7 @@ fun DispatchProgressScreen(
         // 解析 segments
         try {
             val arr = Json.parseToJsonElement(finalRec.logChain) as JsonArray
-            if (arr.isEmpty()) { errorMsg = "故事数据异常"; return@LaunchedEffect }
+            if (arr.isEmpty()) { errorMsg = "故事数据异常"; Log.e(TAG, "[ProgressScreen] logChain为空数组"); return@LaunchedEffect }
             val list = mutableListOf<Map<String, Any?>>()
             for (el in arr) {
                 val obj = el.jsonObject
@@ -92,13 +100,26 @@ fun DispatchProgressScreen(
             }
             segments = list
             totalSeg = list.size
-        } catch (_: Exception) { errorMsg = "故事数据异常"; return@LaunchedEffect }
+            Log.i(TAG, "[ProgressScreen] JSON解析成功 segments=${list.size}")
+        } catch (e: Exception) {
+            Log.w(TAG, "[ProgressScreen] JSON解析失败，尝试文本分割: ${e.message}")
+            val textSegments = finalRec.logChain.split("\n\n").filter { it.isNotBlank() }.map { it.trim() }
+            if (textSegments.isEmpty()) { errorMsg = "故事数据异常"; Log.e(TAG, "[ProgressScreen] 文本分割也为空"); return@LaunchedEffect }
+            segments = textSegments.map { mapOf("type" to "progress", "content" to it) }.toMutableList()
+            totalSeg = segments.size
+            interval = if (interval > 0) interval else 30_000L
+            Log.i(TAG, "[ProgressScreen] 文本分割成功 segments=${segments.size}")
+        }
         // 定时检查已解锁段数
         while (true) {
             val elapsed = System.currentTimeMillis() - startTime
             val count = (elapsed / (interval.coerceAtLeast(1L))).toInt().coerceIn(1, totalSeg)
-            if (count > visibleCount) visibleCount = count
+            if (count > visibleCount) {
+                visibleCount = count
+                Log.d(TAG, "[ProgressScreen] 解锁新段落 visible=$count/$totalSeg")
+            }
             if (count >= totalSeg) {
+                Log.i(TAG, "[ProgressScreen] 所有段落已解锁，执行finishDispatch")
                 viewModel.finishDispatch(dispatchId)
                 done = true
                 val ended = viewModel.repository.getDispatch(dispatchId)
@@ -110,9 +131,10 @@ fun DispatchProgressScreen(
         }
     }
 
-    Column(modifier = modifier.fillMaxSize().systemBarsPadding().background(BG)) {
+    Box(modifier = modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
         Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Spacer(Modifier.width(4.dp))
             Icon(Icons.AutoMirrored.Filled.SendToMobile, null, tint = Primary, modifier = Modifier.size(22.dp))
             Spacer(Modifier.width(6.dp))
@@ -182,6 +204,7 @@ fun DispatchProgressScreen(
                 Icon(Icons.Default.Cancel, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("中断派遣", fontWeight = FontWeight.SemiBold)
             }
         }
+    }
     }
 
     if (showCancel) {

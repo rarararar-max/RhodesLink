@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -68,14 +69,16 @@ fun SessionListScreen(
     var showDeleteConfirm by remember { mutableStateOf<String?>(null) }
     var showSessionActions by remember { mutableStateOf<ChatSessionEntity?>(null) }
     var showOverflowMenu by remember { mutableStateOf(false) }
+    var showClearAllConfirm by remember { mutableStateOf(false) }
 
-    Column(modifier = modifier.fillMaxSize().background(BG)) {
+    Box(modifier = modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(BG).statusBarsPadding()) {
         Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("聊天", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = TextPrimary, modifier = Modifier.weight(1f).padding(start = 12.dp))
             Box {
                 IconButton(onClick = { showOverflowMenu = true }) { Icon(Icons.Default.MoreVert, "菜单", tint = TextPrimary) }
-                DropdownMenu(expanded = showOverflowMenu, onDismissRequest = { showOverflowMenu = false }) {
-                    DropdownMenuItem(text = { Text("清除所有消息") }, onClick = { showOverflowMenu = false; viewModel.clearAllMessages() })
+                DropdownMenu(expanded = showOverflowMenu, onDismissRequest = { showOverflowMenu = false }, containerColor = Surface) {
+                    DropdownMenuItem(text = { Text("清除所有消息") }, onClick = { showOverflowMenu = false; showClearAllConfirm = true })
                     DropdownMenuItem(text = { Text("全部标记已读") }, onClick = { showOverflowMenu = false; viewModel.markAllRead() })
                 }
             }
@@ -95,12 +98,31 @@ fun SessionListScreen(
             }
         }
     }
+    }
 
     if (showDeleteConfirm != null) {
         AlertDialog(onDismissRequest = { showDeleteConfirm = null }, title = { Text("删除会话", color = TextPrimary) },
             text = { Text("删除后将无法恢复", color = TextSecondary) },
             confirmButton = { TextButton(onClick = { onDelete(showDeleteConfirm!!); showDeleteConfirm = null }) { Text("删除", color = ErrorRed) } },
             dismissButton = { TextButton(onClick = { showDeleteConfirm = null }) { Text("取消", color = TextSecondary) } })
+    }
+
+    if (showClearAllConfirm) {
+        AlertDialog(
+            onDismissRequest = { showClearAllConfirm = false },
+            title = { Text("清除所有消息", color = TextPrimary) },
+            text = { Text("将清除全部会话的聊天记录，此操作不可撤销。", color = TextSecondary) },
+            confirmButton = {
+                TextButton(onClick = { viewModel.clearAllMessages(); showClearAllConfirm = false }) {
+                    Text("确认清除", color = ErrorRed)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearAllConfirm = false }) {
+                    Text("取消", color = TextSecondary)
+                }
+            }
+        )
     }
 
     if (showSessionActions != null) {

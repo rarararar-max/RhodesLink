@@ -31,5 +31,9 @@ updateDispatch:
 UPDATE dispatch_records SET logChain = ?, status = ?, endTime = ?, netProfit = ?
 WHERE id = ?;
 
+updateDispatchFull:
+UPDATE dispatch_records SET logChain = ?, status = ?, endTime = ?, netProfit = ?, totalSegments = ?, segmentInterval = ?
+WHERE id = ?;
+
 deleteOldDispatches:
 DELETE FROM dispatch_records WHERE status NOT IN ('active', 'generating') AND endTime > 0 AND endTime < ?;

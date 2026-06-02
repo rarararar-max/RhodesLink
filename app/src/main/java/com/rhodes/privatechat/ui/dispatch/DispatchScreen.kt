@@ -112,11 +112,12 @@ fun DispatchScreen(
     var showPicker by remember { mutableStateOf(false) }
 
     val budget = budgetText.toIntOrNull() ?: 0
-    val canStart = team.size == 5 && budget >= 100 && budget <= balance.intValue && activeDispatch == null
+    val canStart = team.size == 5 && budget >= 100 && budget <= balance.intValue && activeDispatch == null && !viewModel.dispatchViewModel.isStarting
 
-    Column(modifier = modifier.fillMaxSize().systemBarsPadding().background(BG)) {
+    Box(modifier = modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
         Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Icon(Icons.AutoMirrored.Filled.SendToMobile, null, tint = Primary, modifier = Modifier.size(22.dp))
             Spacer(modifier = Modifier.width(6.dp))
             Text("干员派遣", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
@@ -228,6 +229,7 @@ fun DispatchScreen(
                     Icon(Icons.Default.History, null, modifier = Modifier.size(18.dp)); Spacer(modifier = Modifier.width(4.dp)); Text("历史日志")
                 }
                 Button(onClick = {
+                    if (viewModel.dispatchViewModel.isStarting) return@Button
                     if (activeDispatch != null) return@Button
                     if (canStart) {
                         val id = UUID.randomUUID().toString()
@@ -235,12 +237,17 @@ fun DispatchScreen(
                     }
                 }, modifier = Modifier.weight(1f).height(44.dp), shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = if (canStart) Primary else Divider)) {
-                    Text(if (activeDispatch != null) "已有小队正在派遣" else "开始派遣", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Text(when {
+                        activeDispatch != null -> "已有小队正在派遣"
+                        viewModel.dispatchViewModel.isStarting -> "正在启动..."
+                        else -> "开始派遣"
+                    }, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
             Spacer(modifier = Modifier.height(24.dp))
             }
         }
+    }
     }
 
     if (showPicker) {

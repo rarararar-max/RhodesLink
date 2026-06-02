@@ -2,6 +2,7 @@ package com.rhodes.privatechat.ui.group
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,6 +26,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -46,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -95,14 +98,15 @@ fun GroupEditScreen(
         }
     }
 
-    Column(modifier = modifier.fillMaxSize().systemBarsPadding().background(BG)) {
+    Box(modifier = modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
         Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Spacer(modifier = Modifier.weight(1f))
             Text("群聊编辑", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
             Spacer(modifier = Modifier.weight(1f))
             TextButton(onClick = {
-                viewModel.saveGroup(groupId, groupName, members.map { it.op.name }, rules, avatarUri, members.filter { it.muted }.map { it.op.name })
+                viewModel.saveGroup(groupId, groupName, members.map { it.op.id }, rules, avatarUri, members.filter { it.muted }.map { it.op.id })
                 settings.putGroupAuto(groupId, autoSpeak)
                 onBack()
             }) {
@@ -138,16 +142,27 @@ fun GroupEditScreen(
             Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Card).padding(horizontal = 16.dp, vertical = 12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("群聊自动聊天", fontSize = 14.sp, color = TextPrimary)
-                Switch(checked = autoSpeak, onCheckedChange = { autoSpeak = it }, colors = SwitchDefaults.colors(checkedThumbColor = Primary, checkedTrackColor = PrimaryContainer))
+                Switch(checked = autoSpeak, onCheckedChange = { autoSpeak = it }, colors = SwitchDefaults.colors(checkedThumbColor = Primary, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
             }
 
             Spacer(modifier = Modifier.height(12.dp))
             SectionCard("群成员") {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    members.forEach { m ->
-                        Box(modifier = Modifier.size(44.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) { Text(m.op.name.take(1), color = Color.White, fontWeight = FontWeight.Bold) }
+                val avatarScrollState = rememberScrollState()
+                Box {
+                    Row(modifier = Modifier.horizontalScroll(avatarScrollState).padding(horizontal = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Box(modifier = Modifier.size(44.dp).clip(CircleShape).background(SurfaceVariant).clickable { showPicker = true }, contentAlignment = Alignment.Center) { Icon(Icons.Default.Add, null, tint = Primary, modifier = Modifier.size(22.dp)) }
+                        members.forEach { m ->
+                            Box(modifier = Modifier.size(44.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) { Text(m.op.name.take(1), color = Color.White, fontWeight = FontWeight.Bold) }
+                        }
                     }
-                    Box(modifier = Modifier.size(44.dp).clip(CircleShape).background(SurfaceVariant).clickable { showPicker = true }, contentAlignment = Alignment.Center) { Icon(Icons.Default.Add, null, tint = Primary, modifier = Modifier.size(22.dp)) }
+                    // 左侧渐变遮罩
+                    if (avatarScrollState.value > 0) {
+                        Box(modifier = Modifier.align(Alignment.CenterStart).size(width = 20.dp, height = 44.dp).background(Brush.horizontalGradient(listOf(Card, Color.Transparent))))
+                    }
+                    // 右侧渐变遮罩
+                    if (avatarScrollState.value < avatarScrollState.maxValue) {
+                        Box(modifier = Modifier.align(Alignment.CenterEnd).size(width = 20.dp, height = 44.dp).background(Brush.horizontalGradient(listOf(Color.Transparent, Card))))
+                    }
                 }
                 if (members.isEmpty()) {
                     Text("暂无成员，点击添加", fontSize = 13.sp, color = TextTertiary, modifier = Modifier.padding(top = 8.dp))
@@ -161,7 +176,7 @@ fun GroupEditScreen(
                                 Text(m.op.name, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
                                 Text(if (m.muted) "已禁言" else "正常", fontSize = 11.sp, color = if (m.muted) ErrorRed else TextSecondary)
                             }
-                            Switch(checked = m.muted, onCheckedChange = { b -> members[i] = m.copy(muted = b) }, colors = SwitchDefaults.colors(checkedThumbColor = ErrorRed, checkedTrackColor = ErrorRed.copy(alpha = 0.3f)), modifier = Modifier.size(32.dp))
+                            Switch(checked = !m.muted, onCheckedChange = { b -> members[i] = m.copy(muted = !b) }, colors = SwitchDefaults.colors(checkedThumbColor = Primary, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = ErrorRed, uncheckedTrackColor = ErrorRed.copy(alpha = 0.3f)), modifier = Modifier.size(32.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             IconButton(onClick = { members.removeAt(i) }, modifier = Modifier.size(28.dp)) { Icon(Icons.Default.Close, "移除", tint = TextTertiary, modifier = Modifier.size(16.dp)) }
                         }
@@ -180,6 +195,7 @@ fun GroupEditScreen(
                 }
             }
         }
+    }
     }
 
     if (showDismissConfirm) {
@@ -206,24 +222,40 @@ fun GroupEditScreen(
         )
     }
     if (showPicker) {
-        AlertDialog(onDismissRequest = { showPicker = false }, title = { Text("选择群成员", color = TextPrimary) },
+        var searchQuery by remember { mutableStateOf("") }
+        val filteredOperators = remember(searchQuery, operators) {
+            if (searchQuery.isBlank()) operators
+            else operators.filter { it.name.contains(searchQuery, ignoreCase = true) }
+        }
+        AlertDialog(onDismissRequest = { showPicker = false; searchQuery = "" }, title = { Text("选择群成员", color = TextPrimary) },
             text = {
-                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    operators.forEach { op ->
-                        val checked = members.any { it.op.id == op.id }
-                        Row(modifier = Modifier.fillMaxWidth().clickable {
-                            if (checked) members.removeAll { it.op.id == op.id }
-                            else members.add(MemberState(op))
-                        }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Box(modifier = Modifier.size(32.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) { Text(op.name.take(1), color = Color.White, fontWeight = FontWeight.Bold) }
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Text(op.name, fontSize = 14.sp, color = TextPrimary, modifier = Modifier.weight(1f))
-                            if (checked) Icon(Icons.Default.Check, null, tint = Primary, modifier = Modifier.size(20.dp))
+                Column {
+                    OutlinedTextField(
+                        value = searchQuery, onValueChange = { searchQuery = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true, shape = RoundedCornerShape(8.dp),
+                        placeholder = { Text("搜索干员...", color = TextTertiary) },
+                        leadingIcon = { Icon(Icons.Default.Search, null, tint = TextTertiary, modifier = Modifier.size(18.dp)) },
+                        colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Primary, unfocusedBorderColor = Divider)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                        filteredOperators.forEach { op ->
+                            val checked = members.any { it.op.id == op.id }
+                            Row(modifier = Modifier.fillMaxWidth().clickable {
+                                if (checked) members.removeAll { it.op.id == op.id }
+                                else members.add(MemberState(op))
+                            }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Box(modifier = Modifier.size(32.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) { Text(op.name.take(1), color = Color.White, fontWeight = FontWeight.Bold) }
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text(op.name, fontSize = 14.sp, color = TextPrimary, modifier = Modifier.weight(1f))
+                                if (checked) Icon(Icons.Default.Check, null, tint = Primary, modifier = Modifier.size(20.dp))
+                            }
                         }
                     }
                 }
             },
-            confirmButton = { TextButton(onClick = { showPicker = false }) { Text("完成", color = Primary) } }
+            confirmButton = { TextButton(onClick = { showPicker = false; searchQuery = "" }) { Text("完成", color = Primary) } }
         )
     }
 }

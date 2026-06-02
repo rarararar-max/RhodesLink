@@ -3,6 +3,11 @@ package com.rhodes.privatechat.ui.moments
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -13,6 +18,7 @@ import androidx.compose.material.icons.automirrored.filled.Message
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.animation.core.animate
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -42,8 +48,7 @@ import com.rhodes.privatechat.viewmodel.MainViewModel
 fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick: (String) -> Unit = {}, onUnreadMessages: () -> Unit = {}, modifier: Modifier = Modifier) {
     val moments by viewModel.moments.collectAsState()
     var showPost by remember { mutableStateOf(false) }
-    var batchGenerating by remember { mutableStateOf(false) }
-    var progressText by remember { mutableStateOf("") }
+    var isGenerating by remember { mutableStateOf(false) }
     var replyData by remember { mutableStateOf<Triple<Long, Long, String>?>(null) }
     var showReplyDialog by remember { mutableStateOf(false) }
     var showCommentDialog by remember { mutableStateOf(false) }
@@ -65,34 +70,47 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
         prevCount.intValue = moments.size
     }
 
-    Column(modifier = modifier.fillMaxSize().systemBarsPadding().background(BG)) {
+    Box(modifier = modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
         Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Text("罗德岛动态", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = TextPrimary, modifier = Modifier.weight(1f).padding(start = 4.dp))
-            if (batchGenerating) Text(progressText.ifBlank { "生成中..." }, fontSize = 12.sp, color = AccentOrange)
-            TextButton(onClick = { batchGenerating = true; viewModel.generateAllMoments { progressText = it; if (it == "全部完成") batchGenerating = false } }) { Text(if (batchGenerating) "..." else "一键催发", fontSize = 12.sp, color = Primary) }
             TextButton(onClick = onUnreadMessages) {
                 Text(if (unreadMsgCount > 0) "未读消息 $unreadMsgCount" else "未读消息", fontSize = 12.sp, color = if (unreadMsgCount > 0) AccentOrange else TextSecondary, fontWeight = if (unreadMsgCount > 0) FontWeight.Bold else FontWeight.Normal)
             }
             IconButton(onClick = { showPost = true }) { Icon(Icons.Default.Create, "发动态", tint = Primary) }
         }
         HorizontalDivider(color = Divider)
-        LazyColumn(state = listState) {
-            if (moments.isEmpty()) { item { Box(Modifier.fillMaxWidth().padding(48.dp), contentAlignment = Alignment.Center) { Text("暂无动态\n点击右上角发布第一条", fontSize = 14.sp, color = TextTertiary, textAlign = TextAlign.Center) } } }
-            items(moments, key = { it.id }) { moment ->
-                MomentCardWithInteraction(moment = moment, viewModel = viewModel,
-                    onReply = { commentId, name ->
-                        replyData = Triple(moment.id, commentId, name)
-                        showReplyDialog = true
-                    },
-                    onComment = {
-                        commentMomentId = moment.id
-                        showCommentDialog = true
-                    },
-                    onOperatorClick = onOperatorClick)
+        PullToRefreshOverscroll(
+            pullToRefresh = isGenerating,
+            listState = listState,
+            onRefresh = {
+                if (!isGenerating) {
+                    isGenerating = true
+                    viewModel.generateOneMoment { progress ->
+                        if (progress == "全部完成") isGenerating = false
+                    }
+                }
             }
-            item { Spacer(Modifier.height(16.dp)) }
+        ) {
+            LazyColumn(state = listState) {
+                if (moments.isEmpty()) { item { Box(Modifier.fillMaxWidth().fillParentMaxHeight(), contentAlignment = Alignment.Center) { Text("暂无动态\n下拉刷新生成动态", fontSize = 14.sp, color = TextTertiary, textAlign = TextAlign.Center) } } }
+                items(moments, key = { it.id }) { moment ->
+                    MomentCardWithInteraction(moment = moment, viewModel = viewModel,
+                        onReply = { commentId, name ->
+                            replyData = Triple(moment.id, commentId, name)
+                            showReplyDialog = true
+                        },
+                        onComment = {
+                            commentMomentId = moment.id
+                            showCommentDialog = true
+                        },
+                        onOperatorClick = onOperatorClick)
+                }
+                item { Spacer(Modifier.height(16.dp)) }
+            }
         }
+    }
     }
     if (showPost) PostDialog(operators = viewModel.operators.collectAsState().value, onDismiss = { showPost = false }, onPost = { content, mentioned -> viewModel.postUserMoment(content, mentioned); showPost = false })
 
@@ -223,6 +241,95 @@ private fun MomentCardWithInteraction(moment: MomentEntity, viewModel: MainViewM
         } else onDismiss()
     }) { Text("发布", color = if (text.isNotBlank()) Primary else TextTertiary) } }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消", color = TextSecondary) } })
     if (showAtPicker) AlertDialog(onDismissRequest = { showAtPicker = false }, title = { Text("@谁？", color = TextPrimary) }, text = { Column { names.forEach { val sel = atOps.contains(it); Row(Modifier.fillMaxWidth().clickable { if (sel) atOps.remove(it) else atOps.add(it) }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(32.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) { Text(it.take(1), color = Color.White, fontWeight = FontWeight.Bold) }; Spacer(Modifier.width(8.dp)); Text(it, fontSize = 14.sp, color = TextPrimary, modifier = Modifier.weight(1f)); if (sel) Icon(Icons.Default.Check, null, tint = Primary, modifier = Modifier.size(18.dp)) } } } }, confirmButton = { TextButton(onClick = { showAtPicker = false }) { Text("完成", color = Primary) } })
+}
+
+@Composable
+private fun PullToRefreshOverscroll(
+    pullToRefresh: Boolean,
+    listState: androidx.compose.foundation.lazy.LazyListState? = null,
+    onRefresh: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    val indicatorHeight = 80f
+    val pullThreshold = 120f
+    var offsetValue by remember { mutableStateOf(0f) }
+    var isOverscrolling by remember { mutableStateOf(false) }
+    val latestOnRefresh by rememberUpdatedState(onRefresh)
+    val latestPullToRefresh by rememberUpdatedState(pullToRefresh)
+    val showIndicator = offsetValue > 0f || pullToRefresh
+
+    LaunchedEffect(pullToRefresh) {
+        val target = if (pullToRefresh) indicatorHeight else 0f
+        animate(offsetValue, target) { value, _ -> offsetValue = value }
+    }
+
+    val connection = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                // 滚动上升时：收回指示器
+                if (offsetValue > 0f && available.y < 0f) {
+                    val consumed = available.y.coerceAtLeast(-offsetValue)
+                    offsetValue += consumed
+                    if (offsetValue <= 0f) {
+                        offsetValue = 0f
+                        isOverscrolling = false
+                    }
+                    return Offset(0f, consumed)
+                }
+                // 列表在顶部且下拉时：在 onPreScroll 中拦截，防止 overscroll effect 吞掉事件
+                if (available.y > 0f && listState != null) {
+                    val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+                    if (atTop || offsetValue > 0f) {
+                        isOverscrolling = true
+                        offsetValue = (offsetValue + available.y).coerceIn(0f, 300f)
+                        return Offset(0f, available.y)
+                    }
+                }
+                return Offset.Zero
+            }
+
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (available.y > 0f) {
+                    isOverscrolling = true
+                    offsetValue = (offsetValue + available.y).coerceIn(0f, 300f)
+                    return Offset(0f, available.y)
+                }
+                return Offset.Zero
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (offsetValue >= pullThreshold) {
+                    offsetValue = indicatorHeight
+                    latestOnRefresh()
+                    return available
+                } else if (!latestPullToRefresh) {
+                    offsetValue = 0f
+                }
+                isOverscrolling = false
+                return Velocity.Zero
+            }
+        }
+    }
+
+    Box {
+        if (showIndicator) {
+            Box(
+                Modifier.fillMaxWidth().height(indicatorHeight.toInt().dp).background(Surface),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = Primary)
+                    Spacer(Modifier.width(8.dp))
+                    Text("正在生成动态...", fontSize = 13.sp, color = TextSecondary)
+                }
+            }
+        }
+        Box(
+            Modifier.offset(y = offsetValue.dp).nestedScroll(connection)
+        ) {
+            content()
+        }
+    }
 }
 
 private fun formatTime(ts: Long): String { val diff = System.currentTimeMillis() - ts; return when { diff < 60_000 -> "刚刚"; diff < 3_600_000 -> "${diff/60_000}分钟前"; diff < 86_400_000 -> "${diff/3_600_000}小时前"; else -> "${diff/86_400_000}天前" } }

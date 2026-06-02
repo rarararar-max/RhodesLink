@@ -121,7 +121,7 @@ private fun TextBubble(message: ChatMessageEntity, aiAvatarUri: String, userAvat
                 }
                 if (isMe) { Spacer(modifier = Modifier.width(8.dp)); UserAvatar(uri = userAvatarUri) }
             }
-            DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+            DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }, containerColor = Surface) {
                 DropdownMenuItem(text = { Row { Icon(Icons.Default.ContentCopy, null, tint = TextPrimary, modifier = Modifier.size(16.dp)); Spacer(modifier = Modifier.width(8.dp)); Text("复制", color = TextPrimary) } }, onClick = { (context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager)?.setPrimaryClip(ClipData.newPlainText("msg", message.content)); Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show(); showMenu = false })
                 DropdownMenuItem(text = { Row { Icon(Icons.Default.Delete, null, tint = ErrorRed, modifier = Modifier.size(16.dp)); Spacer(modifier = Modifier.width(8.dp)); Text("撤回", color = ErrorRed) } }, onClick = { onRecall(message.id); showMenu = false })
                 if (!isMe) {
@@ -135,9 +135,9 @@ private fun TextBubble(message: ChatMessageEntity, aiAvatarUri: String, userAvat
 
 @Composable private fun SystemBubble(message: ChatMessageEntity, modifier: Modifier) { Row(Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 8.dp), horizontalArrangement = Arrangement.Center) { Text(message.content, fontSize = 13.sp, color = TextSecondary, fontStyle = FontStyle.Italic, textAlign = TextAlign.Center) } }
 
-@Composable private fun NarrationBubble(text: String, modifier: Modifier) { Column(Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 8.dp)) { Box(modifier = Modifier.widthIn(max = 260.dp).clip(RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp)).background(Card).padding(horizontal = 12.dp, vertical = 8.dp)) { Text(text, fontSize = 13.sp, color = TextTertiary, fontStyle = FontStyle.Italic, textAlign = TextAlign.Start) } } }
+@Composable private fun NarrationBubble(text: String, modifier: Modifier) { Box(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 6.dp), contentAlignment = Alignment.Center) { Box(modifier = Modifier.fillMaxWidth(0.75f).clip(RoundedCornerShape(12.dp)).background(TextTertiary.copy(alpha = 0.1f)).padding(horizontal = 16.dp, vertical = 8.dp)) { Text(text, fontSize = 14.sp, color = TextPrimary, fontStyle = FontStyle.Italic, textAlign = TextAlign.Start, lineHeight = 20.sp) } } }
 
-@Composable private fun NarrationText(text: String) { if (text.isNotBlank()) Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 6.dp)) { Box(modifier = Modifier.widthIn(max = 260.dp).clip(RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp)).background(Card).padding(horizontal = 12.dp, vertical = 8.dp)) { Text(text, fontSize = 13.sp, color = TextTertiary, fontStyle = FontStyle.Italic, textAlign = TextAlign.Start) } } }
+@Composable private fun NarrationText(text: String) { if (text.isNotBlank()) Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 6.dp), contentAlignment = Alignment.Center) { Box(modifier = Modifier.fillMaxWidth(0.75f).clip(RoundedCornerShape(12.dp)).background(TextTertiary.copy(alpha = 0.1f)).padding(horizontal = 16.dp, vertical = 8.dp)) { Text(text, fontSize = 14.sp, color = TextPrimary, fontStyle = FontStyle.Italic, textAlign = TextAlign.Start, lineHeight = 20.sp) } } }
 
 @Composable private fun OfflineInfo(message: ChatMessageEntity) {
     Column(modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)) {
@@ -201,9 +201,9 @@ private fun JsonBubble(message: ChatMessageEntity, aiAvatarUri: String, userAvat
             if (seg.type == "narration") {
                 // 旁白：线下/导演模式显示；线上模式隐藏
                 if (!isOnline) {
-                    Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 6.dp)) {
-                        Box(modifier = Modifier.widthIn(max = 260.dp).clip(RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp)).background(Card).padding(horizontal = 12.dp, vertical = 8.dp)) {
-                            Text(seg.content, fontSize = 13.sp, color = TextTertiary, fontStyle = FontStyle.Italic, textAlign = TextAlign.Start)
+                    Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 6.dp), contentAlignment = Alignment.Center) {
+                        Box(modifier = Modifier.fillMaxWidth(0.75f).clip(RoundedCornerShape(12.dp)).background(TextTertiary.copy(alpha = 0.1f)).padding(horizontal = 16.dp, vertical = 8.dp)) {
+                            Text(seg.content, fontSize = 14.sp, color = TextPrimary, fontStyle = FontStyle.Italic, textAlign = TextAlign.Start, lineHeight = 20.sp)
                         }
                     }
                 }
@@ -222,7 +222,7 @@ private fun JsonBubble(message: ChatMessageEntity, aiAvatarUri: String, userAvat
                 }
             }
         }
-        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }, containerColor = Surface) {
             DropdownMenuItem(text = { Row { Icon(Icons.Default.ContentCopy, null, tint = TextPrimary, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text("复制", color = TextPrimary) } }, onClick = { (context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager)?.setPrimaryClip(ClipData.newPlainText("msg", message.content)); Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show(); showMenu = false })
             DropdownMenuItem(text = { Row { Icon(Icons.Default.Delete, null, tint = ErrorRed, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text("撤回", color = ErrorRed) } }, onClick = { onRecall(message.id); showMenu = false })
             if (!message.isMe) {

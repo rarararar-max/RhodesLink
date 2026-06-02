@@ -64,9 +64,10 @@ fun RankingScreen(
         ranking = viewModel.getMessageRanking()
     }
 
-    Column(modifier = modifier.fillMaxSize().systemBarsPadding().background(BG)) {
+    Box(modifier = modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
         Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Spacer(modifier = Modifier.width(4.dp))
             Text("聊天排行榜", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
         }
@@ -117,6 +118,7 @@ fun RankingScreen(
                 }
             }
         }
+    }
     }
 }
 

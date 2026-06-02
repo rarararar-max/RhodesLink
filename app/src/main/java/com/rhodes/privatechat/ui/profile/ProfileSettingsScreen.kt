@@ -28,7 +28,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.PhotoCamera
@@ -40,7 +39,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -83,16 +81,11 @@ fun ProfileSettingsScreen(
     val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> cropTarget = uri }
     var avatarIndex by remember { mutableIntStateOf(0) }
 
-    Column(modifier = modifier.fillMaxSize().systemBarsPadding().background(BG).imePadding()) {
+    Box(modifier = modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding().imePadding()) {
         Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
-            Spacer(modifier = Modifier.weight(1f))
+            IconButton(onClick = { viewModel.saveUserProfile(nickname, gender, bio, avatarUri ?: existingAvatar ?: ""); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Text("身份设置", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-            Spacer(modifier = Modifier.weight(1f))
-            TextButton(onClick = { viewModel.saveUserProfile(nickname, gender, bio, avatarUri ?: ""); onBack() }) {
-                Icon(Icons.Default.Check, null, tint = Blue400, modifier = Modifier.size(20.dp))
-                Text("保存", color = Blue400, fontWeight = FontWeight.SemiBold)
-            }
         }
         HorizontalDivider(color = Divider)
 
@@ -128,17 +121,9 @@ fun ProfileSettingsScreen(
                 LabelField("个人简介") {
                     OutlinedTextField(value = bio, onValueChange = { bio = it }, modifier = Modifier.fillMaxWidth().height(100.dp), shape = RoundedCornerShape(8.dp), colors = fieldColors())
                 }
-                Spacer(modifier = Modifier.height(6.dp))
-                OutlinedButton(onClick = {
-                    val clip = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
-                    clip?.primaryClip?.getItemAt(0)?.text?.toString()?.let { bio = it }
-                }, modifier = Modifier.height(30.dp), colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = Blue400)) {
-                    Icon(Icons.Default.ContentPaste, null, modifier = Modifier.size(14.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("从剪贴板粘贴", fontSize = 12.sp)
-                }
             }
         }
+    }
     }
     cropTarget?.let { uri ->
         com.rhodes.privatechat.ui.common.ImageCropperDialog(

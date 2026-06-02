@@ -2,10 +2,10 @@ package com.rhodes.privatechat.navigation
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -27,9 +27,13 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.rhodes.privatechat.ui.theme.NavBarBg
+import com.rhodes.privatechat.ui.theme.Primary
+import com.rhodes.privatechat.ui.theme.PrimaryContainer
+import com.rhodes.privatechat.ui.theme.TextSecondary
 import cafe.adriel.voyager.core.screen.Screen
 import cafe.adriel.voyager.navigator.CurrentScreen
 import cafe.adriel.voyager.navigator.LocalNavigator
@@ -58,8 +62,9 @@ class MainScreen : Screen {
         )
 
         Scaffold(
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
             bottomBar = {
-                NavigationBar(containerColor = Color(0xFF252529)) {
+                NavigationBar(containerColor = NavBarBg, tonalElevation = 0.dp) {
                     tabs.forEachIndexed { i, tab ->
                         NavigationBarItem(
                             selected = activeTab == i,
@@ -67,9 +72,11 @@ class MainScreen : Screen {
                             icon = { Icon(if (activeTab == i) tab.selectedIcon else tab.unselectedIcon, tab.label) },
                             label = { Text(tab.label, fontSize = 12.sp) },
                             colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = MaterialTheme.colorScheme.primary,
-                                selectedTextColor = MaterialTheme.colorScheme.primary,
-                                indicatorColor = MaterialTheme.colorScheme.primaryContainer
+                                selectedIconColor = Primary,
+                                selectedTextColor = Primary,
+                                indicatorColor = PrimaryContainer,
+                                unselectedIconColor = TextSecondary,
+                                unselectedTextColor = TextSecondary
                             )
                         )
                     }

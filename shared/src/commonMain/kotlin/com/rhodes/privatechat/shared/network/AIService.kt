@@ -1,5 +1,6 @@
 package com.rhodes.privatechat.shared.network
 
+import android.util.Log
 import com.rhodes.privatechat.shared.model.AiMessage
 import com.rhodes.privatechat.shared.model.ChatCompletionRequest
 import com.rhodes.privatechat.shared.model.StreamChunk
@@ -28,6 +29,10 @@ import kotlinx.serialization.json.Json
 class AIService(private val client: HttpClient = createHttpClient()) {
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+
+    companion object {
+        private const val TAG = "AIService"
+    }
 
     // --- Response parsing utilities ---
 
@@ -68,13 +73,38 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         var s = raw.trim()
             .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
             .replace("，", ",").replace("：", ":")
+            .replace("；", ";").replace("（", "(").replace("）", ")")
+            .replace("‘", "’").replace("’", "’")
+            .replace("　", " ")
+            .replace(Regex("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F]"), "")
         try {
             val obj = json.parseToJsonElement(s)
             return obj.toString()
         } catch (_: Exception) {}
-        s = s.replace(", }", "}").replace(",}", "}")
-        if (!s.startsWith("{")) { val start = s.indexOf('{'); if (start >= 0) s = s.substring(start) }
-        if (!s.endsWith("}")) { val end = s.lastIndexOf('}'); if (end >= 0) s = s.substring(0, end + 1) }
+        s = s.replace(Regex(",\\s*([}\\]])"), "$1")
+        val firstBrace = s.indexOf('{')
+        val firstBracket = s.indexOf('[')
+        val start = when {
+            firstBrace < 0 && firstBracket < 0 -> -1
+            firstBrace < 0 -> firstBracket
+            firstBracket < 0 -> firstBrace
+            else -> minOf(firstBrace, firstBracket)
+        }
+        if (start > 0) s = s.substring(start)
+        if (start >= 0) {
+            val openChar = s[0]
+            val closeChar = if (openChar == '{') '}' else ']'
+            var depth = 0
+            var end = -1
+            for (i in s.indices) {
+                if (s[i] == openChar) depth++
+                else if (s[i] == closeChar) {
+                    depth--
+                    if (depth == 0) { end = i; break }
+                }
+            }
+            if (end >= 0) s = s.substring(0, end + 1)
+        }
         return s
     }
 
@@ -87,7 +117,82 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         }
     }
 
-    // --- Streaming chat ---
+    // --- Non-streaming chat (primary) ---
+
+    suspend fun chat(
+        apiKey: String,
+        messages: List<AiMessage>,
+        providerId: String = "deepseek",
+        modelName: String = "deepseek-chat",
+        customUrl: String = "",
+        temperature: Double = 0.95
+    ): String {
+        val config = providers[providerId] ?: providers["deepseek"]!!
+        val url = if (config.id == "custom") customUrl else config.baseUrl
+        val model = modelName
+
+        val requestBody = ChatCompletionRequest(
+            model = model,
+            messages = messages,
+            stream = false,
+            temperature = temperature
+        )
+
+        val response: HttpResponse = client.post(url) {
+            contentType(ContentType.Application.Json)
+            if (config.id == "google") {
+                header("X-Goog-Api-Key", apiKey)
+            } else {
+                header("Authorization", "Bearer $apiKey")
+            }
+            setBody(requestBody)
+        }
+
+        if (!response.status.isSuccess()) {
+            val errorBody = response.bodyAsChannel().readUTF8Line() ?: "Unknown error"
+            throw Exception("API error ${response.status.value}: $errorBody")
+        }
+
+        val responseBody = response.bodyAsText()
+        val completion = json.decodeFromString<NonStreamResponse>(responseBody)
+        return completion.choices?.firstOrNull()?.message?.content ?: ""
+    }
+
+    /**
+     * 带重试的非流式聊天请求 + JSON解析。
+     * 解析失败时重新发送请求，最多重试 [maxRetries] 次。
+     * 全部失败后将原始文本作为 dialogue 降级返回，并记录日志。
+     */
+    suspend fun chatWithRetry(
+        apiKey: String,
+        messages: List<AiMessage>,
+        providerId: String = "deepseek",
+        modelName: String = "deepseek-chat",
+        customUrl: String = "",
+        temperature: Double = 0.95,
+        maxRetries: Int = 3,
+        logTag: String = "Chat"
+    ): OfflineModeResponse {
+        var lastRaw = ""
+        for (attempt in 1..maxRetries) {
+            try {
+                val raw = chat(apiKey, messages, providerId, modelName, customUrl, temperature)
+                lastRaw = raw
+                val cleaned = cleanJson(raw)
+                val parsed = json.decodeFromString<OfflineModeResponse>(cleaned)
+                return parsed
+            } catch (e: Exception) {
+                Log.w(TAG, "[$logTag] JSON解析失败 (attempt $attempt/$maxRetries): ${e.message}")
+                if (attempt < maxRetries) {
+                    kotlinx.coroutines.delay(500L * attempt)
+                }
+            }
+        }
+        Log.e(TAG, "[$logTag] ${maxRetries}次重试均失败，降级为原始文本。原始内容: ${lastRaw.take(200)}")
+        return OfflineModeResponse(dialogue = lastRaw)
+    }
+
+    // --- Streaming chat (保留用于兼容) ---
 
     fun streamChat(
         apiKey: String,
@@ -151,45 +256,5 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                 }
             }
         }
-    }.flowOn(Dispatchers.Default)
-
-    fun chat(
-        apiKey: String,
-        messages: List<AiMessage>,
-        providerId: String = "deepseek",
-        modelName: String = "deepseek-chat",
-        customUrl: String = "",
-        temperature: Double = 0.95
-    ): Flow<String> = flow {
-        val config = providers[providerId] ?: providers["deepseek"]!!
-        val url = if (config.id == "custom") customUrl else config.baseUrl
-        val model = modelName
-
-        val requestBody = ChatCompletionRequest(
-            model = model,
-            messages = messages,
-            stream = false,
-            temperature = temperature
-        )
-
-        val response: HttpResponse = client.post(url) {
-            contentType(ContentType.Application.Json)
-            if (config.id == "google") {
-                header("X-Goog-Api-Key", apiKey)
-            } else {
-                header("Authorization", "Bearer $apiKey")
-            }
-            setBody(requestBody)
-        }
-
-        if (!response.status.isSuccess()) {
-            val errorBody = response.bodyAsChannel().readUTF8Line() ?: "Unknown error"
-            throw Exception("API error ${response.status.value}: $errorBody")
-        }
-
-        val responseBody = response.bodyAsText()
-        val completion = json.decodeFromString<NonStreamResponse>(responseBody)
-        val content = completion.choices?.firstOrNull()?.message?.content ?: ""
-        emit(content)
     }.flowOn(Dispatchers.Default)
 }

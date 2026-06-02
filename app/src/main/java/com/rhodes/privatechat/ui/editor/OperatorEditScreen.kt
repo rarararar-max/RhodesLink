@@ -118,7 +118,8 @@ fun OperatorEditScreen(
         onBack()
     }
 
-    Column(modifier = modifier.fillMaxSize().systemBarsPadding().background(BG)) {
+    Box(modifier = modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
         TopBar(
             title = if (isNew) "新建干员" else operator!!.name,
             onBack = onBack,
@@ -243,6 +244,7 @@ fun OperatorEditScreen(
             Spacer(modifier = Modifier.height(32.dp))
         }
     }
+    }
 
     if (showDeleteConfirm) {
         AlertDialog(
@@ -291,7 +293,7 @@ private fun TopBar(title: String, onBack: () -> Unit, onSave: () -> Unit) {
         modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
+        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
         Spacer(modifier = Modifier.weight(1f))
         Text(title, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
         Spacer(modifier = Modifier.weight(1f))
@@ -348,7 +350,7 @@ private fun ToggleItem(label: String, checked: Boolean, onCheckedChange: (Boolea
         Text(label, fontSize = 13.sp, color = TextPrimary)
         Spacer(modifier = Modifier.width(8.dp))
         Switch(checked = checked, onCheckedChange = onCheckedChange,
-            colors = SwitchDefaults.colors(checkedThumbColor = Blue400, checkedTrackColor = PrimaryContainer))
+            colors = SwitchDefaults.colors(checkedThumbColor = Blue400, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
     }
 }
 
@@ -434,7 +436,7 @@ private fun TypeDropdown(selected: RelationshipType, onSelect: (RelationshipType
                 Text(typeName(selected), fontSize = 13.sp, color = TextPrimary)
                 Text("▼", fontSize = 10.sp, color = TextTertiary)
             }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, containerColor = Surface) {
                 RelationshipType.values().forEach { type ->
                     DropdownMenuItem(
                         text = { Text(typeName(type), color = if (type == selected) Blue400 else TextPrimary) },

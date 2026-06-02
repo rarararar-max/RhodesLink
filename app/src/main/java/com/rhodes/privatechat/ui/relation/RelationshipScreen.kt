@@ -55,7 +55,8 @@ fun RelationshipScreen(
     var selectedOperator by remember { mutableStateOf<OperatorEntity?>(null) }
     var relationships by remember { mutableStateOf<List<RelationshipEntity>>(emptyList()) }
 
-    Column(modifier = modifier.fillMaxSize().systemBarsPadding().background(Color(0xFFF5F5F5))) {
+    Box(modifier = modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(Color(0xFFF5F5F5)).systemBarsPadding()) {
         RelationTopBar(title = if (selectedOperator != null) "${selectedOperator!!.name}的关系网" else "关系网", onBack = {
             if (selectedOperator != null) selectedOperator = null else onBack()
         })
@@ -89,12 +90,13 @@ fun RelationshipScreen(
             }
         }
     }
+    }
 }
 
 @Composable
 private fun RelationTopBar(title: String, onBack: () -> Unit) {
     Row(modifier = Modifier.fillMaxWidth().background(Card).padding(horizontal = 4.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
+        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
         Spacer(modifier = Modifier.width(4.dp))
         Icon(Icons.Default.Hub, null, tint = Primary, modifier = Modifier.size(22.dp))
         Spacer(modifier = Modifier.width(6.dp))

@@ -23,11 +23,11 @@ import com.rhodes.privatechat.viewmodel.shared.SharedUtils
 import com.rhodes.privatechat.viewmodel.shared.UserProfile
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.int
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -130,13 +130,35 @@ class ChatViewModel(
             val older = msgs.dropLast(retain)
             if (older.isEmpty()) return
             val text = older.joinToString("\n") { "${it.senderName}：${it.content.take(100)}" }
-            val prompt = "请将以下聊天记录压缩为一段简短的滚动摘要（不超过200字），保留关键信息。直接输出纯文本。\n${text}"
-            val sb = StringBuilder()
-            withTimeout(15_000) { sharedUtils.streamChat(listOf(AiMessage("system", prompt)), "Memory").collect { sb.append(it) } }
-            sharedUtils.trackTokens("memory", prompt, sb.toString())
-            val content = sb.toString().trim()
-            if (content.isNotBlank()) {
-                repository.saveMemory(Memory(sessionId = session.id, operatorId = session.operatorId, type = MemoryType.SHORT_TERM, content = content, expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L))
+            val prompt = """
+你是罗德岛的记录员。将对话压缩为摘要并提取记忆锚点。
+
+总结以下对话，生成摘要和记忆锚点。
+
+输出JSON：{"summary":"50~200字摘要","anchors":[{"type":"event|preference|plan|emotion|taboo|relation","content":"具体内容","isPrivate":false}]}
+
+字段说明：
+- summary：重点关注用户喜好、习惯、重要事件、决定、承诺，以及对话情感氛围
+- anchors：3~5个关键信息锚点
+  - type：锚点类型。event=事件，preference=偏好，plan=约定，emotion=情感，taboo=禁忌，relation=干员间互动
+  - content：具体内容，30字内
+  - isPrivate：涉及用户负面情绪、私密情感、自我怀疑时设为true；正面评价、公开约定、普通事件设为false
+
+隐私标记规则：
+- 必须设为true：用户负面情绪、个人隐私、"别告诉别人"的内容
+- 可设为false：正面评价、公开约定、一般偏好、干员间公开互动
+
+对话内容：
+${text}"""
+            val rawResult = withTimeout(15_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Memory") }.trim()
+            sharedUtils.trackTokens("memory", prompt, rawResult)
+            val cleaned = sharedUtils.aiService.cleanJson(rawResult)
+            val summary = try {
+                val obj = kotlinx.serialization.json.Json.parseToJsonElement(cleaned).jsonObject
+                obj["summary"]?.jsonPrimitive?.content ?: rawResult
+            } catch (_: Exception) { rawResult }
+            if (summary.isNotBlank()) {
+                repository.saveMemory(Memory(sessionId = session.id, operatorId = session.operatorId, type = MemoryType.SHORT_TERM, content = summary, expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L))
             }
         } catch (_: Exception) {}
     }
@@ -238,20 +260,69 @@ class ChatViewModel(
                 if (settings.dualModel) {
                     analysisGuidance = ""
                     try {
-                        val analysisSb = StringBuilder()
                         val profile = appState.userProfile.value
-                        withTimeout(15_000) {
-                            val prompt = buildString {
-                                append("你是罗德岛的资深心理顾问与战术分析员。分析用户最新消息的深层意图、情绪和需求，为干员回应提供策略指导。\n\n")
-                                append("当前系统时间：${sharedUtils.beijingSdf("HH:mm").format(java.util.Date())}\n")
-                                append("用户最新消息：${text}\n用户信息：${profile.nickname}，${profile.gender}\n干员：${session.operatorName}\n")
-                                append("最近对话：${_messages.value.takeLast(6).joinToString("\\n") { m -> "${if (m.isMe) "用户" else "你"}：${m.content}" }}\n")
-                                append("当前模式：${_currentMode.value}\n\n")
-                                append("输出JSON：{\"intent_analysis\":\"\",\"user_emotion\":\"\",\"user_need\":\"\",\"suggested_emotion\":\"\",\"reply_guidance\":\"\",\"affection_mod\":0}")
-                            }
-                            sharedUtils.streamChat(listOf(AiMessage("system", prompt)), "Chat").collect { analysisSb.append(it) }
+                        val recentDialogues = _messages.value.takeLast(6).joinToString("\n") { m -> "${if (m.isMe) "用户" else "你"}：${m.content}" }
+                        val analysisPrompt = """你是罗德岛的资深心理顾问与战术分析员。你的唯一任务是分析对话并输出指定JSON。你只输出JSON，不参与任何对话。
+
+【任务】
+分析用户最新消息的深层意图、情绪和需求，并为干员的回应提供策略指导。
+
+【思考流程】
+1. 阅读最近对话，理解脉络
+2. 分析用户最新消息的字面意思和潜在意图
+3. 推断用户当前情绪状态
+4. 判断用户最核心的情感/行动需求
+5. 基于干员人设给出回复策略建议
+
+【输出字段解释】
+{
+  "intent_analysis": "用户字面意思与深层意图综合分析，50字内",
+  "user_emotion": "推断用户当前情绪状态，简洁自然描述",
+  "user_need": "用户核心情感/行动需求，可组合描述",
+  "suggested_emotion": "建议干员应表现的情绪，需贴合人设",
+  "reply_guidance": "回复策略指导，60字内，具体可操作",
+  "affection_mod": -2到2的整数，对用户的好感度即时波动
+}
+
+【内容规范】
+- intent_analysis 必须包含表面和深层含义
+- user_emotion 用生活化语言
+- user_need 必须明确用户想要什么回应
+- suggested_emotion 贴合具体干员人设
+- reply_guidance 给出可操作策略
+- affection_mod 必须是整数，综合判断用户态度
+
+【质量强化】
+- 结合对话历史判断当前发言是常态还是异常
+- 注意反话、撒娇等间接表达
+- 考虑聊天模式：线上更直接，面对面可能有更多暗示
+
+【边界情况】
+- 对话历史为空时仅基于当前消息分析
+- 用户消息为无意义重复时判断为测试/敷衍状态
+- 用户消息带有明显恶意时 affection_mod 应为负数
+
+【输出规范】
+- 只输出一行完整JSON，不加任何标记或额外文字
+- JSON内双引号必须转义
+- 所有字段必须填写，不得省略
+
+以下是你需要分析的信息：
+当前系统时间：${sharedUtils.beijingSdf("HH:mm").format(java.util.Date())}
+用户最新消息：${text}
+用户信息：${profile.nickname}，${profile.gender}
+干员：${session.operatorName}
+最近对话：
+${recentDialogues}
+当前模式：${_currentMode.value}
+
+请基于以上信息进行分析，直接输出JSON对象。
+{"intent_analysis":"","user_emotion":"","user_need":"","suggested_emotion":"","reply_guidance":"","affection_mod":0}"""
+                        val analysisResult = withTimeout(15_000) {
+                            sharedUtils.chat(listOf(AiMessage("system", analysisPrompt)), "Chat")
                         }
-                        val result = sharedUtils.aiService.cleanJson(analysisSb.toString())
+                        sharedUtils.trackTokens("private_analysis", analysisPrompt, analysisResult)
+                        val result = sharedUtils.aiService.cleanJson(analysisResult)
                         val analysis: AnalysisResult? = try { json.decodeFromString<AnalysisResult>(result) } catch (_: Exception) { null }
                         if (analysis != null) {
                             analysisGuidance = "【用户意图分析】${analysis.intent_analysis}\n【用户情绪】${analysis.user_emotion}\n【核心需求】${analysis.user_need}\n【建议干员情绪】${analysis.suggested_emotion}\n【回复策略】${analysis.reply_guidance}\n【好感度修正】${analysis.affection_mod}"
@@ -260,19 +331,17 @@ class ChatViewModel(
                 }
 
                 val apiMessages = buildApiMessages(text)
-                val sb = StringBuilder()
-                withTimeout(60_000) { sharedUtils.streamChat(apiMessages).collect { chunk -> sb.append(chunk) } }
-                val promptText = apiMessages.firstOrNull()?.content ?: ""
-                sharedUtils.trackTokens("private", promptText, sb.toString())
+                val parsed = withTimeout(60_000) { sharedUtils.chatWithRetry(apiMessages) }
+                sharedUtils.trackTokens("private", apiMessages, parsed.toString())
                 val mode = _currentMode.value
-                val rawJson = sharedUtils.aiService.cleanJson(sb.toString().trim())
+                val serializedJson = try { json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed) } catch (_: Exception) { parsed.toString() }
+                val rawJson = sharedUtils.aiService.cleanJson(serializedJson)
                 var aiResponseCount = 1
                 if (rawJson.isNotBlank()) {
                     repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = rawJson, type = "ai_json", mode = mode, isMe = false))
                     if (_currentSession.value?.id == session.id) {
                         _messages.value = _messages.value.map { if (it.id == aiMsgId) it.copy(content = rawJson, type = "ai_json") else it }
                     }
-                    val parsed = sharedUtils.aiService.parseOfflineResponse(rawJson)
                     if (parsed.emotion.isNotBlank() || parsed.location.isNotBlank() || parsed.state.isNotBlank()) {
                         operatorStateUpdater.updateOperatorStatus(session.operatorId, parsed.location, parsed.state, parsed.emotion) { opId, newLoc, newAct, newEmo ->
                             if (opId == _selectedOperator.value?.id) {
@@ -282,7 +351,7 @@ class ChatViewModel(
                     }
                     aiResponseCount = 1
                 }
-                val affectionMod = try { val obj = Json.parseToJsonElement(sb.toString()).jsonObject; obj["affection_mod"]?.jsonPrimitive?.int ?: 0 } catch (_: Exception) { 0 }
+                val affectionMod = parsed.affection_mod
                 operatorStateUpdater.updateOperatorIntimacy(session.operatorId, 1 + affectionMod.coerceIn(-3, 3))
                 val today = settings.rewardDate
                 val currentDate = sharedUtils.beijingSdf("yyyyMMdd").format(java.util.Date())
@@ -314,6 +383,107 @@ class ChatViewModel(
         }
     }
 
+    /** 撤回多段 JSON 消息中的单个段落，而非整条消息 */
+    fun recallMessageSegment(msgId: Long, segmentIndex: Int) {
+        if (segmentIndex < 0) { recallMessage(msgId); return }
+        val msg = _messages.value.find { it.id == msgId } ?: return
+        if (msg.type != "ai_json") { recallMessage(msgId); return }
+        viewModelScope.launch {
+            val newContent = removeSegmentFromJson(msg.content, segmentIndex)
+            if (DEBUG) Log.d("ChatVM", "recallSegment msgId=$msgId segIdx=$segmentIndex newContent=${newContent?.take(80)}")
+            if (newContent == null) {
+                repository.deleteMessage(msgId)
+                _messages.value = _messages.value.filter { it.id != msgId }
+            } else {
+                repository.updateMessageContent(msgId, newContent)
+                _messages.value = _messages.value.map { if (it.id == msgId) it.copy(content = newContent) else it }
+            }
+        }
+    }
+
+    /** 从 JSON 内容中移除指定索引的段落，返回修改后的 JSON；若无剩余段落则返回 null */
+    private fun removeSegmentFromJson(content: String, segmentIndex: Int): String? {
+        return try {
+            val cleaned = content.trim()
+                .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+                .replace("，", ",").replace("：", ":")
+            val element = json.parseToJsonElement(cleaned)
+            when (element) {
+                is JsonArray -> {
+                    val list = element.toMutableList()
+                    if (segmentIndex in list.indices) list.removeAt(segmentIndex)
+                    if (list.isEmpty()) null
+                    else list.joinToString(",", "[", "]") { it.toString() }
+                }
+                is JsonObject -> {
+                    val segments = element["segments"] as? JsonArray ?: return null
+                    val list = segments.toMutableList()
+                    if (segmentIndex in list.indices) list.removeAt(segmentIndex)
+                    if (list.isEmpty()) null
+                    else {
+                        val newSegments = list.joinToString(",", "[", "]") { it.toString() }
+                        val keys = element.keys.filter { it != "segments" }
+                        buildString {
+                            append("{")
+                            for ((i, k) in keys.withIndex()) {
+                                if (i > 0) append(",")
+                                append("\"$k\":${element[k]}")
+                            }
+                            if (keys.isNotEmpty()) append(",")
+                            append("\"segments\":$newSegments")
+                            append("}")
+                        }
+                    }
+                }
+                else -> null
+            }
+        } catch (_: Exception) {
+            // 容错：尝试更宽松的解析
+            tryRemoveSegmentLenient(content, segmentIndex)
+        }
+    }
+
+    private fun tryRemoveSegmentLenient(content: String, segmentIndex: Int): String? {
+        var s = content.trim()
+            .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+            .replace("，", ",").replace("：", ":")
+        s = s.replace(", }", "}").replace(",}", "}")
+        if (!s.startsWith("{")) { val start = s.indexOf('{'); if (start >= 0) s = s.substring(start) }
+        if (!s.endsWith("}")) { val end = s.lastIndexOf('}'); if (end >= 0) s = s.substring(0, end + 1) }
+        return try {
+            val element = json.parseToJsonElement(s)
+            when (element) {
+                is JsonArray -> {
+                    val list = element.toMutableList()
+                    if (segmentIndex in list.indices) list.removeAt(segmentIndex)
+                    if (list.isEmpty()) null
+                    else list.joinToString(",", "[", "]") { it.toString() }
+                }
+                is JsonObject -> {
+                    val segments = element["segments"] as? JsonArray ?: return null
+                    val list = segments.toMutableList()
+                    if (segmentIndex in list.indices) list.removeAt(segmentIndex)
+                    if (list.isEmpty()) null
+                    else {
+                        val newSegments = list.joinToString(",", "[", "]") { it.toString() }
+                        val keys = element.keys.filter { it != "segments" }
+                        buildString {
+                            append("{")
+                            for ((i, k) in keys.withIndex()) {
+                                if (i > 0) append(",")
+                                append("\"$k\":${element[k]}")
+                            }
+                            if (keys.isNotEmpty()) append(",")
+                            append("\"segments\":$newSegments")
+                            append("}")
+                        }
+                    }
+                }
+                else -> null
+            }
+        } catch (_: Exception) { null }
+    }
+
     fun regenerateAiMessage(msgId: Long) {
         val session = _currentSession.value ?: return
         val idx = _messages.value.indexOfFirst { it.id == msgId }
@@ -338,9 +508,8 @@ class ChatViewModel(
             modeTransitionNotice = "【继续指令】请自然地继续说下去，不要复述或总结之前说过的话。"
             try {
                 val apiMessages = buildApiMessages(previousUser?.content ?: "")
-                val sb = StringBuilder()
-                sharedUtils.streamChat(apiMessages).collect { chunk -> sb.append(chunk) }
-                val raw = sb.toString().trim()
+                val raw = withTimeout(60_000) { sharedUtils.chat(apiMessages) }.trim()
+                sharedUtils.trackTokens("private", apiMessages, raw)
                 repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = raw, type = "ai_json", mode = mode, isMe = false))
                 if (_currentSession.value?.id == session.id) { _messages.value = _messages.value.map { if (it.id == aiMsgId) it.copy(content = raw, type = "ai_json") else it } }
                 val parsed = sharedUtils.aiService.parseOfflineResponse(raw)
@@ -369,11 +538,52 @@ class ChatViewModel(
                 val hour = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai")).get(java.util.Calendar.HOUR_OF_DAY)
                 val recent = _messages.value.takeLast(15).joinToString("\n") { "${if (it.isMe) profile.nickname else it.senderName}：${it.content.take(60)}" }
                 val lastOpMsg = _messages.value.lastOrNull { !it.isMe }?.content?.take(60) ?: ""
-                val modeHint = when (_currentMode.value) { "offline" -> "线下模式"; "director" -> "导演模式"; else -> "线上模式" }
-                val prompt = "你是对话灵感生成器。用户${profile.nickname}与${op.name}的最近15条对话：\n${recent}\n${op.name}刚说：${lastOpMsg}\n模式：${modeHint}\n生成3条回复话术，JSON格式：{\"suggestions\":[\"...\"]}"
-                val sb = StringBuilder()
-                withTimeout(10_000) { sharedUtils.streamChat(listOf(AiMessage("system", prompt))).collect { sb.append(it) } }
-                val cleaned = sb.toString().trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim().replace("，", ",").replace("：", ":")
+                val modeHint = when (_currentMode.value) {
+                    "offline" -> "1. 【线下模式】你和${op.name}面对面在一起，回复要像当面说话一样自然，可用括号带动作描述。"
+                    "director" -> "2. 【导演模式】你可以自由描述场景和行动，回复可以是动作、心理活动或对话。"
+                    else -> "3. 【线上模式】你通过通讯终端与${op.name}文字聊天，回复要像打字聊天一样简洁。"
+                }
+                val timeHint = when {
+                    hour in 6..8 -> "清晨"
+                    hour in 9..11 -> "上午"
+                    hour in 12..13 -> "中午"
+                    hour in 14..17 -> "下午"
+                    hour in 18..20 -> "晚上"
+                    hour in 21..23 -> "深夜"
+                    else -> "凌晨"
+                }
+                val prompt = """
+你是对话灵感生成器，请结合聊天上下文，为${profile.nickname}生成3条可以直接发送给${op.name}的回复话术。
+
+【当前时间】${now}
+【干员信息】
+${op.name}，${op.privatePrompt.ifBlank { op.description }}
+
+【用户信息】
+${profile.nickname}，${profile.gender.ifBlank { "未知" }}，个人简介：${profile.bio.ifBlank { "无" }}
+
+【聊天上下文】
+用户与${op.name}的最近15条对话记录：
+${recent}
+
+${op.name}刚刚对用户说："${lastOpMsg}"
+
+【生成要求】
+请为${profile.nickname}生成3条可以直接发送给${op.name}的回复话术：
+1. 每条15-40字，口语化自然，像真人平时说话一样。
+2. 三条建议分别对应不同风格的回复方向：
+   - 第一条（承接）：顺势承接${op.name}的话题，继续推进对话。
+   - 第二条（关心）：换个角度，表达关心、好奇或共情，让对话有新鲜感。
+   - 第三条（行动）：提出一个具体的行动邀约或场景推进建议，让对话进入下一阶段。
+3. ${modeHint}
+4. 结合用户的人设和当前时间（${timeHint}），让回复更贴合真实的聊天氛围。
+
+【输出格式要求】
+严格输出纯JSON，不要添加任何其他文字、markdown标记或解释：
+{"suggestions":["第一条承接话题的回复","第二条关心的回复","第三条行动邀约的回复"]}
+""".trimIndent()
+                val rawResult = withTimeout(10_000) { sharedUtils.chat(listOf(AiMessage("system", prompt))) }
+                val cleaned = rawResult.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim().replace("，", ",").replace("：", ":")
                 val results = try { val resp = json.decodeFromString<SuggestionResponse>(cleaned); resp.suggestions.filter { it.isNotBlank() } } catch (_: Exception) { emptyList() }
                 callback(results.ifEmpty { listOf("嗯，我在听", "然后呢？", "有意思") })
             } catch (_: Exception) { callback(listOf("嗯，我在听", "然后呢？", "有意思")) }
@@ -409,7 +619,7 @@ class ChatViewModel(
         val hypnosisBlock = if (_hypnosisRounds.value > 0) "【催眠状态】\n${_hypnosisCommand.value}\n剩余${_hypnosisRounds.value}轮\n" else ""
         val mindReadBlock = if (_mindReadRounds.value > 0) "【读心术生效中】\n你能看到${profile.nickname}的内心独白：${_mindReadContent.value}\n剩余${_mindReadRounds.value}轮\n" else ""
         val mode = _currentMode.value
-        val systemPrompt = sharedUtils.applyTemplate(getPromptTemplate("private", mode), mapOf(
+        val systemPrompt = sharedUtils.compactTemplate(sharedUtils.applyTemplate(getPromptTemplate("private", mode), mapOf(
             "CURRENT_TIME" to sharedUtils.beijingSdf("yyyy-MM-dd HH:mm").format(java.util.Date()),
             "USER_NAME" to profile.nickname, "USER_GENDER" to profile.gender.ifBlank { "未知" }, "USER_BIO" to profile.bio.ifBlank { "无" },
             "USER_CONTENT" to userContent, "AI_ANALYSIS" to analysisBlock, "HYPNOSIS" to hypnosisBlock, "MIND_READ" to mindReadBlock,
@@ -429,7 +639,7 @@ class ChatViewModel(
             "DIA_MIN" to settings.diaMin.toString(), "DIA_MAX" to settings.diaMax.toString(),
             "SEG_MIN" to (settings.narSegMin + settings.diaSegMin).toString(),
             "SEG_MAX" to (settings.narSegMax + settings.diaSegMax).toString()
-        ))
+        )))
         val messages = repository.getMessagesSync(session.id).let { msgs ->
             val limit = settings.historyMessages
             if (limit > 0) msgs.takeLast(limit) else msgs
@@ -454,10 +664,8 @@ class ChatViewModel(
             val text = allMsgs.joinToString("\n") { "${it.senderName}：${it.content.take(60)}" }
             val dateStr = sharedUtils.beijingSdf("yyyy年MM月dd日").format(dayBegin)
             val prompt = "请总结${dateStr}的聊天记录，生成50-150字的每日摘要。直接输出纯文本。\n${text}"
-            val sb = StringBuilder()
-            withTimeout(15_000) { sharedUtils.streamChat(listOf(AiMessage("system", prompt)), "Memory").collect { sb.append(it) } }
-            sharedUtils.trackTokens("memory", prompt, sb.toString())
-            val content = sb.toString().trim()
+            val content = withTimeout(15_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Memory") }.trim()
+            sharedUtils.trackTokens("memory", prompt, content)
             if (content.isNotBlank()) { repository.saveMemory(Memory(sessionId = "daily_${dateStr}", operatorId = "daily", type = MemoryType.DAILY, content = content, expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L)) }
         } catch (_: Exception) {}
     }
@@ -470,20 +678,48 @@ class ChatViewModel(
             val anchors = repository.getAnchors(session.operatorId)
             val anchorText = sharedUtils.pickAnchors(anchors, 5).joinToString("\n") { "- ${it.content}" }
             val profile = appState.userProfile.value
-            val prompt = """你是记忆分析员。基于以下信息，为${op.name}对${profile.nickname}的长期印象写一段简洁总结（50-100字）。
+            val oldImpression = repository.getLongTermImpression(session.operatorId)
+            val oldImpressionText = oldImpression?.content ?: "无"
+            val summaries = listOfNotNull(shortTerm?.content, anchorText.ifBlank { null }).joinToString("\n\n").ifBlank { "无" }
+            val prompt = """
+你是罗德岛的心理档案员。基于多次对话摘要总结干员对用户的长期印象。每次更新时融合旧印象和新摘要。
 
-干员：${op.name}，${op.description}
-用户：${profile.nickname}，${profile.bio}
-近期聊天摘要：${shortTerm?.content ?: "无"}
-近期事件：${anchorText}
+总结用户${profile.nickname}在${op.name}眼中的整体印象。
 
-直接输出印象总结文本。"""
-            val sb = StringBuilder()
-            withTimeout(15_000) { sharedUtils.streamChat(listOf(AiMessage("system", prompt)), "Memory").collect { sb.append(it) } }
-            sharedUtils.trackTokens("memory", prompt, sb.toString())
-            val content = sb.toString().trim()
-            if (content.isNotBlank()) {
-                repository.saveMemory(Memory(sessionId = session.id, operatorId = session.operatorId, type = MemoryType.LONG_TERM, content = content, expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L))
+输出JSON：{"impression":"50~200字印象描述，使用'用户'指代对方","keywords":["关键词1","关键词2","关键词3"],"preferences":["偏好1","偏好2"],"taboos":["禁忌1"]}
+
+字段说明：
+- impression：完整人像描述，包含性格特质、偏好、情感模式、互动风格
+- keywords：3~5个关键词，最突出特点
+- preferences：2~4个持续偏好标签
+- taboos：0~2个持续禁忌标签，无则空数组
+
+质量要求：
+- impression要有整体感，不是零散信息堆砌
+- 旧印象与新信息冲突时以新信息为准
+- 标签从所有摘要中综合提取
+
+宁缺毋滥：
+- 如果对话内容不足以支撑足够标签，可返回少于标准数量
+- 不要为了凑数而编造不存在的标签
+
+之前的印象（在此基础上融合更新）：
+${oldImpressionText}
+
+新的对话摘要：
+${summaries}
+
+直接输出JSON对象。
+""".trimIndent()
+            val rawResult = withTimeout(15_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Memory") }.trim()
+            sharedUtils.trackTokens("memory", prompt, rawResult)
+            val cleaned = sharedUtils.aiService.cleanJson(rawResult)
+            val impression = try {
+                val obj = kotlinx.serialization.json.Json.parseToJsonElement(cleaned).jsonObject
+                obj["impression"]?.jsonPrimitive?.content ?: rawResult
+            } catch (_: Exception) { rawResult }
+            if (impression.isNotBlank()) {
+                repository.saveMemory(Memory(sessionId = session.id, operatorId = session.operatorId, type = MemoryType.LONG_TERM, content = impression, expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L))
             }
         } catch (_: Exception) {}
     }

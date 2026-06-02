@@ -29,7 +29,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -45,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontStyle
@@ -55,6 +55,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import coil3.compose.AsyncImage
 import com.rhodes.privatechat.shared.settings.SettingsRepository
+import com.rhodes.privatechat.ui.chat.component.ChatDropdownMenuItem
 import com.rhodes.privatechat.ui.chat.component.ChatHeader
 import com.rhodes.privatechat.ui.chat.component.ChatInputBar
 import com.rhodes.privatechat.ui.chat.component.MenuChip
@@ -101,11 +102,13 @@ fun ChatScreen(
     val bgPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> cropTarget = uri }
     var showBgReset by remember { mutableStateOf(false) }
     var showExport by remember { mutableStateOf(false) }
+    var showClearConfirm by remember { mutableStateOf(false) }
     val showModePicker = remember { mutableStateOf(false) }
     var showPropShop by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    Box(modifier = Modifier.fillMaxSize().systemBarsPadding().background(BG).clickable(
+    Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding().clickable(
         interactionSource = remember { MutableInteractionSource() },
         indication = null
     ) { focusManager.clearFocus() }) {
@@ -120,18 +123,19 @@ fun ChatScreen(
                 subtitleText = "${op.location} | ${op.activity} | ${op.emotion}",
                 onBack = onBack,
                 menuContent = {
-                    DropdownMenuItem(text = { Text("更换背景图") }, onClick = { bgPicker.launch("image/*") })
-                    if (bgUri != null) DropdownMenuItem(text = { Text("恢复默认背景") }, onClick = { showBgReset = true })
-                    DropdownMenuItem(text = { Text("编辑干员") }, onClick = { onEditOperator() })
-                    DropdownMenuItem(text = { Text("分享") }, onClick = { showExport = true })
+                    ChatDropdownMenuItem(text = { Text("更换背景图") }, onClick = { bgPicker.launch("image/*") })
+                    if (bgUri != null) ChatDropdownMenuItem(text = { Text("恢复默认背景") }, onClick = { showBgReset = true })
+                    ChatDropdownMenuItem(text = { Text("编辑干员") }, onClick = { onEditOperator() })
+                    ChatDropdownMenuItem(text = { Text("分享") }, onClick = { showExport = true })
+                    ChatDropdownMenuItem(text = { Text("清除聊天记录") }, onClick = { showClearConfirm = true })
                 }
             )
 
-            Column(modifier = Modifier.weight(1f).imePadding()) {
+            Column(modifier = Modifier.weight(1f).imePadding().clipToBounds()) {
                 MessageList(
                     messages = messages,
                     listState = listState,
-                    onRecall = { viewModel.recallMessage(it) },
+                    onRecall = { msgId, segIdx -> viewModel.recallMessageSegment(msgId, segIdx) },
                     onRegenerate = { viewModel.regenerateAiMessage(it) },
                     onContinue = { viewModel.continueAiMessage(it) },
                     modifier = Modifier.weight(1f)
@@ -155,13 +159,13 @@ fun ChatScreen(
                     showModePicker = showModePicker,
                     menuItems = {
                         MenuChip("切换模式", Primary) { showModePicker.value = true }
-                        MenuChip("重启聊天", ErrorRed) { viewModel.clearMessages() }
                         MenuChip("查看状态", Primary) { onViewStatus() }
                         MenuChip("使用道具", AccentOrange) { showPropShop = true }
                     }
                 )
             }
         }
+    }
     }
 
     if (showBgReset) {
@@ -170,6 +174,13 @@ fun ChatScreen(
             confirmButton = { TextButton(onClick = { bgUri = null; settings.remove("bg_${op.id}"); showBgReset = false }) { Text("确认", color = Primary) } },
             dismissButton = { TextButton(onClick = { showBgReset = false }) { Text("取消", color = TextSecondary) } })
     }
+    if (showClearConfirm) AlertDialog(
+        onDismissRequest = { showClearConfirm = false },
+        title = { Text("清除聊天记录", color = TextPrimary) },
+        text = { Text("将清除与${op.name}的全部聊天记录，此操作不可撤销。", color = TextSecondary) },
+        confirmButton = { TextButton(onClick = { viewModel.clearMessages(); showClearConfirm = false }) { Text("确认清除", color = ErrorRed) } },
+        dismissButton = { TextButton(onClick = { showClearConfirm = false }) { Text("取消", color = TextSecondary) } }
+    )
     if (showExport) {
         AlertDialog(onDismissRequest = { showExport = false }, title = {}, text = {
             ChatExportDialog(operatorName = op.name, messages = rawMessages, userProfile = viewModel.userProfile.value, operatorAvatarUri = op.avatarUri, onDismiss = { showExport = false })
@@ -264,7 +275,6 @@ private fun PropShopDialog(
                             balance.value = settings.lmb
                             loading = true
                             scope.launch {
-                                val result = StringBuilder()
                                 try {
                                     val temp = settings.aiTemperature
                                     val op = viewModel.selectedOperator.value
@@ -312,10 +322,9 @@ ${recentChats.ifBlank { "暂无" }}
 
 直接输出纯文本，不加任何前缀或说明。
 """.trimIndent()
-                                    viewModel.sharedUtils.streamChat(listOf(
+                                    innerThoughts = viewModel.sharedUtils.chat(listOf(
                                         AiMessage("system", innerPrompt)
-                                    ), "InnerThoughts").collect { result.append(it) }
-                                    innerThoughts = result.toString()
+                                    ), "InnerThoughts")
                                     val thoughtText = innerThoughts
                                     if (!thoughtText.isNullOrBlank()) {
                                         viewModel.setMindRead(thoughtText)

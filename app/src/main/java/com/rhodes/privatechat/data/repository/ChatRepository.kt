@@ -152,6 +152,9 @@ class ChatRepository(
     suspend fun updateDispatch(id: String, logChain: String, status: String, endTime: Long = 0, netProfit: Int = 0) =
         shared.updateDispatch(id, logChain, status, endTime, netProfit)
 
+    suspend fun updateDispatchFull(id: String, logChain: String, status: String, endTime: Long = 0, netProfit: Int = 0, totalSegments: Int = 0, segmentInterval: Long = 0) =
+        shared.updateDispatchFull(id, logChain, status, endTime, netProfit, totalSegments, segmentInterval)
+
     suspend fun deleteSession(id: String) = shared.deleteSession(id)
 
     suspend fun deleteSessionMessages(sessionId: String) = shared.deleteSessionMessages(sessionId)

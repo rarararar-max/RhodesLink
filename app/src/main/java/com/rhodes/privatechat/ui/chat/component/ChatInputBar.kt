@@ -116,7 +116,7 @@ fun ChatInputBar(
         }
 
         // 输入行
-        Row(modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = {
                 showInspire = !showInspire
                 if (showInspire) {

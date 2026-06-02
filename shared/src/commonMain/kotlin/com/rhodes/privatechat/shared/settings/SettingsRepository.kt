@@ -72,8 +72,8 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     // === 聊天配置 ===
     var aiTemperature: Double
-        get() = settings.getDouble("ai_temperature", 0.95)
-        set(value) = settings.putDouble("ai_temperature", value)
+        get() = settings.getInt("ai_temperature", 95).toDouble() / 100.0
+        set(value) = settings.putInt("ai_temperature", (value * 100).toInt())
 
     var cleanDays: Int
         get() = settings.getInt("clean_days", 30)

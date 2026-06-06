@@ -31,11 +31,12 @@ log_warn() {
     echo -e "${YELLOW}[WARN]${NC} $1"
 }
 
-# 清理输出目录内容
+# 清理构建产物，确保每次都是全新构建
 prepare_output() {
     mkdir -p "$OUTPUT_DIR"
     rm -f "$OUTPUT_DIR"/*.apk 2>/dev/null || true
-    log_info "输出目录已准备: $OUTPUT_DIR"
+    rm -rf "$PROJECT_DIR/app/build" 2>/dev/null || true
+    log_info "已清理构建目录和输出目录"
 }
 
 # 构建指定 ABI 的 APK
@@ -50,9 +51,9 @@ build_apk() {
     log_info "当前目录: $(pwd)"
 
     if [ "$abi" = "universal" ]; then
-        ./gradlew "assemble${build_variant^}" --no-daemon --stacktrace
+        ./gradlew "assemble${build_variant^}" --no-daemon --no-build-cache --stacktrace
     else
-        ./gradlew "assemble${build_variant^}" -PTARGET_ABI="$abi" --no-daemon --stacktrace
+        ./gradlew "assemble${build_variant^}" -PTARGET_ABI="$abi" --no-daemon --no-build-cache --stacktrace
     fi
 
     log_info "Gradle 构建完成，开始查找 APK..."
@@ -61,7 +62,7 @@ build_apk() {
     log_info "构建输出目录结构:"
     find "$PROJECT_DIR/app/build/outputs" -type f -name "*.apk" 2>/dev/null || true
 
-    # 查找生成的 APK
+    # 查找生成的 APK（优先匹配正确的 variant 目录，取最新文件）
     local apk_path=""
     for search_dir in \
         "$PROJECT_DIR/app/build/outputs/apk/$build_variant" \
@@ -69,7 +70,7 @@ build_apk() {
         "$PROJECT_DIR/app/build/outputs/apk/release"; do
         if [ -d "$search_dir" ]; then
             log_info "搜索目录: $search_dir"
-            apk_path=$(find "$search_dir" -name "*.apk" -type f | head -1)
+            apk_path=$(find "$search_dir" -name "*.apk" -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | awk '{print $2}')
             if [ -n "$apk_path" ]; then
                 log_info "找到 APK: $apk_path"
                 break
@@ -144,9 +145,11 @@ main() {
             ;;
         all)
             prepare_output
-            build_apk "arm64-v8a" "app-arm64-v8a-${variant}" "$variant" || true
-            build_apk "x86_64" "app-x86_64-${variant}" "$variant" || true
-            build_apk "universal" "app-universal-${variant}" "$variant" || true
+            build_apk "arm64-v8a" "app-arm64-v8a-${variant}" "$variant"
+            rm -rf "$PROJECT_DIR/app/build" 2>/dev/null || true
+            build_apk "x86_64" "app-x86_64-${variant}" "$variant"
+            rm -rf "$PROJECT_DIR/app/build" 2>/dev/null || true
+            build_apk "universal" "app-universal-${variant}" "$variant"
 
             log_info "所有架构构建完成！"
             echo ""

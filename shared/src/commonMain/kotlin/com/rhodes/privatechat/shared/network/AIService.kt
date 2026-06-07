@@ -96,9 +96,16 @@ class AIService(private val client: HttpClient = createHttpClient()) {
             val closeChar = if (openChar == '{') '}' else ']'
             var depth = 0
             var end = -1
+            var inStr = false
+            var esc = false
             for (i in s.indices) {
-                if (s[i] == openChar) depth++
-                else if (s[i] == closeChar) {
+                val c = s[i]
+                if (esc) { esc = false; continue }
+                if (c == '\\') { esc = true; continue }
+                if (c == '"') { inStr = !inStr; continue }
+                if (inStr) continue
+                if (c == openChar) depth++
+                else if (c == closeChar) {
                     depth--
                     if (depth == 0) { end = i; break }
                 }

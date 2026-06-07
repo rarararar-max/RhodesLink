@@ -63,10 +63,15 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
     }
 
     suspend fun deleteMessage(id: Long) = withContext(Dispatchers.Default) { db.chatMessagesQueries.deleteMessage(id) }
+    suspend fun deleteOldMessages(cutoff: Long) = withContext(Dispatchers.Default) { db.chatMessagesQueries.deleteOldMessages(cutoff) }
     suspend fun getMessageCount(): Int = withContext(Dispatchers.Default) { db.chatMessagesQueries.getMessageCount().executeAsOne().toInt() }
 
     suspend fun getMessageCountPerSender(): List<SenderCount> = withContext(Dispatchers.Default) {
         db.chatMessagesQueries.getMessageCountPerSender().executeAsList().map { SenderCount(it.senderName, it.cnt) }
+    }
+
+    suspend fun getMessageCountPerSenderSince(since: Long): List<SenderCount> = withContext(Dispatchers.Default) {
+        db.chatMessagesQueries.getMessageCountPerSenderSince(since).executeAsList().map { SenderCount(it.senderName, it.cnt) }
     }
 
     suspend fun getMessagesInRange(start: Long, end: Long): List<ChatMessage> = withContext(Dispatchers.Default) {

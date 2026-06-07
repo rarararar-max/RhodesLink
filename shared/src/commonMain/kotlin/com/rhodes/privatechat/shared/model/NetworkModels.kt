@@ -55,7 +55,6 @@ data class StreamErrorDetail(
 data class OfflineModeResponse(
     val emotion: String = "",
     val state: String = "",
-    val activity: String = "",
     val location: String = "",
     val narration: String = "",
     val dialogue: String = "",

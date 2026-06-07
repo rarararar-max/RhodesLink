@@ -53,19 +53,20 @@ class SessionViewModel(
         }
     }
 
-    fun loadGroupData(groupId: String, callback: (String, List<Operator>, String) -> Unit) {
+    fun loadGroupData(groupId: String, callback: (String, List<Operator>, String, Set<String>) -> Unit) {
         scope.launch {
-            val session = repository.getSession(groupId) ?: run { callback("", emptyList(), ""); return@launch }
+            val session = repository.getSession(groupId) ?: run { callback("", emptyList(), "", emptySet()); return@launch }
             val memberNames = session.members.split(",").map { it.trim() }.filter { it.isNotBlank() }
             val allOps = appState.operators.value
             val memberOps = memberNames.mapNotNull { name -> allOps.find { it.id == name || it.name == name } }
-            callback(session.operatorName, memberOps, session.rules ?: "")
+            val mutedSet = session.mutedMembers.split(",").map { it.trim() }.filter { it.isNotBlank() }.toSet()
+            callback(session.operatorName, memberOps, session.rules ?: "", mutedSet)
         }
     }
 
     fun saveGroup(groupId: String, name: String, memberNames: List<String>, rules: String, avatarUri: String = "", mutedMembers: List<String> = emptyList()) {
         scope.launch {
-            val id = groupId.ifBlank { "group_${System.currentTimeMillis()}" }
+            val id = groupId.ifBlank { "group_${java.util.UUID.randomUUID()}" }
             val existing = if (groupId.isNotBlank()) repository.getSession(groupId) else null
             val oldMembers = existing?.members?.split(",")?.map { it.trim() }?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
             val newMembers = memberNames.toSet()

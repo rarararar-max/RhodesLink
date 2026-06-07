@@ -29,6 +29,7 @@ class SessionRepository(private val wrapper: DatabaseWrapper) {
         if (existing != null) {
             if (avatarUri.isNotBlank() && existing.avatarUri != avatarUri) {
                 db.chatSessionsQueries.insertSession(existing.id, existing.operatorId, existing.operatorName, existing.lastMessage, existing.lastTime, existing.mode, if (existing.isPinned) 1L else 0L, existing.unreadCount.toLong(), existing.members, existing.rules, avatarUri, existing.mutedMembers)
+                return@withContext existing.copy(avatarUri = avatarUri)
             }
             return@withContext existing
         }
@@ -69,10 +70,7 @@ class SessionRepository(private val wrapper: DatabaseWrapper) {
     }
 
     suspend fun getLastUserMessageTime(sessionId: String): Long? = withContext(Dispatchers.Default) {
-        val msgs = db.chatMessagesQueries.getMessagesSync(sessionId) { id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe ->
-            ChatMessage(id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange.toInt(), timestamp, isMe != 0L)
-        }.executeAsList()
-        msgs.filter { it.isMe }.maxOfOrNull { it.timestamp }
+        db.chatMessagesQueries.getLastUserMessageTime(sessionId).executeAsOneOrNull()?.MAX
     }
 
     // --- Preset groups ---

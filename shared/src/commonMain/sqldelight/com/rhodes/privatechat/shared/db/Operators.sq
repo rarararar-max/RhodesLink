@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS operators (
     lmb INTEGER NOT NULL DEFAULT 10000,
     attack REAL NOT NULL DEFAULT 0.5,
     defense REAL NOT NULL DEFAULT 0.5,
-    meldPref TEXT NOT NULL DEFAULT 'medium'
+    meldPref TEXT NOT NULL DEFAULT 'medium',
+    activityLevel REAL NOT NULL DEFAULT 0.5
 );
 
 getAllOperators:
@@ -30,11 +31,11 @@ getCount:
 SELECT COUNT(*) FROM operators;
 
 insertOperator:
-INSERT OR REPLACE INTO operators(id, name, title, description, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, userRelation, lmb, attack, defense, meldPref)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO operators(id, name, title, description, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, userRelation, lmb, attack, defense, meldPref, activityLevel)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 updateOperator:
-UPDATE operators SET name = ?, title = ?, description = ?, avatarUri = ?, location = ?, activity = ?, emotion = ?, intimacy = ?, privatePrompt = ?, groupPrompt = ?, userRelation = ?, lmb = ?, attack = ?, defense = ?, meldPref = ?
+UPDATE operators SET name = ?, title = ?, description = ?, avatarUri = ?, location = ?, activity = ?, emotion = ?, intimacy = ?, privatePrompt = ?, groupPrompt = ?, userRelation = ?, lmb = ?, attack = ?, defense = ?, meldPref = ?, activityLevel = ?
 WHERE id = ?;
 
 updateIntimacy:
@@ -47,8 +48,8 @@ deleteOperator:
 DELETE FROM operators WHERE id = ?;
 
 insertAllOperators:
-INSERT OR REPLACE INTO operators(id, name, title, description, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, userRelation, lmb, attack, defense, meldPref)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO operators(id, name, title, description, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, userRelation, lmb, attack, defense, meldPref, activityLevel)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 deleteAllOperators:
 DELETE FROM operators;

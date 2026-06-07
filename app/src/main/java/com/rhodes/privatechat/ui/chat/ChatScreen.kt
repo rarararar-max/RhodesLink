@@ -67,6 +67,8 @@ import com.rhodes.privatechat.viewmodel.MainViewModel
 import org.koin.compose.koinInject
 import kotlinx.coroutines.launch
 
+private const val PROP_PRICE = 100
+
 @Composable
 fun ChatScreen(
     viewModel: MainViewModel, onBack: () -> Unit,
@@ -126,7 +128,7 @@ fun ChatScreen(
                     ChatDropdownMenuItem(text = { Text("更换背景图") }, onClick = { bgPicker.launch("image/*") })
                     if (bgUri != null) ChatDropdownMenuItem(text = { Text("恢复默认背景") }, onClick = { showBgReset = true })
                     ChatDropdownMenuItem(text = { Text("编辑干员") }, onClick = { onEditOperator() })
-                    ChatDropdownMenuItem(text = { Text("分享") }, onClick = { showExport = true })
+
                     ChatDropdownMenuItem(text = { Text("清除聊天记录") }, onClick = { showClearConfirm = true })
                 }
             )
@@ -208,12 +210,12 @@ private fun PropShopDialog(
     var innerThoughts by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(false) }
     val settings: SettingsRepository = koinInject()
-    val balance = remember { mutableStateOf(settings.lmb) }
+    val balance by settings.lmbFlow.collectAsState(initial = settings.lmb)
 
     AlertDialog(onDismissRequest = onDismiss, title = { Row { Icon(Icons.Default.ShoppingCart, null, tint = AccentOrange, modifier = Modifier.size(20.dp)); Spacer(modifier = Modifier.width(6.dp)); Text("道具商店", color = TextPrimary) } },
         text = {
             Column {
-                Text("余额：${balance.value} 龙门币", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = AccentOrange)
+                Text("余额：${balance} 龙门币", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = AccentOrange)
                 Spacer(modifier = Modifier.height(12.dp))
                 // 催眠怀表
                 Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Card).padding(12.dp)) {
@@ -222,7 +224,7 @@ private fun PropShopDialog(
                             Text("催眠怀表", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
                             Text("对干员施加催眠指令，持续10轮", fontSize = 12.sp, color = TextSecondary)
                         }
-                        Text("100", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = AccentOrange)
+                        Text("${PROP_PRICE}", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = AccentOrange)
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     if (showHypnotizeInput) {
@@ -237,14 +239,14 @@ private fun PropShopDialog(
                                 val err = viewModel.buyProp("催眠怀表", context)
                                 if (err != null) { Toast.makeText(context, err, Toast.LENGTH_SHORT).show(); return@TextButton }
                                 viewModel.setHypnosis(hypnotizeInput)
-                                balance.value = settings.lmb
                                 showHypnotizeInput = false; hypnotizeInput = ""
                                 onDismiss()
                             }) { Text("确认", color = Primary) }
                         }
                     } else {
                         Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(PrimaryContainer).clickable {
-                            if (balance.value < 100) { Toast.makeText(context, "余额不足", Toast.LENGTH_SHORT).show(); return@clickable }
+                            if (balance < PROP_PRICE) { Toast.makeText(context, "余额不足", Toast.LENGTH_SHORT).show(); return@clickable }
+                            if (viewModel.hypnosisRounds.value > 0) { Toast.makeText(context, "已有催眠指令生效中", Toast.LENGTH_SHORT).show(); return@clickable }
                             showHypnotizeInput = true
                         }.padding(vertical = 8.dp), horizontalArrangement = Arrangement.Center) {
                             Text("购买", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Primary)
@@ -259,7 +261,7 @@ private fun PropShopDialog(
                             Text("看穿眼镜", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
                             Text("读取干员的内心独白", fontSize = 12.sp, color = TextSecondary)
                         }
-                        Text("100", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = AccentOrange)
+                        Text("${PROP_PRICE}", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = AccentOrange)
                     }
                     if (loading) {
                         Text("正在读取内心想法…", fontSize = 13.sp, color = TextSecondary, modifier = Modifier.padding(top = 8.dp))
@@ -270,9 +272,9 @@ private fun PropShopDialog(
                     } else {
                         Spacer(modifier = Modifier.height(6.dp))
                         Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(PrimaryContainer).clickable {
-                            if (balance.value < 100) { Toast.makeText(context, "余额不足", Toast.LENGTH_SHORT).show(); return@clickable }
+                            if (balance < PROP_PRICE) { Toast.makeText(context, "余额不足", Toast.LENGTH_SHORT).show(); return@clickable }
+                            if (viewModel.mindReadRounds.value > 0) { Toast.makeText(context, "读心效果已生效中", Toast.LENGTH_SHORT).show(); return@clickable }
                             viewModel.buyProp("看穿眼镜", context)
-                            balance.value = settings.lmb
                             loading = true
                             scope.launch {
                                 try {

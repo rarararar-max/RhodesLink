@@ -223,16 +223,22 @@ class GroupChatViewModel(
     fun sendGroupMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online", autoSpeak: Boolean = false, isAuto: Boolean = false) {
         scope.launch {
             if (!groupMessageMutex.tryLock()) return@launch
-            _groupLoading.value = true
-            if (!isAuto && text.isNotBlank()) {
-                val userMsgId = repository.getNextMessageId()
-                repository.sendMessage(groupSessionId, ChatMessage(
-                    id = userMsgId, sessionId = groupSessionId,
-                    senderName = "我", content = text, type = "text", mode = mode, isMe = true
-                ))
-                resetAutoGroupChatTimer(groupSessionId)
-            }
             try {
+                _groupLoading.value = true
+                if (!isAuto && text.isNotBlank()) {
+                    val userMsgId = repository.getNextMessageId()
+                    repository.sendMessage(groupSessionId, ChatMessage(
+                        id = userMsgId, sessionId = groupSessionId,
+                        senderName = "我", content = text, type = "text", mode = mode, isMe = true
+                    ))
+                    resetAutoGroupChatTimer(groupSessionId)
+                    // 群聊每轮加 10 龙门币，每日上限 5000
+                    val today = sharedUtils.beijingSdf("yyyyMMdd").format(java.util.Date())
+                    val rewardDate = settings.rewardDate
+                    if (rewardDate != today) { settings.rewardDate = today; settings.dailyLmbCount = 0 }
+                    val dailyCount = settings.dailyLmbCount
+                    if (dailyCount < 5000) { val balance = settings.lmb; settings.lmb = balance + 10; settings.dailyLmbCount = dailyCount + 1 }
+                }
                 val session = repository.getSession(groupSessionId) ?: run { _groupLoading.value = false; return@launch }
                 val memberIds = session.members.split(",").map { it.trim() }.filter { it.isNotBlank() }
                 val allOps = appState.operators.value
@@ -297,13 +303,16 @@ class GroupChatViewModel(
                     "GROUP_SPEECH_MIN" to settings.groupSpeechMin.toString(),
                     "GROUP_SPEECH_MAX" to settings.groupSpeechMax.toString(),
                     "USER_MESSAGE" to userMessage, "USER_OBSERVING" to userObserving,
-                    "GROUP_MODE_FORMAT" to grpModeFormat
+                    "GROUP_MODE_FORMAT" to grpModeFormat,
+                    "MEMBER_NAMES" to activeMembers.joinToString("、") { it.name }
                 )
                 val systemPrompt = sharedUtils.compactTemplate(sharedUtils.applyTemplate(grpTpl, grpReplacements))
                 val apiMessages = mutableListOf(AiMessage("system", systemPrompt))
                 val historyLimit = settings.historyMessages
+                val activeNames = activeMembers.map { it.name }.toSet() + "我" + "系统"
                 val allHistory = repository.getMessagesSync(groupSessionId).let { msgs ->
-                    if (historyLimit > 0) msgs.takeLast(historyLimit) else msgs
+                    val limited = if (historyLimit > 0) msgs.takeLast(historyLimit) else msgs
+                    limited.filter { msg -> msg.isMe || msg.type == "system" || msg.senderName in activeNames }
                 }
                 for (msg in allHistory) {
                     val role = if (msg.isMe) "user" else "assistant"
@@ -316,7 +325,7 @@ class GroupChatViewModel(
                 }
                 val promptText = apiMessages.firstOrNull()?.content ?: ""
                 if (DEBUG) sharedUtils.logAiCall("GroupChat", promptText, "(requesting...)", apiMessages)
-                val rawBase = withTimeout(25_000) { sharedUtils.chat(apiMessages, "GroupChat") }.trim()
+                val rawBase = withTimeout(45_000) { sharedUtils.chat(apiMessages, "GroupChat") }.trim()
                     .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
                 sharedUtils.trackTokens("group", apiMessages, rawBase)
                 if (DEBUG) sharedUtils.logAiCall("GroupChat", promptText, rawBase, apiMessages)
@@ -327,6 +336,10 @@ class GroupChatViewModel(
                         results = arr
                         if (results.isNotEmpty()) break
                     } catch (_: Exception) {}
+                }
+                // JSON 全部解析失败时，将原文作为一条旁白兜底显示
+                if (results.isEmpty() && rawBase.isNotBlank()) {
+                    results = listOf(GroupMsgResult(speaker = "系统", message = rawBase.take(500), type = "narration"))
                 }
                 val filtered = results.filter { it.message.isNotBlank() }
                 if (filtered.isNotEmpty()) {
@@ -344,7 +357,8 @@ class GroupChatViewModel(
                                 sessionId = "anchor_${System.currentTimeMillis()}",
                                 operatorId = anchorOp.id, type = AnchorType.EVENT,
                                 content = "在群聊「${groupName}」中${r.speaker}说：${r.message.take(40)}",
-                                isPrivate = false
+                                isPrivate = false,
+                                expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L
                             ))
                         }
                     }

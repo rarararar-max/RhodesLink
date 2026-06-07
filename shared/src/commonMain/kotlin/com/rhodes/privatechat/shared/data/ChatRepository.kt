@@ -64,7 +64,9 @@ class ChatRepository(wrapper: DatabaseWrapper) {
     suspend fun deleteSessionMessages(sessionId: String) = messages.deleteSessionMessages(sessionId)
     suspend fun deleteMessage(id: Long) = messages.deleteMessage(id)
     suspend fun getMessageCount() = messages.getMessageCount()
+    suspend fun deleteOldMessages(cutoff: Long) = messages.deleteOldMessages(cutoff)
     suspend fun getMessageCountPerSender() = messages.getMessageCountPerSender()
+    suspend fun getMessageCountPerSenderSince(since: Long) = messages.getMessageCountPerSenderSince(since)
     suspend fun getMessagesInRange(start: Long, end: Long) = messages.getMessagesInRange(start, end)
 
     suspend fun getShortTermMemory(sessionId: String) = memories.getShortTermMemory(sessionId)
@@ -134,4 +136,11 @@ class ChatRepository(wrapper: DatabaseWrapper) {
     suspend fun deleteMahjongSave() = mahjong.deleteMahjongSave()
 
     suspend fun cleanupExpiredData() = cleanup.cleanupExpiredData()
+
+    suspend fun syncOperatorAvatar(operatorId: String, avatarUri: String) {
+        val session = sessions.getSessionByOperator(operatorId)
+        if (session != null && avatarUri.isNotBlank() && session.avatarUri != avatarUri) {
+            sessions.insertSession(session.copy(avatarUri = avatarUri))
+        }
+    }
 }

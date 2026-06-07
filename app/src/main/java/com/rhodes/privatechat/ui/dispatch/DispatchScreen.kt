@@ -44,6 +44,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -95,7 +96,8 @@ fun DispatchScreen(
 ) {
     val settings: SettingsRepository = koinInject()
     val operators by viewModel.operators.collectAsState()
-    val balance = remember { mutableIntStateOf(settings.lmb) }
+    var balance by remember { mutableIntStateOf(settings.lmb) }
+    LaunchedEffect(Unit) { while (true) { balance = settings.lmb; delay(5000) } }
     var activeDispatch by remember { mutableStateOf<DispatchRecordEntity?>(null) }
 
     LaunchedEffect(Unit) {
@@ -112,7 +114,8 @@ fun DispatchScreen(
     var showPicker by remember { mutableStateOf(false) }
 
     val budget = budgetText.toIntOrNull() ?: 0
-    val canStart = team.size == 5 && budget >= 100 && budget <= balance.intValue && activeDispatch == null && !viewModel.dispatchViewModel.isStarting
+    val teamAllExist = team.all { m -> operators.any { it.id == m.id } }
+    val canStart = team.size == 5 && teamAllExist && budget >= 100 && budget <= balance && activeDispatch == null && !viewModel.dispatchViewModel.isStarting
 
     Box(modifier = modifier.fillMaxSize()) {
     Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
@@ -124,7 +127,7 @@ fun DispatchScreen(
             Spacer(modifier = Modifier.weight(1f))
             Row(modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(Card).padding(horizontal = 12.dp, vertical = 6.dp)) {
                 Text("龙门币: ", fontSize = 13.sp, color = TextSecondary)
-                Text("${balance.intValue}", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = AccentOrange)
+                Text("${balance}", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = AccentOrange)
             }
         }
         HorizontalDivider(color = Divider)
@@ -215,9 +218,9 @@ fun DispatchScreen(
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Primary, unfocusedBorderColor = Divider))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("余额 ${balance.intValue}", fontSize = 13.sp, color = TextSecondary)
+                    Text("余额 ${balance}", fontSize = 13.sp, color = TextSecondary)
                 }
-                if (budget > balance.intValue) Text("余额不足", fontSize = 12.sp, color = ErrorRed, modifier = Modifier.padding(top = 4.dp))
+                if (budget > balance) Text("余额不足", fontSize = 12.sp, color = ErrorRed, modifier = Modifier.padding(top = 4.dp))
                 else if (budget < 100) Text("最少投入100龙门币", fontSize = 12.sp, color = ErrorRed, modifier = Modifier.padding(top = 4.dp))
             }
             Spacer(modifier = Modifier.height(20.dp))

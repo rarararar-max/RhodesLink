@@ -154,19 +154,32 @@ private fun MomentDetailCard(
         if (comments.isNotEmpty()) {
             Spacer(Modifier.height(8.dp))
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(SurfaceVariant).padding(horizontal = 8.dp, vertical = 6.dp)) {
-                comments.forEach { c ->
+                val topComments = comments.filter { it.parentCommentId == 0L }
+                topComments.forEach { top ->
+                    // 一级评论
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(buildAnnotatedString {
-                            withStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = Primary)) { append(c.operatorName) }
-                            if (c.replyToName.isNotBlank()) {
-                                withStyle(SpanStyle(color = TextTertiary)) { append(" 回复 ") }
-                                withStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = Primary)) { append(c.replyToName) }
-                            }
-                            append("：${c.content}")
+                            withStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = Primary)) { append(top.operatorName) }
+                            append("：${top.content}")
                         }, fontSize = 13.sp, color = TextPrimary, modifier = Modifier.weight(1f, fill = false))
-                        if (c.operatorName != userName) {
+                        Spacer(Modifier.width(4.dp))
+                        Text("回复", fontSize = 11.sp, color = Primary, modifier = Modifier.clickable { onReply(top.id, top.operatorName) }.padding(horizontal = 4.dp, vertical = 2.dp))
+                    }
+                    // 该一级下的二级评论
+                    val replies = comments.filter { it.parentCommentId == top.id }
+                    replies.forEach { reply ->
+                        Spacer(Modifier.height(2.dp))
+                        Row(modifier = Modifier.padding(start = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(buildAnnotatedString {
+                                withStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = Primary)) { append(reply.operatorName) }
+                                if (reply.replyToName.isNotBlank()) {
+                                    withStyle(SpanStyle(color = TextTertiary)) { append(" 回复 ") }
+                                    withStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = Primary)) { append(reply.replyToName) }
+                                }
+                                append("：${reply.content}")
+                            }, fontSize = 13.sp, color = TextPrimary, modifier = Modifier.weight(1f, fill = false))
                             Spacer(Modifier.width(4.dp))
-                            Text("回复", fontSize = 11.sp, color = Primary, modifier = Modifier.clickable { onReply(c.id, c.operatorName) }.padding(horizontal = 4.dp, vertical = 2.dp))
+                            Text("回复", fontSize = 11.sp, color = Primary, modifier = Modifier.clickable { onReply(reply.id, reply.operatorName) }.padding(horizontal = 4.dp, vertical = 2.dp))
                         }
                     }
                     Spacer(Modifier.height(4.dp))

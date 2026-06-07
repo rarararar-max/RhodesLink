@@ -123,16 +123,16 @@ private fun HelpButton(message: String) {
 private fun PrivateTab(settings: SettingsRepository) {
     SectionTitle("台词（共用：线上/线下/导演）")
     ParamSlider(settings, "dia_seg_min", "最少台词段数", 1, 1f..10f, "所有模式共用：AI回复中台词段落的最少段数")
-    ParamSlider(settings, "dia_seg_max", "最多台词段数", 2, 1f..10f, "所有模式共用：AI回复中台词段落的最多段数")
-    InputParam(settings, "dia_min", "台词最少字数", 10, 1..1000, "所有模式共用：每段台词的最少字数")
-    InputParam(settings, "dia_max", "台词最多字数", 150, 1..1000, "所有模式共用：每段台词的最多字数")
+    ParamSlider(settings, "dia_seg_max", "最多台词段数", 3, 1f..10f, "所有模式共用：AI回复中台词段落的最多段数")
+    ParamSlider(settings, "dia_min", "台词最少字数", 10, 1f..1000f, "所有模式共用：每段台词的最少字数", step = 5f, pairKey = "dia_max", isMinSide = true)
+    ParamSlider(settings, "dia_max", "台词最多字数", 80, 1f..1000f, "所有模式共用：每段台词的最多字数", step = 5f, pairKey = "dia_min", isMinSide = false)
     Spacer(modifier = Modifier.height(12.dp))
 
     SectionTitle("旁白（线下/导演模式）")
     ParamSlider(settings, "nar_seg_min", "最少旁白段数", 1, 1f..10f, "线下/导演模式：旁白段落最少段数。线上模式旁白极简≤20字，不由本参数控制")
-    ParamSlider(settings, "nar_seg_max", "最多旁白段数", 2, 1f..10f, "线下/导演模式：旁白段落最多段数")
-    InputParam(settings, "nar_min", "旁白最少字数", 50, 1..1000, "线下/导演模式：每段旁白的最少字数")
-    InputParam(settings, "nar_max", "旁白最多字数", 150, 1..1000, "线下/导演模式：每段旁白的最多字数")
+    ParamSlider(settings, "nar_seg_max", "最多旁白段数", 3, 1f..10f, "线下/导演模式：旁白段落最多段数")
+    ParamSlider(settings, "nar_min", "旁白最少字数", 20, 1f..1000f, "线下/导演模式：每段旁白的最少字数", step = 5f, pairKey = "nar_max", isMinSide = true)
+    ParamSlider(settings, "nar_max", "旁白最多字数", 150, 1f..1000f, "线下/导演模式：每段旁白的最多字数", step = 5f, pairKey = "nar_min", isMinSide = false)
 }
 
 // ── Tab 1: 群聊 ──
@@ -141,38 +141,35 @@ private fun PrivateTab(settings: SettingsRepository) {
 private fun GroupTab(settings: SettingsRepository) {
     SectionTitle("消息长度")
     ParamSlider(settings, "group_msg_min", "每条消息最小字数", 10, 5f..50f, "群聊中每条AI消息的最少字数")
-    InputParam(settings, "group_msg_max", "每条消息最大字数", 150, 30..200, "群聊中每条AI消息的最多字数")
+    ParamSlider(settings, "group_msg_max", "每条消息最大字数", 100, 30f..200f, "群聊中每条AI消息的最多字数", step = 5f, pairKey = "group_msg_min", isMinSide = false)
 
     Spacer(Modifier.height(12.dp)); SectionTitle("发言频率")
     ParamSlider(settings, "group_speech_min", "每轮每人最少发言次数", 1, 0f..3f, "每个干员每轮群聊至少发言几次")
     ParamSlider(settings, "group_speech_max", "每轮每人最多发言次数", 2, 1f..5f, "每个干员每轮群聊最多发言几次")
 
     Spacer(Modifier.height(12.dp)); SectionTitle("自动发言间隔")
-    InputParam(settings, "group_auto_min", "自动发言最小间隔(秒)", 20, 5..120, "AI自动发言的最小间隔时间")
-    InputParam(settings, "group_auto_max", "自动发言最大间隔(秒)", 120, 30..300, "AI自动发言的最大间隔时间")
+    ParamSlider(settings, "group_chat_min_interval", "自动发言最小间隔(秒)", 60, 5f..600f, "AI自动发言的最小间隔时间", step = 5f)
+    ParamSlider(settings, "group_chat_max_interval", "自动发言最大间隔(秒)", 180, 30f..900f, "AI自动发言的最大间隔时间", step = 10f)
 
     Spacer(Modifier.height(12.dp)); SectionTitle("群聊旁白(线上/线下/导演)")
     ParamSlider(settings, "group_nar_seg_min", "最少旁白段数", 1, 1f..10f, "群聊每轮最少旁白段数，线上模式旁白用户不可见")
-    ParamSlider(settings, "group_nar_seg_max", "最多旁白段数", 2, 1f..10f, "群聊每轮最多旁白段数，线上模式旁白用户不可见")
-    InputParam(settings, "group_nar_min", "旁白最小字数", 100, 20..200, "群聊线下/导演模式每段旁白最少字数。线上模式旁白不超过20字不由本参数控制")
-    InputParam(settings, "group_nar_max", "旁白最大字数", 250, 50..300, "群聊线下/导演模式每段旁白最多字数。线上模式旁白不超过20字不由本参数控制")
+    ParamSlider(settings, "group_nar_seg_max", "最多旁白段数", 3, 1f..10f, "群聊每轮最多旁白段数，线上模式旁白用户不可见")
+    ParamSlider(settings, "group_nar_min", "旁白最小字数", 20, 20f..200f, "群聊线下/导演模式每段旁白最少字数。线上模式旁白不超过20字不由本参数控制", step = 5f, pairKey = "group_nar_max", isMinSide = true)
+    ParamSlider(settings, "group_nar_max", "旁白最大字数", 100, 50f..300f, "群聊线下/导演模式每段旁白最多字数。线上模式旁白不超过20字不由本参数控制", step = 5f, pairKey = "group_nar_min", isMinSide = false)
 }
 
 // ── Tab 2: 记忆与印象 ──
 
 @Composable
 private fun MemoryTab(settings: SettingsRepository) {
-    var threshold by remember { mutableIntStateOf(settings.summaryThreshold) }
-    var retainCount by remember { mutableIntStateOf(settings.summaryRetain) }
-    var impressionThreshold by remember { mutableIntStateOf(settings.impressionThreshold) }
-    var historyMsgs by remember { mutableIntStateOf(settings.historyMessages) }
-
-    InputFootParam("触发滚动摘要的消息轮数", threshold, 3..200, "每N条消息后自动生成一次对话摘要，用于长期上下文记忆", onDone = { settings.summaryThreshold = it; threshold = it })
-    InputFootParam("滚动摘要保留条数", retainCount, 1..20, "保留最近N条摘要用于注入对话上下文", onDone = { settings.summaryRetain = it; retainCount = it })
+    ParamSlider(settings, "summary_threshold", "触发滚动摘要的消息轮数", 20, 3f..200f, "每N条消息后自动生成一次对话摘要，用于长期上下文记忆", step = 1f)
+    ParamSlider(settings, "summary_retain", "滚动摘要保留条数", 10, 1f..20f, "保留最近N条摘要用于注入对话上下文", step = 1f)
     Spacer(modifier = Modifier.height(12.dp))
-    InputFootParam("触发长期印象更新的最少消息数", impressionThreshold, 1..50, "每N条消息后更新一次AI对用户的长期印象", onDone = { settings.impressionThreshold = it; impressionThreshold = it })
+    ParamSlider(settings, "impression_threshold", "触发长期印象更新的最少消息数", 50, 1f..50f, "每N条消息后更新一次AI对用户的长期印象", step = 1f)
     Spacer(modifier = Modifier.height(12.dp))
-    InputFootParam("保留最近消息轮数（0=全部）", historyMsgs, 0..200, "只向AI发送最近N条历史消息，超出部分由摘要补充上下文，防止Token爆表", onDone = { settings.historyMessages = it; historyMsgs = it })
+    ParamSlider(settings, "history_messages", "保留最近消息轮数（0=全部）", 20, 0f..200f, "只向AI发送最近N条历史消息，超出部分由摘要补充上下文，防止Token爆表", step = 1f)
+    Spacer(modifier = Modifier.height(12.dp))
+    ParamSlider(settings, "clean_days", "记忆过期天数", 30, 1f..365f, "超过此天数的短期摘要、每日摘要和长期印象将自动删除", step = 5f)
 }
 
 // ── Tab 3: 功能 ──
@@ -180,21 +177,21 @@ private fun MemoryTab(settings: SettingsRepository) {
 @Composable
 private fun FeatureTab(settings: SettingsRepository) {
     SectionTitle("日记生成")
-    InputParam(settings, "diary_min_chars", "日记最小字数", 200, 50..500, "控制AI生成日记的最小字数")
-    InputParam(settings, "diary_max_chars", "日记最大字数", 500, 100..800, "控制AI生成日记的最大字数，越大内容越详细")
+    ParamSlider(settings, "diary_min_chars", "日记最小字数", 50, 50f..500f, "控制AI生成日记的最小字数", step = 10f, pairKey = "diary_max_chars", isMinSide = true)
+    ParamSlider(settings, "diary_max_chars", "日记最大字数", 300, 100f..800f, "控制AI生成日记的最大字数，越大内容越详细", step = 10f, pairKey = "diary_min_chars", isMinSide = false)
 
     Spacer(Modifier.height(12.dp)); SectionTitle("动态生成")
-    InputParam(settings, "moment_min_chars", "动态最小字数", 100, 30..300, "控制AI生成动态的最小字数")
-    InputParam(settings, "moment_max_chars", "动态最大字数", 300, 80..500, "控制AI生成动态的最大字数")
+    ParamSlider(settings, "moment_min_chars", "动态最小字数", 30, 20f..300f, "控制AI生成动态的最小字数", step = 5f, pairKey = "moment_max_chars", isMinSide = true)
+    ParamSlider(settings, "moment_max_chars", "动态最大字数", 200, 80f..500f, "控制AI生成动态的最大字数", step = 5f, pairKey = "moment_min_chars", isMinSide = false)
     ParamSlider(settings, "daily_moment_target", "每人每日动态目标数", 2, 1f..10f, "每天自动触发动态生成的条数目标，少于这个数会自动补充")
 
     Spacer(Modifier.height(12.dp)); SectionTitle("评论生成")
     ParamSlider(settings, "comment_min_chars", "评论最少字数", 10, 5f..30f, "AI评论每条最少字数")
-    InputParam(settings, "comment_max_chars", "评论最多字数", 30, 10..100, "AI评论每条最多字数")
+    ParamSlider(settings, "comment_max_chars", "评论最多字数", 40, 10f..100f, "AI评论每条最多字数", step = 5f, pairKey = "comment_min_chars", isMinSide = false)
 
     Spacer(Modifier.height(12.dp)); SectionTitle("派遣故事")
-    InputParam(settings, "dispatch_min_chars", "每段最小字数", 200, 80..400, "派遣故事每段（准备/过程/结局各段）的字数下限。总字数=每段字数×段数")
-    InputParam(settings, "dispatch_max_chars", "每段最大字数", 600, 200..800, "派遣故事每段的字数上限")
+    ParamSlider(settings, "dispatch_min_chars", "每段最小字数", 50, 50f..400f, "派遣故事每段（准备/过程/结局各段）的字数下限。总字数=每段字数×段数", step = 10f, pairKey = "dispatch_max_chars", isMinSide = true)
+    ParamSlider(settings, "dispatch_max_chars", "每段最大字数", 200, 200f..800f, "派遣故事每段的字数上限", step = 10f, pairKey = "dispatch_min_chars", isMinSide = false)
 }
 
 // ── Tab 4: 通用 ──
@@ -259,8 +256,9 @@ private fun OtherTab(settings: SettingsRepository) {
 // ── Shared slider components ──
 
 @Composable
-private fun ParamSlider(settings: SettingsRepository, key: String, label: String, defaultVal: Int, range: ClosedFloatingPointRange<Float>, tip: String, step: Float = 1f) {
-    var value by remember { mutableFloatStateOf(settings.getInt(key, defaultVal).toFloat()) }
+private fun ParamSlider(settings: SettingsRepository, key: String, label: String, defaultVal: Int, range: ClosedFloatingPointRange<Float>, tip: String, step: Float = 1f, pairKey: String? = null, isMinSide: Boolean = true) {
+    var value by remember { mutableFloatStateOf(settings.getInt(key, defaultVal).toFloat().coerceIn(range)) }
+    val pairValue = if (pairKey != null) settings.getInt(pairKey, defaultVal).toFloat() else 0f
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Card).padding(12.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(label, fontSize = 13.sp, color = TextPrimary)
@@ -269,63 +267,14 @@ private fun ParamSlider(settings: SettingsRepository, key: String, label: String
             Spacer(Modifier.weight(1f))
             Text("${value.toInt()}", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Blue400)
         }
-        Slider(value = value, onValueChange = { value = it }, onValueChangeFinished = { settings.putInt(key, value.toInt()) }, valueRange = range, steps = ((range.endInclusive - range.start) / step).toInt(), colors = SliderDefaults.colors(thumbColor = Blue400, activeTrackColor = Blue400))
+        Slider(value = value, onValueChange = { v ->
+            value = if (pairKey != null) {
+                if (isMinSide) v.coerceAtMost(pairValue) else v.coerceAtLeast(pairValue)
+            } else v
+        }, onValueChangeFinished = {
+            settings.putInt(key, value.toInt())
+            if (pairKey != null) settings.putInt(pairKey, if (isMinSide) value.toInt().coerceAtMost(pairValue.toInt()) else value.toInt().coerceAtLeast(pairValue.toInt()))
+        }, valueRange = range, steps = ((range.endInclusive - range.start) / step).toInt(), colors = SliderDefaults.colors(thumbColor = Blue400, activeTrackColor = Blue400))
     }
     Spacer(Modifier.height(4.dp))
-}
-
-@Composable
-private fun InputParam(settings: SettingsRepository, key: String, label: String, defaultVal: Int, range: IntRange, tip: String) {
-    val min = range.first; val max = range.last
-    var text by remember { mutableStateOf(settings.getInt(key, defaultVal).toString()) }
-    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Card).padding(12.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(label, fontSize = 13.sp, color = TextPrimary)
-            Spacer(Modifier.width(2.dp))
-            HelpButton(tip)
-        }
-        Spacer(Modifier.height(6.dp))
-        OutlinedTextField(
-            value = text, onValueChange = { v -> if (v.all { it.isDigit() } && v.length <= 4) text = v },
-            modifier = Modifier.fillMaxWidth().height(48.dp),
-            singleLine = true,
-            suffix = { Text("($min-$max)", fontSize = 11.sp, color = TextTertiary) },
-            shape = RoundedCornerShape(8.dp),
-            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = TextPrimary),
-            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Blue400, unfocusedBorderColor = Divider)
-        )
-        val parsed = text.toIntOrNull()
-        if (parsed != null && parsed != settings.getInt(key, defaultVal).coerceIn(min, max)) {
-            settings.putInt(key, parsed.coerceIn(min, max))
-        }
-    }
-    Spacer(Modifier.height(4.dp))
-}
-
-@Composable
-private fun InputFootParam(label: String, value: Int, range: IntRange, tip: String, onDone: (Int) -> Unit) {
-    val min = range.first; val max = range.last
-    var text by remember { mutableStateOf(value.toString()) }
-    Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Card).padding(12.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(label, fontSize = 13.sp, color = TextPrimary)
-            Spacer(Modifier.width(2.dp))
-            HelpButton(tip)
-        }
-        Spacer(Modifier.height(6.dp))
-        OutlinedTextField(
-            value = text, onValueChange = { v -> if (v.all { it.isDigit() } && v.length <= 4) text = v },
-            modifier = Modifier.fillMaxWidth().height(48.dp),
-            singleLine = true,
-            suffix = { Text("($min-$max)", fontSize = 11.sp, color = TextTertiary) },
-            shape = RoundedCornerShape(8.dp),
-            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, color = TextPrimary),
-            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Blue400, unfocusedBorderColor = Divider)
-        )
-        val parsed = text.toIntOrNull()
-        if (parsed != null && parsed != value.coerceIn(min, max)) {
-            onDone(parsed.coerceIn(min, max))
-        }
-    }
-    Spacer(Modifier.height(6.dp))
 }

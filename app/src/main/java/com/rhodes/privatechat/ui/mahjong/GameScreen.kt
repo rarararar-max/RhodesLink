@@ -42,7 +42,7 @@ data class MeldUI(val r: Boolean, val k: Boolean, val p: Boolean, val c: Boolean
 data class ChatMsg(val sender: String, val text: String, val isAssistant: Boolean = false, val isSystem: Boolean = false)
 
 @Composable
-fun GameScreen(game: GameState, onBack: () -> Unit, onSettlement: (SettlementResult) -> Unit, assistantName: String = "", assistantAvatarUri: String = "") {
+fun GameScreen(game: GameState, onBack: () -> Unit, onSettlement: (SettlementResult) -> Unit, assistantName: String = "", assistantAvatarUri: String = "", onSave: ((GameState) -> Unit)? = null) {
     val ctx = LocalContext.current; val scope = rememberCoroutineScope()
     var g by remember { mutableStateOf(game) }; var sel by remember { mutableStateOf<Int?>(null) }
     var isU by remember { mutableStateOf(false) }; var start by remember { mutableStateOf(false) }; var rnd by remember { mutableIntStateOf(0) }
@@ -133,6 +133,7 @@ fun GameScreen(game: GameState, onBack: () -> Unit, onSettlement: (SettlementRes
         if(!dl.isHuman){delay(500L+Random.nextLong(800));if(!showResult)aiT(dl);if(!showResult){g.currentTurn=(g.dealerIdx+1)%4;g=g.copy();tLoop()}}else isU=true
     }
     LaunchedEffect(effectText){if(effectText.isNotEmpty()){delay(2000);effectText=""}}
+    LaunchedEffect(Unit){while(true){delay(10000);onSave?.invoke(g)}}
 
     val topOpp=oi.firstOrNull();val lOp=oi.getOrNull(1);val rOp=oi.getOrNull(2)
     Box(Modifier.fillMaxSize()){
@@ -193,7 +194,7 @@ fun GameScreen(game: GameState, onBack: () -> Unit, onSettlement: (SettlementRes
                 if(isU&&mld==null&&isUserTenpai&&!u.isRiichi&&u.melds.isEmpty())Bt("立直",Color(0xFF4CAF50),Modifier.weight(1f)){u.isRiichi=true;u.points-=1000;g.riichiSticks++;g.ippatsuPlayerIdx=g.players.indexOf(u);g=g.copy();cnv("riichi",u);val s=sel;if(s!=null)disc(s)}
                 val ak=if(isU&&mld==null)Engine.canAnkan(u.hand)else emptyList()
                 if(ak.isNotEmpty())ak.forEach{t->Bt("暗杠${Tile.tileName(t)}",Color(0xFF7B1FA2),Modifier.weight(1f)){doAnkan(t)}}
-                Bt("退",Color(0xFF37474F),Modifier.weight(1f)){onBack()}
+                Bt("退",Color(0xFF37474F),Modifier.weight(1f)){onSave?.invoke(g);onBack()}
             }
             Text("💰${((g.humanPlayer()?.points?:25000)*100)/1000}",fontSize=11.sp,fontWeight=FontWeight.SemiBold,color=C6)
         }

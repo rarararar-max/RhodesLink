@@ -178,6 +178,13 @@ ${storyStructure}
                         val itemsJson = json.encodeToString(resp.items ?: emptyList<String>())
                         val rawReward = (resp.currency_reward ?: 0).coerceIn(0, budget * 10)
                         val netP = rawReward - budget
+                        // 竞态保护：写入前检查状态是否已被用户取消
+                        val currentStatus = repository.getDispatch(id)?.status
+                        if (currentStatus != "generating") {
+                            Log.w(TAG, "[startDispatch] 跳过写入: 状态已变更为 $currentStatus")
+                            success = true
+                            return@repeat
+                        }
                         Log.i(TAG, "[startDispatch] 成功 segments=${segments.size} reward=$rawReward netProfit=$netP items=${resp.items?.size ?: 0}")
                         repository.insertDispatch(DispatchRecord(id = id, taskType = task, durationHours = duration, budget = budget, netProfit = netP, operatorIds = operatorIds.joinToString(","), logChain = logJson, status = "active", startTime = dispatchStartTime, totalSegments = totalSeg, segmentInterval = interval, items = itemsJson))
                         success = true
@@ -208,6 +215,9 @@ ${storyStructure}
             val d = repository.getDispatch(dispatchId) ?: run { Log.w(TAG, "[finishDispatch] 记录不存在 id=$dispatchId"); return@launch }
             if (d.status != "active") { Log.w(TAG, "[finishDispatch] 状态非active: ${d.status}，跳过"); return@launch }
             Log.i(TAG, "[finishDispatch] 完成派遣 id=$dispatchId task=${d.taskType} netProfit=${d.netProfit}")
+            // 先改状态为finished，再发奖励，防止进程中断时 recover 重复发奖
+            repository.updateDispatch(dispatchId, d.logChain, "finished", System.currentTimeMillis(), d.netProfit)
+            Log.d(TAG, "[finishDispatch] 已更新为finished")
             refreshAllOperatorStatus()
             val balance = settings.lmb
             settings.lmb = balance + d.netProfit
@@ -218,18 +228,22 @@ ${storyStructure}
             val memberIds = d.operatorIds.split(",").map { it.trim() }.filter { it.isNotBlank() }
             val memberNames = memberIds.mapNotNull { id -> allOps.find { it.id == id || it.name == id }?.name }.take(3).joinToString("、")
             for (opId in memberIds) {
-                repository.saveAnchor(MemoryAnchor(sessionId = "anchor_${System.currentTimeMillis()}", operatorId = opId, type = AnchorType.EVENT, content = "${d.taskType}任务完成，${memberNames}带回${items}，净收益${d.netProfit}龙门币", isPrivate = false))
+                repository.saveAnchor(MemoryAnchor(sessionId = "anchor_${System.currentTimeMillis()}", operatorId = opId, type = AnchorType.EVENT, content = "${d.taskType}任务完成，${memberNames}带回${items}，净收益${d.netProfit}龙门币", isPrivate = false, expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L))
             }
-            repository.updateDispatch(dispatchId, d.logChain, "finished", System.currentTimeMillis(), d.netProfit)
-            Log.d(TAG, "[finishDispatch] 已更新为finished")
         }
     }
 
     fun cancelDispatch(dispatchId: String) {
         scope.launch {
             val d = repository.getDispatch(dispatchId) ?: run { Log.w(TAG, "[cancelDispatch] 记录不存在 id=$dispatchId"); return@launch }
-            Log.i(TAG, "[cancelDispatch] 中断派遣 id=$dispatchId task=${d.taskType}")
-            repository.updateDispatch(dispatchId, d.logChain + "\n\n【已中断】", "cancelled", System.currentTimeMillis(), 0)
+            Log.i(TAG, "[cancelDispatch] 中断派遣 id=$dispatchId task=${d.taskType} status=${d.status}")
+            // 如果AI尚未完成（generating状态），退还预算
+            if (d.status == "generating" && d.logChain.isBlank()) {
+                val cur = settings.lmb
+                settings.lmb = cur + d.budget
+                Log.i(TAG, "[cancelDispatch] 生成未完成，退还预算 ${d.budget}")
+            }
+            repository.updateDispatch(dispatchId, if (d.logChain.isNotBlank()) "${d.logChain}\n\n【已中断】" else "【已中断】", "cancelled", System.currentTimeMillis(), 0)
             refreshAllOperatorStatus()
         }
     }

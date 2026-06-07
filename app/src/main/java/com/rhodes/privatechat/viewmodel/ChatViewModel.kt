@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.rhodes.privatechat.shared.model.ChatMessage
 import com.rhodes.privatechat.shared.model.ChatSession
+import com.rhodes.privatechat.shared.model.AnchorType
 import com.rhodes.privatechat.shared.model.MemoryAnchor
 import com.rhodes.privatechat.shared.model.Memory
 import com.rhodes.privatechat.shared.model.MemoryType
@@ -27,6 +28,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -88,8 +90,12 @@ class ChatViewModel(
     val mindReadContent: StateFlow<String> = _mindReadContent.asStateFlow()
 
     // Internal state
-    private var messageCounter = 0
-    private var impressionMsgCounter = 0
+    private var messageCounter: Int
+        get() = settings.messageCounter
+        set(v) { settings.messageCounter = v }
+    private var impressionMsgCounter: Int
+        get() = settings.impressionMsgCounter
+        set(v) { settings.impressionMsgCounter = v }
     private val sessionMessageCounter = mutableMapOf<String, Int>()
     private val shortTermThreshold: Int get() = settings.summaryThreshold
     private val updateMutex = Mutex()
@@ -152,13 +158,26 @@ class ChatViewModel(
 ${text}"""
             val rawResult = withTimeout(15_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Memory") }.trim()
             sharedUtils.trackTokens("memory", prompt, rawResult)
-            val cleaned = sharedUtils.aiService.cleanJson(rawResult)
-            val summary = try {
-                val obj = kotlinx.serialization.json.Json.parseToJsonElement(cleaned).jsonObject
-                obj["summary"]?.jsonPrimitive?.content ?: rawResult
-            } catch (_: Exception) { rawResult }
-            if (summary.isNotBlank()) {
-                repository.saveMemory(Memory(sessionId = session.id, operatorId = session.operatorId, type = MemoryType.SHORT_TERM, content = summary, expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L))
+            val parsed = sharedUtils.aiService.parseSummaryResponse(rawResult)
+            if (parsed.summary.isNotBlank()) {
+                repository.saveMemory(Memory(
+                    sessionId = session.id, operatorId = session.operatorId,
+                    type = MemoryType.SHORT_TERM, content = parsed.summary,
+                    keywords = parsed.keywords.joinToString(","),
+                    expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L
+                ))
+                if (parsed.anchors.isNotEmpty()) {
+                    val anchors = parsed.anchors.map { a ->
+                        MemoryAnchor(
+                            sessionId = session.id, operatorId = session.operatorId,
+                            type = try { AnchorType.valueOf(a.type.uppercase()) } catch (_: Exception) { AnchorType.EVENT },
+                            content = a.content, isPrivate = a.isPrivate,
+                            expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L
+                        )
+                    }
+                    repository.saveAnchors(anchors)
+                }
+                repository.enforceMemoryRetain(session.id, settings.summaryRetain)
             }
         } catch (_: Exception) {}
     }
@@ -166,18 +185,27 @@ ${text}"""
     // === Public API ===
 
     fun selectOperator(operator: Operator) {
+        // 保存当前干员的催眠/读心状态
+        val prevOp = _selectedOperator.value
+        if (prevOp != null) {
+            settings.putString("hypnosis_cmd_${prevOp.id}", _hypnosisCommand.value)
+            settings.putInt("hypnosis_round_${prevOp.id}", _hypnosisRounds.value)
+            settings.putString("mind_read_${prevOp.id}", _mindReadContent.value)
+            settings.putInt("mind_read_rounds_${prevOp.id}", _mindReadRounds.value)
+        }
         _selectedOperator.value = operator
         messageCounter = 0
-        _hypnosisCommand.value = ""
-        _hypnosisRounds.value = 0
-        _mindReadRounds.value = 0
-        _mindReadContent.value = ""
-        settings.hypnosisCmd = ""
-        settings.hypnosisRound = 0
+        // 恢复新干员的催眠/读心状态
+        _hypnosisCommand.value = settings.getString("hypnosis_cmd_${operator.id}", "")
+        _hypnosisRounds.value = settings.getInt("hypnosis_round_${operator.id}", 0)
+        _mindReadContent.value = settings.getString("mind_read_${operator.id}", "")
+        _mindReadRounds.value = settings.getInt("mind_read_rounds_${operator.id}", 0)
+        settings.hypnosisCmd = _hypnosisCommand.value
+        settings.hypnosisRound = _hypnosisRounds.value
         viewModelScope.launch {
             val session = repository.getOrCreateSession(operator.id, operator.name, operator.avatarUri)
             _currentSession.value = session
-            val savedMode = settings.lastMode
+            val savedMode = settings.getLastMode(operator.id)
             _currentMode.value = savedMode
             markSessionRead(session.id)
             messagesJob?.cancel()
@@ -220,7 +248,7 @@ ${text}"""
                 oldMode == "director" && mode == "online" -> "【眼前的场景像雾气一样散去，你回到了罗德岛的走廊，通讯器里传来用户的声音。】"
                 else -> "【系统通知：模式已切换。】"
             }
-            settings.lastMode = mode
+            settings.putLastMode(session.operatorId, mode)
         }
     }
 
@@ -241,10 +269,11 @@ ${text}"""
             return
         }
         _inputText.value = ""
+        _loadingSessions.value = _loadingSessions.value + session.id
         generateDailyIfNeeded()
-        messageCounter++
 
         viewModelScope.launch {
+            messageCounter++
             repository.sendMessage(session.id, ChatMessage(
                 id = repository.getNextMessageId(), sessionId = session.id,
                 senderName = "我", content = text, type = "text", mode = _currentMode.value, isMe = true
@@ -254,7 +283,6 @@ ${text}"""
                 id = aiMsgId, sessionId = session.id,
                 senderName = session.operatorName, content = "...", type = "ai_json", mode = _currentMode.value, isMe = false
             ))
-            _loadingSessions.value = _loadingSessions.value + session.id
 
             try {
                 if (settings.dualModel) {
@@ -357,7 +385,7 @@ ${recentDialogues}
                 val currentDate = sharedUtils.beijingSdf("yyyyMMdd").format(java.util.Date())
                 if (today != currentDate) { settings.rewardDate = currentDate; settings.dailyLmbCount = 0 }
                 val dailyCount = settings.dailyLmbCount
-                if (dailyCount < 2000) { val balance = settings.lmb; settings.lmb = balance + 10; settings.dailyLmbCount = dailyCount + 1 }
+                if (dailyCount < 5000) { val balance = settings.lmb; settings.lmb = balance + 10; settings.dailyLmbCount = dailyCount + 1 }
                 decrementHypnosis()
                 decrementMindRead()
                 if (messageCounter >= shortTermThreshold) { generateShortTermSummary(session); messageCounter = 0 }
@@ -500,10 +528,10 @@ ${recentDialogues}
         val idx = _messages.value.indexOfFirst { it.id == msgId }
         if (idx < 0) return
         val mode = _currentMode.value
+        _loadingSessions.value = _loadingSessions.value + session.id
         viewModelScope.launch {
             val aiMsgId = repository.getNextMessageId()
             repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = "...", type = "ai_json", mode = mode, isMe = false))
-            _loadingSessions.value = _loadingSessions.value + session.id
             val previousUser = _messages.value.take(idx).lastOrNull { it.isMe }
             modeTransitionNotice = "【继续指令】请自然地继续说下去，不要复述或总结之前说过的话。"
             try {
@@ -583,8 +611,10 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
 {"suggestions":["第一条承接话题的回复","第二条关心的回复","第三条行动邀约的回复"]}
 """.trimIndent()
                 val rawResult = withTimeout(10_000) { sharedUtils.chat(listOf(AiMessage("system", prompt))) }
-                val cleaned = rawResult.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim().replace("，", ",").replace("：", ":")
-                val results = try { val resp = json.decodeFromString<SuggestionResponse>(cleaned); resp.suggestions.filter { it.isNotBlank() } } catch (_: Exception) { emptyList() }
+                val base = rawResult.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+                val results = try { json.decodeFromString<SuggestionResponse>(base).suggestions.filter { it.isNotBlank() } } catch (_: Exception) {
+                    try { json.decodeFromString<SuggestionResponse>(base.replace("，", ",").replace("：", ":")).suggestions.filter { it.isNotBlank() } } catch (_: Exception) { emptyList() }
+                }
                 callback(results.ifEmpty { listOf("嗯，我在听", "然后呢？", "有意思") })
             } catch (_: Exception) { callback(listOf("嗯，我在听", "然后呢？", "有意思")) }
         }
@@ -714,12 +744,19 @@ ${summaries}
             val rawResult = withTimeout(15_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Memory") }.trim()
             sharedUtils.trackTokens("memory", prompt, rawResult)
             val cleaned = sharedUtils.aiService.cleanJson(rawResult)
-            val impression = try {
+            try {
                 val obj = kotlinx.serialization.json.Json.parseToJsonElement(cleaned).jsonObject
-                obj["impression"]?.jsonPrimitive?.content ?: rawResult
-            } catch (_: Exception) { rawResult }
-            if (impression.isNotBlank()) {
-                repository.saveMemory(Memory(sessionId = session.id, operatorId = session.operatorId, type = MemoryType.LONG_TERM, content = impression, expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L))
+                val impression = obj["impression"]?.jsonPrimitive?.content ?: rawResult
+                val keywords = obj["keywords"]?.jsonArray?.mapNotNull { it.jsonPrimitive?.content }?.joinToString(",") ?: ""
+                val preferences = obj["preferences"]?.jsonArray?.mapNotNull { it.jsonPrimitive?.content }?.joinToString(",") ?: ""
+                val taboos = obj["taboos"]?.jsonArray?.mapNotNull { it.jsonPrimitive?.content }?.joinToString(",") ?: ""
+                if (impression.isNotBlank()) {
+                    repository.saveMemory(Memory(sessionId = session.id, operatorId = session.operatorId, type = MemoryType.LONG_TERM, content = impression, keywords = keywords, preferences = preferences, taboos = taboos, expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L))
+                }
+            } catch (_: Exception) {
+                if (rawResult.isNotBlank()) {
+                    repository.saveMemory(Memory(sessionId = session.id, operatorId = session.operatorId, type = MemoryType.LONG_TERM, content = rawResult, expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L))
+                }
             }
         } catch (_: Exception) {}
     }

@@ -2,6 +2,7 @@ package com.rhodes.privatechat.ui.model
 
 import android.content.ClipboardManager
 import android.content.Context
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -10,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -50,17 +52,26 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     val isCustom = currentProviderId == "custom"
     val modelOptions = if (isCustom) listOf("自填") else currentConfig.models + "自填"
 
+    val saveSettings: () -> Unit = {
+        settings.provider = currentProviderId
+        settings.modelName = if (isCustom || selectedModelIdx >= currentConfig.models.size) customModelName else currentConfig.models[selectedModelIdx]
+        settings.customUrl = customUrl
+        settings.apiKey = apiKey
+    }
+
+    BackHandler(onBack = { saveSettings(); onBack() })
+
     Box(modifier = modifier.fillMaxSize()) {
     Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
         Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = {
-                settings.provider = currentProviderId
-                settings.modelName = if (isCustom || selectedModelIdx >= currentConfig.models.size) customModelName else currentConfig.models[selectedModelIdx]
-                settings.customUrl = customUrl
-                settings.apiKey = apiKey
-                onBack()
-            }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
+            IconButton(onClick = { saveSettings(); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
+            Spacer(Modifier.weight(1f))
             Text("模型设置", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = { saveSettings(); onBack() }) {
+                Icon(Icons.Default.Check, null, tint = Primary, modifier = Modifier.size(20.dp))
+                Text("保存", color = Primary, fontWeight = FontWeight.SemiBold)
+            }
         }
         HorizontalDivider(color = Divider)
 

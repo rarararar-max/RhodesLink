@@ -19,5 +19,6 @@ data class Operator(
     val lmb: Int = 10000,
     val attack: Float = 0.5f,
     val defense: Float = 0.5f,
-    val meldPref: String = "medium"
+    val meldPref: String = "medium",
+    val activityLevel: Float = 0.5f
 )

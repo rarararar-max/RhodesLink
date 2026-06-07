@@ -39,7 +39,7 @@ class DataViewModel(
         scope.launch {
             val now = System.currentTimeMillis()
             val msgDays = settings.cleanDaysMessages
-            repository.enforceMemoryRetain("", 0)
+            repository.deleteOldMessages(now - msgDays * 86400000L)
             val anchorDays = settings.cleanDaysAnchors
             repository.deleteOldAnchors(now - anchorDays * 86400000L)
             val diaryDays = settings.cleanDaysDiaries
@@ -52,6 +52,17 @@ class DataViewModel(
     }
 
     suspend fun getMessageRanking(): List<SenderCount> = repository.getMessageCountPerSender()
+
+    suspend fun getDailyRanking(): List<SenderCount> {
+        val cal = java.util.Calendar.getInstance()
+        cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+        cal.set(java.util.Calendar.MINUTE, 0)
+        cal.set(java.util.Calendar.SECOND, 0)
+        cal.set(java.util.Calendar.MILLISECOND, 0)
+        val todayStart = cal.timeInMillis
+        val yesterdayStart = todayStart - 86400000L
+        return repository.getMessageCountPerSenderSince(yesterdayStart)
+    }
 
     suspend fun getAllImpressions(): List<Memory> = repository.getAllLongTermImpressions()
 

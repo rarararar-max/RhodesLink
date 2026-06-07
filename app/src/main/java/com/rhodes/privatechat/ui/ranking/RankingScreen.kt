@@ -57,10 +57,12 @@ fun RankingScreen(
 ) {
     var tab by remember { mutableIntStateOf(0) }
     var ranking by remember { mutableStateOf<List<SenderCount>>(emptyList()) }
+    var dailyRanking by remember { mutableStateOf<List<SenderCount>>(emptyList()) }
     val operators by viewModel.operators.collectAsState()
     val tabs = listOf("昨日排行", "历史总榜")
 
     LaunchedEffect(Unit) {
+        dailyRanking = viewModel.getDailyRanking()
         ranking = viewModel.getMessageRanking()
     }
 
@@ -82,7 +84,7 @@ fun RankingScreen(
         }
         HorizontalDivider(color = Divider)
 
-        val sorted = ranking.sortedByDescending { it.cnt }
+        val sorted = (if (tab == 0) dailyRanking else ranking).sortedByDescending { it.cnt }
         if (sorted.isEmpty()) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Text("暂无数据", color = TextTertiary)

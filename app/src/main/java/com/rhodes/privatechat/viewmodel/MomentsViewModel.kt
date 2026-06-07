@@ -10,8 +10,8 @@ import com.rhodes.privatechat.viewmodel.shared.UserProfile
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 
 class MomentsViewModel(
     private val repository: ChatRepository,
@@ -32,6 +32,8 @@ class MomentsViewModel(
             val existing = repository.getLike(momentId, operatorId)
             if (existing == null) {
                 repository.insertLike(MomentLike(momentId = momentId, operatorId = operatorId, operatorName = operatorName, createdAt = System.currentTimeMillis()))
+            } else {
+                repository.deleteLike(momentId, operatorId)
             }
             val count = repository.getLikeCount(momentId)
             repository.updateLikeCount(momentId, count)

@@ -21,11 +21,14 @@ import androidx.compose.material.icons.outlined.Chat
 import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
@@ -135,9 +138,18 @@ private fun ContactsTabContent(navigator: Navigator) {
 @Composable
 private fun FeaturesTabContent(navigator: Navigator) {
     val viewModel: MainViewModel = koinViewModel()
+    var momentBadge by remember { mutableIntStateOf(viewModel.getMomentBadge()) }
+    var commentBadge by remember { mutableIntStateOf(viewModel.getUnreadCommentCount()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            momentBadge = viewModel.getMomentBadge()
+            commentBadge = viewModel.getUnreadCommentCount()
+            delay(10_000)
+        }
+    }
     com.rhodes.privatechat.ui.features.FeaturesScreen(
-        momentBadge = viewModel.getMomentBadge(),
-        commentBadge = viewModel.getUnreadCommentCount(),
+        momentBadge = momentBadge,
+        commentBadge = commentBadge,
         onMoments = { viewModel.markMomentsSeen(); navigator.push(MomentsRoute) },
         onDiary = { navigator.push(DiaryRoute) },
         onRanking = { navigator.push(RankingRoute) },

@@ -82,6 +82,10 @@ fun DispatchProgressScreen(
             Log.d(TAG, "[ProgressScreen] 已结束 status=${finalRec.status}，直接显示")
             done = true; visibleCount = totalSeg
             netProfit = finalRec.netProfit; items = finalRec.items
+            // 检测AI生成失败：cancelled + 无段落 + 无收益 = AI生成失败
+            if (finalRec.status == "cancelled" && finalRec.totalSegments <= 0 && finalRec.netProfit == 0 && finalRec.logChain.isBlank()) {
+                errorMsg = "AI生成失败，预算已退还"
+            }
             return@LaunchedEffect
         }
         startTime = finalRec.startTime
@@ -113,7 +117,7 @@ fun DispatchProgressScreen(
         // 定时检查已解锁段数
         while (true) {
             val elapsed = System.currentTimeMillis() - startTime
-            val count = (elapsed / (interval.coerceAtLeast(1L))).toInt().coerceIn(1, totalSeg)
+            val count = (elapsed / (interval.coerceAtLeast(1L))).toInt().coerceIn(1, totalSeg.coerceAtLeast(1))
             if (count > visibleCount) {
                 visibleCount = count
                 Log.d(TAG, "[ProgressScreen] 解锁新段落 visible=$count/$totalSeg")

@@ -103,7 +103,7 @@ fun MessageList(
     // 自动滚动到底部
     LaunchedEffect(displayMessages.size) {
         if (displayMessages.isNotEmpty()) {
-            listState.animateScrollToItem(displayMessages.size - 1)
+            listState.scrollToItem(displayMessages.size - 1)
         }
     }
 
@@ -204,10 +204,6 @@ private fun MessageBubble(
                             Text(formatChatTime(message.timestamp), fontSize = 10.sp, color = TextTertiary)
                         }
                         Spacer(modifier = Modifier.height(2.dp))
-                    }
-                    // 私聊：显示离线信息
-                    if (!isMe && onSenderClick == null && message.mode == "offline") {
-                        OfflineInfo(message = message)
                     }
                     // 气泡
                     Box(modifier = Modifier.widthIn(max = if (onSenderClick != null) 240.dp else 260.dp)

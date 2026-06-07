@@ -65,7 +65,6 @@ fun TokenStatsScreen(
 ) {
     val settings: SettingsRepository = koinInject()
     val bjSdf = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply { timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai") } }
-    val cal = remember { Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai")) }
 
     val tabs = listOf("今日", "本周", "全部")
     var tabIndex by remember { mutableIntStateOf(0) }
@@ -74,6 +73,7 @@ fun TokenStatsScreen(
     val allCategories = remember {
         listOf(
             TokenCategory("private", "私聊", 0, Primary),
+            TokenCategory("private_analysis", "私聊分析", 0, Color(0xFF7C4DFF)),
             TokenCategory("group", "群聊", 0, AccentOrange),
             TokenCategory("moment", "动态生成", 0, AccentGreen),
             TokenCategory("diary", "日记生成", 0, AccentPurple),
@@ -82,47 +82,50 @@ fun TokenStatsScreen(
         )
     }
 
-    // 读取今日数据
+    // 按 tab 切换刷新数据
     val todayStr = remember { bjSdf.format(Date()) }
-    val todayData = remember {
+    val todayData = remember(tabIndex) {
         allCategories.map { cat ->
             cat.copy(tokens = settings.getDailyTokenCount(cat.key, todayStr))
         }
     }
 
-    // 读取本周数据（周一~今天）
-    cal.time = Date()
-    cal.set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
-    val weekStart = bjSdf.format(cal.time)
-    val weekData = remember {
+    // 读取本周数据（周一~今天），周日时回退到上周一
+    val weekData = remember(tabIndex) {
+        val c = Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
+        c.time = Date()
+        c.set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
+        if (c.time.after(Date())) c.add(Calendar.WEEK_OF_YEAR, -1)
+        val ws = bjSdf.format(c.time)
         allCategories.map { cat ->
             var sum = 0
-            val c = Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
-            c.time = bjSdf.parse(weekStart)!!
+            val scan = Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
+            scan.time = bjSdf.parse(ws)!!
             val today = Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
-            while (c <= today) {
-                val d = bjSdf.format(c.time)
-                sum += settings.getDailyTokenCount(cat.key, d)
-                c.add(Calendar.DAY_OF_MONTH, 1)
+            while (scan <= today) {
+                sum += settings.getDailyTokenCount(cat.key, bjSdf.format(scan.time))
+                scan.add(Calendar.DAY_OF_MONTH, 1)
             }
             cat.copy(tokens = sum)
         }
     }
 
     // 读取全部数据
-    val allData = remember {
+    val allData = remember(tabIndex) {
         allCategories.map { cat ->
             cat.copy(tokens = settings.getTokenCount(cat.key))
         }
     }
 
     // 周趋势数据（过去8周）
-    val weeklyLabels = remember { mutableListOf<String>() }
-    val weeklyTotals = remember { mutableListOf<Int>() }
-    remember {
+    val weeklyLabels = remember(tabIndex) { mutableListOf<String>() }
+    val weeklyTotals = remember(tabIndex) { mutableListOf<Int>() }
+    remember(tabIndex) {
+        weeklyLabels.clear()
+        weeklyTotals.clear()
         val c = Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
-        // 定位到本周一
         c.set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
+        if (c.time.after(Date())) c.add(Calendar.WEEK_OF_YEAR, -1)
         for (w in 0 until 8) {
             val weekEnd = c.time.clone() as Date
             c.add(Calendar.DAY_OF_MONTH, -6)
@@ -141,8 +144,8 @@ fun TokenStatsScreen(
             weeklyTotals.add(0, sum)
             c.add(Calendar.DAY_OF_MONTH, -1)
             c.set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
+            if (c.time.after(Date())) c.add(Calendar.WEEK_OF_YEAR, -1)
         }
-        // 最后一条改成"本周"
         if (weeklyLabels.isNotEmpty()) weeklyLabels[weeklyLabels.size - 1] = "本周"
     }
 

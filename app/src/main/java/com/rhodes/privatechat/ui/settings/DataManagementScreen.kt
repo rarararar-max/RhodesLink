@@ -48,6 +48,7 @@ fun DataManagementScreen(
     val settings: SettingsRepository = koinInject()
     var stats by remember { mutableStateOf(DataViewModel.DataStats(0,0,0,0,0,0)) }
     var refreshKey by remember { mutableIntStateOf(0) }
+    val context = LocalContext.current
 
     LaunchedEffect(refreshKey) { stats = viewModel.getDataStats() }
 
@@ -100,6 +101,7 @@ fun DataManagementScreen(
                                         settings.putInt(item.prefKey, days)
                                         viewModel.cleanupAllExpired()
                                         refreshKey++
+                                        android.widget.Toast.makeText(context, "已清理${item.label}", android.widget.Toast.LENGTH_SHORT).show()
                                     }.padding(horizontal = 8.dp, vertical = 4.dp)
                             )
                         }
@@ -111,6 +113,7 @@ fun DataManagementScreen(
             OutlinedButton(onClick = {
                 viewModel.cleanupAllExpired()
                 refreshKey++
+                android.widget.Toast.makeText(context, "已清理所有过期数据", android.widget.Toast.LENGTH_SHORT).show()
             }, modifier = Modifier.fillMaxWidth().height(44.dp), shape = RoundedCornerShape(10.dp)) {
                 Icon(Icons.Default.Delete, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))

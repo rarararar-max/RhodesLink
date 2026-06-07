@@ -31,6 +31,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -57,7 +59,7 @@ fun SettingsScreen(
     userNickname: String = "博士", userGender: String = "", userAvatarUri: String = "", modifier: Modifier = Modifier
 ) {
     val settings: SettingsRepository = koinInject()
-    val balance = settings.lmb
+    val balance by settings.lmbFlow.collectAsState(initial = settings.lmb)
     Box(modifier = modifier.fillMaxSize()) {
     Column(modifier = Modifier.fillMaxSize().background(BG).statusBarsPadding()) {
         Row(modifier = Modifier.fillMaxWidth().background(Surface).clickable(onClick = onProfile).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {

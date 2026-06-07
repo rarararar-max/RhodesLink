@@ -77,7 +77,7 @@ fun FeaturesScreen(
             FeatureButton(FeatureEntry(Icons.AutoMirrored.Filled.Assignment, "大家的印象", "干员对你的长期印象总结", iconColor = Primary), onClick = onImpressions)
             FeatureButton(FeatureEntry(Icons.AutoMirrored.Filled.SendToMobile, "干员派遣", "组建小队执行任务", iconColor = Primary), onClick = onDispatch)
             FeatureButton(FeatureEntry(Icons.Default.BarChart, "消费统计", "Token消耗分析", iconColor = Primary), onClick = onTokenStats)
-            FeatureButton(FeatureEntry(Icons.Default.EmojiEvents, "打麻将", "在活动室和干员们打一局麻将", iconColor = AccentOrange), onClick = onMahjong)
+
         }
     }
     }

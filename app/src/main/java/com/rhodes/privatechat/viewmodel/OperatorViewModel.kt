@@ -21,32 +21,40 @@ class OperatorViewModel(
         privatePrompt: String = "", groupPrompt: String = "",
         userRelation: String = "", avatarUri: String = "",
         autoPost: Boolean = true, allowChat: Boolean = true,
-        relationships: List<Relationship> = emptyList()
+        relationships: List<Relationship> = emptyList(),
+        activityLevel: Float = 0.5f,
+        onComplete: () -> Unit = {}
     ) {
         scope.launch {
-            val existing = repository.getOperator(id)
-            val op = Operator(
-                id = id, name = name, title = title,
-                description = description, location = existing?.location ?: "宿舍",
-                activity = existing?.activity ?: "休息", emotion = existing?.emotion ?: "平静",
-                intimacy = existing?.intimacy ?: 0,
-                privatePrompt = if (privatePrompt.isNotBlank()) privatePrompt else existing?.privatePrompt ?: "",
-                groupPrompt = if (groupPrompt.isNotBlank()) groupPrompt else existing?.groupPrompt ?: "",
-                userRelation = if (userRelation.isNotBlank()) userRelation else existing?.userRelation ?: "",
-                avatarUri = if (avatarUri.isNotBlank()) avatarUri else existing?.avatarUri ?: "",
-                lmb = existing?.lmb ?: 10000,
-                attack = existing?.attack ?: 0.5f,
-                defense = existing?.defense ?: 0.5f,
-                meldPref = existing?.meldPref ?: "medium"
-            )
-            repository.insertOperator(op)
-            settings.putOperatorDynPermission(id, autoPost)
-            settings.putOperatorMsgPermission(id, allowChat)
-            repository.deleteRelationshipByOperator(id)
-            for (rel in relationships) {
-                repository.insertRelationship(rel.copy(operatorId = id))
+            try {
+                val existing = repository.getOperator(id)
+                val op = Operator(
+                    id = id, name = name, title = title,
+                    description = description, location = existing?.location ?: "宿舍",
+                    activity = existing?.activity ?: "休息", emotion = existing?.emotion ?: "平静",
+                    intimacy = existing?.intimacy ?: 0,
+                    privatePrompt = if (privatePrompt.isNotBlank()) privatePrompt else existing?.privatePrompt ?: "",
+                    groupPrompt = if (groupPrompt.isNotBlank()) groupPrompt else existing?.groupPrompt ?: "",
+                    userRelation = if (userRelation.isNotBlank()) userRelation else existing?.userRelation ?: "",
+                    avatarUri = if (avatarUri.isNotBlank()) avatarUri else existing?.avatarUri ?: "",
+                    lmb = existing?.lmb ?: 10000,
+                    attack = existing?.attack ?: 0.5f,
+                    defense = existing?.defense ?: 0.5f,
+                    meldPref = existing?.meldPref ?: "medium",
+                    activityLevel = activityLevel
+                )
+                repository.insertOperator(op)
+                repository.syncOperatorAvatar(id, op.avatarUri)
+                settings.putOperatorDynPermission(id, autoPost)
+                settings.putOperatorMsgPermission(id, allowChat)
+                repository.deleteRelationshipByOperator(id)
+                for (rel in relationships) {
+                    repository.insertRelationship(rel.copy(operatorId = id))
+                }
+                onSelectedOperatorUpdated?.invoke(repository.getOperator(id))
+            } finally {
+                onComplete()
             }
-            onSelectedOperatorUpdated?.invoke(repository.getOperator(id))
         }
     }
 

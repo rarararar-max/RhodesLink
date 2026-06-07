@@ -17,17 +17,20 @@ object SettingsMigration {
 
         val editor = target.edit()
 
-        // 1. chat_prefs -> rhodes_settings
+        // 1. chat_prefs -> rhodes_settings (string keys only)
         migrateFile(context, "chat_prefs", editor, listOf(
-            "dual_model", "msg_counter", "impression_msg_counter", "summary_threshold",
-            "api_key", "ai_temperature", "clean_days", "summary_retain", "history_messages",
+            "api_key", "daily_summary_date", "hypnosis_cmd", "last_mode"
+        ))
+        // Migrate int keys
+        migrateIntKeys(context, "chat_prefs", editor, listOf(
+            "msg_counter", "impression_msg_counter", "summary_threshold",
+            "ai_temperature", "clean_days", "summary_retain", "history_messages",
             "nar_seg_min", "nar_seg_max", "nar_min", "nar_max",
             "dia_seg_min", "dia_seg_max", "dia_min", "dia_max",
-            "daily_moment_target", "dispatch_fast_mode",
+            "daily_moment_target",
             "moment_min_chars", "moment_max_chars", "diary_min_chars", "diary_max_chars",
             "online_min_chars", "online_max_chars", "online_min_segs", "online_max_segs",
             "dispatch_min_chars", "dispatch_max_chars",
-            "daily_summary_date", "hypnosis_cmd", "last_mode",
             "group_chat_min_interval", "group_chat_max_interval",
             "group_auto_min", "group_auto_max",
             "group_msg_min", "group_msg_max",
@@ -36,15 +39,12 @@ object SettingsMigration {
             "group_nar_min", "group_nar_max",
             "comment_min_chars", "comment_max_chars",
             "clean_days_messages", "clean_days_anchors", "clean_days_diaries",
-            "clean_days_moments", "clean_days_dispatches"
-        ))
-        // Migrate int keys that are stored as int in source
-        migrateIntKeys(context, "chat_prefs", editor, listOf(
-            "hypnosis_rounds"
+            "clean_days_moments", "clean_days_dispatches",
+            "hypnosis_round"
         ))
         // Migrate boolean keys
         migrateBooleanKeys(context, "chat_prefs", editor, listOf(
-            "dark_mode"
+            "dual_model", "dispatch_fast_mode", "dark_mode"
         ))
         // Migrate dynamic keys (bg_*, gbg_*, group_auto_*, group_mode_*, moment_count_*)
         migrateDynamicKeys(context, "chat_prefs", editor)
@@ -92,8 +92,51 @@ object SettingsMigration {
         // 11. prompt_templates -> rhodes_settings
         migrateDynamicKeys(context, "prompt_templates", editor)
 
+        // 修复已迁移用户：被旧版 migrateFile 存成 String 的 int/bool 转回正确类型
+        fixupCorruptedInts(context, editor, listOf(
+            "msg_counter", "impression_msg_counter", "summary_threshold",
+            "ai_temperature", "clean_days", "summary_retain", "history_messages",
+            "nar_seg_min", "nar_seg_max", "nar_min", "nar_max",
+            "dia_seg_min", "dia_seg_max", "dia_min", "dia_max",
+            "daily_moment_target",
+            "moment_min_chars", "moment_max_chars", "diary_min_chars", "diary_max_chars",
+            "online_min_chars", "online_max_chars", "online_min_segs", "online_max_segs",
+            "dispatch_min_chars", "dispatch_max_chars",
+            "group_chat_min_interval", "group_chat_max_interval",
+            "group_auto_min", "group_auto_max",
+            "group_msg_min", "group_msg_max",
+            "group_speech_min", "group_speech_max",
+            "group_nar_seg_min", "group_nar_seg_max",
+            "group_nar_min", "group_nar_max",
+            "comment_min_chars", "comment_max_chars",
+            "clean_days_messages", "clean_days_anchors", "clean_days_diaries",
+            "clean_days_moments", "clean_days_dispatches",
+            "hypnosis_round"
+        ))
+        fixupCorruptedBooleans(context, editor, listOf("dual_model", "dispatch_fast_mode", "dark_mode"))
         editor.putBoolean(MIGRATION_DONE_KEY, true)
         editor.apply()
+    }
+
+    private fun fixupCorruptedInts(context: Context, editor: SharedPreferences.Editor, keys: List<String>) {
+        val target = context.getSharedPreferences(TARGET_SP, Context.MODE_PRIVATE)
+        for (key in keys) {
+            val v = target.all[key]
+            if (v is String) {
+                val intVal = v.toIntOrNull()
+                if (intVal != null) editor.putInt(key, intVal)
+            }
+        }
+    }
+
+    private fun fixupCorruptedBooleans(context: Context, editor: SharedPreferences.Editor, keys: List<String>) {
+        val target = context.getSharedPreferences(TARGET_SP, Context.MODE_PRIVATE)
+        for (key in keys) {
+            val v = target.all[key]
+            if (v is String) {
+                editor.putBoolean(key, v == "true")
+            }
+        }
     }
 
     private fun migrateFile(context: Context, spName: String, editor: SharedPreferences.Editor, keys: List<String>) {

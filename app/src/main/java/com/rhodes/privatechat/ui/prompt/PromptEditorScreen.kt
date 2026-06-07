@@ -1,6 +1,7 @@
 package com.rhodes.privatechat.ui.prompt
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -104,6 +105,15 @@ fun PromptEditorScreen(
         )
     }
 
+    val saveCurrent: () -> Unit = {
+        if (tabIndex < 4) {
+            textMap[currentKey()] = textFieldValue
+            viewModel.savePromptTemplate(currentType(), currentMode(), textFieldValue.text)
+        }
+    }
+
+    BackHandler(onBack = { saveCurrent(); onBack() })
+
     var showResetDialog by remember { mutableStateOf(false) }
     var showHelpDialog by remember { mutableStateOf(false) }
 
@@ -143,27 +153,14 @@ fun PromptEditorScreen(
             modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = {
-                if (tabIndex < 4) {
-                    textMap[currentKey()] = textFieldValue
-                    viewModel.savePromptTemplate(currentType(), currentMode(), textFieldValue.text)
-                }
-                onBack()
-            }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
+            IconButton(onClick = { saveCurrent(); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Spacer(modifier = Modifier.weight(1f))
             Text("提示词模板编辑", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
             Spacer(modifier = Modifier.weight(1f))
             IconButton(onClick = { showHelpDialog = true }) {
                 Icon(Icons.AutoMirrored.Filled.HelpOutline, "帮助", tint = Blue400, modifier = Modifier.size(22.dp))
             }
-            TextButton(onClick = {
-                if (tabIndex < 4) {
-                    textMap[currentKey()] = textFieldValue
-                    viewModel.savePromptTemplate(currentType(), currentMode(), textFieldValue.text)
-                    Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show()
-                }
-                onBack()
-            }) {
+            TextButton(onClick = { saveCurrent(); Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show(); onBack() }) {
                 Icon(Icons.Default.Check, null, tint = Blue400, modifier = Modifier.size(20.dp))
                 Text("保存", color = Blue400, fontWeight = FontWeight.SemiBold)
             }

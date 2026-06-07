@@ -79,17 +79,11 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = settings.getInt("clean_days", 30)
         set(value) = settings.putInt("clean_days", value)
 
-    var maxSegments: Int
-        get() = settings.getInt("max_segments", 3)
-        set(value) = settings.putInt("max_segments", value)
+    fun getLastMode(operatorId: String): String =
+        getString("last_mode_$operatorId", "online")
 
-    var maxCharsPerSegment: Int
-        get() = settings.getInt("max_chars_per_segment", 200)
-        set(value) = settings.putInt("max_chars_per_segment", value)
-
-    var lastMode: String
-        get() = settings.getString("last_mode", "online")
-        set(value) = settings.putString("last_mode", value)
+    fun putLastMode(operatorId: String, value: String) =
+        putString("last_mode_$operatorId", value)
 
     // === 旁白设置 ===
     var narSegMin: Int
@@ -105,7 +99,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = settings.putInt("nar_min", value)
 
     var narMax: Int
-        get() = settings.getInt("nar_max", 80)
+        get() = settings.getInt("nar_max", 150)
         set(value) = settings.putInt("nar_max", value)
 
     var diaSegMin: Int
@@ -121,7 +115,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = settings.putInt("dia_min", value)
 
     var diaMax: Int
-        get() = settings.getInt("dia_max", 50)
+        get() = settings.getInt("dia_max", 80)
         set(value) = settings.putInt("dia_max", value)
 
     // === 联机模式 ===
@@ -156,7 +150,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     // === 动态/日记设置 ===
     var momentMinChars: Int
-        get() = settings.getInt("moment_min_chars", 20)
+        get() = settings.getInt("moment_min_chars", 30)
         set(value) = settings.putInt("moment_min_chars", value)
 
     var momentMaxChars: Int
@@ -198,6 +192,8 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = settings.getInt("lmb", 1000)
         set(value) = settings.putInt("lmb", value)
 
+    val lmbFlow: Flow<Int> = flowSettings.getIntFlow("lmb", 1000)
+
     var lmbRefreshDate: String
         get() = settings.getString("lmb_refresh_date", "")
         set(value) = settings.putString("lmb_refresh_date", value)
@@ -212,7 +208,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     // === 动态设置 ===
     var dailyMomentTarget: Int
-        get() = settings.getInt("daily_moment_target", 3)
+        get() = settings.getInt("daily_moment_target", 2)
         set(value) = settings.putInt("daily_moment_target", value)
 
     // === 用户资料 ===
@@ -305,7 +301,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putInt("group_msg_min", value)
 
     var groupMsgMax: Int
-        get() = getInt("group_msg_max", 80)
+        get() = getInt("group_msg_max", 100)
         set(value) = putInt("group_msg_max", value)
 
     var groupSpeechMin: Int
@@ -329,7 +325,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putInt("group_nar_min", value)
 
     var groupNarMax: Int
-        get() = getInt("group_nar_max", 50)
+        get() = getInt("group_nar_max", 100)
         set(value) = putInt("group_nar_max", value)
 
     var commentMinChars: Int

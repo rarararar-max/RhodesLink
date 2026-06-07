@@ -32,8 +32,8 @@ fun PermissionsScreen(
     modifier: Modifier = Modifier
 ) {
     val operators by viewModel.operators.collectAsState()
-    val sessions by viewModel.sessions.collectAsState()
-    val groups = remember { sessions.filter { it.operatorId.startsWith("group_") } }
+    val allSessions by viewModel.allSessions.collectAsState()
+    val groups = allSessions.filter { it.operatorId.startsWith("group_") }
     val context = androidx.compose.ui.platform.LocalContext.current
     val tabs = listOf("干员", "群聊")
     var tabIndex by remember { mutableIntStateOf(0) }

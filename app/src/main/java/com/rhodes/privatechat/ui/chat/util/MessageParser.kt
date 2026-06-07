@@ -113,13 +113,10 @@ object MessageParser {
                     ))
                 }
             } else {
-                val isFirstDialogue = result.none { !it.isNarration && !it.isSystem }
                 result.add(ChatUiMessage(
                     msg.id * 1000 + segIdx, aiName, Primary, seg.content, msg.timestamp,
                     avatarUri = aiAvatarUri, mode = msg.mode,
-                    emotion = if (isFirstDialogue) emotion else "",
-                    activity = if (isFirstDialogue) msg.activity else "",
-                    location = if (isFirstDialogue) msg.location else "",
+                    emotion = emotion, activity = msg.activity, location = msg.location,
                     originalMessageId = msg.id, segmentIndex = segIdx
                 ))
             }

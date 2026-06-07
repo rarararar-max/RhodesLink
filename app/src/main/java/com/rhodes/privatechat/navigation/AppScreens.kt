@@ -9,6 +9,7 @@ import androidx.compose.runtime.remember
 import cafe.adriel.voyager.core.screen.Screen
 import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.currentOrThrow
+import com.rhodes.privatechat.game.mahjong.GameSerializer
 import com.rhodes.privatechat.game.mahjong.GameState
 import com.rhodes.privatechat.game.mahjong.GameStateCreateParams
 import com.rhodes.privatechat.game.mahjong.MahjongHistoryEntry
@@ -272,8 +273,9 @@ data object MahjongSelectRoute : Screen {
         val viewModel: MainViewModel = koinViewModel()
         val settings: SettingsRepository = koinInject()
         val userLmb = settings.lmb
+        val operators by viewModel.operators.collectAsState()
         com.rhodes.privatechat.ui.mahjong.SelectScreen(
-            operators = viewModel.operators.value,
+            operators = operators,
             userLmb = userLmb,
             userAvatarUri = viewModel.getUserProfile().avatarUri,
             userName = viewModel.getUserProfile().nickname,
@@ -311,7 +313,8 @@ data class MahjongGameRoute(
                 navigator.replace(MahjongSettlementRoute(result, names, replayData, gameState))
             },
             assistantName = asstOp?.name ?: "",
-            assistantAvatarUri = asstOp?.avatarUri ?: ""
+            assistantAvatarUri = asstOp?.avatarUri ?: "",
+            onSave = { g -> viewModel.saveMahjongGame(GameSerializer.serialize(g), "japanese_riichi") }
         )
     }
 }

@@ -70,8 +70,8 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
     LaunchedEffect(groupId, groupLoading) {
         if (groupId.isBlank()) return@LaunchedEffect
         if (!settings.getGroupAuto(groupId)) return@LaunchedEffect
-        val minMs = settings.groupAutoMin * 1000L
-        val maxMs = settings.groupAutoMax * 1000L
+        val minMs = settings.groupChatMinInterval * 1000L
+        val maxMs = settings.groupChatMaxInterval * 1000L
         while (true) {
             val interval = minMs + (Math.random() * (maxMs - minMs)).toLong()
             delay(interval)
@@ -133,7 +133,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                     ChatDropdownMenuItem(text = { Text("编辑群聊") }, onClick = { onEditGroup(groupId) })
                     ChatDropdownMenuItem(text = { Text("更换背景图") }, onClick = { bgPicker.launch("image/*") })
                     if (bgUri != null) ChatDropdownMenuItem(text = { Text("恢复默认背景") }, onClick = { showBgReset = true })
-                    ChatDropdownMenuItem(text = { Text("分享") }, onClick = { showShare = true })
+
                     ChatDropdownMenuItem(text = { Text("清除聊天记录") }, onClick = { showClearConfirm = true })
                 }
             )

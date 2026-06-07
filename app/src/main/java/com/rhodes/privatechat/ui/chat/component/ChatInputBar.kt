@@ -78,7 +78,7 @@ fun ChatInputBar(
 ) {
     var showInspire by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
-    var localSuggestions by remember { mutableStateOf(suggestions) }
+    var localSuggestions by remember(suggestions, text) { mutableStateOf(suggestions) }
 
     Column(modifier = modifier.fillMaxWidth().background(Surface)) {
         // 顶部指示器（如催眠状态）
@@ -94,7 +94,7 @@ fun ChatInputBar(
                 }
                 localSuggestions.forEach { s ->
                     Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(SurfaceVariant)
-                        .clickable { onTextChange(s); showInspire = false; onSend(s) }.padding(12.dp)) {
+                        .clickable { onTextChange(s); showInspire = false }.padding(12.dp)) {
                         Icon(Icons.Default.AutoAwesome, null, tint = Primary, modifier = Modifier.size(14.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(s, fontSize = 13.sp, color = TextPrimary)
@@ -117,16 +117,18 @@ fun ChatInputBar(
 
         // 输入行
         Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = {
-                showInspire = !showInspire
-                if (showInspire) {
-                    showMenu = false
-                    if (localSuggestions.isEmpty() && onGenerateSuggestions != null) {
-                        onGenerateSuggestions { localSuggestions = it }
+            if (onGenerateSuggestions != null) {
+                IconButton(onClick = {
+                    showInspire = !showInspire
+                    if (showInspire) {
+                        showMenu = false
+                        if (localSuggestions.isEmpty()) {
+                            onGenerateSuggestions { localSuggestions = it }
+                        }
                     }
+                }, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Default.AutoAwesome, "灵感", tint = if (showInspire) Primary else TextSecondary, modifier = Modifier.size(20.dp))
                 }
-            }, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Default.AutoAwesome, "灵感", tint = if (showInspire) Primary else TextSecondary, modifier = Modifier.size(20.dp))
             }
             OutlinedTextField(
                 value = text, onValueChange = onTextChange, modifier = Modifier.weight(1f),

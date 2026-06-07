@@ -89,10 +89,10 @@ fun GroupEditScreen(
         if (groupId.isNotBlank()) {
             val session = viewModel.repository.getSession(groupId)
             if (session != null) avatarUri = session.avatarUri
-            viewModel.loadGroupData(groupId) { name, mems, rls ->
+            viewModel.loadGroupData(groupId) { name, mems, rls, mutedIds ->
                 groupName = name
                 members.clear()
-                mems.forEach { m -> members.add(MemberState(m)) }
+                mems.forEach { m -> members.add(MemberState(m, muted = m.id in mutedIds || m.name in mutedIds)) }
                 rules = rls
             }
         }
@@ -106,8 +106,9 @@ fun GroupEditScreen(
             Text("群聊编辑", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
             Spacer(modifier = Modifier.weight(1f))
             TextButton(onClick = {
-                viewModel.saveGroup(groupId, groupName, members.map { it.op.id }, rules, avatarUri, members.filter { it.muted }.map { it.op.id })
-                settings.putGroupAuto(groupId, autoSpeak)
+                val resolvedId = if (groupId.isBlank()) "group_${java.util.UUID.randomUUID()}" else groupId
+                viewModel.saveGroup(resolvedId, groupName, members.map { it.op.id }, rules, avatarUri, members.filter { it.muted }.map { it.op.id })
+                viewModel.setAutoGroupChatEnabled(resolvedId, autoSpeak)
                 onBack()
             }) {
                 Icon(Icons.Default.Check, null, tint = Primary, modifier = Modifier.size(20.dp))

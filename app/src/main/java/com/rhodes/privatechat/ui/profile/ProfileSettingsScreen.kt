@@ -1,12 +1,12 @@
 package com.rhodes.privatechat.ui.profile
 
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,6 +40,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -55,9 +56,10 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import androidx.compose.ui.unit.sp
+import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.viewmodel.MainViewModel
-import androidx.compose.material3.ButtonDefaults
+import org.koin.compose.koinInject
 
 private val presetAvatars = listOf(
     Color(0xFF5B8DEF), Color(0xFF34C759), Color(0xFFFF9500),
@@ -70,21 +72,28 @@ fun ProfileSettingsScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val profile = remember { viewModel.getUserProfile() }
+    val profile by viewModel.userProfile.collectAsState()
     var nickname by remember { mutableStateOf(profile.nickname) }
     var gender by remember { mutableStateOf(profile.gender) }
     var bio by remember { mutableStateOf(profile.bio) }
-    val existingAvatar = viewModel.getUserProfile().avatarUri.ifBlank { null }
     val context = LocalContext.current
-    var avatarUri by remember { mutableStateOf(existingAvatar) }
+    var avatarUri by remember { mutableStateOf(profile.avatarUri.ifBlank { null }) }
     var cropTarget by remember { mutableStateOf<android.net.Uri?>(null) }
     val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> cropTarget = uri }
-    var avatarIndex by remember { mutableIntStateOf(0) }
+    val prefSettings: SettingsRepository = koinInject()
+    var avatarIndex by remember { mutableIntStateOf(prefSettings.getInt("user_avatar_index", 0)) }
+
+    val saveProfile: () -> Unit = {
+        viewModel.saveUserProfile(nickname, gender, bio, avatarUri ?: "")
+        prefSettings.putInt("user_avatar_index", avatarIndex)
+    }
+
+    BackHandler(onBack = { saveProfile(); onBack() })
 
     Box(modifier = modifier.fillMaxSize()) {
     Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding().imePadding()) {
         Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { viewModel.saveUserProfile(nickname, gender, bio, avatarUri ?: existingAvatar ?: ""); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
+            IconButton(onClick = { saveProfile(); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Text("身份设置", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
         }
         HorizontalDivider(color = Divider)

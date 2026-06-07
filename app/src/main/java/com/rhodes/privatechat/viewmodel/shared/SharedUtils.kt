@@ -69,14 +69,14 @@ class SharedUtils(
     }
 
     fun trackTokens(category: String, prompt: String, response: String) {
-        val estimate = ((prompt.length + response.length) * 3 / 2).coerceAtLeast(1)
+        val estimate = ((prompt.length + response.length) / 2).coerceAtLeast(1)
         addTokenEstimate(category, estimate)
     }
 
     /** 统计完整消息列表的token消耗（包含系统提示词+聊天历史+响应） */
     fun trackTokens(category: String, messages: List<AiMessage>, response: String) {
         val totalInput = messages.sumOf { it.content.length }
-        val estimate = ((totalInput + response.length) * 3 / 2).coerceAtLeast(1)
+        val estimate = ((totalInput + response.length) / 2).coerceAtLeast(1)
         addTokenEstimate(category, estimate)
     }
 

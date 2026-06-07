@@ -71,7 +71,9 @@ import com.rhodes.privatechat.data.db.entity.OperatorEntity
 import com.rhodes.privatechat.data.db.entity.RelationshipEntity
 import com.rhodes.privatechat.data.db.entity.RelationshipType
 import com.rhodes.privatechat.ui.theme.*
+import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.viewmodel.MainViewModel
+import org.koin.compose.koinInject
 
 @Composable
 fun OperatorEditScreen(
@@ -87,9 +89,10 @@ fun OperatorEditScreen(
 
     var name by remember { mutableStateOf(operator?.name ?: "新干员") }
     var title by remember { mutableStateOf(operator?.title ?: "") }
-    var activity by remember { mutableFloatStateOf(operator?.let { 0.5f } ?: 0.5f) }
-    var autoPost by remember { mutableStateOf(true) }
-    var allowChat by remember { mutableStateOf(true) }
+    var activity by remember { mutableFloatStateOf(operator?.activityLevel ?: 0.5f) }
+    val settings: SettingsRepository = koinInject()
+    var autoPost by remember { mutableStateOf(settings.getOperatorDynPermission(operator?.id ?: "")) }
+    var allowChat by remember { mutableStateOf(settings.getOperatorMsgPermission(operator?.id ?: "")) }
     var avatarUri by remember { mutableStateOf(operator?.avatarUri ?: "") }
     var privatePrompt by remember { mutableStateOf(operator?.privatePrompt ?: "") }
     var groupPrompt by remember { mutableStateOf(operator?.groupPrompt ?: "") }
@@ -113,9 +116,10 @@ fun OperatorEditScreen(
             privatePrompt = privatePrompt, groupPrompt = groupPrompt,
             userRelation = userRelation, avatarUri = avatarUri,
             autoPost = autoPost, allowChat = allowChat,
-            relationships = relationships
+            relationships = relationships,
+            activityLevel = activity,
+            onComplete = { onBack() }
         )
-        onBack()
     }
 
     Box(modifier = modifier.fillMaxSize()) {

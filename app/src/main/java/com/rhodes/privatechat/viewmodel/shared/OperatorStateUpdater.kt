@@ -42,7 +42,8 @@ class OperatorStateUpdater(
                         operatorId = observer.id,
                         type = AnchorType.EVENT,
                         content = "${moved.name}来到了${moved.location}，正在${moved.activity}，情绪${moved.emotion}",
-                        isPrivate = false
+                        isPrivate = false,
+                        expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L
                     )
                     repository.saveAnchor(anchor)
                 }

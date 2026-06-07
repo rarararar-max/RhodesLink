@@ -42,7 +42,7 @@ import java.util.Calendar
 import java.util.Locale
 import java.util.TimeZone
 
-data class DiaryOp(val id: String, val name: String, val color: Color)
+data class DiaryOp(val id: String, val name: String, val color: Color, val hasDiary: Boolean = false)
 
 private val colorPalette = listOf(
     Color(0xFF5B8DEF), Color(0xFF4DB6AC), Color(0xFFFF7043), Color(0xFF607D8B),
@@ -58,9 +58,24 @@ fun DiaryScreen(
     modifier: Modifier = Modifier
 ) {
     val operators by viewModel.operators.collectAsState()
-    val diaryOps: List<DiaryOp> = remember(operators) {
+    val diaryMap = remember { mutableStateMapOf<String, Boolean>() }
+    val yesterdayKey = remember {
+        val cal = Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai"))
+        cal.add(Calendar.DAY_OF_MONTH, -1)
+        SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply {
+            timeZone = TimeZone.getTimeZone("Asia/Shanghai")
+        }.format(cal.time)
+    }
+    // 异步查询各干员是否有日记
+    LaunchedEffect(operators, yesterdayKey) {
+        for (op in operators) {
+            val d = withContext(Dispatchers.IO) { viewModel.repository.getDiary(op.id, yesterdayKey) }
+            diaryMap[op.id] = d != null
+        }
+    }
+    val diaryOps: List<DiaryOp> = remember(operators, diaryMap) {
         operators.mapIndexed { i, op ->
-            DiaryOp(op.id, op.name, colorPalette[i % colorPalette.size])
+            DiaryOp(op.id, op.name, colorPalette[i % colorPalette.size], diaryMap[op.id] == true)
         }
     }
     val context = LocalContext.current
@@ -73,7 +88,6 @@ fun DiaryScreen(
     var showPanel by remember { mutableStateOf(true) }
     var diaryContent by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
 
     // 切换干员时从 DB 加载已有日记
     LaunchedEffect(selectedName) {
@@ -81,7 +95,9 @@ fun DiaryScreen(
         isLoading = true
         val cal = Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai"))
         cal.add(Calendar.DAY_OF_MONTH, -1)
-        val yesterday = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(cal.time)
+        val yesterday = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply {
+            timeZone = TimeZone.getTimeZone("Asia/Shanghai")
+        }.format(cal.time)
         val existing = withContext(Dispatchers.IO) {
             viewModel.repository.getDiary(opId, yesterday)
         }
@@ -121,6 +137,7 @@ fun DiaryScreen(
                                 } else {
                                     AsyncImage(model = avatarUri, contentDescription = null, modifier = Modifier.size(40.dp).clip(CircleShape), contentScale = ContentScale.Crop)
                                 }
+                                Spacer(modifier = Modifier.height(4.dp))
                                 Text(op.name, fontSize = 10.sp, color = if (op.name == selectedName) Primary else TextSecondary)
                             }
                         }
@@ -167,22 +184,10 @@ fun DiaryScreen(
                                 val opId = diaryOps.find { it.name == selectedName }?.id ?: return@Button
                                 isLoading = true
                                 viewModel.generateDiary(opId) { text ->
-                                    when (text) {
-                                        "__NOT_FOUND__" -> android.widget.Toast.makeText(context, "干员不存在或已被删除", android.widget.Toast.LENGTH_SHORT).show()
-                                        "__NO_API_KEY__" -> android.widget.Toast.makeText(context, "请先在设置中配置 API Key", android.widget.Toast.LENGTH_SHORT).show()
-                                        "__AI_FAILED__" -> android.widget.Toast.makeText(context, "AI 生成失败，请检查网络和 API Key 后重试", android.widget.Toast.LENGTH_SHORT).show()
-                                        "昨天已写" -> {
-                                            scope.launch(Dispatchers.IO) {
-                                                val cal = Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai"))
-                                                cal.add(Calendar.DAY_OF_MONTH, -1)
-                                                val yesterday = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(cal.time)
-                                                val existing = viewModel.repository.getDiary(opId, yesterday)
-                                                withContext(Dispatchers.Main) {
-                                                    diaryContent = existing?.content
-                                                }
-                                            }
-                                        }
-                                        else -> diaryContent = text
+                                    if (text.isNotBlank()) {
+                                        diaryContent = text
+                                    } else {
+                                        android.widget.Toast.makeText(context, "AI生成失败，请检查网络和API Key后重试", android.widget.Toast.LENGTH_SHORT).show()
                                     }
                                     isLoading = false
                                 }

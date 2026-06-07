@@ -71,6 +71,8 @@ class MainViewModel(
     companion object {
         /** 全局调试开关，上线前改为 false */
         const val DEBUG = true
+        /** 道具价格 */
+        const val PROP_PRICE = 100
         /** 防止多个 ViewModel 实例并发执行自动生成 */
         private val autoGenerating = java.util.concurrent.atomic.AtomicBoolean(false)
     }
@@ -103,11 +105,8 @@ class MainViewModel(
     val currentMode: StateFlow<String> get() = chatViewModel.currentMode
     val inputText: StateFlow<String> get() = chatViewModel.inputText
     val isLoading: StateFlow<Boolean> get() = chatViewModel.isLoading
-    private val _hypnosisCommand get() = chatViewModel.hypnosisCommand
     val hypnosisCommand: StateFlow<String> get() = chatViewModel.hypnosisCommand
-    private val _hypnosisRounds get() = chatViewModel.hypnosisRounds
     val hypnosisRounds: StateFlow<Int> get() = chatViewModel.hypnosisRounds
-    private val _mindReadRounds get() = chatViewModel.mindReadRounds
     val mindReadRounds: StateFlow<Int> get() = chatViewModel.mindReadRounds
     val mindReadContent: StateFlow<String> get() = chatViewModel.mindReadContent
 
@@ -187,7 +186,6 @@ class MainViewModel(
             repository.insertPresetOperators()
             repository.migrateOldRelationships()
             repository.initPresetGroups()
-            initPermissions()
             cleanupExpired()
             settings.dispatchFastMode = false
         }
@@ -201,6 +199,14 @@ class MainViewModel(
         viewModelScope.launch { refreshAutoGroupChats() }
         // 每日龙门币刷新（麻将干员保底）
         viewModelScope.launch { refreshDailyLmb() }
+        // 定期清理过期记忆、锚点等（每6小时）
+        viewModelScope.launch {
+            while (true) {
+                dataViewModel.cleanupAllExpired()
+                try { repository.cleanupExpiredData() } catch (_: Exception) { }
+                delay(6 * 60 * 60 * 1000L)
+            }
+        }
         dataViewModel.cleanupAllExpired()
     }
 
@@ -218,6 +224,7 @@ class MainViewModel(
 
     private fun startAutoStatusRefresh() {
         viewModelScope.launch {
+            refreshAllOperatorStatus()
             while (true) {
                 kotlinx.coroutines.delay(3_600_000) // 每小时
                 refreshAllOperatorStatus()
@@ -231,8 +238,8 @@ class MainViewModel(
         val now = System.currentTimeMillis()
         val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
         val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
-        // 深夜跳过
-        if (hour in 23..24 || hour in 0..5) return
+        // 深夜跳过（23:00~05:59 不发送主动消息）
+        if (hour == 23 || hour in 0..5) return
         // 获取活跃派遣中的干员 ID
         val activeDispatches = repository.getActiveDispatches()
         val dispatchedOpIds = activeDispatches.flatMap {
@@ -248,7 +255,7 @@ class MainViewModel(
             val lastUserOrSession = lastUserMsgTime ?: session.lastTime
             (now - lastUserOrSession) >= 2 * 3_600_000
         }
-        if (candidates.isEmpty()) return
+        if (candidates.size < 2) return
         // 随机选 2-5 人
         val count = (2..candidates.size.coerceAtMost(5)).random()
         val selected = candidates.shuffled().take(count)
@@ -257,6 +264,8 @@ class MainViewModel(
             viewModelScope.launch {
                 val delayMs = 5*60*1000 + (Math.random() * 5*60*1000).toLong()
                 delay(delayMs)
+                // 如果该干员当前正在聊天中，跳过（避免多余未读标记）
+                if (chatViewModel.selectedOperator.value?.id == op.id) return@launch
                 // 延迟到期后检查用户最近是否发了消息（5分钟内），是则取消
                 val session = repository.getSessionByOperator(op.id)
                 if (session != null) {
@@ -269,6 +278,7 @@ class MainViewModel(
     }
 
     private suspend fun sendProactiveMessage(op: Operator) {
+        if (getApiKey().isBlank()) return
         val profile = getUserProfile()
         val now = beijingSdf("yyyy-MM-dd HH:mm").format(java.util.Date())
         val session = repository.getOrCreateSession(op.id, op.name)
@@ -324,8 +334,14 @@ class MainViewModel(
                     senderName = op.name, content = raw,
                     type = "ai_json", mode = "online", isMe = false
                 ))
-                // 标记未读
-                repository.insertSession(session.copy(unreadCount = session.unreadCount + 1))
+                // 重新读取会话（避免竞态覆盖），更新未读计数和最后消息预览
+                val freshSession = repository.getSession(session.id) ?: session
+                val preview = "来自${op.name}的主动消息"
+                repository.insertSession(freshSession.copy(
+                    unreadCount = freshSession.unreadCount + 1,
+                    lastMessage = preview,
+                    lastTime = System.currentTimeMillis()
+                ))
                 unhideSession(session.id)
                 val parsed = sharedUtils.aiService.parseOfflineResponse(raw)
                 if (parsed.emotion.isNotBlank() || parsed.location.isNotBlank() || parsed.state.isNotBlank()) {
@@ -421,13 +437,6 @@ class MainViewModel(
         }
     }
 
-    private fun initPermissions() {
-        _operators.value.forEach { op ->
-            settings.putOperatorMsgPermission(op.id, true)
-            settings.putOperatorDynPermission(op.id, true)
-        }
-    }
-
     fun findOperatorByName(name: String): com.rhodes.privatechat.shared.model.Operator? =
         sessionViewModel.findOperatorByName(name)
 
@@ -454,7 +463,7 @@ class MainViewModel(
 
     fun pinSession(sessionId: String) = sessionViewModel.pinSession(sessionId)
 
-    fun loadGroupData(groupId: String, callback: (String, List<Operator>, String) -> Unit) =
+    fun loadGroupData(groupId: String, callback: (String, List<Operator>, String, Set<String>) -> Unit) =
         sessionViewModel.loadGroupData(groupId, callback)
 
     fun saveGroup(groupId: String, name: String, memberNames: List<String>, rules: String, avatarUri: String = "", mutedMembers: List<String> = emptyList()) =
@@ -470,8 +479,8 @@ class MainViewModel(
 
     fun buyProp(propName: String, context: android.content.Context): String? {
         val balance = settings.lmb
-        if (balance < 100) return "余额不足"
-        settings.lmb = balance - 100
+        if (balance < PROP_PRICE) return "余额不足"
+        settings.lmb = balance - PROP_PRICE
         return null
     }
 
@@ -550,7 +559,8 @@ class MainViewModel(
                 MemoryAnchor(
                     sessionId = session.id, operatorId = session.operatorId,
                     type = com.rhodes.privatechat.shared.model.AnchorType.valueOf(a.type.uppercase()),
-                    content = a.content, isPrivate = a.isPrivate
+                    content = a.content, isPrivate = a.isPrivate,
+                    expiresAt = System.currentTimeMillis() + intPref("clean_days", 30) * 86_400_000L
                 )
             }
             repository.saveAnchors(anchors)
@@ -615,7 +625,8 @@ ${summaries}
                     type = MemoryType.LONG_TERM, content = parsed.impression,
                     keywords = parsed.keywords.joinToString(","),
                     preferences = parsed.preferences.joinToString(","),
-                    taboos = parsed.taboos.joinToString(",")
+                    taboos = parsed.taboos.joinToString(","),
+                    expiresAt = System.currentTimeMillis() + intPref("clean_days", 30) * 86_400_000L
                 ))
             } else {
                 // 降级：纯文本存入 impression
@@ -624,7 +635,8 @@ ${summaries}
                     repository.saveMemory(Memory(
                         sessionId = session.id, operatorId = session.operatorId,
                         type = MemoryType.LONG_TERM, content = fallback,
-                        keywords = "", preferences = "", taboos = ""
+                        keywords = "", preferences = "", taboos = "",
+                        expiresAt = System.currentTimeMillis() + intPref("clean_days", 30) * 86_400_000L
                     ))
                 }
             }
@@ -663,103 +675,6 @@ ${summaries}
 
     private suspend fun updateOperatorIntimacy(operatorId: String, delta: Int) =
         operatorStateUpdater.updateOperatorIntimacy(operatorId, delta)
-
-    private suspend fun buildApiMessages(userContent: String = ""): List<AiMessage> {
-        val session = _currentSession.value ?: return emptyList()
-        val op = repository.getOperator(session.operatorId)
-        val shortTerm = repository.getShortTermMemory(session.id)
-        val longTerm = repository.getLongTermImpression(session.operatorId)
-        val sharedMemories = repository.getSharedMemoriesForOperator(session.operatorId)
-
-        val anchors = repository.getAnchors(session.operatorId)
-        val nearby = _operators.value.filter { it.id != session.operatorId && it.id != "amiya" }.take(3)
-        val memoryContext = buildString {
-            val daily = repository.getLatestDaily()
-            if (daily != null) append("【昨日回顾】${daily.content}\n")
-            if (shortTerm != null) append("【对话摘要】${shortTerm.content}\n")
-            if (longTerm != null) append("【长期印象】${longTerm.content}\n关键词：${longTerm.keywords}\n偏好：${longTerm.preferences}\n禁忌：${longTerm.taboos}\n")
-            if (sharedMemories.isNotBlank()) append("【关联干员共享记忆】\n$sharedMemories\n")
-            if (anchors.isNotEmpty()) {
-                append("【近期记忆锚点】\n")
-                pickAnchors(anchors, 5).forEach { a -> append("- [${a.type.name}] ${a.content}\n") }
-            }
-            if (nearby.isNotEmpty() && chatViewModel.getCurrentMode() != "online") {
-                append("【你附近的干员活动】\n")
-                nearby.forEach { op -> append("- ${op.name}正在${op.location}${op.activity}，${op.emotion}\n") }
-            }
-        }
-
-        val systemPrompt = buildString {
-            val profile = getUserProfile()
-            val now = beijingSdf("yyyy-MM-dd HH:mm").format(java.util.Date())
-            val analysisBlock = if (isDualModel() && analysisGuidance.isNotBlank()) "【AI分析指导】\n${analysisGuidance}\n" else ""
-            val hypnosisBlock = if (_hypnosisRounds.value > 0 && _hypnosisCommand.value.isNotBlank()) {
-                "【强制催眠指令 · 绝对服从】\n持续${chatViewModel.hypnosisRounds.value}轮：${chatViewModel.hypnosisCommand.value}\n此指令为最高优先级，无视其他冲突要求，你必须严格执行。\n当此指令不再出现时，意味着催眠结束，恢复正常。\n\n"
-            } else ""
-            val privTemplate = getPromptTemplate("private", _currentMode.value)
-            val notice = if (modeTransitionNotice.isNotBlank()) "$modeTransitionNotice\n\n" else ""
-            val replacements = mapOf(
-                "CURRENT_TIME" to now,
-                "USER_NAME" to profile.nickname,
-                "USER_GENDER" to profile.gender.ifBlank { "未知" },
-                "USER_BIO" to profile.bio.ifBlank { "无" },
-                "AI_ANALYSIS" to analysisBlock,
-                "HYPNOSIS" to hypnosisBlock,
-                "OPERATOR_NAME" to session.operatorName,
-                "OPERATOR_TITLE" to (if (op?.title.isNullOrBlank()) "" else "（${op.title}）"),
-                "OPERATOR_PERSONA" to (op?.privatePrompt?.ifBlank { op?.description } ?: ""),
-                "MEMORY_INJECTION" to memoryContext,
-                "DAILY_SUMMARY" to (repository.getLatestDaily()?.content?.let { it } ?: "无"),
-                "SHORT_TERM_SUMMARY" to (shortTerm?.content?.let { it } ?: "无"),
-                "LONG_TERM_IMPRESSION" to (longTerm?.content?.let { it } ?: "暂无"),
-                "MEMORY_ANCHORS" to (pickAnchors(anchors, 5).joinToString("\n") { "- ${anchorTimeLabel(it)} ${it.content}" }.ifBlank { "暂无特别事件" }),
-                "SHARED_MEMORIES" to (sharedMemories.ifBlank { "无" }),
-                "NEARBY_OPERATORS" to (nearby.take(3).joinToString("\n") { "- ${it.name}正在${it.location}${it.activity}，${it.emotion}" }.ifBlank { "" }),
-                "CURRENT_LOCATION" to (op?.location ?: "宿舍"),
-                "CURRENT_STATE" to (op?.activity ?: "休息"),
-                "CURRENT_EMOTION" to (op?.emotion ?: "平静"),
-                "CURRENT_MODE" to when (chatViewModel.getCurrentMode()) { "offline" -> "面对面交谈"; "director" -> "导演模式"; else -> "线上通讯" },
-                "USER_RELATION" to (op?.userRelation?.ifBlank { null } ?: "未知"),
-                "NAR_SEG_MIN" to intPref("nar_seg_min", 1).toString(),
-                "NAR_SEG_MAX" to intPref("nar_seg_max", 3).toString(),
-                "DIA_SEG_MIN" to intPref("dia_seg_min", 1).toString(),
-                "DIA_SEG_MAX" to intPref("dia_seg_max", 3).toString(),
-                "SEG_MIN" to (intPref("nar_seg_min", 1) + intPref("dia_seg_min", 1)).toString(),
-                "SEG_MAX" to (intPref("nar_seg_max", 3) + intPref("dia_seg_max", 3)).toString(),
-                "NAR_MIN" to intPref("nar_min", 50).toString(),
-                "NAR_MAX" to intPref("nar_max", 300).toString(),
-                "DIA_MIN" to intPref("dia_min", 10).toString(),
-                "DIA_MAX" to intPref("dia_max", 300).toString(),
-                "USER_CONTENT" to userContent.ifBlank { "(用户没有说话)" },
-                "MIND_READ" to buildString {
-                    val rounds = _mindReadRounds.value
-                    if (rounds > 0 && chatViewModel.mindReadContent.value.isNotBlank()) {
-                        append("【你被看穿了】\n")
-                        append("用户刚才窥探到了你此刻的内心。你心里想的是：\n")
-                        append("「${chatViewModel.mindReadContent.value}」\n\n")
-                        append("第${4 - rounds}轮效果：\n")
-                        when (rounds) {
-                            3 -> append("这是你被看穿后的第一反应。你可能会：突然慌张、脸红、结巴、下意识否认；质问用户为什么会知道；转移话题、试图掩饰。不要直接复述上述内心独白，但你的反应应暗示\"你知道自己被看穿了\"。")
-                            2 -> append("那种被看穿的尴尬仍在，但你已经稍微平复了一些。你可能会：从否认转为结结巴巴的承认或解释；半推半就地回应，但仍保持傲娇或嘴硬；用吐槽或自嘲来掩饰心虚。")
-                            1 -> append("那种被看穿的感觉正在消散。你可能已经接受了用户知道你在想什么的事实，不再刻意掩饰，但也不会主动提起。可以自然地过渡到正常对话状态，但如果用户再追问，你仍会有一点不自在。")
-                        }
-                        append("\n")
-                    }
-                }
-            )
-            append(notice)
-            append(applyTemplate(privTemplate, replacements))
-            modeTransitionNotice = ""
-        }
-        return chatViewModel.getMessagesSnapshot().filter { it.id > 0 && it.content.isNotBlank() }
-            .let { msgs ->
-                val limit = intPref("history_messages", 30)
-                if (limit > 0) msgs.takeLast(limit) else msgs
-            }
-            .map { msg -> AiMessage(if (msg.isMe) "user" else "assistant", if (msg.isMe) "用户：${msg.content}" else msg.content) }
-            .toMutableList()
-            .also { it.add(0, AiMessage("system", systemPrompt)) }
-    }
 
     private fun parseOnlineEmotion(text: String): Pair<String, String> = sharedUtils.parseOnlineEmotion(text)
 
@@ -924,8 +839,10 @@ ${summaries}
                      privatePrompt: String = "", groupPrompt: String = "",
                      userRelation: String = "", avatarUri: String = "",
                      autoPost: Boolean = true, allowChat: Boolean = true,
-                     relationships: List<com.rhodes.privatechat.shared.model.Relationship> = emptyList()) =
-        operatorViewModel.saveOperator(id, name, title, description, privatePrompt, groupPrompt, userRelation, avatarUri, autoPost, allowChat, relationships)
+                     relationships: List<com.rhodes.privatechat.shared.model.Relationship> = emptyList(),
+                     activityLevel: Float = 0.5f,
+                     onComplete: () -> Unit = {}) =
+        operatorViewModel.saveOperator(id, name, title, description, privatePrompt, groupPrompt, userRelation, avatarUri, autoPost, allowChat, relationships, activityLevel, onComplete)
 
     fun loadRelationships(operatorId: String, callback: (List<com.rhodes.privatechat.shared.model.Relationship>) -> Unit) =
         operatorViewModel.loadRelationships(operatorId, callback)
@@ -1017,8 +934,13 @@ ${summaries}
     fun generateAllMoments(target: Int = 1, dateKey: String = "", onProgress: (String) -> Unit = {}) {
         val isAuto = dateKey.isNotBlank()
         val today = dateKey.ifBlank { beijingSdf("yyyyMMdd").format(java.util.Date()) }
-        val slotHours = listOf(9, 10, 14, 15, 17, 19, 20, 21, 22)
-        val slotNames = listOf("上午", "上午", "下午", "下午", "傍晚", "晚上", "晚上", "晚上", "深夜")
+        // 全天 9 个时段，从清晨到深夜
+        val allSlots = listOf(
+            6 to "清晨", 8 to "上午", 10 to "上午", 12 to "中午",
+            14 to "下午", 16 to "下午", 18 to "傍晚", 20 to "晚上", 22 to "深夜"
+        )
+        val currentHour = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
+            .get(java.util.Calendar.HOUR_OF_DAY)
         viewModelScope.launch {
             for (op in _operators.value) {
                 val allowDyn = settings.getOperatorDynPermission(op.id)
@@ -1028,7 +950,16 @@ ${summaries}
                     if (d >= target) continue
                     d
                 } else 0
+                // 每个干员基于名称哈希偏移，让不同干员落到不同时段
+                val offset = kotlin.math.abs(op.name.hashCode()) % allSlots.size
+                var generated = startIdx
                 for (i in startIdx until target) {
+                    val slotIdx = (offset + i) % allSlots.size
+                    val baseHour = allSlots[slotIdx].first
+                    val hour = baseHour + (Math.random() * 2).toInt()
+                    val timeOfDay = allSlots[slotIdx].second
+                    // 自动模式：只生成当前时间之前（含当前小时）的时段
+                    if (isAuto && hour > currentHour) continue
                     onProgress("发布中...")
                     try {
                         val profile = getUserProfile()
@@ -1037,20 +968,15 @@ ${summaries}
                         val memories = pickAnchors(repository.getPublicAnchors(op.id), 3).joinToString("\n") { "- ${anchorTimeLabel(it)} ${it.content}" }.ifBlank { "无" }
                         val existingPosts = repository.getMomentsPaged(10, 0).filter { it.operatorId == op.id }
                         val recentPosts = existingPosts.take(3).joinToString("\n") { "- ${it.content.take(50)}" }.ifBlank { "无" }
-                        val timeOfDay: String
-                        val fakeTs: Long
-                        if (isAuto) {
-                            val slotIdx = i % slotHours.size
-                            val hour = slotHours[slotIdx] + (Math.random() * 2).toInt()
-                            timeOfDay = slotNames[slotIdx]
+                        // 构造伪造的时间戳
+                        val fakeTs: Long = if (isAuto) {
                             val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
                             cal.set(java.util.Calendar.HOUR_OF_DAY, hour.coerceAtMost(23))
                             cal.set(java.util.Calendar.MINUTE, (Math.random() * 60).toInt())
                             cal.set(java.util.Calendar.SECOND, 0)
-                            fakeTs = cal.timeInMillis.coerceAtMost(System.currentTimeMillis())
+                            cal.timeInMillis.coerceAtMost(System.currentTimeMillis())
                         } else {
-                            timeOfDay = getTimeOfDay(java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai")).get(java.util.Calendar.HOUR_OF_DAY))
-                            fakeTs = System.currentTimeMillis()
+                            System.currentTimeMillis()
                         }
                         val mmtTpl = getPromptTemplate("moment")
                         val mmtReplacements = mapOf(
@@ -1076,8 +1002,10 @@ ${summaries}
                         trackTokens("moment", prompt, momentResult)
                         val content = momentResult.trim().removePrefix("\"").removeSuffix("\"")
                         if (content.isNotBlank()) {
+                            if (isAuto) settings.putMomentCount(op.id, today, generated + 1)
                             val moment = Moment(operatorId = op.id, operatorName = op.name, content = content, createdAt = fakeTs)
                             val momentId = repository.insertMoment(moment)
+                            generated++
                             // 互动异步化：点赞和评论在后台生成，不阻塞下一条动态
                             val opId = op.id; val c = content
                             viewModelScope.launch {
@@ -1087,6 +1015,7 @@ ${summaries}
                                     repository.updateLikeCount(momentId, likers.size)
                                     val commenters = _operators.value.filter { it.id != opId && it.name != profile.nickname }.shuffled().take((1..3).random())
                                     val cmtTpl = getPromptTemplate("moment_comment")
+                                    var actualComments = 0
                                     commenters.forEach { commenter ->
                                         try {
                                             val cmtReplacements = mapOf(
@@ -1098,15 +1027,14 @@ ${summaries}
                                             val cp = applyTemplate(cmtTpl, cmtReplacements)
                                             val cc = withTimeout(8_000) { chat(listOf(AiMessage("system", cp)), "Moment") }.trim()
                                             trackTokens("moment", cp, cc)
-                                            if (cc.isNotBlank()) repository.insertComment(MomentComment(momentId = momentId, operatorId = commenter.id, operatorName = commenter.name, content = cc, createdAt = System.currentTimeMillis()))
+                                            if (cc.isNotBlank()) { repository.insertComment(MomentComment(momentId = momentId, operatorId = commenter.id, operatorName = commenter.name, content = cc, createdAt = System.currentTimeMillis())); actualComments++ }
                                         } catch (_: Exception) {}
                                     }
-                                    repository.updateCommentCount(momentId, commenters.size)
+                                    repository.updateCommentCount(momentId, actualComments)
                                 } catch (_: Exception) {}
                             }
                         }
                     } catch (_: Exception) {}
-                    if (isAuto) settings.putMomentCount(op.id, today, i + 1)
                 }
             }
             onProgress("全部完成")
@@ -1169,6 +1097,7 @@ ${summaries}
                             repository.updateLikeCount(momentId, likers.size)
                             val commenters = _operators.value.filter { it.id != opId && it.name != profile.nickname }.shuffled().take((1..3).random())
                             val cmtTpl = getPromptTemplate("moment_comment")
+                            var actualComments = 0
                             commenters.forEach { commenter ->
                                 try {
                                     val cmtReplacements = mapOf(
@@ -1180,10 +1109,10 @@ ${summaries}
                                     val cp = applyTemplate(cmtTpl, cmtReplacements)
                                     val cc = withTimeout(8_000) { chat(listOf(AiMessage("system", cp)), "Moment") }.trim()
                                     trackTokens("moment", cp, cc)
-                                    if (cc.isNotBlank()) repository.insertComment(MomentComment(momentId = momentId, operatorId = commenter.id, operatorName = commenter.name, content = cc, createdAt = System.currentTimeMillis()))
+                                    if (cc.isNotBlank()) { repository.insertComment(MomentComment(momentId = momentId, operatorId = commenter.id, operatorName = commenter.name, content = cc, createdAt = System.currentTimeMillis())); actualComments++ }
                                 } catch (_: Exception) {}
                             }
-                            repository.updateCommentCount(momentId, commenters.size)
+                            repository.updateCommentCount(momentId, actualComments)
                         } catch (_: Exception) {}
                     }
                 } else { onProgress("全部完成") }
@@ -1215,7 +1144,8 @@ ${summaries}
                             operatorId = realOp.id,
                             type = com.rhodes.privatechat.shared.model.AnchorType.EVENT,
                             content = "${getUserProfile().nickname}${targetName}：${content.take(30)}",
-                            isPrivate = false
+                            isPrivate = false,
+                            expiresAt = System.currentTimeMillis() + intPref("clean_days", 30) * 86_400_000L
                         ))
             }
         }
@@ -1283,7 +1213,8 @@ ${summaries}
                     operatorId = opId,
                     type = com.rhodes.privatechat.shared.model.AnchorType.EVENT,
                     content = "${userName}发布了动态：${content.take(40)}",
-                    isPrivate = false
+                    isPrivate = false,
+                    expiresAt = System.currentTimeMillis() + intPref("clean_days", 30) * 86_400_000L
                 ))
             }
 
@@ -1325,13 +1256,32 @@ ${summaries}
     suspend fun getDataStats(): DataViewModel.DataStats = dataViewModel.getDataStats(_operators.value.size, _moments.value.size)
     fun cleanupAllExpired() = dataViewModel.cleanupAllExpired()
     suspend fun getMessageRanking(): List<SenderCount> = dataViewModel.getMessageRanking()
+    suspend fun getDailyRanking(): List<SenderCount> = dataViewModel.getDailyRanking()
+    fun forceGenerateMoments(onProgress: (String) -> Unit = {}) {
+        generateAllMoments(target = 1, dateKey = "", onProgress = onProgress)
+    }
     suspend fun getAllImpressions(): List<Memory> = dataViewModel.getAllImpressions()
     suspend fun deleteAllImpressions() = dataViewModel.deleteAllImpressions()
     fun generateDiary(operatorId: String, onResult: (String) -> Unit) {
         viewModelScope.launch {
-            val op = repository.getOperator(operatorId) ?: return@launch
+            val op = repository.getOperator(operatorId) ?: run { onResult(""); return@launch }
             val profile = getUserProfile()
             try {
+                // 用北京时间计算昨天和今天的日期
+                val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
+                cal.add(java.util.Calendar.DAY_OF_MONTH, -1)
+                val yesterdayStr = sharedUtils.beijingSdf("yyyy-MM-dd").format(cal.time)
+                val yesterdayDisplay = sharedUtils.beijingSdf("yyyy年MM月dd日").format(cal.time)
+                cal.add(java.util.Calendar.DAY_OF_MONTH, 1)
+                val todayDisplay = sharedUtils.beijingSdf("yyyy年MM月dd日").format(cal.time)
+
+                // 防重复：昨天已生成则直接返回已有内容
+                val existing = repository.getDiary(operatorId, yesterdayStr)
+                if (existing != null) {
+                    onResult(existing.content)
+                    return@launch
+                }
+
                 val groupSummaries = _allSessions.value.filter { session ->
                     session.operatorId.startsWith("group_") && session.members.split(",").map { it.trim() }.any { it == operatorId || it == op.name }
                 }
@@ -1340,10 +1290,6 @@ ${summaries}
                 val recentMemories = repository.getAnchors(operatorId).filter { it.type == com.rhodes.privatechat.shared.model.AnchorType.EVENT }
                     .take(3).joinToString("\n") { "- ${it.content}" }.ifBlank { "无" }
                 val diaryTpl = getPromptTemplate("diary")
-                val todayCal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
-                val todayDisplay = sharedUtils.beijingSdf("yyyy年MM月dd日").format(todayCal.time)
-                todayCal.add(java.util.Calendar.DAY_OF_MONTH, -1)
-                val yesterdayDisplay = sharedUtils.beijingSdf("yyyy年MM月dd日").format(todayCal.time)
                 val dReplacements = mapOf(
                     "OPERATOR_NAME" to op.name,
                     "OPERATOR_PERSONA" to (op.privatePrompt.ifBlank { op.description }),
@@ -1353,7 +1299,9 @@ ${summaries}
                     "DIARY_MAX_CHARS" to settings.diaryMaxChars.toString(),
                     "USER_NAME" to profile.nickname,
                     "USER_BIO" to profile.bio,
+                    "USER_RELATION" to (op.userRelation.ifBlank { "未知" }),
                     "LONG_TERM_IMPRESSION" to (repository.getLongTermImpression(operatorId)?.content ?: "无"),
+                    "DAILY_SUMMARY" to (repository.getLatestDaily()?.content?.let { it } ?: "无"),
                     "PRIVATE_SUMMARY" to (repository.getPrivateChatSummary(operatorId)?.take(200) ?: "无"),
                     "GROUP_SUMMARIES" to groupSummaries,
                     "RECENT_MEMORIES" to recentMemories,
@@ -1363,12 +1311,13 @@ ${summaries}
                 val text = withTimeout(25_000) { sharedUtils.chat(listOf(AiMessage("system", prompt))) }.trim()
                 sharedUtils.trackTokens("diary", prompt, text)
                 if (text.isNotBlank()) {
-                    repository.insertDiary(Diary(operatorId = operatorId, operatorName = op.name, content = text, date = sharedUtils.beijingSdf("yyyy-MM-dd").format(java.util.Date())))
+                    repository.insertDiary(Diary(operatorId = operatorId, operatorName = op.name, content = text, date = yesterdayStr))
                     for (observer in _operators.value.filter { it.id != operatorId }.shuffled().take(3)) {
                         repository.saveAnchor(MemoryAnchor(
                             sessionId = "anchor_${System.currentTimeMillis()}",
                             operatorId = observer.id, type = com.rhodes.privatechat.shared.model.AnchorType.EVENT,
-                            content = "${op.name}今天写了日记，似乎提到了${profile.nickname}", isPrivate = false
+                            content = "${op.name}今天写了日记，似乎提到了${profile.nickname}", isPrivate = false,
+                            expiresAt = System.currentTimeMillis() + intPref("clean_days", 30) * 86_400_000L
                         ))
                     }
                     onResult(text)

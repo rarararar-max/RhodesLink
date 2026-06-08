@@ -46,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.data.db.entity.MemoryEntity
 import com.rhodes.privatechat.data.db.entity.OperatorEntity
+import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import java.text.SimpleDateFormat
@@ -154,9 +155,7 @@ private fun DetailImpressionsPage(impressions: List<MemoryEntity>, operators: Li
             val displayName = op?.name ?: entry.operatorId
             Column(modifier = Modifier.fillMaxWidth().background(Surface).padding(16.dp)) {
                 Row(modifier = Modifier.clickable { onOperatorClick(entry.operatorId) }, verticalAlignment = Alignment.CenterVertically) {
-                    Box(modifier = Modifier.size(40.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) {
-                        Text(displayName.take(1), color = Color.White, fontWeight = FontWeight.Bold)
-                    }
+                OperatorAvatarImage(avatarUri = op?.avatarUri ?: "", name = displayName, modifier = Modifier.size(40.dp))
                     Spacer(modifier = Modifier.width(10.dp))
                     Column {
                         Text(displayName, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)

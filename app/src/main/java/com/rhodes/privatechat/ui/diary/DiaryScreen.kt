@@ -22,6 +22,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -32,6 +33,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import kotlinx.coroutines.Dispatchers
@@ -79,20 +81,20 @@ fun DiaryScreen(
         }
     }
     val context = LocalContext.current
-    var selectedName by remember { mutableStateOf("") }
+    var selectedName by rememberSaveable { mutableStateOf("") }
     LaunchedEffect(diaryOps) {
         if (selectedName.isEmpty() || diaryOps.none { it.name == selectedName }) {
             selectedName = diaryOps.firstOrNull()?.name ?: ""
         }
     }
     var showPanel by remember { mutableStateOf(true) }
-    var diaryContent by remember { mutableStateOf<String?>(null) }
-    var isLoading by remember { mutableStateOf(false) }
+    var diaryContent by rememberSaveable { mutableStateOf<String?>(null) }
+    var isGenerating by remember { mutableStateOf(false) }
 
-    // 切换干员时从 DB 加载已有日记
+    // 每次进入或切换干员时从 DB 加载已有日记
     LaunchedEffect(selectedName) {
+        diaryContent = null
         val opId = diaryOps.find { it.name == selectedName }?.id ?: return@LaunchedEffect
-        isLoading = true
         val cal = Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai"))
         cal.add(Calendar.DAY_OF_MONTH, -1)
         val yesterday = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply {
@@ -101,8 +103,7 @@ fun DiaryScreen(
         val existing = withContext(Dispatchers.IO) {
             viewModel.repository.getDiary(opId, yesterday)
         }
-        diaryContent = existing?.content
-        isLoading = false
+        if (existing != null) diaryContent = existing.content
     }
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -129,14 +130,7 @@ fun DiaryScreen(
                         items(diaryOps) { op ->
                             val opEntity = operators.find { it.id == op.id || it.name == op.name }
                             Column(modifier = Modifier.fillMaxWidth().background(if (op.name == selectedName) Primary.copy(alpha = 0.1f) else Color.Transparent).clickable { selectedName = op.name }.padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                val avatarUri = opEntity?.avatarUri
-                                if (avatarUri.isNullOrBlank()) {
-                                    Box(modifier = Modifier.size(40.dp).clip(CircleShape).background(op.color), contentAlignment = Alignment.Center) {
-                                        Text(op.name.take(1), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                                    }
-                                } else {
-                                    AsyncImage(model = avatarUri, contentDescription = null, modifier = Modifier.size(40.dp).clip(CircleShape), contentScale = ContentScale.Crop)
-                                }
+                                OperatorAvatarImage(avatarUri = opEntity?.avatarUri ?: "", name = op.name, modifier = Modifier.size(40.dp))
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(op.name, fontSize = 10.sp, color = if (op.name == selectedName) Primary else TextSecondary)
                             }
@@ -146,28 +140,13 @@ fun DiaryScreen(
             }
 
             Column(modifier = Modifier.weight(1f).padding(12.dp)) {
-                if (isLoading) {
-                    Box(modifier = Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(if (diaryContent != null) "加载中..." else "偷看日记中...", fontSize = 16.sp, color = Primary)
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text("AI正在读取${selectedName}的内心世界", fontSize = 12.sp, color = TextSecondary)
-                        }
-                    }
-                } else if (diaryContent != null) {
+                if (diaryContent != null) {
                     Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).clip(RoundedCornerShape(12.dp)).background(Card).padding(16.dp)) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 val selOp = diaryOps.find { it.name == selectedName }
                                 val selEntity = selOp?.let { s -> operators.find { it.id == s.id || it.name == s.name } }
-                                val selAvatar = selEntity?.avatarUri
-                                if (selAvatar.isNullOrBlank()) {
-                                    Box(Modifier.size(28.dp).clip(CircleShape).background(selOp?.color ?: Primary), contentAlignment = Alignment.Center) {
-                                        Text(selectedName.take(1), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                    }
-                                } else {
-                                    AsyncImage(model = selAvatar, contentDescription = null, modifier = Modifier.size(28.dp).clip(CircleShape), contentScale = ContentScale.Crop)
-                                }
+                                OperatorAvatarImage(avatarUri = selEntity?.avatarUri ?: "", name = selectedName, modifier = Modifier.size(28.dp))
                                 Spacer(Modifier.width(6.dp))
                                 Text(selectedName, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Primary)
                             }
@@ -175,21 +154,21 @@ fun DiaryScreen(
                         Spacer(Modifier.height(10.dp))
                         Text(diaryContent!!, fontSize = 14.sp, color = TextPrimary, lineHeight = 24.sp)
                     }
-                } else {
+                } else if (!isGenerating) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("点击下方按钮偷看${selectedName}的日记", fontSize = 14.sp, color = TextTertiary)
                             Spacer(modifier = Modifier.height(16.dp))
                             Button(onClick = {
                                 val opId = diaryOps.find { it.name == selectedName }?.id ?: return@Button
-                                isLoading = true
+                                isGenerating = true
                                 viewModel.generateDiary(opId) { text ->
                                     if (text.isNotBlank()) {
                                         diaryContent = text
                                     } else {
                                         android.widget.Toast.makeText(context, "AI生成失败，请检查网络和API Key后重试", android.widget.Toast.LENGTH_SHORT).show()
                                     }
-                                    isLoading = false
+                                    isGenerating = false
                                 }
                             }, colors = ButtonDefaults.buttonColors(containerColor = Primary)) {
                                 Icon(Icons.AutoMirrored.Filled.MenuBook, null, modifier = Modifier.size(18.dp))
@@ -197,6 +176,10 @@ fun DiaryScreen(
                                 Text("偷看日记", fontWeight = FontWeight.SemiBold)
                             }
                         }
+                    }
+                } else {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("偷看日记中...", fontSize = 16.sp, color = Primary)
                     }
                 }
             }

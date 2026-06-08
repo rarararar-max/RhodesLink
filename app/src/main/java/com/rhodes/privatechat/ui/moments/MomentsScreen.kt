@@ -35,6 +35,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import coil3.compose.AsyncImage
+import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import androidx.compose.ui.layout.ContentScale
 import com.rhodes.privatechat.data.db.entity.MomentCommentEntity
 import com.rhodes.privatechat.data.db.entity.MomentEntity
@@ -47,9 +48,9 @@ import com.rhodes.privatechat.viewmodel.MainViewModel
 @Composable
 fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick: (String) -> Unit = {}, onUnreadMessages: () -> Unit = {}, modifier: Modifier = Modifier) {
     val moments by viewModel.moments.collectAsState()
+    val genStatus by viewModel.momentGenerateStatus.collectAsState()
     var showPost by remember { mutableStateOf(false) }
     var isGenerating by remember { mutableStateOf(false) }
-    var isForceGenerating by remember { mutableStateOf(false) }
     var replyData by remember { mutableStateOf<Triple<Long, Long, String>?>(null) }
     var showReplyDialog by remember { mutableStateOf(false) }
     var showCommentDialog by remember { mutableStateOf(false) }
@@ -58,9 +59,11 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
     val prevCount = remember { mutableIntStateOf(0) }
     var unreadMsgCount by remember { mutableIntStateOf(viewModel.getUnreadCommentCount()) }
     LaunchedEffect(Unit) {
+        viewModel.refreshMomentsNow()
         while (true) {
+            viewModel.refreshMomentsNow()
             unreadMsgCount = viewModel.getUnreadCommentCount()
-            delay(10_000)
+            delay(5_000)
         }
     }
 
@@ -79,13 +82,12 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
             TextButton(onClick = onUnreadMessages) {
                 Text(if (unreadMsgCount > 0) "未读消息 $unreadMsgCount" else "未读消息", fontSize = 12.sp, color = if (unreadMsgCount > 0) AccentOrange else TextSecondary, fontWeight = if (unreadMsgCount > 0) FontWeight.Bold else FontWeight.Normal)
             }
-            if (!isForceGenerating) {
-                TextButton(onClick = {
-                    isForceGenerating = true
-                    viewModel.forceGenerateMoments { if (it == "全部完成") isForceGenerating = false }
-                }) { Text("催发", fontSize = 12.sp, color = AccentOrange, fontWeight = FontWeight.SemiBold) }
+            if (!genStatus.running) {
+                TextButton(onClick = { viewModel.forceGenerateMoments() }) {
+                    Text(if (genStatus.msg.contains("失败")) "重新催发" else "催发", fontSize = 12.sp, color = AccentOrange, fontWeight = FontWeight.SemiBold)
+                }
             } else {
-                Text("催发中...", fontSize = 12.sp, color = AccentOrange, modifier = Modifier.padding(horizontal = 12.dp))
+                Text(genStatus.msg, fontSize = 12.sp, color = AccentOrange, modifier = Modifier.padding(horizontal = 12.dp))
             }
             IconButton(onClick = { showPost = true }) { Icon(Icons.Default.Create, "发动态", tint = Primary) }
         }
@@ -169,8 +171,8 @@ private fun MomentCardWithInteraction(moment: MomentEntity, viewModel: MainViewM
         Row(verticalAlignment = Alignment.Top) {
             if (moment.isUserPost && userProfile.avatarUri.isNotBlank()) {
                 coil3.compose.AsyncImage(model = userProfile.avatarUri, contentDescription = null, modifier = Modifier.size(44.dp).clip(CircleShape), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
-            } else if (!moment.isUserPost && !momentOp?.avatarUri.isNullOrBlank()) {
-                AsyncImage(model = momentOp!!.avatarUri, contentDescription = null, modifier = Modifier.size(44.dp).clip(CircleShape).clickable { onOperatorClick(moment.operatorName) }, contentScale = ContentScale.Crop)
+            } else if (!moment.isUserPost) {
+                OperatorAvatarImage(avatarUri = momentOp?.avatarUri ?: "", name = moment.operatorName, modifier = Modifier.size(44.dp).clickable { onOperatorClick(moment.operatorName) })
             } else {
                 Box(Modifier.size(44.dp).clip(CircleShape).background(if (moment.isUserPost) Gray500 else Primary).clickable { onOperatorClick(moment.operatorName) }, contentAlignment = Alignment.Center) {
                     Text(if (moment.isUserPost) userProfile.nickname.take(1) else moment.operatorName.take(1), color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
@@ -261,7 +263,31 @@ private fun MomentCardWithInteraction(moment: MomentEntity, viewModel: MainViewM
             onPost(text, mentioned)
         } else onDismiss()
     }) { Text("发布", color = if (text.isNotBlank()) Primary else TextTertiary) } }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消", color = TextSecondary) } })
-    if (showAtPicker) AlertDialog(onDismissRequest = { showAtPicker = false }, title = { Text("@谁？", color = TextPrimary) }, text = { Column { names.forEach { val sel = text.contains("@$it"); Row(Modifier.fillMaxWidth().clickable { if (!sel) text = "$text@$it "; showAtPicker = false }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(32.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) { Text(it.take(1), color = Color.White, fontWeight = FontWeight.Bold) }; Spacer(Modifier.width(8.dp)); Text(it, fontSize = 14.sp, color = TextPrimary, modifier = Modifier.weight(1f)); if (sel) Icon(Icons.Default.Check, null, tint = Primary, modifier = Modifier.size(18.dp)) } } } }, confirmButton = { TextButton(onClick = { showAtPicker = false }) { Text("完成", color = Primary) } })
+    if (showAtPicker) {
+        val allOps = operators
+        var selectedMentions by remember { mutableStateOf(setOf<String>()) }
+        AlertDialog(onDismissRequest = { showAtPicker = false }, title = { Text("@谁？", color = TextPrimary) }, text = {
+            Column {
+                names.forEach { name ->
+                    val checked = name in selectedMentions
+                    val opEntity = allOps.find { it.name == name }
+                    Row(Modifier.fillMaxWidth().clickable {
+                        selectedMentions = if (checked) selectedMentions - name else selectedMentions + name
+                    }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        OperatorAvatarImage(avatarUri = opEntity?.avatarUri ?: "", name = name, modifier = Modifier.size(32.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(name, fontSize = 14.sp, color = TextPrimary, modifier = Modifier.weight(1f))
+                        Checkbox(checked = checked, onCheckedChange = { selectedMentions = if (checked) selectedMentions - name else selectedMentions + name }, colors = CheckboxDefaults.colors(checkedColor = Primary))
+                    }
+                }
+            }
+        }, confirmButton = { TextButton(onClick = {
+            if (selectedMentions.isNotEmpty()) {
+                text = "${text}${selectedMentions.joinToString(" ") { "@$it" }} "
+            }
+            showAtPicker = false
+        }) { Text("确定", color = Primary) } })
+    }
 }
 
 @Composable

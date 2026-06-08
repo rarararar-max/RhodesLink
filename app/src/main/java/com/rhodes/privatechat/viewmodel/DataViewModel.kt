@@ -54,7 +54,7 @@ class DataViewModel(
     suspend fun getMessageRanking(): List<SenderCount> = repository.getMessageCountPerSender()
 
     suspend fun getDailyRanking(): List<SenderCount> {
-        val cal = java.util.Calendar.getInstance()
+        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
         cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
         cal.set(java.util.Calendar.MINUTE, 0)
         cal.set(java.util.Calendar.SECOND, 0)

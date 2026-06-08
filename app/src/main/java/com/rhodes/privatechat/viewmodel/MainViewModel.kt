@@ -56,6 +56,8 @@ import kotlinx.coroutines.withTimeout
 
 private val json = Json { ignoreUnknownKeys = true }
 
+data class MomentGenerateStatus(val running: Boolean = false, val msg: String = "")
+
 class MainViewModel(
     application: Application,
     val repository: ChatRepository,
@@ -93,6 +95,9 @@ class MainViewModel(
     val momentsViewModel = MomentsViewModel(repository, settings, appState, viewModelScope) { getUserProfile() }
     val dispatchViewModel = DispatchViewModel(repository, settings, sharedUtils, operatorStateUpdater, appState, viewModelScope, { refreshAllOperatorStatus() }) { getUserProfile() }
     val groupChatViewModel = GroupChatViewModel(repository, settings, sharedUtils, appState, viewModelScope, { chatViewModel.markSessionRead(it) }, { unhideSession(it) }, { getUserProfile() }, { t, m -> chatViewModel.getPromptTemplate(t, m) }, { s, msgs -> chatViewModel.generateShortTermSummary(s, msgs) }, sessionMessageCounter)
+
+    private val _momentGenerateStatus = MutableStateFlow(MomentGenerateStatus())
+    val momentGenerateStatus: StateFlow<MomentGenerateStatus> = _momentGenerateStatus.asStateFlow()
 
     // Chat state delegates to ChatViewModel
     private val _selectedOperator get() = chatViewModel.selectedOperator
@@ -142,6 +147,7 @@ class MainViewModel(
     private val updateMutex = Mutex()
     private var lastDbUpdate = 0L
     private var analysisGuidance = ""
+    private val lastProactiveMsgTime = mutableMapOf<String, Long>()
     private var modeTransitionNotice = ""
 
     private var messagesJob: kotlinx.coroutines.Job? = null
@@ -184,17 +190,35 @@ class MainViewModel(
     init {
         viewModelScope.launch {
             repository.insertPresetOperators()
+            // 初始角色默认关闭自动发动态和主动私聊权限
+            val allOps = repository.getAllOperatorsSync()
+            for (op in allOps) {
+                settings.putOperatorDynPermission(op.id, false)
+                settings.putOperatorMsgPermission(op.id, false)
+            }
+            // 部分角色开启自动发言和发动态
+            val enabledOps = setOf("amiya", "kaltsit", "suzuran", "shu", "muelsyse", "exusiai", "priestess", "goldenglow", "zhuang_fangyi", "loxy")
+            for (op in allOps) {
+                if (op.id in enabledOps) {
+                    settings.putOperatorDynPermission(op.id, true)
+                    settings.putOperatorMsgPermission(op.id, true)
+                }
+            }
             repository.migrateOldRelationships()
             repository.initPresetGroups()
+            // 新群组默认从主页隐藏，仅在通讯录显示
+            val groupIds = listOf("group_elite", "group_penguin", "group_lungmen", "group_rhine", "group_sui")
+            val hidden = settings.hiddenIds.toMutableSet()
+            hidden.addAll(groupIds)
+            settings.hiddenIds = hidden
             cleanupExpired()
             settings.dispatchFastMode = false
+            autoGenerateTodayMoments()
         }
         startAutoStatusRefresh()
         loadHypnosis()
         // 启动时检查派遣恢复
         viewModelScope.launch { recoverDispatches() }
-        // 启动时检查今天是否有动态，无则自动生成
-        viewModelScope.launch { autoGenerateTodayMoments() }
         // 启动时恢复自动群聊 + 执行一次数据清理
         viewModelScope.launch { refreshAutoGroupChats() }
         // 每日龙门币刷新（麻将干员保底）
@@ -245,19 +269,20 @@ class MainViewModel(
         val dispatchedOpIds = activeDispatches.flatMap {
             it.operatorIds.split(",").map(String::trim).filter(String::isNotBlank)
         }.toSet()
-        // 筛选候选（冷却时间从用户最近一次发言算）
+        // 筛选候选（冷却时间从用户最近一次发言算，同时考虑上次主动消息时间）
         val candidates = _operators.value.filter { op ->
             if (!settings.getOperatorMsgPermission(op.id)) return@filter false
             if (op.id in dispatchedOpIds) return@filter false
             val session = repository.getSessionByOperator(op.id)
-            if (session == null) return@filter true
+            if (session == null) return@filter false
             val lastUserMsgTime = repository.getLastUserMessageTime(session.id)
             val lastUserOrSession = lastUserMsgTime ?: session.lastTime
-            (now - lastUserOrSession) >= 2 * 3_600_000
+            val lastSent = lastProactiveMsgTime[op.id] ?: 0L
+            (now - maxOf(lastUserOrSession, lastSent)) >= 2 * 3_600_000
         }
-        if (candidates.size < 2) return
-        // 随机选 2-5 人
-        val count = (2..candidates.size.coerceAtMost(5)).random()
+        if (candidates.size < 1) return
+        // 随机选 1-2 人
+        val count = (1..candidates.size.coerceAtMost(2)).random()
         val selected = candidates.shuffled().take(count)
         // 错峰：每人独立协程，随机延迟 5-10 分钟
         for (op in selected) {
@@ -281,7 +306,7 @@ class MainViewModel(
         if (getApiKey().isBlank()) return
         val profile = getUserProfile()
         val now = beijingSdf("yyyy-MM-dd HH:mm").format(java.util.Date())
-        val session = repository.getOrCreateSession(op.id, op.name)
+        val session = repository.getOrCreateSession(op.id, op.name, op.avatarUri)
         // 构建替换映射
         val shortTerm = repository.getShortTermMemory(session.id)
         val longTerm = repository.getLongTermImpression(op.id)
@@ -334,15 +359,14 @@ class MainViewModel(
                     senderName = op.name, content = raw,
                     type = "ai_json", mode = "online", isMe = false
                 ))
-                // 重新读取会话（避免竞态覆盖），更新未读计数和最后消息预览
+                // 重新读取会话，仅更新未读计数（lastMessage 由 sendMessage 自动更新）
                 val freshSession = repository.getSession(session.id) ?: session
-                val preview = "来自${op.name}的主动消息"
                 repository.insertSession(freshSession.copy(
                     unreadCount = freshSession.unreadCount + 1,
-                    lastMessage = preview,
                     lastTime = System.currentTimeMillis()
                 ))
                 unhideSession(session.id)
+                lastProactiveMsgTime[op.id] = System.currentTimeMillis()
                 val parsed = sharedUtils.aiService.parseOfflineResponse(raw)
                 if (parsed.emotion.isNotBlank() || parsed.location.isNotBlank() || parsed.state.isNotBlank()) {
                     updateOperatorStatus(op.id, parsed.location, parsed.state, parsed.emotion)
@@ -459,6 +483,13 @@ class MainViewModel(
 
     fun deleteSession(sessionId: String) = sessionViewModel.deleteSession(sessionId)
 
+    fun hideSession(sessionId: String) {
+        val hidden = settings.hiddenIds.toMutableSet()
+        hidden.add(sessionId)
+        settings.hiddenIds = hidden
+        appState.clearChatListOnly()
+    }
+
     fun clearAllMessages() = sessionViewModel.clearAllMessages()
 
     fun pinSession(sessionId: String) = sessionViewModel.pinSession(sessionId)
@@ -466,8 +497,8 @@ class MainViewModel(
     fun loadGroupData(groupId: String, callback: (String, List<Operator>, String, Set<String>) -> Unit) =
         sessionViewModel.loadGroupData(groupId, callback)
 
-    fun saveGroup(groupId: String, name: String, memberNames: List<String>, rules: String, avatarUri: String = "", mutedMembers: List<String> = emptyList()) =
-        sessionViewModel.saveGroup(groupId, name, memberNames, rules, avatarUri, mutedMembers)
+    fun saveGroup(groupId: String, name: String, memberNames: List<String>, rules: String, avatarUri: String = "", mutedMembers: List<String> = emptyList(), onComplete: () -> Unit = {}) =
+        sessionViewModel.saveGroup(groupId, name, memberNames, rules, avatarUri, mutedMembers, onComplete)
 
     fun markSessionRead(sessionId: String) = sessionViewModel.markSessionRead(sessionId)
 
@@ -560,6 +591,7 @@ class MainViewModel(
                     sessionId = session.id, operatorId = session.operatorId,
                     type = com.rhodes.privatechat.shared.model.AnchorType.valueOf(a.type.uppercase()),
                     content = a.content, isPrivate = a.isPrivate,
+                    createdAt = System.currentTimeMillis(),
                     expiresAt = System.currentTimeMillis() + intPref("clean_days", 30) * 86_400_000L
                 )
             }
@@ -760,7 +792,7 @@ ${summaries}
         sb.appendLine("╠══ 会话状态 ════════════════════════════════")
         for (s in _sessions.value.take(10)) {
             val mode = s.mode.take(10)
-            val last = java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date(s.lastTime))
+            val last = java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).apply { timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai") }.format(java.util.Date(s.lastTime))
             sb.appendLine("║ ${s.operatorName.take(8)} | $mode | 最后:$last | 未读:${s.unreadCount}")
         }
         sb.appendLine("╠══ 权限开关 ════════════════════════════════")
@@ -931,7 +963,7 @@ ${summaries}
 
     fun sendGroupMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online", autoSpeak: Boolean = false, isAuto: Boolean = false) =
         groupChatViewModel.sendGroupMessage(groupSessionId, groupName, text, mode, autoSpeak, isAuto)
-    fun generateAllMoments(target: Int = 1, dateKey: String = "", onProgress: (String) -> Unit = {}) {
+    fun generateAllMoments(target: Int = 1, dateKey: String = "", force: Boolean = false, onProgress: (String) -> Unit = {}) {
         val isAuto = dateKey.isNotBlank()
         val today = dateKey.ifBlank { beijingSdf("yyyyMMdd").format(java.util.Date()) }
         // 全天 9 个时段，从清晨到深夜
@@ -944,7 +976,7 @@ ${summaries}
         viewModelScope.launch {
             for (op in _operators.value) {
                 val allowDyn = settings.getOperatorDynPermission(op.id)
-                if (!allowDyn) continue
+                if (!allowDyn && !force) continue
                 val startIdx = if (isAuto) {
                     val d = settings.getMomentCount(op.id, today)
                     if (d >= target) continue
@@ -980,7 +1012,7 @@ ${summaries}
                         }
                         val mmtTpl = getPromptTemplate("moment")
                         val mmtReplacements = mapOf(
-                            "OPERATOR_NAME" to op.name, "OPERATOR_PERSONA" to op.description,
+                            "OPERATOR_NAME" to op.name, "OPERATOR_PERSONA" to op.privatePrompt.ifBlank { op.description },
                             "TIME_OF_DAY" to timeOfDay, "LONG_TERM_IMPRESSION" to impression,
                             "RECENT_CHAT_SUMMARY" to chatSummary, "RECENT_MEMORIES" to memories,
                             "RECENT_POSTS" to recentPosts,
@@ -1005,6 +1037,7 @@ ${summaries}
                             if (isAuto) settings.putMomentCount(op.id, today, generated + 1)
                             val moment = Moment(operatorId = op.id, operatorName = op.name, content = content, createdAt = fakeTs)
                             val momentId = repository.insertMoment(moment)
+                            refreshMomentsNow()
                             generated++
                             // 互动异步化：点赞和评论在后台生成，不阻塞下一条动态
                             val opId = op.id; val c = content
@@ -1034,10 +1067,15 @@ ${summaries}
                                 } catch (_: Exception) {}
                             }
                         }
-                    } catch (_: Exception) {}
+                    } catch (e: Exception) {
+                        val errMsg = "${op.name}失败: ${e.message?.take(30) ?: "未知错误"}"
+                        onProgress(errMsg)
+                        _momentGenerateStatus.value = MomentGenerateStatus(running = false, msg = errMsg)
+                    }
                 }
             }
             onProgress("全部完成")
+            refreshMomentsNow()
         }
     }
 
@@ -1060,7 +1098,7 @@ ${summaries}
                 val fakeTs = System.currentTimeMillis()
                 val mmtTpl = getPromptTemplate("moment")
                 val mmtReplacements = mapOf(
-                    "OPERATOR_NAME" to op.name, "OPERATOR_PERSONA" to op.description,
+                    "OPERATOR_NAME" to op.name, "OPERATOR_PERSONA" to op.privatePrompt.ifBlank { op.description },
                     "TIME_OF_DAY" to timeOfDay, "LONG_TERM_IMPRESSION" to impression,
                     "RECENT_CHAT_SUMMARY" to chatSummary, "RECENT_MEMORIES" to memories,
                     "RECENT_POSTS" to recentPosts,
@@ -1087,6 +1125,7 @@ ${summaries}
                 if (content.isNotBlank()) {
                     val moment = Moment(operatorId = op.id, operatorName = op.name, content = content, createdAt = fakeTs)
                     val momentId = repository.insertMoment(moment)
+                    refreshMomentsNow()
                     onProgress("全部完成")
                     // 互动异步化：点赞和评论在后台生成，UI 立即显示动态
                     val opId = op.id; val c = content
@@ -1120,6 +1159,78 @@ ${summaries}
         }
     }
 
+    /** 为指定干员生成 1 条动态，返回是否成功 */
+    private suspend fun generateOneForOp(op: Operator): Boolean {
+        return try {
+            val profile = getUserProfile()
+            val impression = repository.getLongTermImpression(op.id)?.content ?: "无"
+            val chatSummary = repository.getShortTermMemory("session_${op.id}")?.content?.take(100) ?: "无"
+            val memories = pickAnchors(repository.getPublicAnchors(op.id), 3).joinToString("\n") { "- ${anchorTimeLabel(it)} ${it.content}" }.ifBlank { "无" }
+            val existingPosts = repository.getMomentsPaged(10, 0).filter { it.operatorId == op.id }
+            val recentPosts = existingPosts.take(3).joinToString("\n") { "- ${it.content.take(50)}" }.ifBlank { "无" }
+            val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
+            val timeOfDay = getTimeOfDay(cal.get(java.util.Calendar.HOUR_OF_DAY))
+            val fakeTs = System.currentTimeMillis()
+            val mmtTpl = getPromptTemplate("moment")
+            val mmtReplacements = mapOf(
+                "OPERATOR_NAME" to op.name, "OPERATOR_PERSONA" to op.privatePrompt.ifBlank { op.description },
+                "TIME_OF_DAY" to timeOfDay, "LONG_TERM_IMPRESSION" to impression,
+                "RECENT_CHAT_SUMMARY" to chatSummary, "RECENT_MEMORIES" to memories,
+                "RECENT_POSTS" to recentPosts,
+                "CURRENT_DATE" to beijingSdf("yyyy年MM月dd日").format(fakeTs),
+                "USER_NAME" to profile.nickname,
+                "MOMENT_MIN_CHARS" to intPref("moment_min_chars", 50).toString(),
+                "MOMENT_MAX_CHARS" to intPref("moment_max_chars", 200).toString()
+            )
+            val prompt = applyTemplate(mmtTpl, mmtReplacements)
+            var momentResult = ""
+            repeat(3) { attempt ->
+                try {
+                    momentResult = ""
+                    momentResult = withTimeout(15_000) { chat(listOf(AiMessage("system", prompt)), "Moment") }
+                    if (momentResult.isNotBlank()) return@repeat
+                } catch (_: Exception) { if (attempt < 2) delay((1000L * (attempt + 1))) }
+            }
+            trackTokens("moment", prompt, momentResult)
+            var content = momentResult.trim()
+            while (content.startsWith("\"") && content.endsWith("\"") && content.length > 2) {
+                content = content.substring(1, content.length - 1).trim()
+            }
+            content = content.removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+            if (content.isNotBlank()) {
+                val moment = Moment(operatorId = op.id, operatorName = op.name, content = content, createdAt = fakeTs)
+                val momentId = repository.insertMoment(moment)
+                val opId = op.id; val c = content
+                viewModelScope.launch {
+                    try {
+                        val likers = _operators.value.filter { it.id != opId && it.name != profile.nickname }.shuffled().take((3..8).random())
+                        likers.forEach { liker -> repository.insertLike(MomentLike(momentId = momentId, operatorId = liker.id, operatorName = liker.name, createdAt = System.currentTimeMillis())) }
+                        repository.updateLikeCount(momentId, likers.size)
+                        val commenters = _operators.value.filter { it.id != opId && it.name != profile.nickname }.shuffled().take((1..3).random())
+                        val cmtTpl = getPromptTemplate("moment_comment")
+                        var actualComments = 0
+                        commenters.forEach { commenter ->
+                            try {
+                                val cmtReplacements = mapOf(
+                                    "COMMENTER_NAME" to commenter.name, "COMMENTER_PERSONA" to (commenter.privatePrompt.ifBlank { commenter.description }),
+                                    "POST_CONTENT" to c,
+                                    "COMMENT_MIN_CHARS" to intPref("comment_min_chars", 10).toString(),
+                                    "COMMENT_MAX_CHARS" to intPref("comment_max_chars", 40).toString()
+                                )
+                                val cp = applyTemplate(cmtTpl, cmtReplacements)
+                                val cc = withTimeout(8_000) { chat(listOf(AiMessage("system", cp)), "Moment") }.trim()
+                                trackTokens("moment", cp, cc)
+                                if (cc.isNotBlank()) { repository.insertComment(MomentComment(momentId = momentId, operatorId = commenter.id, operatorName = commenter.name, content = cc, createdAt = System.currentTimeMillis())); actualComments++ }
+                            } catch (_: Exception) {}
+                        }
+                        repository.updateCommentCount(momentId, actualComments)
+                    } catch (_: Exception) {}
+                }
+                true
+            } else false
+        } catch (_: Exception) { false }
+    }
+
     fun generateInspirations(callback: (List<String>) -> Unit) = chatViewModel.generateInspirations(callback)
     fun getLikes(momentId: Long): kotlinx.coroutines.flow.Flow<List<MomentLike>> = momentsViewModel.getLikes(momentId)
     fun getCommentsForMoment(momentId: Long): kotlinx.coroutines.flow.Flow<List<MomentComment>> = momentsViewModel.getCommentsForMoment(momentId)
@@ -1128,7 +1239,15 @@ ${summaries}
         val cleanContent = content.trim()
         if (cleanContent.isBlank()) return
         viewModelScope.launch {
-            repository.insertComment(MomentComment(momentId = momentId, operatorId = operatorId, operatorName = operatorName, content = cleanContent, parentCommentId = parentCommentId, replyToName = replyToName, createdAt = System.currentTimeMillis()))
+            // 微信模式：向上追溯到根一级评论，所有回复挂在一级下面
+            val rootParentId = if (parentCommentId > 0) {
+                val parentComment = repository.getCommentById(parentCommentId)
+                if (parentComment?.parentCommentId != null && parentComment.parentCommentId > 0)
+                    parentComment.parentCommentId
+                else
+                    parentCommentId
+            } else 0L
+            repository.insertComment(MomentComment(momentId = momentId, operatorId = operatorId, operatorName = operatorName, content = cleanContent, parentCommentId = rootParentId, replyToName = replyToName, createdAt = System.currentTimeMillis()))
             // 创建评论锚点（仅动态发布者 + 被回复者，不扩散到全干员）
             if (operatorId == "user") {
                 val moment = _moments.value.find { it.id == momentId }
@@ -1145,16 +1264,17 @@ ${summaries}
                             type = com.rhodes.privatechat.shared.model.AnchorType.EVENT,
                             content = "${getUserProfile().nickname}${targetName}：${content.take(30)}",
                             isPrivate = false,
+                            createdAt = System.currentTimeMillis(),
                             expiresAt = System.currentTimeMillis() + intPref("clean_days", 30) * 86_400_000L
                         ))
+                    }
+                }
             }
-        }
-    }
+
             if (operatorId != "user") return@launch
             val moment = _moments.value.find { it.id == momentId } ?: return@launch
             val userName = getUserProfile().nickname
 
-            // 1) 回复原评论者（如果是回复）
             val alreadyReplied = mutableSetOf<String>()
             if (parentCommentId > 0 && replyToName.isNotBlank() && replyToName != moment.operatorName && replyToName != userName) {
                 triggerSingleAiReply(momentId, replyToName, content, parentCommentId, userName)
@@ -1162,14 +1282,12 @@ ${summaries}
                 delay((1500L + (Math.random() * 1500).toLong()))
             }
 
-            // 2) 动态发布者回复（跳过用户自己发的动态）
             if (moment.operatorName != "我" && moment.operatorName != userName && moment.operatorName !in alreadyReplied) {
                 triggerSingleAiReply(momentId, moment.operatorName, content, parentCommentId, userName, "你是${moment.operatorName}。用户${userName}在你的动态下评论了：「${content}」。请用10-50字自然回复。只输出回复内容本身，不要加任何前缀如「回复xxx」或冒号。直接输出纯文本。")
                 alreadyReplied.add(moment.operatorName)
                 delay((1500L + (Math.random() * 1500).toLong()))
             }
 
-            // 3) 随机1-2个干员看热闹
             val bystanders = _operators.value
                 .map { it.name }
                 .filter { it !in alreadyReplied && it != "我" && it != userName }
@@ -1214,6 +1332,7 @@ ${summaries}
                     type = com.rhodes.privatechat.shared.model.AnchorType.EVENT,
                     content = "${userName}发布了动态：${content.take(40)}",
                     isPrivate = false,
+                    createdAt = System.currentTimeMillis(),
                     expiresAt = System.currentTimeMillis() + intPref("clean_days", 30) * 86_400_000L
                 ))
             }
@@ -1257,8 +1376,33 @@ ${summaries}
     fun cleanupAllExpired() = dataViewModel.cleanupAllExpired()
     suspend fun getMessageRanking(): List<SenderCount> = dataViewModel.getMessageRanking()
     suspend fun getDailyRanking(): List<SenderCount> = dataViewModel.getDailyRanking()
-    fun forceGenerateMoments(onProgress: (String) -> Unit = {}) {
-        generateAllMoments(target = 1, dateKey = "", onProgress = onProgress)
+    fun forceGenerateMoments() {
+        _momentGenerateStatus.value = MomentGenerateStatus(running = true, msg = "开始生成...")
+        viewModelScope.launch {
+            var generated = 0
+            val candidates = _operators.value.filter {
+                settings.getOperatorDynPermission(it.id)
+            }.shuffled().take(5)
+            for (op in candidates) {
+                _momentGenerateStatus.value = MomentGenerateStatus(running = true, msg = "${op.name}发布中...")
+                if (generateOneForOp(op)) {
+                    generated++
+                    refreshMomentsNow()
+                }
+            }
+            _momentGenerateStatus.value = MomentGenerateStatus(
+                running = false,
+                msg = if (generated > 0) "全部完成" else "无可用干员"
+            )
+            refreshMomentsNow()
+        }
+    }
+
+    fun refreshMomentsNow() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val fresh = repository.getAllMomentsSync()
+            appState.refreshMoments(fresh)
+        }
     }
     suspend fun getAllImpressions(): List<Memory> = dataViewModel.getAllImpressions()
     suspend fun deleteAllImpressions() = dataViewModel.deleteAllImpressions()
@@ -1317,6 +1461,7 @@ ${summaries}
                             sessionId = "anchor_${System.currentTimeMillis()}",
                             operatorId = observer.id, type = com.rhodes.privatechat.shared.model.AnchorType.EVENT,
                             content = "${op.name}今天写了日记，似乎提到了${profile.nickname}", isPrivate = false,
+                            createdAt = System.currentTimeMillis(),
                             expiresAt = System.currentTimeMillis() + intPref("clean_days", 30) * 86_400_000L
                         ))
                     }

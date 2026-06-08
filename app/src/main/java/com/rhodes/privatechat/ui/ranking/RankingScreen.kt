@@ -42,6 +42,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.shared.data.SenderCount
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.viewmodel.MainViewModel
@@ -104,13 +105,7 @@ fun RankingScreen(
                     val rankingAvatar = rankingOp?.avatarUri
                     Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 16.dp, vertical = 10.dp).clickable { onOperatorClick(entry.senderName) }, verticalAlignment = Alignment.CenterVertically) {
                         Text(rankText(i), fontSize = 14.sp, fontWeight = FontWeight.Bold, color = rankColor(i), modifier = Modifier.width(40.dp))
-                        if (rankingAvatar.isNullOrBlank()) {
-                            Box(modifier = Modifier.size(36.dp).clip(CircleShape).background(color), contentAlignment = Alignment.Center) {
-                                Text(entry.senderName.take(1), color = Color.White, fontWeight = FontWeight.Bold)
-                            }
-                        } else {
-                            AsyncImage(model = rankingAvatar, contentDescription = null, modifier = Modifier.size(36.dp).clip(CircleShape), contentScale = ContentScale.Crop)
-                        }
+                        OperatorAvatarImage(avatarUri = rankingOp?.avatarUri ?: "", name = entry.senderName, modifier = Modifier.size(36.dp))
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(entry.senderName, fontSize = 14.sp, modifier = Modifier.weight(1f), color = TextPrimary)
                         Text("${entry.cnt}", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, modifier = Modifier.width(48.dp), textAlign = TextAlign.Center)

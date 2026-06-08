@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material3.HorizontalDivider
@@ -68,9 +69,7 @@ fun RelationshipScreen(
                         selectedOperator = op
                         viewModel.loadRelationships(op.id) { relationships = it }
                     }.padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box(modifier = Modifier.size(40.dp).clip(CircleShape).background(Color(0xFF8B5CF6)), contentAlignment = Alignment.Center) {
-                            Text(text = op.name.take(1), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                        }
+                        OperatorAvatarImage(avatarUri = op.avatarUri, name = op.name, modifier = Modifier.size(40.dp))
                         Spacer(modifier = Modifier.width(12.dp))
                         Column {
                             Text(text = op.name, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
@@ -109,9 +108,7 @@ private fun RelationTopBar(title: String, onBack: () -> Unit) {
 private fun RelationshipItem(operatorName: String, rel: RelationshipEntity) {
     Column(modifier = Modifier.fillMaxWidth().background(Card).padding(horizontal = 16.dp, vertical = 10.dp)) {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Box(modifier = Modifier.size(40.dp).clip(CircleShape).background(Color(0xFF6B7280)), contentAlignment = Alignment.Center) {
-                Text(text = rel.relatedOperatorName.take(1), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            }
+            OperatorAvatarImage(avatarUri = "", name = rel.relatedOperatorName, modifier = Modifier.size(40.dp))
             Spacer(modifier = Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -160,7 +157,6 @@ private fun relationshipLabel(type: RelationshipType): Pair<String, Color> {
     if (type == RelationshipType.FATHER) return "父亲" to red
     if (type == RelationshipType.DAUGHTER) return "女儿" to red
     if (type == RelationshipType.SON) return "儿子" to red
-    if (type == RelationshipType.SIBLING) return "姐妹/兄弟" to red
     if (type == RelationshipType.FAMILY) return "家人" to red
     if (type == RelationshipType.GUARDIAN) return "监护人" to red
     if (type == RelationshipType.CLOSE_FRIEND) return "挚友" to Color(0xFF00BCD4)
@@ -175,6 +171,7 @@ private fun relationshipLabel(type: RelationshipType): Pair<String, Color> {
     if (type == RelationshipType.TEAMMATE) return "队友" to Color(0xFF9E9E9E)
     if (type == RelationshipType.RIVAL) return "对手" to Color(0xFFEF4444)
     if (type == RelationshipType.CRUSH) return "暗恋对象" to Color(0xFFF48FB1)
+    if (type == RelationshipType.LOVER) return "恋人" to Color(0xFFE91E63)
     return "陌生" to Color(0xFFBDBDBD)
 }
 
@@ -201,7 +198,7 @@ private fun relDesc(operatorName: String, rel: RelationshipEntity): String {
     if (t == RelationshipType.TEAMMATE) return "${rel.relatedOperatorName}的【队友】"
     if (t == RelationshipType.RIVAL) return "${rel.relatedOperatorName}的【对手】"
     if (t == RelationshipType.CRUSH) return "${rel.relatedOperatorName}的【暗恋对象】"
-    if (t == RelationshipType.SIBLING) return "${rel.relatedOperatorName}的【姐妹/兄弟】"
+    if (t == RelationshipType.LOVER) return "${rel.relatedOperatorName}的【恋人】"
     if (t == RelationshipType.FAMILY) return "${rel.relatedOperatorName}的【家人】"
     return ""
 }

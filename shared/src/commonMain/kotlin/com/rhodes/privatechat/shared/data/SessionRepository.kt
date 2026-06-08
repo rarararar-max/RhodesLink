@@ -22,6 +22,12 @@ class SessionRepository(private val wrapper: DatabaseWrapper) {
             ChatSession(id, operatorId, operatorName, lastMessage, lastTime, mode, isPinned != 0L, unreadCount.toInt(), members, rules, avatarUri, mutedMembers)
         }.asFlow().mapToList(Dispatchers.Default)
 
+    suspend fun getAllSessionsSync(): List<ChatSession> = withContext(Dispatchers.Default) {
+        db.chatSessionsQueries.getAllSessions { id, operatorId, operatorName, lastMessage, lastTime, mode, isPinned, unreadCount, members, rules, avatarUri, mutedMembers ->
+            ChatSession(id, operatorId, operatorName, lastMessage, lastTime, mode, isPinned != 0L, unreadCount.toInt(), members, rules, avatarUri, mutedMembers)
+        }.executeAsList()
+    }
+
     suspend fun getOrCreateSession(operatorId: String, operatorName: String, avatarUri: String = ""): ChatSession = withContext(Dispatchers.Default) {
         val existing = db.chatSessionsQueries.getSessionByOperator(operatorId) { id, opId, opName, lastMsg, lastTime, mode, isPinned, unreadCount, members, rules, avatar, muted ->
             ChatSession(id, opId, opName, lastMsg, lastTime, mode, isPinned != 0L, unreadCount.toInt(), members, rules, avatar, muted)
@@ -75,18 +81,31 @@ class SessionRepository(private val wrapper: DatabaseWrapper) {
 
     // --- Preset groups ---
     suspend fun initPresetGroups() = withContext(Dispatchers.Default) {
-        val count = db.chatSessionsQueries.getGroupCount().executeAsOne().toInt()
-        if (count > 0) return@withContext
+        if (db.chatSessionsQueries.getGroupCount().executeAsOne() > 0L) return@withContext
         val now = Clock.System.now().toEpochMilliseconds()
         val groups = listOf(
-            ChatSession(id = "group_elite", operatorId = "group_elite", operatorName = "罗德岛精英干员", lastMessage = "欢迎加入", members = "amiya,blaze,rosmontis,kaltsit,exusiai"),
-            ChatSession(id = "group_logistics", operatorId = "group_logistics", operatorName = "企鹅物流", lastMessage = "欢迎加入", members = "exusiai,texas,angelina"),
-            ChatSession(id = "group_medical", operatorId = "group_medical", operatorName = "医疗组", lastMessage = "欢迎加入", members = "kaltsit,nightingale,shining,ifrit,saria")
+            ChatSession(id = "group_elite", operatorId = "group_elite", operatorName = "精英干员茶水间",
+                members = "blaze,rosmontis,logos,misery,ascalon,arc",
+                rules = "精英干员的非正式聊天群，出任务之余闲聊放松。", lastTime = now),
+            ChatSession(id = "group_penguin", operatorId = "group_penguin", operatorName = "企鹅物流快乐群",
+                members = "exusiai,texas,croissant,sora",
+                rules = "企鹅物流内部群，聊送件日常、约饭。", lastTime = now),
+            ChatSession(id = "group_lungmen", operatorId = "group_lungmen", operatorName = "龙门近卫局工作群",
+                members = "chen,hoshiguma,waaifu,swire,lin",
+                rules = "龙门近卫局工作沟通群。", lastTime = now),
+            ChatSession(id = "group_rhine", operatorId = "group_rhine", operatorName = "莱茵生命学术交流",
+                members = "saria,silence,muelsyse,ifrit,ptilopsis",
+                rules = "莱茵生命前同事交流群。学术讨论为主。", lastTime = now),
+            ChatSession(id = "group_sui", operatorId = "group_sui", operatorName = "岁家乐游",
+                members = "chongyue,shu,ling,nian,dusk,yu",
+                rules = "岁家兄弟姐妹群。聊家常、分享美食。", lastTime = now)
         )
-        var msgId = 1L
-        groups.forEach { g ->
-            db.chatSessionsQueries.insertSession(g.id, g.operatorId, g.operatorName, g.lastMessage, now, g.mode, 0, 0, g.members, g.rules, g.avatarUri, g.mutedMembers)
-            db.chatMessagesQueries.insertMessage(msgId++, g.id, "", "系统", "欢迎加入群聊", "system", "online", "", "", "", "", "", 0, now, 0)
+        groups.forEach { group ->
+            db.chatSessionsQueries.insertSession(
+                group.id, group.operatorId, group.operatorName, group.lastMessage, group.lastTime,
+                group.mode, if (group.isPinned) 1L else 0L, group.unreadCount.toLong(),
+                group.members, group.rules, group.avatarUri, group.mutedMembers
+            )
         }
     }
 

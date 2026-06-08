@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.rhodes.privatechat.data.db.entity.ChatSessionEntity
+import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import java.text.SimpleDateFormat
@@ -156,13 +157,7 @@ private fun SessionItem(session: ChatSessionEntity, onClick: () -> Unit, onLongC
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box {
-                if (session.avatarUri.isNotBlank()) {
-                    AsyncImage(model = session.avatarUri, contentDescription = null, modifier = Modifier.size(48.dp).clip(CircleShape), contentScale = ContentScale.Crop)
-                } else {
-                    Box(modifier = Modifier.size(48.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) {
-                        Text(session.operatorName.take(1), color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
+                OperatorAvatarImage(avatarUri = session.avatarUri, name = session.operatorName, modifier = Modifier.size(48.dp))
                 if (session.unreadCount > 0) {
                     Box(modifier = Modifier.size(20.dp).clip(RoundedCornerShape(10.dp)).background(ErrorRed).align(Alignment.TopEnd), contentAlignment = Alignment.Center) {
                         Text("${session.unreadCount}", fontSize = 9.sp, color = Color.White, fontWeight = FontWeight.Bold)

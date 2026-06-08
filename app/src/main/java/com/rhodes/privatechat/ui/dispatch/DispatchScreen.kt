@@ -63,6 +63,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import androidx.compose.ui.layout.ContentScale
 import com.rhodes.privatechat.data.db.entity.OperatorEntity
 import com.rhodes.privatechat.data.db.entity.DispatchRecordEntity
@@ -189,13 +190,7 @@ fun DispatchScreen(
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     items(team) { op ->
                         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(60.dp)) {
-                            if (op.avatarUri.isNotBlank()) {
-                                AsyncImage(model = op.avatarUri, contentDescription = null, modifier = Modifier.size(48.dp).clip(CircleShape), contentScale = ContentScale.Crop)
-                            } else {
-                                Box(modifier = Modifier.size(48.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) {
-                                    Text(op.name.take(1), color = Color.White, fontWeight = FontWeight.Bold)
-                                }
-                            }
+                            OperatorAvatarImage(avatarUri = op.avatarUri, name = op.name, modifier = Modifier.size(48.dp))
                             Text(op.name, fontSize = 11.sp, color = TextPrimary, textAlign = TextAlign.Center)
                         }
                     }
@@ -279,11 +274,7 @@ private fun OperatorPickerDialog(
                     if (checked) selected.removeAll { it.id == op.id }
                     else if (selected.size < 5) selected.add(op)
                 }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (op.avatarUri.isNotBlank()) {
-                        AsyncImage(model = op.avatarUri, contentDescription = null, modifier = Modifier.size(32.dp).clip(CircleShape), contentScale = ContentScale.Crop)
-                    } else {
-                        Box(modifier = Modifier.size(32.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) { Text(op.name.take(1), color = Color.White, fontWeight = FontWeight.Bold) }
-                    }
+                    OperatorAvatarImage(avatarUri = op.avatarUri, name = op.name, modifier = Modifier.size(32.dp))
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(op.name, fontSize = 14.sp, color = TextPrimary, modifier = Modifier.weight(1f))
                     if (checked) Icon(Icons.Default.Check, null, tint = Primary, modifier = Modifier.size(20.dp))

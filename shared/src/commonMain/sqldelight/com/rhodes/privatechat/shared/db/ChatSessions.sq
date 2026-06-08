@@ -46,3 +46,6 @@ DELETE FROM chat_sessions WHERE id = ?;
 
 deleteAllSessions:
 DELETE FROM chat_sessions WHERE operatorId NOT LIKE 'group_%';
+
+deleteAllGroups:
+DELETE FROM chat_sessions WHERE operatorId LIKE 'group_%';

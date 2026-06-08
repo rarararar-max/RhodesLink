@@ -228,7 +228,7 @@ ${storyStructure}
             val memberIds = d.operatorIds.split(",").map { it.trim() }.filter { it.isNotBlank() }
             val memberNames = memberIds.mapNotNull { id -> allOps.find { it.id == id || it.name == id }?.name }.take(3).joinToString("、")
             for (opId in memberIds) {
-                repository.saveAnchor(MemoryAnchor(sessionId = "anchor_${System.currentTimeMillis()}", operatorId = opId, type = AnchorType.EVENT, content = "${d.taskType}任务完成，${memberNames}带回${items}，净收益${d.netProfit}龙门币", isPrivate = false, expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L))
+                repository.saveAnchor(MemoryAnchor(sessionId = "anchor_${System.currentTimeMillis()}", operatorId = opId, type = AnchorType.EVENT, content = "${d.taskType}任务完成，${memberNames}带回${items}，净收益${d.netProfit}龙门币", isPrivate = false, createdAt = System.currentTimeMillis(), expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L))
             }
         }
     }

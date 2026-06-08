@@ -14,7 +14,10 @@ class ChatRepository(
     val allOperators: Flow<List<Operator>> = shared.allOperators
     val allSessions: Flow<List<ChatSession>> = shared.allSessions
 
+    suspend fun getAllOperatorsSync(): List<Operator> = shared.getAllOperatorsSync()
     suspend fun getOperator(id: String): Operator? = shared.getOperator(id)
+
+    suspend fun getAllSessionsSync(): List<ChatSession> = shared.getAllSessionsSync()
 
     suspend fun getOrCreateSession(operatorId: String, operatorName: String, avatarUri: String = ""): ChatSession =
         shared.getOrCreateSession(operatorId, operatorName, avatarUri)
@@ -66,6 +69,7 @@ class ChatRepository(
     suspend fun insertMoment(moment: Moment): Long = shared.insertMoment(moment)
 
     fun getAllMoments(): Flow<List<Moment>> = shared.getAllMoments()
+    suspend fun getAllMomentsSync(): List<Moment> = shared.getAllMomentsSync()
 
     fun getLikesFlow(momentId: Long): Flow<List<MomentLike>> = shared.getLikesFlow(momentId)
 
@@ -76,6 +80,7 @@ class ChatRepository(
     suspend fun insertComment(comment: MomentComment): Long = shared.insertComment(comment)
 
     suspend fun getMaxCommentId(): Long? = shared.getMaxCommentId()
+    suspend fun getCommentById(commentId: Long): MomentComment? = shared.getCommentById(commentId)
 
     suspend fun markCommentRead(id: Long) = shared.markCommentRead(id)
 

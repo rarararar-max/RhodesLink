@@ -26,12 +26,12 @@ class SessionViewModel(
     fun clearAllMessages() {
         scope.launch {
             val sessions = appState.sessions.value.toList()
+            val hidden = settings.hiddenIds.toMutableSet()
             for (session in sessions) {
-                repository.deleteSessionMessages(session.id)
-                repository.deleteSession(session.id)
+                hidden.add(session.id)
             }
-            settings.hiddenIds = emptySet()
-            appState.clearSessions()
+            settings.hiddenIds = hidden
+            appState.clearChatListOnly()
         }
     }
 
@@ -64,7 +64,7 @@ class SessionViewModel(
         }
     }
 
-    fun saveGroup(groupId: String, name: String, memberNames: List<String>, rules: String, avatarUri: String = "", mutedMembers: List<String> = emptyList()) {
+    fun saveGroup(groupId: String, name: String, memberNames: List<String>, rules: String, avatarUri: String = "", mutedMembers: List<String> = emptyList(), onComplete: () -> Unit = {}) {
         scope.launch {
             val id = groupId.ifBlank { "group_${java.util.UUID.randomUUID()}" }
             val existing = if (groupId.isNotBlank()) repository.getSession(groupId) else null
@@ -92,6 +92,9 @@ class SessionViewModel(
                     type = "system", mode = "online", isMe = false
                 ))
             }
+            val allSessions = repository.getAllSessionsSync()
+            appState.refreshAllSessions(allSessions, settings.hiddenIds)
+            onComplete()
         }
     }
 }

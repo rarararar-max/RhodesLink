@@ -204,7 +204,7 @@ class SharedUtils(
         RelationshipType.TEAMMATE -> "队友"
         RelationshipType.RIVAL -> "对手"
         RelationshipType.CRUSH -> "暗恋"
-        RelationshipType.SIBLING -> "姐妹/兄弟"
+        RelationshipType.LOVER -> "恋人"
         RelationshipType.FAMILY -> "家人"
         else -> "陌生"
     }
@@ -231,7 +231,7 @@ class SharedUtils(
         RelationshipType.TEAMMATE -> "${aName}是${bName}的【队友】"
         RelationshipType.RIVAL -> "${aName}是${bName}的【对手】"
         RelationshipType.CRUSH -> "${aName}是${bName}的【暗恋对象】"
-        RelationshipType.SIBLING -> "${aName}是${bName}的【姐妹/兄弟】"
+        RelationshipType.LOVER -> "${aName}是${bName}的【恋人】"
         RelationshipType.FAMILY -> "${aName}是${bName}的【家人】"
         else -> ""
     }

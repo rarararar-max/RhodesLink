@@ -53,6 +53,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.ui.chat.formatChatTime
 import com.rhodes.privatechat.ui.chat.model.ChatUiMessage
 import com.rhodes.privatechat.ui.theme.*
@@ -176,20 +177,12 @@ private fun MessageBubble(
                 verticalAlignment = Alignment.Top
             ) {
                 if (!isMe) {
-                    // AI/他人头像
                     val avatarModifier = if (onSenderClick != null) {
-                        Modifier.size(36.dp).clip(CircleShape).clickable { onSenderClick(message.senderName) }
+                        Modifier.size(36.dp).clickable { onSenderClick(message.senderName) }
                     } else {
-                        Modifier.size(36.dp).clip(CircleShape)
+                        Modifier.size(36.dp)
                     }
-                    if (message.avatarUri.isNotBlank()) {
-                        AsyncImage(model = message.avatarUri, contentDescription = null,
-                            modifier = avatarModifier, contentScale = ContentScale.Crop)
-                    } else {
-                        Box(modifier = avatarModifier.background(message.senderColor), contentAlignment = Alignment.Center) {
-                            Text(message.senderName.take(1), color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
+                    OperatorAvatarImage(avatarUri = message.avatarUri, name = message.senderName, modifier = avatarModifier)
                     Spacer(modifier = Modifier.width(8.dp))
                 }
 

@@ -57,6 +57,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.data.db.entity.OperatorEntity
+import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.viewmodel.MainViewModel
@@ -107,9 +108,10 @@ fun GroupEditScreen(
             Spacer(modifier = Modifier.weight(1f))
             TextButton(onClick = {
                 val resolvedId = if (groupId.isBlank()) "group_${java.util.UUID.randomUUID()}" else groupId
-                viewModel.saveGroup(resolvedId, groupName, members.map { it.op.id }, rules, avatarUri, members.filter { it.muted }.map { it.op.id })
-                viewModel.setAutoGroupChatEnabled(resolvedId, autoSpeak)
-                onBack()
+                viewModel.saveGroup(resolvedId, groupName, members.map { it.op.id }, rules, avatarUri, members.filter { it.muted }.map { it.op.id }) {
+                    viewModel.setAutoGroupChatEnabled(resolvedId, autoSpeak)
+                    onBack()
+                }
             }) {
                 Icon(Icons.Default.Check, null, tint = Primary, modifier = Modifier.size(20.dp))
                 Text("保存", color = Primary, fontWeight = FontWeight.SemiBold)
@@ -153,7 +155,7 @@ fun GroupEditScreen(
                     Row(modifier = Modifier.horizontalScroll(avatarScrollState).padding(horizontal = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Box(modifier = Modifier.size(44.dp).clip(CircleShape).background(SurfaceVariant).clickable { showPicker = true }, contentAlignment = Alignment.Center) { Icon(Icons.Default.Add, null, tint = Primary, modifier = Modifier.size(22.dp)) }
                         members.forEach { m ->
-                            Box(modifier = Modifier.size(44.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) { Text(m.op.name.take(1), color = Color.White, fontWeight = FontWeight.Bold) }
+                            OperatorAvatarImage(avatarUri = m.op.avatarUri, name = m.op.name, modifier = Modifier.size(44.dp))
                         }
                     }
                     // 左侧渐变遮罩
@@ -171,7 +173,7 @@ fun GroupEditScreen(
                     Spacer(modifier = Modifier.height(12.dp))
                     members.forEachIndexed { i, m ->
                         Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(SurfaceVariant).padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Box(modifier = Modifier.size(36.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) { Text(m.op.name.take(1), color = Color.White, fontWeight = FontWeight.Bold) }
+                            OperatorAvatarImage(avatarUri = m.op.avatarUri, name = m.op.name, modifier = Modifier.size(36.dp))
                             Spacer(modifier = Modifier.width(10.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(m.op.name, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
@@ -247,7 +249,7 @@ fun GroupEditScreen(
                                 if (checked) members.removeAll { it.op.id == op.id }
                                 else members.add(MemberState(op))
                             }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Box(modifier = Modifier.size(32.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) { Text(op.name.take(1), color = Color.White, fontWeight = FontWeight.Bold) }
+                                OperatorAvatarImage(avatarUri = op.avatarUri, name = op.name, modifier = Modifier.size(32.dp))
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Text(op.name, fontSize = 14.sp, color = TextPrimary, modifier = Modifier.weight(1f))
                                 if (checked) Icon(Icons.Default.Check, null, tint = Primary, modifier = Modifier.size(20.dp))

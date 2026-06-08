@@ -50,6 +50,7 @@ class MahjongViewModel(
                     sessionId = "anchor_${System.currentTimeMillis()}_${op.id}",
                     operatorId = op.id, type = AnchorType.EVENT,
                     content = content, isPrivate = false,
+                    createdAt = System.currentTimeMillis(),
                     expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L
                 ))
             }

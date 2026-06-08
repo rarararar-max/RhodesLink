@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.rhodes.privatechat.data.db.entity.OperatorEntity
+import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.data.db.entity.RelationshipEntity
 import com.rhodes.privatechat.data.db.entity.RelationshipType
 import com.rhodes.privatechat.data.repository.BfsNode
@@ -109,11 +110,7 @@ fun OperatorDetailScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
 
 @Composable private fun ProfileSection(op: OperatorEntity) {
     Column(modifier = Modifier.fillMaxWidth().background(Surface).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        if (op.avatarUri.isNotBlank()) {
-            AsyncImage(model = op.avatarUri, contentDescription = null, modifier = Modifier.size(100.dp).clip(CircleShape), contentScale = ContentScale.Crop)
-        } else {
-            Box(modifier = Modifier.size(100.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) { Text(op.name.take(1), color = Color.White, fontSize = 36.sp, fontWeight = FontWeight.Bold) }
-        }
+        OperatorAvatarImage(avatarUri = op.avatarUri, name = op.name, modifier = Modifier.size(100.dp))
         Spacer(modifier = Modifier.height(8.dp))
         Text(op.name, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
         Text(op.title, fontSize = 13.sp, color = TextSecondary)
@@ -159,11 +156,7 @@ fun OperatorDetailScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             items(operators) { op ->
                 Column(modifier = Modifier.clickable { onClick(op) }, horizontalAlignment = Alignment.CenterHorizontally) {
-                    if (op.avatarUri.isNotBlank()) {
-                        AsyncImage(model = op.avatarUri, contentDescription = null, modifier = Modifier.size(48.dp).clip(CircleShape), contentScale = ContentScale.Crop)
-                    } else {
-                        Box(modifier = Modifier.size(48.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) { Text(op.name.take(1), color = Color.White, fontWeight = FontWeight.Bold) }
-                    }
+                    OperatorAvatarImage(avatarUri = op.avatarUri, name = op.name, modifier = Modifier.size(48.dp))
                     Text(op.name, fontSize = 11.sp, color = TextPrimary)
                 }
             }
@@ -195,7 +188,7 @@ private fun relDesc(operatorName: String, rel: RelationshipEntity): String {
     if (t == RelationshipType.TEAMMATE) return "${rel.relatedOperatorName}的【队友】"
     if (t == RelationshipType.RIVAL) return "${rel.relatedOperatorName}的【对手】"
     if (t == RelationshipType.CRUSH) return "${rel.relatedOperatorName}的【暗恋对象】"
-    if (t == RelationshipType.SIBLING) return "${rel.relatedOperatorName}的【姐妹/兄弟】"
+    if (t == RelationshipType.LOVER) return "${rel.relatedOperatorName}的【恋人】"
     if (t == RelationshipType.FAMILY) return "${rel.relatedOperatorName}的【家人】"
     return ""
 }
@@ -223,7 +216,7 @@ private fun bfsLabel(parentName: String, childName: String, type: RelationshipTy
         RelationshipType.STUDENT -> "学生"; RelationshipType.CLOSE_FRIEND -> "挚友"
         RelationshipType.FRIEND -> "朋友"; RelationshipType.COMRADE -> "战友"
         RelationshipType.TEAMMATE -> "队友"; RelationshipType.RIVAL -> "对手"
-        RelationshipType.CRUSH -> "暗恋对象"; RelationshipType.SIBLING -> "姐妹/兄弟"
+        RelationshipType.CRUSH -> "暗恋对象"; RelationshipType.LOVER -> "恋人"
         RelationshipType.FAMILY -> "家人"; else -> ""
     }
     if (ch.isEmpty()) return ""
@@ -371,11 +364,7 @@ private fun bfsLabel(parentName: String, childName: String, type: RelationshipTy
                             .clickable { onNameClick(dn.name) },
                             contentAlignment = Alignment.Center
                         ) {
-                            if (nodeAvatarUri.isNotBlank()) {
-                                AsyncImage(model = nodeAvatarUri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                            } else if (!isCenter) {
-                                Text(dn.name.take(1), color = Color.White, fontWeight = FontWeight.Bold, fontSize = (56f * zoomScale).sp)
-                            }
+                            OperatorAvatarImage(avatarUri = nodeAvatarUri, name = dn.name, modifier = Modifier.fillMaxSize())
                         } }
                     }
                 }
@@ -406,7 +395,7 @@ private fun relColor(type: RelationshipType): Color {
         type == RelationshipType.MOTHER || type == RelationshipType.FATHER ||
         type == RelationshipType.DAUGHTER || type == RelationshipType.SON ||
         type == RelationshipType.GUARDIAN ||
-        type == RelationshipType.SIBLING || type == RelationshipType.FAMILY) return red
+        type == RelationshipType.FAMILY) return red
     if (type == RelationshipType.CLOSE_FRIEND || type == RelationshipType.FRIEND) return Color(0xFF00BCD4)
     if (type == RelationshipType.BOSS || type == RelationshipType.CAPTAIN) return Color(0xFFFFC107)
     if (type == RelationshipType.SUBORDINATE || type == RelationshipType.MEMBER) return Color(0xFFFFB74D)
@@ -414,6 +403,7 @@ private fun relColor(type: RelationshipType): Color {
     if (type == RelationshipType.MENTOR || type == RelationshipType.STUDENT) return Color(0xFF8B5CF6)
     if (type == RelationshipType.RIVAL) return Color(0xFFEF4444)
     if (type == RelationshipType.CRUSH) return Color(0xFFF48FB1)
+    if (type == RelationshipType.LOVER) return Color(0xFFE91E63)
     return Color(0xFFBDBDBD)
 }
 

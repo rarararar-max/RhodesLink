@@ -258,7 +258,7 @@ private fun OtherTab(settings: SettingsRepository) {
 @Composable
 private fun ParamSlider(settings: SettingsRepository, key: String, label: String, defaultVal: Int, range: ClosedFloatingPointRange<Float>, tip: String, step: Float = 1f, pairKey: String? = null, isMinSide: Boolean = true) {
     var value by remember { mutableFloatStateOf(settings.getInt(key, defaultVal).toFloat().coerceIn(range)) }
-    val pairValue = if (pairKey != null) settings.getInt(pairKey, defaultVal).toFloat() else 0f
+    var pairValue by remember { mutableFloatStateOf(if (pairKey != null) settings.getInt(pairKey, defaultVal).toFloat() else 0f) }
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Card).padding(12.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(label, fontSize = 13.sp, color = TextPrimary)
@@ -268,12 +268,18 @@ private fun ParamSlider(settings: SettingsRepository, key: String, label: String
             Text("${value.toInt()}", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Blue400)
         }
         Slider(value = value, onValueChange = { v ->
-            value = if (pairKey != null) {
-                if (isMinSide) v.coerceAtMost(pairValue) else v.coerceAtLeast(pairValue)
-            } else v
+            if (pairKey != null) {
+                if (isMinSide) {
+                    if (v <= pairValue) { value = v }
+                    else { value = pairValue; pairValue = v }
+                } else {
+                    if (v >= pairValue) { value = v }
+                    else { value = pairValue; pairValue = v }
+                }
+            } else { value = v }
         }, onValueChangeFinished = {
             settings.putInt(key, value.toInt())
-            if (pairKey != null) settings.putInt(pairKey, if (isMinSide) value.toInt().coerceAtMost(pairValue.toInt()) else value.toInt().coerceAtLeast(pairValue.toInt()))
+            if (pairKey != null) settings.putInt(pairKey, pairValue.toInt())
         }, valueRange = range, steps = ((range.endInclusive - range.start) / step).toInt(), colors = SliderDefaults.colors(thumbColor = Blue400, activeTrackColor = Blue400))
     }
     Spacer(Modifier.height(4.dp))

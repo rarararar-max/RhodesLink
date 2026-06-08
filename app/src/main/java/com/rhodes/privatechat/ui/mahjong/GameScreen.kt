@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.game.mahjong.*
 import com.rhodes.privatechat.ui.theme.*
 import kotlinx.coroutines.delay
@@ -169,10 +170,7 @@ fun GameScreen(game: GameState, onBack: () -> Unit, onSettlement: (SettlementRes
         // 助手求助按钮
         Row(Modifier.fillMaxWidth().padding(vertical=1.dp),verticalAlignment=Alignment.CenterVertically){
             Spacer(Modifier.weight(1f))
-            Box(Modifier.size(32.dp).clip(CircleShape).background(Color(0xFF5C6BC0)).clickable{requestHelp()},contentAlignment=Alignment.Center){
-                if(assistantAvatarUri.isNotBlank()){AsyncImage(model=assistantAvatarUri,contentDescription=null,modifier=Modifier.fillMaxSize(),contentScale=androidx.compose.ui.layout.ContentScale.Crop)}
-                else{Text(asstName.take(1),color=Color.White,fontWeight=FontWeight.Bold,fontSize=13.sp)}
-            }
+            OperatorAvatarImage(avatarUri = assistantAvatarUri, name = asstName, modifier = Modifier.size(32.dp).clickable{requestHelp()})
             Text(asstName.take(6),fontSize=9.sp,color=Color.White.copy(alpha=0.6f),modifier=Modifier.padding(start=4.dp).clickable{requestHelp()})
         }
         // 手牌区

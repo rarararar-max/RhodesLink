@@ -68,6 +68,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.data.db.entity.OperatorEntity
+import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.data.db.entity.RelationshipEntity
 import com.rhodes.privatechat.data.db.entity.RelationshipType
 import com.rhodes.privatechat.ui.theme.*
@@ -174,13 +175,7 @@ fun OperatorEditScreen(
                 SectionTitle("头像")
                 val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> cropTarget = uri }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(modifier = Modifier.size(80.dp).clip(CircleShape).background(Gray100).clickable { avatarPicker.launch("image/*") }, contentAlignment = Alignment.Center) {
-                        if (avatarUri.isNotBlank()) {
-                            coil3.compose.AsyncImage(model = avatarUri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
-                        } else {
-                            Text(name.take(1), fontSize = 28.sp, fontWeight = FontWeight.Bold, color = TextSecondary)
-                        }
-                    }
+                    OperatorAvatarImage(avatarUri = avatarUri, name = name, modifier = Modifier.size(80.dp).clickable { avatarPicker.launch("image/*") })
                     Spacer(modifier = Modifier.width(16.dp))
                     OutlinedButton(onClick = { avatarPicker.launch("image/*") }) {
                         Icon(Icons.Default.PhotoCamera, null, modifier = Modifier.size(18.dp))
@@ -401,9 +396,7 @@ private fun RelationshipEditItem(
     val op = allOperators.find { it.id == rel.relatedOperatorId }
     Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Gray100).padding(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(modifier = Modifier.size(40.dp).clip(CircleShape).background(Blue400), contentAlignment = Alignment.Center) {
-                Text(rel.relatedOperatorName.take(1), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            }
+            OperatorAvatarImage(avatarUri = op?.avatarUri ?: "", name = rel.relatedOperatorName, modifier = Modifier.size(40.dp))
             Spacer(modifier = Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(rel.relatedOperatorName, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
@@ -466,9 +459,7 @@ private fun OperatorPickerDialog(
                 operators.forEach { op ->
                     Row(modifier = Modifier.fillMaxWidth().clickable { onSelect(op) }.padding(vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically) {
-                        Box(modifier = Modifier.size(36.dp).clip(CircleShape).background(Blue400), contentAlignment = Alignment.Center) {
-                            Text(op.name.take(1), color = Color.White, fontWeight = FontWeight.Bold)
-                        }
+                        OperatorAvatarImage(avatarUri = op.avatarUri, name = op.name, modifier = Modifier.size(36.dp))
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(op.name, fontSize = 14.sp)
                     }
@@ -501,7 +492,7 @@ private fun typeName(type: RelationshipType): String {
     if (type == RelationshipType.TEAMMATE) return "队友"
     if (type == RelationshipType.RIVAL) return "对手"
     if (type == RelationshipType.CRUSH) return "暗恋对象"
-    if (type == RelationshipType.SIBLING) return "姐妹/兄弟"
+    if (type == RelationshipType.LOVER) return "恋人"
     if (type == RelationshipType.FAMILY) return "家人"
     return "陌生"
 }

@@ -28,6 +28,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.data.db.entity.OperatorEntity
@@ -93,13 +94,7 @@ fun SelectScreen(
                     }.padding(8.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Box(modifier = Modifier.size(44.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) {
-                        if (op.avatarUri.isNotBlank()) {
-                            AsyncImage(model = op.avatarUri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
-                        } else {
-                            Text(op.name.take(1), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                        }
-                    }
+                    OperatorAvatarImage(avatarUri = op.avatarUri, name = op.name, modifier = Modifier.size(44.dp))
                     Text(op.name.take(6), fontSize = 11.sp, fontWeight = FontWeight.Medium, color = if (disabled) TextTertiary else TextPrimary, maxLines = 1, textAlign = TextAlign.Center)
                     Text("余额${opLmb}", fontSize = 9.sp, color = if (disabled) ErrorRed else TextSecondary)
                     if (disabled) Text("不足", fontSize = 9.sp, color = ErrorRed)
@@ -114,10 +109,7 @@ fun SelectScreen(
             operators.filter { it.id !in opponentIds }.forEach { op ->
                 val sel = assistantId == op.id
                 Column(modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(if (sel) Primary.copy(alpha = 0.15f) else Color.Transparent).clickable { assistantId = op.id }.padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Box(modifier = Modifier.size(36.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) {
-                        if (op.avatarUri.isNotBlank()) AsyncImage(model = op.avatarUri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
-                        else Text(op.name.take(1), color = Color.White, fontWeight = FontWeight.Bold)
-                    }
+                    OperatorAvatarImage(avatarUri = op.avatarUri, name = op.name, modifier = Modifier.size(36.dp))
                     Text(op.name.take(4), fontSize = 9.sp, color = TextPrimary)
                     if (sel) Text("已选", fontSize = 8.sp, color = Primary)
                 }
@@ -155,7 +147,7 @@ fun SelectScreen(
             text = {
                 if (historyEntries.isEmpty()) { Text("暂无对局记录", color = TextSecondary, modifier = Modifier.padding(16.dp)) }
                 else {
-                    val sdf = SimpleDateFormat("MM/dd HH:mm", Locale.getDefault())
+                    val sdf = SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()).apply { timeZone = TimeZone.getTimeZone("Asia/Shanghai") }
                     LazyColumn(modifier = Modifier.heightIn(max = 400.dp)) {
                         itemsIndexed(historyEntries) { _, e ->
                             val rankColor = when (e.userRank) { 1 -> Color(0xFFFFD700); 2 -> Color(0xFFC0C0C0); 3 -> Color(0xFFCD7F32); else -> TextSecondary }

@@ -62,8 +62,9 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
     val groupSession = remember(groupId, sessions) { sessions.find { it.id == groupId } }
     var lastActivity by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
-    LaunchedEffect(groupId) {
+    DisposableEffect(groupId) {
         if (groupId.isNotBlank()) viewModel.setCurrentGroup(groupId)
+        onDispose { viewModel.clearCurrentGroup() }
     }
 
     // Auto-speak timer

@@ -27,6 +27,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.data.db.entity.MomentCommentEntity
 import com.rhodes.privatechat.data.db.entity.MomentEntity
 import com.rhodes.privatechat.ui.theme.*
@@ -127,13 +128,7 @@ private fun MomentDetailCard(
 ) {
     Column(Modifier.fillMaxWidth().background(Surface).padding(16.dp)) {
         Row(verticalAlignment = Alignment.Top) {
-            if (operatorAvatarUri.isNotBlank()) {
-                AsyncImage(model = operatorAvatarUri, contentDescription = null, modifier = Modifier.size(44.dp).clip(CircleShape).clickable { onOperatorClick(moment.operatorName) }, contentScale = ContentScale.Crop)
-            } else {
-                Box(Modifier.size(44.dp).clip(CircleShape).background(Primary).clickable { onOperatorClick(moment.operatorName) }, contentAlignment = Alignment.Center) {
-                    Text(moment.operatorName.take(1), color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                }
-            }
+            OperatorAvatarImage(avatarUri = operatorAvatarUri, name = moment.operatorName, modifier = Modifier.size(44.dp).clickable { onOperatorClick(moment.operatorName) })
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(moment.operatorName, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Primary)

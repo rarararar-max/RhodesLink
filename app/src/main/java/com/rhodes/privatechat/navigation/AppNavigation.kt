@@ -114,12 +114,12 @@ private fun ChatTabContent(navigator: Navigator) {
                 navigator.push(GroupChatRoute(s.operatorName.ifBlank { "群聊" }, s.id))
             } else {
                 val op = viewModel.operators.value.find { it.id == s.operatorId }
-                if (op != null) navigator.push(ChatOperator(op.id))
+                if (op != null) navigator.push(ChatOperator(op))
             }
         },
         onPin = { viewModel.pinSession(it) },
         onMarkRead = { viewModel.markSessionRead(it) },
-        onDelete = { viewModel.deleteSession(it) }
+        onDelete = { viewModel.hideSession(it) }
     )
 }
 
@@ -128,7 +128,7 @@ private fun ContactsTabContent(navigator: Navigator) {
     val viewModel: MainViewModel = koinViewModel()
     com.rhodes.privatechat.ui.contacts.ContactsScreen(
         viewModel = viewModel,
-        onOperatorClick = { op -> navigator.push(ChatOperator(op.id)) },
+        onOperatorClick = { op -> navigator.push(ChatOperator(op)) },
         onNewOperator = { navigator.push(NewOperatorScreen) },
         onNewGroup = { navigator.push(NewGroupScreen) },
         onGroupClick = { name, id -> navigator.push(GroupChatRoute(name, id)) }

@@ -56,7 +56,8 @@ class GroupChatViewModel(
     val currentGroupId: StateFlow<String> = _currentGroupId.asStateFlow()
 
     private var groupMessagesJob: Job? = null
-    private var groupMessageMutex = Mutex()
+    private val groupMessageMutexes = mutableMapOf<String, Mutex>()
+    private fun mutexFor(groupId: String): Mutex = groupMessageMutexes.getOrPut(groupId) { Mutex() }
 
     // 自动群聊
     private val autoGroupChatJobs = mutableMapOf<String, Job>()
@@ -222,27 +223,32 @@ class GroupChatViewModel(
 
     fun sendGroupMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online", autoSpeak: Boolean = false, isAuto: Boolean = false) {
         scope.launch {
-            if (!groupMessageMutex.tryLock()) return@launch
+            // 步骤1: 用户消息立即插入（不持锁），消息即时显示
+            if (!isAuto && text.isNotBlank()) {
+                val userMsgId = repository.getNextMessageId()
+                repository.sendMessage(groupSessionId, ChatMessage(
+                    id = userMsgId, sessionId = groupSessionId,
+                    senderName = "我", content = text, type = "text", mode = mode, isMe = true
+                ))
+                resetAutoGroupChatTimer(groupSessionId)
+                unhideSession(groupSessionId)
+                val today = sharedUtils.beijingSdf("yyyyMMdd").format(java.util.Date())
+                val rewardDate = settings.rewardDate
+                if (rewardDate != today) { settings.rewardDate = today; settings.dailyLmbCount = 0 }
+                val dailyCount = settings.dailyLmbCount
+                if (dailyCount < 5000) { val balance = settings.lmb; settings.lmb = balance + 10; settings.dailyLmbCount = dailyCount + 1 }
+            }
+
+            // 步骤2: AI 处理 — 串行化（持锁）
+            mutexFor(groupSessionId).lock()
             try {
                 _groupLoading.value = true
-                if (!isAuto && text.isNotBlank()) {
-                    val userMsgId = repository.getNextMessageId()
-                    repository.sendMessage(groupSessionId, ChatMessage(
-                        id = userMsgId, sessionId = groupSessionId,
-                        senderName = "我", content = text, type = "text", mode = mode, isMe = true
-                    ))
-                    resetAutoGroupChatTimer(groupSessionId)
-                    // 群聊每轮加 10 龙门币，每日上限 5000
-                    val today = sharedUtils.beijingSdf("yyyyMMdd").format(java.util.Date())
-                    val rewardDate = settings.rewardDate
-                    if (rewardDate != today) { settings.rewardDate = today; settings.dailyLmbCount = 0 }
-                    val dailyCount = settings.dailyLmbCount
-                    if (dailyCount < 5000) { val balance = settings.lmb; settings.lmb = balance + 10; settings.dailyLmbCount = dailyCount + 1 }
-                }
                 val session = repository.getSession(groupSessionId) ?: run { _groupLoading.value = false; return@launch }
                 val memberIds = session.members.split(",").map { it.trim() }.filter { it.isNotBlank() }
                 val allOps = appState.operators.value
-                val members = memberIds.mapNotNull { id -> allOps.find { it.id == id || it.name == id } }
+                val opsById = allOps.associateBy { it.id }
+                val opsByName = allOps.associateBy { it.name }
+                val members = memberIds.mapNotNull { id -> opsById[id] ?: opsByName[id] }
                 val mutedIds = session.mutedMembers.split(",").map { it.trim() }.filter { it.isNotBlank() }.toSet()
                 val activeMembers = members.filter { it.id !in mutedIds && it.name !in mutedIds }
 
@@ -329,35 +335,40 @@ class GroupChatViewModel(
                     .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
                 sharedUtils.trackTokens("group", apiMessages, rawBase)
                 if (DEBUG) sharedUtils.logAiCall("GroupChat", promptText, rawBase, apiMessages)
-                var results: List<GroupMsgResult> = emptyList()
-                for (cleaned in listOf(rawBase, rawBase.replace("，", ",").replace("：", ":"))) {
-                    try {
-                        val arr = json.decodeFromString<List<GroupMsgResult>>(cleaned)
-                        results = arr
-                        if (results.isNotEmpty()) break
-                    } catch (_: Exception) {}
-                }
-                // JSON 全部解析失败时，将原文作为一条旁白兜底显示
+                var results: List<GroupMsgResult> = extractGroupResults(rawBase)
                 if (results.isEmpty() && rawBase.isNotBlank()) {
                     results = listOf(GroupMsgResult(speaker = "系统", message = rawBase.take(500), type = "narration"))
                 }
                 val filtered = results.filter { it.message.isNotBlank() }
                 if (filtered.isNotEmpty()) {
                     val aiMsgId = repository.getNextMessageId()
+                    val storedContent = if (filtered.isNotEmpty()) {
+                        try {
+                            buildString {
+                                append("[")
+                                results.forEachIndexed { i, r ->
+                                    if (i > 0) append(",")
+                                    append("{\"speaker\":\"${r.speaker}\",\"message\":\"${r.message}\",\"type\":\"${r.type}\"}")
+                                }
+                                append("]")
+                            }
+                        } catch (_: Exception) { rawBase }
+                    } else rawBase
                     repository.sendMessage(groupSessionId, ChatMessage(
                         id = aiMsgId, sessionId = groupSessionId,
-                        senderName = groupName, content = rawBase,
+                        senderName = groupName, content = storedContent,
                         type = "ai_json", mode = mode, isMe = false
                     ))
                     for (r in filtered) {
                         val anchorOp = if (r.speaker == "旁白" || r.speaker == "系统") null
-                        else allOps.find { it.name == r.speaker }
+                        else opsByName[r.speaker]
                         if (anchorOp != null) {
                             repository.saveAnchor(MemoryAnchor(
                                 sessionId = "anchor_${System.currentTimeMillis()}",
                                 operatorId = anchorOp.id, type = AnchorType.EVENT,
                                 content = "在群聊「${groupName}」中${r.speaker}说：${r.message.take(40)}",
                                 isPrivate = false,
+                                createdAt = System.currentTimeMillis(),
                                 expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L
                             ))
                         }
@@ -388,9 +399,35 @@ class GroupChatViewModel(
                 repository.sendMessage(groupSessionId, ChatMessage(id = repository.getNextMessageId(), sessionId = groupSessionId, senderName = "系统", content = "连接失败", type = "system", mode = mode, isMe = false))
             } finally {
                 _groupLoading.value = false
-                groupMessageMutex.unlock()
+                mutexFor(groupSessionId).unlock()
             }
         }
+    }
+
+    private fun extractGroupResults(raw: String): List<GroupMsgResult> {
+        try {
+            val cleaned = sharedUtils.aiService.cleanJson(raw)
+            val arr = json.decodeFromString<List<GroupMsgResult>>(cleaned)
+            if (arr.isNotEmpty()) return arr
+        } catch (_: Exception) {}
+
+        try {
+            val objRegex = Regex("""\{[^}]*\}""")
+            val results = objRegex.findAll(raw).mapNotNull { match ->
+                try { json.decodeFromString<GroupMsgResult>(match.value) } catch (_: Exception) { null }
+            }.filter { it.message.isNotBlank() }.toList()
+            if (results.isNotEmpty()) return results
+        } catch (_: Exception) {}
+
+        try {
+            val regex = Regex(""""speaker"\s*:\s*"([^"]*)"\s*,\s*"message"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"type"\s*:\s*"([^"]*)"""")
+            val results = regex.findAll(raw).map { m ->
+                GroupMsgResult(speaker = m.groupValues[1], message = m.groupValues[2], type = m.groupValues[3])
+            }.filter { it.message.isNotBlank() }.toList()
+            if (results.isNotEmpty()) return results
+        } catch (_: Exception) {}
+
+        return emptyList()
     }
 
     private suspend fun getGroupRelationshipContext(members: List<Operator>): String {
@@ -399,7 +436,7 @@ class GroupChatViewModel(
             for (j in i + 1 until members.size) {
                 val a = members[i]; val b = members[j]
                 val rel = repository.getRelationship(a.id, b.id)
-                if (rel != null && rel.type != RelationshipType.STRANGER) {
+                if (rel != null) {
                     val desc = sharedUtils.relationshipGroupDesc(a.name, b.name, rel.type)
                     lines.add("- $desc（亲密${rel.intimacy}）")
                 }

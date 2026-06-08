@@ -104,7 +104,7 @@ fun CreditsScreen(
             }
 
             Spacer(modifier = Modifier.height(24.dp))
-            Text("版本 1.0", fontSize = 12.sp, color = Color(0xFF636366))
+            Text("版本 1.1", fontSize = 12.sp, color = Color(0xFF636366))
             Text("© 2026 Rhodes Terminal", fontSize = 12.sp, color = Color(0xFF636366))
         }
     }

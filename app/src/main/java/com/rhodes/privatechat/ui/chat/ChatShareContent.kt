@@ -41,6 +41,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -224,13 +225,7 @@ private fun SharePreview(titleContent: @Composable () -> Unit, messages: List<Sh
             } else {
                 Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.Top, horizontalArrangement = if (msg.isMe) Arrangement.End else Arrangement.Start) {
                     if (!msg.isMe) {
-                        if (operatorAvatarUri.isNotBlank()) {
-                            coil3.compose.AsyncImage(model = operatorAvatarUri, contentDescription = null, modifier = Modifier.size(28.dp).clip(CircleShape), contentScale = ContentScale.Crop)
-                        } else {
-                            Box(Modifier.size(28.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) {
-                                Text(msg.senderName.take(1), fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
-                            }
-                        }
+                        OperatorAvatarImage(avatarUri = operatorAvatarUri, name = msg.senderName, modifier = Modifier.size(28.dp))
                         Spacer(Modifier.width(6.dp))
                     }
                     Box(Modifier.widthIn(max = 240.dp).clip(RoundedCornerShape(if (msg.isMe) 12.dp else 12.dp, if (msg.isMe) 4.dp else 12.dp, if (msg.isMe) 12.dp else 12.dp, if (msg.isMe) 12.dp else 4.dp)).background(if (msg.isMe) Color(0xFF95EC69) else Card).padding(horizontal = 12.dp, vertical = 8.dp)) {

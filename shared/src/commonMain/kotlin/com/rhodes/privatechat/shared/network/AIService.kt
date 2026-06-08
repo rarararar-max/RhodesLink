@@ -1,6 +1,6 @@
 package com.rhodes.privatechat.shared.network
 
-import android.util.Log
+
 import com.rhodes.privatechat.shared.model.AiMessage
 import com.rhodes.privatechat.shared.model.ChatCompletionRequest
 import com.rhodes.privatechat.shared.model.StreamChunk
@@ -189,13 +189,13 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                 val parsed = json.decodeFromString<OfflineModeResponse>(cleaned)
                 return parsed
             } catch (e: Exception) {
-                Log.w(TAG, "[$logTag] JSON解析失败 (attempt $attempt/$maxRetries): ${e.message}")
+                println("WARN: [$logTag] JSON解析失败 (attempt $attempt/$maxRetries): ${e.message}")
                 if (attempt < maxRetries) {
                     kotlinx.coroutines.delay(500L * attempt)
                 }
             }
         }
-        Log.e(TAG, "[$logTag] ${maxRetries}次重试均失败，降级为原始文本。原始内容: ${lastRaw.take(200)}")
+        println("ERROR: [$logTag] ${maxRetries}次重试均失败，降级为原始文本。原始内容: ${lastRaw.take(200)}")
         return OfflineModeResponse(dialogue = lastRaw)
     }
 

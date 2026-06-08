@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import androidx.compose.ui.layout.ContentScale
+import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.data.db.entity.ChatSessionEntity
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.shared.settings.SettingsRepository
@@ -78,11 +79,7 @@ private fun OperatorPermTab(operators: List<com.rhodes.privatechat.data.db.entit
                 var allowMsg by remember(op.id) { mutableStateOf(settings.getOperatorMsgPermission(op.id)) }
                 var allowDyn by remember(op.id) { mutableStateOf(settings.getOperatorDynPermission(op.id)) }
                 Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (op.avatarUri.isNotBlank()) {
-                        AsyncImage(model = op.avatarUri, contentDescription = null, modifier = Modifier.size(32.dp).clip(CircleShape), contentScale = ContentScale.Crop)
-                    } else {
-                        Box(Modifier.size(32.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) { Text(op.name.take(1), color = Color.White, fontWeight = FontWeight.Bold) }
-                    }
+                    OperatorAvatarImage(avatarUri = op.avatarUri, name = op.name, modifier = Modifier.size(32.dp))
                     Spacer(Modifier.width(10.dp))
                     Text(op.name, fontSize = 14.sp, color = TextPrimary, modifier = Modifier.weight(1f))
                     Switch(checked = allowMsg, onCheckedChange = { b -> allowMsg = b; settings.putOperatorMsgPermission(op.id, b) }, modifier = Modifier.width(56.dp), colors = SwitchDefaults.colors(checkedThumbColor = Primary, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
@@ -110,13 +107,7 @@ private fun GroupPermTab(groups: List<com.rhodes.privatechat.data.db.entity.Chat
                 items(groups, key = { it.id }) { g ->
                     var autoSpeak by remember(g.id) { mutableStateOf(settings.getGroupAuto(g.id)) }
                     Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                        if (g.avatarUri.isNotBlank()) {
-                            AsyncImage(model = g.avatarUri, contentDescription = null, modifier = Modifier.size(36.dp).clip(CircleShape), contentScale = ContentScale.Crop)
-                        } else {
-                            Box(Modifier.size(36.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) {
-                                Text(g.operatorName.take(1), color = Color.White, fontWeight = FontWeight.Bold)
-                            }
-                        }
+                        OperatorAvatarImage(avatarUri = g.avatarUri, name = g.operatorName, modifier = Modifier.size(36.dp))
                         Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
                             Text(g.operatorName, fontSize = 14.sp, color = TextPrimary)

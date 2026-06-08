@@ -23,6 +23,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.ui.theme.*
 import java.io.File
 import java.io.FileOutputStream
@@ -66,13 +67,7 @@ fun ChatExportDialog(
     ChatShareDialog(
         titleContent = {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 4.dp)) {
-                if (operatorAvatarUri.isNotBlank()) {
-                    coil3.compose.AsyncImage(model = operatorAvatarUri, contentDescription = null, modifier = Modifier.size(36.dp).clip(CircleShape), contentScale = ContentScale.Crop)
-                } else {
-                    Box(Modifier.size(36.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) {
-                        Text(operatorName.take(1), color = Color.White, fontWeight = FontWeight.Bold)
-                    }
-                }
+                OperatorAvatarImage(avatarUri = operatorAvatarUri, name = operatorName, modifier = Modifier.size(36.dp))
                 Spacer(Modifier.width(8.dp))
                 Text(operatorName, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
             }

@@ -65,6 +65,19 @@ class AppStateHolder(
         _allSessions.value = emptyList()
     }
 
+    fun clearChatListOnly() {
+        _sessions.value = emptyList()
+    }
+
+    fun refreshAllSessions(all: List<ChatSession>, hiddenIds: Set<String>) {
+        _allSessions.value = all
+        _sessions.value = all.filter { it.id !in hiddenIds }
+    }
+
+    fun refreshMoments(moments: List<Moment>) {
+        _moments.value = moments
+    }
+
     private fun loadUserProfile(): UserProfile {
         return UserProfile(
             nickname = settings.userName.ifBlank { "博士" },

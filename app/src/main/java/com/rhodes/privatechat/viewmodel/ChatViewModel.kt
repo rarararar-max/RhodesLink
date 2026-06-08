@@ -172,6 +172,7 @@ ${text}"""
                             sessionId = session.id, operatorId = session.operatorId,
                             type = try { AnchorType.valueOf(a.type.uppercase()) } catch (_: Exception) { AnchorType.EVENT },
                             content = a.content, isPrivate = a.isPrivate,
+                            createdAt = System.currentTimeMillis(),
                             expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L
                         )
                     }
@@ -212,6 +213,33 @@ ${text}"""
             messagesJob = viewModelScope.launch {
                 repository.getMessages(session.id).collect { msgs -> _messages.value = msgs }
             }
+        }
+    }
+
+    suspend fun selectOperatorSync(operator: Operator) {
+        val prevOp = _selectedOperator.value
+        if (prevOp != null) {
+            settings.putString("hypnosis_cmd_${prevOp.id}", _hypnosisCommand.value)
+            settings.putInt("hypnosis_round_${prevOp.id}", _hypnosisRounds.value)
+            settings.putString("mind_read_${prevOp.id}", _mindReadContent.value)
+            settings.putInt("mind_read_rounds_${prevOp.id}", _mindReadRounds.value)
+        }
+        _selectedOperator.value = operator
+        messageCounter = 0
+        _hypnosisCommand.value = settings.getString("hypnosis_cmd_${operator.id}", "")
+        _hypnosisRounds.value = settings.getInt("hypnosis_round_${operator.id}", 0)
+        _mindReadContent.value = settings.getString("mind_read_${operator.id}", "")
+        _mindReadRounds.value = settings.getInt("mind_read_rounds_${operator.id}", 0)
+        settings.hypnosisCmd = _hypnosisCommand.value
+        settings.hypnosisRound = _hypnosisRounds.value
+        val session = repository.getOrCreateSession(operator.id, operator.name, operator.avatarUri)
+        _currentSession.value = session
+        val savedMode = settings.getLastMode(operator.id)
+        _currentMode.value = savedMode
+        markSessionRead(session.id)
+        messagesJob?.cancel()
+        messagesJob = viewModelScope.launch {
+            repository.getMessages(session.id).collect { msgs -> _messages.value = msgs }
         }
     }
 

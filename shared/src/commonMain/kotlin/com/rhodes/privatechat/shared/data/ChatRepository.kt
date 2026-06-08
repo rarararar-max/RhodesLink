@@ -33,6 +33,7 @@ class ChatRepository(wrapper: DatabaseWrapper) {
 
     // --- Backward-compatible forwarding methods ---
     val allOperators: Flow<List<Operator>> get() = operators.allOperators
+    suspend fun getAllOperatorsSync() = operators.getAllOperatorsSync()
     suspend fun getOperator(id: String) = operators.getOperator(id)
     suspend fun insertPresetOperators() = operators.insertPresetOperators()
     suspend fun deleteOperator(id: String) = operators.deleteOperator(id)
@@ -41,6 +42,7 @@ class ChatRepository(wrapper: DatabaseWrapper) {
     suspend fun insertOperator(op: Operator) = operators.insertOperator(op)
 
     val allSessions: Flow<List<ChatSession>> get() = sessions.allSessions
+    suspend fun getAllSessionsSync() = sessions.getAllSessionsSync()
     suspend fun getOrCreateSession(operatorId: String, operatorName: String, avatarUri: String = "") = sessions.getOrCreateSession(operatorId, operatorName, avatarUri)
     suspend fun getSession(id: String) = sessions.getSession(id)
     suspend fun insertSession(session: ChatSession) = sessions.insertSession(session)
@@ -96,11 +98,13 @@ class ChatRepository(wrapper: DatabaseWrapper) {
 
     suspend fun insertMoment(moment: Moment) = moments.insertMoment(moment)
     fun getAllMoments() = moments.getAllMoments()
+    suspend fun getAllMomentsSync() = moments.getAllMomentsSync()
     fun getLikesFlow(momentId: Long) = moments.getLikesFlow(momentId)
     fun getComments(momentId: Long) = moments.getComments(momentId)
     suspend fun insertLike(like: MomentLike) = moments.insertLike(like)
     suspend fun insertComment(comment: MomentComment) = moments.insertComment(comment)
     suspend fun getMaxCommentId() = moments.getMaxCommentId()
+    suspend fun getCommentById(commentId: Long) = moments.getCommentById(commentId)
     suspend fun markCommentRead(id: Long) = moments.markCommentRead(id)
     suspend fun markAllCommentsRead(userName: String) = moments.markAllCommentsRead(userName)
     suspend fun deleteOldUserComments(cutoff: Long, userName: String) = moments.deleteOldUserComments(cutoff, userName)

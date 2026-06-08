@@ -5,7 +5,9 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import cafe.adriel.voyager.core.screen.Screen
 import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.currentOrThrow
@@ -14,6 +16,7 @@ import com.rhodes.privatechat.game.mahjong.GameState
 import com.rhodes.privatechat.game.mahjong.GameStateCreateParams
 import com.rhodes.privatechat.game.mahjong.MahjongHistoryEntry
 import com.rhodes.privatechat.game.mahjong.SettlementResult
+import com.rhodes.privatechat.shared.model.Operator
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import kotlinx.serialization.json.Json
@@ -28,26 +31,25 @@ private val json = Json { ignoreUnknownKeys = true }
 // Chat
 // ──────────────────────────────────────────────
 
-data class ChatOperator(val opId: String) : Screen {
+data class ChatOperator(val operator: Operator) : Screen {
     @Composable
     override fun Content() {
         val navigator = LocalNavigator.currentOrThrow
         val viewModel: MainViewModel = koinViewModel()
-        val operators by viewModel.operators.collectAsState()
-        val op = remember(operators) { operators.find { it.id == opId } }
-        // 同步设置 selectedOperator，确保 ChatScreen 渲染时已有值
-        if (op != null) {
-            DisposableEffect(Unit) { onDispose { viewModel.clearSelection() } }
-            viewModel.selectOperator(op)
+        var ready by remember { mutableStateOf(false) }
+        LaunchedEffect(operator) {
+            viewModel.chatViewModel.selectOperatorSync(operator)
+            ready = true
+        }
+        DisposableEffect(Unit) { onDispose { viewModel.chatViewModel.clearSelection() } }
+        if (ready) {
             com.rhodes.privatechat.ui.chat.ChatScreen(
                 viewModel = viewModel,
+                operator = operator,
                 onBack = { navigator.pop() },
-                onEditOperator = { navigator.push(EditOperator(opId)) },
-                onViewStatus = { navigator.push(OperatorDetailRoute(opId)) }
+                onEditOperator = { navigator.push(EditOperator(operator.id)) },
+                onViewStatus = { navigator.push(OperatorDetailRoute(operator.id)) }
             )
-        } else if (operators.isNotEmpty()) {
-            // operators 已加载但找不到该干员，返回上一级
-            LaunchedEffect(Unit) { navigator.pop() }
         }
     }
 }
@@ -61,11 +63,12 @@ data class GroupChatRoute(val name: String, val groupId: String) : Screen {
             viewModel = viewModel,
             groupName = name,
             groupId = groupId,
-            onBack = { viewModel.clearCurrentGroup(); navigator.pop() },
+            onBack = { navigator.pop() },
             onEditGroup = { id -> navigator.push(EditGroup(id)) },
             onOperatorClick = { operatorName ->
+                viewModel.clearCurrentGroup()
                 val op = viewModel.findOperatorByName(operatorName)
-                if (op != null) navigator.push(ChatOperator(op.id))
+                if (op != null) navigator.push(ChatOperator(op))
             }
         )
     }
@@ -126,7 +129,7 @@ data class OperatorDetailRoute(val opId: String) : Screen {
                 viewModel = viewModel,
                 operator = op,
                 onBack = { navigator.pop() },
-                onOperatorClick = { clickedOp -> navigator.push(ChatOperator(clickedOp.id)) }
+                onOperatorClick = { clickedOp -> navigator.push(ChatOperator(clickedOp)) }
             )
         }
     }
@@ -146,7 +149,7 @@ data object MomentsRoute : Screen {
             onBack = { navigator.pop() },
             onOperatorClick = { name ->
                 val op = viewModel.findOperatorByName(name)
-                if (op != null) navigator.push(ChatOperator(op.id))
+                if (op != null) navigator.push(ChatOperator(op))
             },
             onUnreadMessages = { navigator.push(UnreadMessagesRoute) }
         )
@@ -179,7 +182,7 @@ data class MomentDetailRoute(val momentId: Long, val replyToCommentId: Long = 0,
             onBack = { navigator.pop() },
             onOperatorClick = { name ->
                 val op = viewModel.findOperatorByName(name)
-                if (op != null) navigator.push(ChatOperator(op.id))
+                if (op != null) navigator.push(ChatOperator(op))
             }
         )
     }
@@ -203,7 +206,7 @@ data object RankingRoute : Screen {
             onBack = { navigator.pop() },
             onOperatorClick = { name ->
                 val op = viewModel.findOperatorByName(name)
-                if (op != null) navigator.push(ChatOperator(op.id))
+                if (op != null) navigator.push(ChatOperator(op))
             }
         )
     }
@@ -219,7 +222,7 @@ data object ImpressionsRoute : Screen {
             onBack = { navigator.pop() },
             onOperatorClick = { name ->
                 val op = viewModel.findOperatorByName(name)
-                if (op != null) navigator.push(ChatOperator(op.id))
+                if (op != null) navigator.push(ChatOperator(op))
             }
         )
     }

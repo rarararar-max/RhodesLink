@@ -62,6 +62,7 @@ import com.rhodes.privatechat.ui.chat.component.MenuChip
 import com.rhodes.privatechat.ui.chat.component.MessageList
 import com.rhodes.privatechat.ui.chat.model.ChatUiMessage
 import com.rhodes.privatechat.ui.chat.util.MessageParser
+import com.rhodes.privatechat.shared.model.Operator
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import org.koin.compose.koinInject
@@ -72,18 +73,20 @@ private const val PROP_PRICE = 100
 @Composable
 fun ChatScreen(
     viewModel: MainViewModel, onBack: () -> Unit,
+    operator: Operator,
     onEditOperator: () -> Unit = {}, onViewStatus: () -> Unit = {},
     onExportChat: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val settings: SettingsRepository = koinInject()
-    val operator by viewModel.selectedOperator.collectAsState()
     val rawMessages by viewModel.messages.collectAsState()
     val inputText by viewModel.inputText.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val currentMode by viewModel.currentMode.collectAsState()
+    val currentOp by viewModel.selectedOperator.collectAsState()
+    val displayOp = currentOp ?: operator
     val listState = rememberLazyListState()
-    val op = operator ?: run { onBack(); return }
+    val op = operator
     val context = LocalContext.current
     val userProfile by viewModel.userProfile.collectAsState()
     val focusManager = LocalFocusManager.current
@@ -118,11 +121,11 @@ fun ChatScreen(
 
         Column(modifier = modifier.fillMaxSize()) {
             ChatHeader(
-                title = op.name,
-                avatarUri = op.avatarUri,
+                title = displayOp.name,
+                avatarUri = displayOp.avatarUri,
                 mode = currentMode,
                 isLoading = isLoading,
-                subtitleText = "${op.location} | ${op.activity} | ${op.emotion}",
+                subtitleText = "${displayOp.location} | ${displayOp.activity} | ${displayOp.emotion}",
                 onBack = onBack,
                 menuContent = {
                     ChatDropdownMenuItem(text = { Text("更换背景图") }, onClick = { bgPicker.launch("image/*") })
@@ -298,7 +301,7 @@ private fun PropShopDialog(
 人设：${persona}
 
 【当前场景】
-现在的时间是：${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date())}
+现在的时间是：${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).apply { timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai") }.format(java.util.Date())}
 你所在的位置是：${loc}
 你正在做的事情是：${stateDesc}
 你此刻的情绪是：${mood}

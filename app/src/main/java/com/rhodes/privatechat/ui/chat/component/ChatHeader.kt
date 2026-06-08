@@ -38,6 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.ui.theme.*
 
 /** 供 ChatDropdownMenuItem 使用的菜单关闭回调 */
@@ -90,15 +91,7 @@ fun ChatHeader(
                         modifier = Modifier.size(34.dp).clip(CircleShape), contentScale = ContentScale.Crop)
                 }
             } else {
-                if (avatarUri.isNotBlank()) {
-                    AsyncImage(model = avatarUri, contentDescription = null,
-                        modifier = Modifier.size(34.dp).clip(CircleShape), contentScale = ContentScale.Crop)
-                } else {
-                    Box(
-                        modifier = Modifier.size(34.dp).clip(CircleShape).background(Primary),
-                        contentAlignment = Alignment.Center
-                    ) { Text(title.take(1), color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold) }
-                }
+                OperatorAvatarImage(avatarUri = avatarUri, name = title, modifier = Modifier.size(34.dp))
             }
 
             Spacer(modifier = Modifier.width(8.dp))

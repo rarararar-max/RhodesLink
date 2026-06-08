@@ -46,7 +46,7 @@ data class RelationshipExport(
     val intimacy: Int = 0, val isPreset: Boolean = false, val note: String = ""
 ) {
     fun toEntity() = Relationship(operatorId = operatorId, relatedOperatorId = relatedOperatorId,
-        relatedOperatorName = relatedOperatorName, type = RelationshipType.valueOf(type),
+        relatedOperatorName = relatedOperatorName, type = try { RelationshipType.valueOf(type) } catch (_: Exception) { RelationshipType.values().first() },
         intimacy = intimacy, isPreset = isPreset, note = note)
     companion object {
         fun fromEntity(r: Relationship) = RelationshipExport(r.operatorId, r.relatedOperatorId,

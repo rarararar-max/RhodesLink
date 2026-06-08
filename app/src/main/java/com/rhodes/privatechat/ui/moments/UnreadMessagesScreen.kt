@@ -18,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -67,9 +68,7 @@ fun UnreadMessagesScreen(viewModel: MainViewModel, onBack: () -> Unit, onMomentC
                         // 红点
                         Box(Modifier.size(8.dp).clip(CircleShape).background(if (c.isRead) Color.Transparent else ErrorRed))
                         Spacer(Modifier.width(8.dp))
-                        Box(Modifier.size(40.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) {
-                            Text(c.operatorName.take(1), color = Color.White, fontWeight = FontWeight.Bold)
-                        }
+                        OperatorAvatarImage(avatarUri = "", name = c.operatorName, modifier = Modifier.size(40.dp))
                         Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
                             Text(c.operatorName, fontSize = 14.sp, fontWeight = if (c.isRead) FontWeight.Normal else FontWeight.SemiBold, color = TextPrimary)

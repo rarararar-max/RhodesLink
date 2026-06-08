@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.rhodes.privatechat.data.db.entity.ChatSessionEntity
+import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.data.db.entity.OperatorEntity
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.viewmodel.MainViewModel
@@ -98,11 +99,7 @@ fun ContactsScreen(viewModel: MainViewModel, onOperatorClick: (OperatorEntity) -
 
 @Composable private fun OperatorItem(op: OperatorEntity, onClick: () -> Unit) {
     Row(modifier = Modifier.fillMaxWidth().background(Surface).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        if (op.avatarUri.isNotBlank()) {
-            AsyncImage(model = op.avatarUri, contentDescription = null, modifier = Modifier.size(40.dp).clip(CircleShape), contentScale = ContentScale.Crop)
-        } else {
-            Box(modifier = Modifier.size(40.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) { Text(op.name.take(1), color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
-        }
+        OperatorAvatarImage(avatarUri = op.avatarUri, name = op.name, modifier = Modifier.size(40.dp))
         Spacer(modifier = Modifier.width(10.dp))
         Column(modifier = Modifier.weight(1f)) { Text(op.name, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = TextPrimary); Text(op.title, fontSize = 11.sp, color = TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis) }
     }

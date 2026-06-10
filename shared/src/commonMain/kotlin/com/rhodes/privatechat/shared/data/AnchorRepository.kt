@@ -38,4 +38,8 @@ class AnchorRepository(private val wrapper: DatabaseWrapper) {
 
     suspend fun getAnchorCount(): Int = withContext(Dispatchers.Default) { db.memoryAnchorsQueries.getAnchorCount().executeAsOne().toInt() }
     suspend fun deleteOldAnchors(cutoff: Long) = withContext(Dispatchers.Default) { db.memoryAnchorsQueries.deleteOldAnchors(cutoff) }
+
+    suspend fun enforceAnchorRetain(operatorId: String, keepCount: Int = 200) = withContext(Dispatchers.Default) {
+        db.memoryAnchorsQueries.enforceAnchorRetain(operatorId, operatorId, keepCount.toLong())
+    }
 }

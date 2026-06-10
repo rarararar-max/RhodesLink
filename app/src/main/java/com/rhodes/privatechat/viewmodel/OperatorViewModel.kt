@@ -45,6 +45,7 @@ class OperatorViewModel(
                 )
                 repository.insertOperator(op)
                 repository.syncOperatorAvatar(id, op.avatarUri)
+                repository.syncOperatorName(id, name)
                 settings.putOperatorDynPermission(id, autoPost)
                 settings.putOperatorMsgPermission(id, allowChat)
                 repository.deleteRelationshipByOperator(id)

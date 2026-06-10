@@ -101,7 +101,7 @@ fun RankingScreen(
             LazyColumn {
                 itemsIndexed(sorted) { i, entry ->
                     val color = operatorColors[i % operatorColors.size]
-                    val rankingOp = remember(entry, operators) { operators.find { op -> op.name == entry.senderName } }
+                    val rankingOp = remember(entry, operators) { operators.find { op -> op.id == entry.senderName || op.name == entry.senderName } }
                     val rankingAvatar = rankingOp?.avatarUri
                     Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 16.dp, vertical = 10.dp).clickable { onOperatorClick(entry.senderName) }, verticalAlignment = Alignment.CenterVertically) {
                         Text(rankText(i), fontSize = 14.sp, fontWeight = FontWeight.Bold, color = rankColor(i), modifier = Modifier.width(40.dp))

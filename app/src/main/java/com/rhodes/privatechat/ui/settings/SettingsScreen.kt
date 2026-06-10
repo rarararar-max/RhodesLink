@@ -91,7 +91,7 @@ fun SettingsScreen(
             SettingItem(SettingEntry(Icons.Default.Tune, "聊天参数设置", "字数、段数、记忆参数", iconColor = Color(0xFF00BCD4)), onClick = onChatParams)
             SettingItem(SettingEntry(Icons.Default.AutoFixHigh, "数据管理", "统计信息与自动清理", iconColor = Color(0xFF8B5CF6)), onClick = onDataManage)
             SettingItem(SettingEntry(Icons.Default.Build, "权限管理", "干员主动消息与动态权限", iconColor = Color(0xFFFF9800)), onClick = onPermissions)
-            SettingItem(SettingEntry(Icons.Default.Info, "关于", "作者与开源组件致谢", iconColor = TextSecondary), onClick = onCredits)
+            SettingItem(SettingEntry(Icons.Default.Favorite, "感谢", "支持股东名单", iconColor = Primary), onClick = onCredits)
         }
     }
     }

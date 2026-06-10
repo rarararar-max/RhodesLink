@@ -45,6 +45,15 @@ class SessionRepository(private val wrapper: DatabaseWrapper) {
         ChatSession(id = sessionId, operatorId = operatorId, operatorName = operatorName, avatarUri = avatarUri, lastTime = now)
     }
 
+    suspend fun syncOperatorName(operatorId: String, newName: String) = withContext(Dispatchers.Default) {
+        val session = db.chatSessionsQueries.getSessionByOperator(operatorId) { id, opId, opName, lastMsg, lastTime, mode, isPinned, unreadCount, members, rules, avatar, muted ->
+            ChatSession(id, opId, opName, lastMsg, lastTime, mode, isPinned != 0L, unreadCount.toInt(), members, rules, avatar, muted)
+        }.executeAsOneOrNull() ?: return@withContext
+        if (session.operatorName != newName) {
+            db.chatSessionsQueries.insertSession(session.id, session.operatorId, newName, session.lastMessage, session.lastTime, session.mode, if (session.isPinned) 1L else 0L, session.unreadCount.toLong(), session.members, session.rules, session.avatarUri, session.mutedMembers)
+        }
+    }
+
     suspend fun getSession(id: String): ChatSession? = withContext(Dispatchers.Default) {
         db.chatSessionsQueries.getSession(id) { id_, opId, opName, lastMsg, lastTime, mode, isPinned, unreadCount, members, rules, avatar, muted ->
             ChatSession(id_, opId, opName, lastMsg, lastTime, mode, isPinned != 0L, unreadCount.toInt(), members, rules, avatar, muted)
@@ -128,9 +137,10 @@ class SessionRepository(private val wrapper: DatabaseWrapper) {
         val impression = db.memoriesQueries.getLatestLongTermImpression(operatorId) { id, sid, opId, type, content, keywords, preferences, taboos, createdAt, expiresAt ->
             Memory(id, sid, opId, try { MemoryType.valueOf(type) } catch (_: Exception) { MemoryType.LONG_TERM }, content, keywords, preferences, taboos, createdAt, expiresAt)
         }.executeAsOneOrNull()?.content?.take(100)
+        val cutoff = System.currentTimeMillis() - 3 * 24 * 60 * 60 * 1000L
         val recentMsgs = db.chatMessagesQueries.getMessagesSync(session.id) { id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe ->
             ChatMessage(id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange.toInt(), timestamp, isMe != 0L)
-        }.executeAsList().takeLast(2)
+        }.executeAsList().filter { it.timestamp >= cutoff }.takeLast(2)
         if (recentMsgs.isEmpty() && impression == null) return@withContext null
         val lines = mutableListOf<String>()
         if (impression != null) lines.add("印象：$impression")

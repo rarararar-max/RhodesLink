@@ -165,6 +165,7 @@ fun DiaryScreen(
                                 viewModel.generateDiary(opId) { text ->
                                     if (text.isNotBlank()) {
                                         diaryContent = text
+                                        diaryMap[opId] = true
                                     } else {
                                         android.widget.Toast.makeText(context, "AI生成失败，请检查网络和API Key后重试", android.widget.Toast.LENGTH_SHORT).show()
                                     }

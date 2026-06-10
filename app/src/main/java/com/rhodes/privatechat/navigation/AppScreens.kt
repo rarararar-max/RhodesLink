@@ -144,6 +144,7 @@ data object MomentsRoute : Screen {
     override fun Content() {
         val navigator = LocalNavigator.currentOrThrow
         val viewModel: MainViewModel = koinViewModel()
+        android.util.Log.d("MainVM", "** [DBG] ** MomentsRoute: VM=${System.identityHashCode(viewModel)}")
         com.rhodes.privatechat.ui.moments.MomentsScreen(
             viewModel = viewModel,
             onBack = { navigator.pop() },
@@ -337,7 +338,7 @@ data class MahjongSettlementRoute(
         LaunchedEffect(Unit) {
             settings.lmb = settings.lmb + result.userNetGain
             result.rankings.forEach { r ->
-                val op = viewModel.operators.value.find { it.name == r.name }
+                val op = viewModel.operators.value.find { it.id == r.name || it.name == r.name }
                 if (op != null && op.id != "user") {
                     val cur = settings.getInt(op.id, op.lmb)
                     settings.putInt(op.id, cur + r.netGain)

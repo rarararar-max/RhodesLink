@@ -396,7 +396,7 @@ class GroupChatViewModel(
                 repository.sendMessage(groupSessionId, ChatMessage(id = repository.getNextMessageId(), sessionId = groupSessionId, senderName = "系统", content = "响应超时，请重试", type = "system", mode = mode, isMe = false))
             } catch (e: Exception) {
                 Log.e("GroupChat", "Error: ${e.message}", e)
-                repository.sendMessage(groupSessionId, ChatMessage(id = repository.getNextMessageId(), sessionId = groupSessionId, senderName = "系统", content = "连接失败", type = "system", mode = mode, isMe = false))
+                repository.sendMessage(groupSessionId, ChatMessage(id = repository.getNextMessageId(), sessionId = groupSessionId, senderName = "系统", content = "对方网络不太好，没有收到信息", type = "system", mode = mode, isMe = false))
             } finally {
                 _groupLoading.value = false
                 mutexFor(groupSessionId).unlock()

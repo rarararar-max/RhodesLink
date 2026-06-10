@@ -76,6 +76,7 @@ class ChatRepository(wrapper: DatabaseWrapper) {
     suspend fun saveMemory(memory: Memory) = memories.saveMemory(memory)
     suspend fun getAllLongTermImpressions() = memories.getAllLongTermImpressions()
     suspend fun getLatestDaily() = memories.getLatestDaily()
+    suspend fun getLatestPrivateDaily(operatorId: String) = memories.getLatestPrivateDaily(operatorId)
     suspend fun enforceMemoryRetain(sessionId: String, keepCount: Int) = memories.enforceMemoryRetain(sessionId, keepCount)
     suspend fun deleteAllImpressions() = memories.deleteAllImpressions()
 
@@ -85,6 +86,7 @@ class ChatRepository(wrapper: DatabaseWrapper) {
     suspend fun getAnchors(operatorId: String) = anchors.getAnchors(operatorId)
     suspend fun getAnchorCount() = anchors.getAnchorCount()
     suspend fun deleteOldAnchors(cutoff: Long) = anchors.deleteOldAnchors(cutoff)
+    suspend fun enforceAnchorRetain(operatorId: String, keepCount: Int = 200) = anchors.enforceAnchorRetain(operatorId, keepCount)
 
     suspend fun migrateOldRelationships() = relationships.migrateOldRelationships()
     suspend fun insertPresetRelationships() = relationships.insertPresetRelationships()
@@ -146,5 +148,9 @@ class ChatRepository(wrapper: DatabaseWrapper) {
         if (session != null && avatarUri.isNotBlank() && session.avatarUri != avatarUri) {
             sessions.insertSession(session.copy(avatarUri = avatarUri))
         }
+    }
+
+    suspend fun syncOperatorName(operatorId: String, newName: String) {
+        sessions.syncOperatorName(operatorId, newName)
     }
 }

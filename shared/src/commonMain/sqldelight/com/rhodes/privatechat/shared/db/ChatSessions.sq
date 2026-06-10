@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 );
 
 getAllSessions:
-SELECT * FROM chat_sessions ORDER BY lastTime DESC;
+SELECT * FROM chat_sessions ORDER BY isPinned DESC, lastTime DESC;
 
 getSessionByOperator:
 SELECT * FROM chat_sessions WHERE operatorId = ? LIMIT 1;

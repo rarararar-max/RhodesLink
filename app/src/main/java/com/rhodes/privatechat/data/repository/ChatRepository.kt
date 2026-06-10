@@ -121,6 +121,7 @@ class ChatRepository(
     suspend fun getAnchorCount(): Int = shared.getAnchorCount()
 
     suspend fun deleteOldAnchors(cutoff: Long) = shared.deleteOldAnchors(cutoff)
+    suspend fun enforceAnchorRetain(operatorId: String, keepCount: Int = 200) = shared.enforceAnchorRetain(operatorId, keepCount)
 
     suspend fun getMessageCount(): Int = shared.getMessageCount()
 
@@ -137,6 +138,7 @@ class ChatRepository(
     suspend fun getMessagesInRange(start: Long, end: Long): List<ChatMessage> = shared.getMessagesInRange(start, end)
 
     suspend fun getLatestDaily(): Memory? = shared.getLatestDaily()
+    suspend fun getLatestPrivateDaily(operatorId: String): Memory? = shared.getLatestPrivateDaily(operatorId)
 
     suspend fun enforceMemoryRetain(sessionId: String, keepCount: Int) = shared.enforceMemoryRetain(sessionId, keepCount)
 

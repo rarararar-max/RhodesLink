@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,35 +55,16 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
     val focusManager = LocalFocusManager.current
     var currentMode by remember { mutableStateOf(settings.getGroupMode(groupId)) }
     val showModePicker = remember { mutableStateOf(false) }
-    var inputText by remember { mutableStateOf("") }
+    var inputText by rememberSaveable { mutableStateOf("") }
 
     val groupMessages by viewModel.groupMessages.collectAsState()
     val groupLoading by viewModel.groupLoading.collectAsState()
     val sessions by viewModel.allSessions.collectAsState()
     val groupSession = remember(groupId, sessions) { sessions.find { it.id == groupId } }
-    var lastActivity by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
     DisposableEffect(groupId) {
         if (groupId.isNotBlank()) viewModel.setCurrentGroup(groupId)
         onDispose { viewModel.clearCurrentGroup() }
-    }
-
-    // Auto-speak timer
-    LaunchedEffect(groupId, groupLoading) {
-        if (groupId.isBlank()) return@LaunchedEffect
-        if (!settings.getGroupAuto(groupId)) return@LaunchedEffect
-        val minMs = settings.groupChatMinInterval * 1000L
-        val maxMs = settings.groupChatMaxInterval * 1000L
-        while (true) {
-            val interval = minMs + (Math.random() * (maxMs - minMs)).toLong()
-            delay(interval)
-            if (groupLoading) continue
-            val elapsed = System.currentTimeMillis() - lastActivity
-            if (elapsed >= interval && groupId.isNotBlank() && !groupLoading) {
-                viewModel.sendGroupMessage(groupId, groupName, "", currentMode, autoSpeak = true)
-                lastActivity = System.currentTimeMillis()
-            }
-        }
     }
 
     // Sender 颜色映射
@@ -96,7 +78,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
     }
     val allOperators by viewModel.operators.collectAsState()
     val profile by viewModel.userProfile.collectAsState()
-    fun senderAvatar(name: String): String = allOperators.find { it.name == name || it.id == name }?.avatarUri ?: ""
+    fun senderAvatar(name: String): String = allOperators.find { it.id == name || it.name == name }?.avatarUri ?: ""
 
     // 使用 MessageParser 将原始消息转换为统一 UI 模型
     val uiMessages = remember(groupMessages, allOperators, profile) {
@@ -112,7 +94,6 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
     // 自动滚动（渐进展示时由 MessageList 处理，这里处理非渐进场景）
     LaunchedEffect(uiMessages.size) {
         if (uiMessages.isNotEmpty()) {
-            lastActivity = System.currentTimeMillis()
         }
     }
 
@@ -154,7 +135,6 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                     onTextChange = { inputText = it },
                     onSend = { text ->
                         if (text.isNotBlank() && groupId.isNotBlank()) {
-                            lastActivity = System.currentTimeMillis()
                             viewModel.sendGroupMessage(groupId, groupName, text, currentMode)
                             inputText = ""
                         }

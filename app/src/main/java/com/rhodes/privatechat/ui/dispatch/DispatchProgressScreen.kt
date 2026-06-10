@@ -91,47 +91,74 @@ fun DispatchProgressScreen(
         startTime = finalRec.startTime
         interval = finalRec.segmentInterval
         totalSeg = finalRec.totalSegments
-        // 解析 segments
-        try {
-            val arr = Json.parseToJsonElement(finalRec.logChain) as JsonArray
-            if (arr.isEmpty()) { errorMsg = "故事数据异常"; Log.e(TAG, "[ProgressScreen] logChain为空数组"); return@LaunchedEffect }
-            val list = mutableListOf<Map<String, Any?>>()
-            for (el in arr) {
-                val obj = el.jsonObject
-                val segType = obj["type"]?.jsonPrimitive?.content ?: ""
-                val content = obj["content"]?.jsonPrimitive?.content ?: ""
-                list.add(mapOf("type" to segType, "content" to content))
+        // 解析 segments（支持分段追加）
+        startTime = finalRec.startTime
+        interval = finalRec.segmentInterval
+        totalSeg = finalRec.totalSegments
+        Log.i(TAG, "[ProgressScreen] 开始监控派遣 startTime=$startTime interval=${interval}ms totalSeg=$totalSeg")
+
+        fun parseSegmentsFromLog(log: String): List<Map<String, Any?>> {
+            if (log.isBlank()) return emptyList()
+            return try {
+                val arr = Json.parseToJsonElement(log) as? JsonArray
+                if (arr != null) {
+                    arr.map { el ->
+                        val obj = el.jsonObject
+                        mapOf("type" to (obj["type"]?.jsonPrimitive?.content ?: "progress"), "content" to (obj["content"]?.jsonPrimitive?.content ?: ""))
+                    }
+                } else {
+                    log.split("\n\n").filter { it.isNotBlank() }.map { mapOf("type" to "progress", "content" to it.trim()) }
+                }
+            } catch (_: Exception) {
+                log.split("\n\n").filter { it.isNotBlank() }.map { mapOf("type" to "progress", "content" to it.trim()) }
             }
-            segments = list
-            totalSeg = list.size
-            Log.i(TAG, "[ProgressScreen] JSON解析成功 segments=${list.size}")
-        } catch (e: Exception) {
-            Log.w(TAG, "[ProgressScreen] JSON解析失败，尝试文本分割: ${e.message}")
-            val textSegments = finalRec.logChain.split("\n\n").filter { it.isNotBlank() }.map { it.trim() }
-            if (textSegments.isEmpty()) { errorMsg = "故事数据异常"; Log.e(TAG, "[ProgressScreen] 文本分割也为空"); return@LaunchedEffect }
-            segments = textSegments.map { mapOf("type" to "progress", "content" to it) }.toMutableList()
-            totalSeg = segments.size
-            interval = if (interval > 0) interval else 30_000L
-            Log.i(TAG, "[ProgressScreen] 文本分割成功 segments=${segments.size}")
         }
-        // 定时检查已解锁段数
+
+        val initialSegments = parseSegmentsFromLog(finalRec.logChain)
+        segments = initialSegments.toMutableList()
+        totalSeg = maxOf(totalSeg, initialSegments.size)
+        Log.i(TAG, "[ProgressScreen] 初始段落数=${initialSegments.size}")
+
+        // 定时检查 DB 中新增的段落 + 按时间解锁
         while (true) {
-            val elapsed = System.currentTimeMillis() - startTime
-            val count = (elapsed / (interval.coerceAtLeast(1L))).toInt().coerceIn(1, totalSeg.coerceAtLeast(1))
-            if (count > visibleCount) {
-                visibleCount = count
-                Log.d(TAG, "[ProgressScreen] 解锁新段落 visible=$count/$totalSeg")
-            }
-            if (count >= totalSeg) {
-                Log.i(TAG, "[ProgressScreen] 所有段落已解锁，执行finishDispatch")
-                viewModel.finishDispatch(dispatchId)
-                done = true
-                val ended = viewModel.repository.getDispatch(dispatchId)
-                netProfit = ended?.netProfit ?: 0
-                items = ended?.items ?: ""
+            // 从 DB 拉取最新数据
+            val currentRec = viewModel.repository.getDispatch(dispatchId)
+            if (currentRec == null) { delay(3000); continue }
+            if (currentRec.status == "cancelled" || currentRec.status == "finished") {
+                done = true; visibleCount = currentRec.totalSegments
+                netProfit = currentRec.netProfit; items = currentRec.items
+                if (currentRec.status == "cancelled" && currentRec.logChain.isBlank()) {
+                    errorMsg = "AI生成失败，预算已退还"
+                } else if (currentRec.status == "finished") {
+                    // 解析最终段落
+                    segments = parseSegmentsFromLog(currentRec.logChain)
+                    visibleCount = segments.size
+                }
+                Log.i(TAG, "[ProgressScreen] 派遣已结束 status=${currentRec.status}")
                 break
             }
-            delay(1000)
+
+            // 更新段落列表（后台可能已追加新段）
+            val newSegments = parseSegmentsFromLog(currentRec.logChain)
+            if (newSegments.size > segments.size) {
+                segments = newSegments
+                Log.d(TAG, "[ProgressScreen] 检测到新段落: ${newSegments.size}")
+            }
+            totalSeg = maxOf(currentRec.totalSegments, newSegments.size)
+
+            // 按时间解锁段落
+            val elapsed = System.currentTimeMillis() - currentRec.startTime
+            val unlockedCount = (elapsed / (currentRec.segmentInterval.coerceAtLeast(1L))).toInt().coerceIn(1, totalSeg.coerceAtLeast(1))
+            if (unlockedCount > visibleCount) {
+                visibleCount = unlockedCount
+                Log.d(TAG, "[ProgressScreen] 解锁新段落 visible=$visibleCount/$totalSeg")
+            }
+
+            if (unlockedCount >= totalSeg) {
+                Log.i(TAG, "[ProgressScreen] 所有段落已解锁，执行finishDispatch")
+                viewModel.finishDispatch(dispatchId)
+            }
+            delay(3000)
         }
     }
 

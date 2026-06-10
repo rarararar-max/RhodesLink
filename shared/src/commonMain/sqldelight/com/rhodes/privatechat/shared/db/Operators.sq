@@ -44,6 +44,9 @@ UPDATE operators SET intimacy = ? WHERE id = ?;
 updatePrompts:
 UPDATE operators SET privatePrompt = ?, groupPrompt = ? WHERE id = ?;
 
+updateName:
+UPDATE operators SET name = ? WHERE id = ?;
+
 deleteOperator:
 DELETE FROM operators WHERE id = ?;
 

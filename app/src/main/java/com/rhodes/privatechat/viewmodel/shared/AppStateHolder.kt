@@ -42,6 +42,7 @@ class AppStateHolder(
                 val hidden = settings.hiddenIds
                 _allSessions.value = all
                 _sessions.value = all.filter { it.id !in hidden }
+                android.util.Log.d("MainVM", "会话过滤: 总数=${all.size}, 隐藏数=${hidden.size}, 显示数=${_sessions.value.size}")
             }
         }
         scope.launch { repository.getAllMoments().collect { _moments.value = it } }

@@ -42,6 +42,7 @@ object PromptTemplates {
 {{AI_ANALYSIS}}
 {{HYPNOSIS}}
 {{MIND_READ}}
+{{TRANSITION_NOTICE}}
 
 【你对{{USER_NAME}}的了解】
 长期印象：{{LONG_TERM_IMPRESSION}}
@@ -55,6 +56,10 @@ object PromptTemplates {
 
 你与{{USER_NAME}}最近的聊天摘要：
 {{SHORT_TERM_SUMMARY}}
+
+【群聊回顾】
+你最近在群聊中参与或听到的事：
+{{GROUP_CONTEXT}}
 
 【你附近的其他干员】
 {{NEARBY_OPERATORS}}
@@ -172,6 +177,7 @@ object PromptTemplates {
 {{AI_ANALYSIS}}
 {{HYPNOSIS}}
 {{MIND_READ}}
+{{TRANSITION_NOTICE}}
 
 【你当前的记忆】
 长期印象：{{LONG_TERM_IMPRESSION}}
@@ -185,6 +191,10 @@ object PromptTemplates {
 
 最近的对话摘要：
 {{SHORT_TERM_SUMMARY}}
+
+【群聊回顾】
+你最近在群聊中参与或听到的事：
+{{GROUP_CONTEXT}}
 
 【你附近的其他干员】
 {{NEARBY_OPERATORS}}
@@ -300,6 +310,7 @@ object PromptTemplates {
 {{AI_ANALYSIS}}
 {{HYPNOSIS}}
 {{MIND_READ}}
+{{TRANSITION_NOTICE}}
 
 【你对{{USER_NAME}}的了解】
 长期印象：{{LONG_TERM_IMPRESSION}}
@@ -313,6 +324,10 @@ object PromptTemplates {
 
 你与{{USER_NAME}}最近的聊天摘要：
 {{SHORT_TERM_SUMMARY}}
+
+【群聊回顾】
+你最近在群聊中参与或听到的事：
+{{GROUP_CONTEXT}}
 
 【你附近的其他干员】
 {{NEARBY_OPERATORS}}
@@ -791,55 +806,25 @@ object PromptTemplates {
 {{OPERATOR_PERSONA}}
 
 【任务】
-发布一条动态。直接输出动态文本，不加前缀、后缀、署名或格式标记。
+发布一条动态。直接输出动态文本，不加任何前缀或格式标记。
 
 【当前信息】
-今天是{{CURRENT_DATE}}，当前时段：{{TIME_OF_DAY}}。动态内容应符合当前时段。
+今天是{{CURRENT_DATE}}，{{TIME_OF_DAY}}。罗德岛的管理者：{{USER_NAME}}
 
-罗德岛的管理者：{{USER_NAME}}，个人简介：{{USER_BIO}}
-
-【你对用户的了解】
-对{{USER_NAME}}的长期印象：{{LONG_TERM_IMPRESSION}}
-最近和{{USER_NAME}}的聊天摘要：{{RECENT_CHAT_SUMMARY}}
-
-【近期记忆】
-最近你注意到的一些事情：
-{{RECENT_MEMORIES}}
+【背景】
+对{{USER_NAME}}的印象：{{LONG_TERM_IMPRESSION}}
+最近聊天摘要：{{RECENT_CHAT_SUMMARY}}
+最近注意到的事：{{RECENT_MEMORIES}}
 
 【避免重复】
-你最近发布过的动态：
-{{RECENT_POSTS}}
-
-【动态内容规范 · 什么是好的动态】
-可以包含以下元素但不强求：
-1. 工作碎碎念：今天做了什么任务、遇到什么困难
-2. 同事互动：和谁一起做了什么、谁说了有趣的话
-3. 对用户的观察（第三人称）：用户今天做了什么、状态如何
-4. 环境与天气：罗德岛的变化、食堂的新菜
-5. 心情与感悟：简短真实，不需要深刻
-6. 小吐槽与自嘲：拿自己或身边的事开涮
-
-关键：写具体的事，不要写"这是美好的一天"这种空洞内容。
+你最近发布过：{{RECENT_POSTS}}
 
 【发布对象规则 · 极其重要】
 - 动态是公开发布给全体干员看的，不是你与{{USER_NAME}}的私聊
-- 严禁直接呼唤{{USER_NAME}}
-- 提到{{USER_NAME}}时用第三人称
+- 严禁直接呼唤{{USER_NAME}}，提到时用第三人称
 - 语气是自言自语或与全体干员分享日常
 
-【人设表达要真实】
-- 永远不要在动态中直接提及自己的职业标签、特殊物品、习惯
-- 性格通过关注点、语气、描写侧重点间接体现
-- 禁止在动态中说："说到这个，我就想起我的..."、"我的习惯是..."、"作为一个..."这类句式
-- 写真实会发生的事：工作细节、路上见闻、同事互动、天气、食堂
-
-【边界情况 · 信息缺失时】
-- 长期印象为空 -> 不刻意编造，动态可不涉及用户
-- 聊天摘要为空 -> 围绕工作、同事互动、环境观察展开
-- 近期记忆为空 -> 写最近日常
-- 多个信息为空 -> 完全围绕自身日常，不强提用户
-
-动态字数要求：{{MOMENT_MIN_CHARS}}~{{MOMENT_MAX_CHARS}}字。
+动态字数：{{MOMENT_MIN_CHARS}}~{{MOMENT_MAX_CHARS}}字。
 
 直接输出动态文本。
 """.trimIndent()

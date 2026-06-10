@@ -46,6 +46,63 @@ class DispatchViewModel(
     @Volatile
     private var generatingDispatchId: String? = null
 
+    // 段落辅助函数
+    private fun parseSegmentCount(logChain: String): Int {
+        if (logChain.isBlank()) return 0
+        return try {
+            val arr = Json.parseToJsonElement(logChain) as? JsonArray
+            if (arr != null) arr.size
+            else logChain.split("\n\n").filter { it.isNotBlank() }.size
+        } catch (_: Exception) {
+            logChain.split("\n\n").filter { it.isNotBlank() }.size
+        }
+    }
+
+    private suspend fun generateDispatchProgressSuspend(dispatchId: String, taskType: String, budget: Int, operatorIds: List<String>, roundNum: Int, logSummary: String, logChain: String): Boolean {
+        val ops = operatorIds.mapNotNull { repository.getOperator(it) }
+        val names = ops.joinToString("、") { it.name }
+        val memberCount = ops.size
+        val profiles = ops.joinToString("\n") { "${it.name}：${it.description}" }
+        val budgetLevel = when { budget < 300 -> "低"; budget < 800 -> "中"; else -> "高" }
+        repeat(3) { attempt ->
+            try {
+                val dMn = settings.dispatchMinChars; val dMx = settings.dispatchMaxChars
+                val prompt = """
+你是罗德岛的战术记录员，也是冒险小说作家。为进行中的派遣行动续写故事。
+
+续写派遣冒险的第${roundNum}轮过程日志。
+
+【派遣信息】
+任务类型：${taskType}
+预算等级：${budgetLevel}（低预算事件倾向危险和损失，高预算倾向顺利和意外收获）
+前情提要：${logSummary.take(100)}
+
+【成员档案】
+${profiles}
+
+【写作要求】
+- ${dMn}~${dMx}字，第三人称叙事，承接前情，剧情连贯
+- 本轮必须出现一个具体事件：遭遇敌人、发现遗迹、天气突变、物资丢失、队员争执等
+- 所有成员必须被提及，名字和人设必须与前文一致
+
+【人称约束】
+- 全文使用角色名字称呼角色，禁止使用"我""我的""我们""咱们"
+- 角色之间的对话中用"对方""博士""队长"等第三人称称呼
+
+直接输出过程叙事。
+""".trimIndent()
+                val rawResult = withTimeout(20_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Dispatch") }
+                sharedUtils.trackTokens("dispatch", prompt, rawResult)
+                val newLog = logChain + "\n\n【第${roundNum}轮】" + rawResult
+                repository.updateDispatch(dispatchId, newLog, "active")
+                return true
+            } catch (e: Exception) {
+                if (attempt < 2) delay(1000L * (attempt + 1))
+            }
+        }
+        return false
+    }
+
     fun startDispatch(id: String, task: String, duration: Int, budget: Int, operatorIds: List<String>, onSuccess: () -> Unit = {}) {
         if (isStarting) { Log.w(TAG, "[startDispatch] 已在启动中，忽略重复调用 id=$id"); return }
         isStarting = true
@@ -58,151 +115,47 @@ class DispatchViewModel(
         Log.i(TAG, "[startDispatch] 启动派遣 id=$id task=$task duration=${duration}h budget=$budget segments=$totalSeg interval=${interval}ms ops=${operatorIds.size}")
         scope.launch {
             try {
-            // 1. 先插入 generating 记录并导航
-            repository.insertDispatch(DispatchRecord(
-                id = id, taskType = task, durationHours = duration,
-                budget = budget, netProfit = 0, operatorIds = operatorIds.joinToString(","),
-                logChain = "", status = "generating", startTime = dispatchStartTime,
-                totalSegments = totalSeg, segmentInterval = interval, items = "[]"
-            ))
-            Log.d(TAG, "[startDispatch] 已插入generating记录，导航到进度页")
-            onSuccess()
+                // 1. 插入 generating 记录，立即导航
+                repository.insertDispatch(DispatchRecord(
+                    id = id, taskType = task, durationHours = duration,
+                    budget = budget, netProfit = 0, operatorIds = operatorIds.joinToString(","),
+                    logChain = "", status = "generating", startTime = dispatchStartTime,
+                    totalSegments = totalSeg, segmentInterval = interval, items = "[]"
+                ))
+                Log.d(TAG, "[startDispatch] 已插入generating记录，导航到进度页")
+                onSuccess()
 
-            // 2. 扣除预算、更新干员状态
-            val balance = settings.lmb
-            if (balance < budget) {
-                Log.w(TAG, "[startDispatch] 余额不足 balance=$balance budget=$budget，取消")
-                repository.updateDispatch(id, "", "cancelled", System.currentTimeMillis(), 0)
-                return@launch
-            }
-            settings.lmb = balance - budget
-            Log.d(TAG, "[startDispatch] 已扣除预算 $budget，余额 ${balance - budget}")
-            for (opId in operatorIds) {
-                val op = repository.getOperator(opId) ?: continue
-                repository.updateOperator(op.copy(location = "外出", activity = task, emotion = "专注"))
-            }
-            operatorStateUpdater.notifyNearbyObservers(operatorIds)
-
-            // 3. 调用 AI 生成完整故事
-            val ops = operatorIds.mapNotNull { repository.getOperator(it) }
-            val names = ops.joinToString("、") { it.name }
-            val memberCount = ops.size
-            val profiles = ops.joinToString("\n") { "${it.name}：${it.description}" }
-            val dMn = settings.dispatchMinChars; val dMx = settings.dispatchMaxChars
-            val budgetLevel = when { budget < 300 -> "低（≤300）"; budget < 800 -> "中（300~800）"; else -> "高（≥800）" }
-            val storyStructure = when (duration) {
-                1 -> """
-写出5段故事：1段准备阶段 + 3段过程 + 1段结局。
-- 准备阶段（${dMn}~${dMx}字）：出发前准备，埋悬念
-- 过程阶段（3段，每段${dMn}~${dMx}字）：每段一个具体事件
-- 结局阶段（${dMn}~${dMx}字）：返回罗德岛，呼应悬念"""
-                2 -> """
-写出6段故事：1段准备阶段 + 4段过程 + 1段结局。
-- 准备阶段（${dMn}~${dMx}字）
-- 过程阶段（4段，每段${dMn}~${dMx}字）
-- 结局阶段（${dMn}~${dMx}字）"""
-                else -> """
-写出8段故事：1段准备阶段 + 6段过程 + 1段结局。
-- 准备阶段（${dMn}~${dMx}字）
-- 过程阶段（6段，每段${dMn}~${dMx}字）
-- 结局阶段（${dMn}~${dMx}字）"""
-            }
-            val startHour = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai")).get(java.util.Calendar.HOUR_OF_DAY)
-            val timeOfDay = sharedUtils.getTimeOfDay(startHour)
-            val durationDesc = when (duration) { 1 -> "短时快速"; 2 -> "常规"; else -> "长时间深入" }
-            val prompt = """
-【角色】
-你是罗德岛的战术记录员，也是一位冒险小说作家。你正在为一次干员派遣行动撰写完整的故事。
-
-【派遣信息】
-任务类型：$task
-出发时间：${timeOfDay}（这是一个${timeOfDay}出发的${durationDesc}任务）
-预计耗时：${duration}小时
-小队成员：$names（共${memberCount}人）
-投入预算：${budget}龙门币（${budgetLevel}）
-
-【成员档案】
-$profiles
-
-【预算影响】
-- 低预算（≤300）：事件倾向危险和损失，但也可能有意外惊喜
-- 中预算（300~800）：平衡
-- 高预算（≥800）：倾向顺利和意外收获
-
-【故事结构】
-${storyStructure}
-
-【叙事质量】
-- 小说叙事，有场景、有情绪、有细节。制造"可看性"
-- 不要让角色在对话中直接提及职业标签
-
-【输出格式 · 最高优先级】
-严格输出以下JSON对象，不加任何额外文字：
-{
-  "segments": [
-    {"type":"prep","content":"准备阶段叙事","operator_states":[{"name":"阿米娅","emotion":"专注"},...]},
-    {"type":"progress","content":"过程叙事","operator_states":[{"name":"阿米娅","emotion":"警觉"},...]},
-    {"type":"ending","content":"结局叙事","operator_states":[{"name":"阿米娅","emotion":"欣慰"},...]}
-  ],
-  "items":["物品1","物品2"],
-  "currency_reward": 物品总价值,
-  "net_profit": 净收益
-}
-
-【字段解释】
-- segments：共${totalSeg}段。第1段type="prep"，中间type="progress"，最后type="ending"。每段必须附带operator_states，列出所有${memberCount}个干员的情绪（不超过5汉字）
-- items：物资数组，无则空数组[]
-- currency_reward：整数，范围0~${budget * 10}
-- net_profit：整数，必须等于currency_reward - $budget
-
-【验证】
-1. 段数是否为${totalSeg}？ 2. 第1段type=prep/最后一段type=ending？ 3. 每段operator_states包含所有${memberCount}干员？ 4. currency_reward在0~${budget * 10}？
-
-直接输出JSON对象。
-""".trimIndent()
-            var success = false
-            repeat(5) { attempt ->
-                try {
-                    Log.d(TAG, "[startDispatch] AI请求 attempt=${attempt + 1}/5")
-                    val rawResult = withTimeout(90_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Dispatch") }
-                    sharedUtils.trackTokens("dispatch", prompt, rawResult)
-                    Log.d(TAG, "[startDispatch] AI返回 ${rawResult.length}字")
-                    val cleaned = sharedUtils.aiService.cleanJson(rawResult.trim())
-                    val resp = try { json.decodeFromString<DispatchResponse>(cleaned) } catch (e: Exception) {
-                        Log.w(TAG, "[startDispatch] JSON解析失败: ${e.message}, cleaned=${cleaned.take(200)}")
-                        null
-                    }
-                    val segments = resp?.segments
-                    if (resp != null && segments != null && segments.size == totalSeg) {
-                        val logJson = json.encodeToString(segments)
-                        val itemsJson = json.encodeToString(resp.items ?: emptyList<String>())
-                        val rawReward = (resp.currency_reward ?: 0).coerceIn(0, budget * 10)
-                        val netP = rawReward - budget
-                        // 竞态保护：写入前检查状态是否已被用户取消
-                        val currentStatus = repository.getDispatch(id)?.status
-                        if (currentStatus != "generating") {
-                            Log.w(TAG, "[startDispatch] 跳过写入: 状态已变更为 $currentStatus")
-                            success = true
-                            return@repeat
-                        }
-                        Log.i(TAG, "[startDispatch] 成功 segments=${segments.size} reward=$rawReward netProfit=$netP items=${resp.items?.size ?: 0}")
-                        repository.insertDispatch(DispatchRecord(id = id, taskType = task, durationHours = duration, budget = budget, netProfit = netP, operatorIds = operatorIds.joinToString(","), logChain = logJson, status = "active", startTime = dispatchStartTime, totalSegments = totalSeg, segmentInterval = interval, items = itemsJson))
-                        success = true
-                        return@repeat
-                    } else {
-                        Log.w(TAG, "[startDispatch] 验证失败: resp=${resp != null} segments=${segments?.size} 期望=$totalSeg")
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "[startDispatch] attempt=${attempt + 1} 异常: ${e.message}")
+                // 2. 扣除预算、更新干员状态
+                val balance = settings.lmb
+                if (balance < budget) {
+                    Log.w(TAG, "[startDispatch] 余额不足，取消")
+                    repository.updateDispatch(id, "", "cancelled", System.currentTimeMillis(), 0)
+                    return@launch
                 }
-                if (attempt < 4) delay(1000L * (attempt + 1))
-            }
-            if (!success) {
-                Log.e(TAG, "[startDispatch] 5次尝试全部失败，退款 budget=$budget")
-                val cur = settings.lmb; settings.lmb = cur + budget
-                refreshAllOperatorStatus()
-                repository.insertDispatch(DispatchRecord(id = id, taskType = task, durationHours = duration, budget = budget, operatorIds = operatorIds.joinToString(","), logChain = "", status = "cancelled", startTime = dispatchStartTime, totalSegments = 0, segmentInterval = 0, items = "[]"))
-            }
+                settings.lmb = balance - budget
+                for (opId in operatorIds) {
+                    val op = repository.getOperator(opId) ?: continue
+                    repository.updateOperator(op.copy(location = "外出", activity = task, emotion = "专注"))
+                }
+                operatorStateUpdater.notifyNearbyObservers(operatorIds)
+
+                // 3. 生成开局段（轻量，20s 超时）
+                val ops = operatorIds.mapNotNull { repository.getOperator(it) }
+                val dMn = settings.dispatchMinChars; val dMx = settings.dispatchMaxChars
+                val startOk = generateDispatchStartSuspend(id, task, budget, operatorIds, totalSeg, interval, dispatchStartTime)
+                if (!startOk) {
+                    Log.e(TAG, "[startDispatch] 开局段生成失败，退款")
+                    settings.lmb = settings.lmb + budget
+                    repository.updateDispatch(id, "", "cancelled", System.currentTimeMillis(), 0)
+                    refreshAllOperatorStatus()
+                    return@launch
+                }
+                // 更新为 active 状态
+                val currentRecord = repository.getDispatch(id)
+                if (currentRecord != null) {
+                    repository.updateDispatch(id, currentRecord.logChain, "active")
+                }
+                Log.i(TAG, "[startDispatch] 开局段生成成功，后续段落由后台生成")
             } finally {
                 isStarting = false
                 generatingDispatchId = null
@@ -214,6 +167,7 @@ ${storyStructure}
         scope.launch {
             val d = repository.getDispatch(dispatchId) ?: run { Log.w(TAG, "[finishDispatch] 记录不存在 id=$dispatchId"); return@launch }
             if (d.status != "active") { Log.w(TAG, "[finishDispatch] 状态非active: ${d.status}，跳过"); return@launch }
+            if (d.endTime > 0) { Log.w(TAG, "[finishDispatch] endTime已设置(${d.endTime})，跳过重复结算"); return@launch }
             Log.i(TAG, "[finishDispatch] 完成派遣 id=$dispatchId task=${d.taskType} netProfit=${d.netProfit}")
             // 先改状态为finished，再发奖励，防止进程中断时 recover 重复发奖
             repository.updateDispatch(dispatchId, d.logChain, "finished", System.currentTimeMillis(), d.netProfit)
@@ -368,29 +322,77 @@ ${storyStructure}
     }
 
     suspend fun recoverDispatches() {
-        delay(500) // 等待 startDispatch 设置 generatingDispatchId，避免竞态
+        delay(500)
         val actives = repository.getActiveDispatches()
         Log.i(TAG, "[recoverDispatches] 发现 ${actives.size} 个活跃派遣 generatingId=$generatingDispatchId")
         for (d in actives) {
             Log.d(TAG, "[recoverDispatches] 检查 id=${d.id} status=${d.status} task=${d.taskType} logLen=${d.logChain.length}")
-            if (d.status == "generating" && d.logChain.isBlank()) {
-                if (d.id == generatingDispatchId) {
-                    Log.i(TAG, "[recoverDispatches] id=${d.id} 跳过：startDispatch正在处理此ID")
-                    continue
-                }
-                Log.i(TAG, "[recoverDispatches] id=${d.id} 正在生成且无内容，尝试generateDispatch")
-                if (!generateDispatch(d)) {
-                    Log.w(TAG, "[recoverDispatches] generateDispatch失败，降级到generateDispatchStart")
-                    generateDispatchStart(d.id, d.taskType, d.budget, d.operatorIds.split(","))
-                }
-                continue
-            }
+            val segments = parseSegmentCount(d.logChain)
             val elapsed = System.currentTimeMillis() - d.startTime
             val totalDuration = d.durationHours * 3_600_000L
-            Log.d(TAG, "[recoverDispatches] id=${d.id} elapsed=${elapsed}ms total=${totalDuration}ms")
+            Log.d(TAG, "[recoverDispatches] id=${d.id} elapsed=${elapsed}ms total=${totalDuration}ms segments=$segments")
+
+            // 情况 A：从未生成内容
+            if (d.status == "generating" && d.logChain.isBlank()) {
+                if (d.id == generatingDispatchId) {
+                    Log.i(TAG, "[recoverDispatches] id=${d.id} 跳过：startDispatch正在处理")
+                    continue
+                }
+                Log.i(TAG, "[recoverDispatches] id=${d.id} 从未生成，尝试generateDispatchStart")
+                generateDispatchStart(d.id, d.taskType, d.budget, d.operatorIds.split(","))
+                continue
+            }
+
+            // 情况 B：已超时 → 直接结算
             if (elapsed >= totalDuration) {
                 Log.i(TAG, "[recoverDispatches] id=${d.id} 已超时，执行finishDispatch")
                 finishDispatch(d.id)
+                continue
+            }
+
+            // 情况 C：需要补充段落
+            if (d.status == "active" && d.logChain.isNotBlank()) {
+                val expectedSegments = (elapsed / d.segmentInterval.coerceAtLeast(1L)).toInt().coerceIn(1, d.totalSegments)
+                if (segments < expectedSegments) {
+                    Log.i(TAG, "[recoverDispatches] id=${d.id} 当前${segments}段，期望${expectedSegments}段，补充生成")
+                    for (i in (segments + 1)..expectedSegments) {
+                        val summary = d.logChain.take(100)
+                        val ok = generateDispatchProgressSuspend(d.id, d.taskType, d.budget, d.operatorIds.split(","), i, summary, d.logChain)
+                        if (!ok) {
+                            Log.w(TAG, "[recoverDispatches] id=${d.id} 第${i}段生成失败")
+                            break
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    suspend fun checkActiveDispatches() {
+        val actives = repository.getActiveDispatches()
+        if (actives.isEmpty()) return
+        val now = System.currentTimeMillis()
+        Log.d(TAG, "[checkActiveDispatches] 检查 ${actives.size} 个活跃派遣")
+        for (d in actives) {
+            if (d.status != "active" || d.logChain.isBlank()) continue
+            val elapsed = now - d.startTime
+            val totalDuration = d.durationHours * 3_600_000L
+            val segments = parseSegmentCount(d.logChain)
+
+            // 已超时 → 结算
+            if (elapsed >= totalDuration) {
+                Log.i(TAG, "[checkActiveDispatches] id=${d.id} 已超时，结算")
+                finishDispatch(d.id)
+                continue
+            }
+
+            // 需要补充下一段
+            val expectedSegments = (elapsed / d.segmentInterval.coerceAtLeast(1L)).toInt().coerceIn(1, d.totalSegments)
+            if (segments < expectedSegments && segments < d.totalSegments && segments >= 0) {
+                Log.i(TAG, "[checkActiveDispatches] id=${d.id} 生成第${segments + 1}段")
+                scope.launch {
+                    generateDispatchProgressSuspend(d.id, d.taskType, d.budget, d.operatorIds.split(","), segments + 1, d.logChain.take(100), d.logChain)
+                }
             }
         }
     }

@@ -55,7 +55,7 @@ fun PermissionsScreen(
 
         when (tabIndex) {
             0 -> OperatorPermTab(operators = operators)
-            1 -> GroupPermTab(groups = groups)
+            1 -> GroupPermTab(groups = groups, viewModel = viewModel)
         }
     }
     }
@@ -92,7 +92,7 @@ private fun OperatorPermTab(operators: List<com.rhodes.privatechat.data.db.entit
 }
 
 @Composable
-private fun GroupPermTab(groups: List<com.rhodes.privatechat.data.db.entity.ChatSessionEntity>) {
+private fun GroupPermTab(groups: List<com.rhodes.privatechat.data.db.entity.ChatSessionEntity>, viewModel: MainViewModel) {
     val settings: SettingsRepository = koinInject()
 
     Column {
@@ -115,7 +115,7 @@ private fun GroupPermTab(groups: List<com.rhodes.privatechat.data.db.entity.Chat
                         }
                         Switch(checked = autoSpeak, onCheckedChange = { b ->
                             autoSpeak = b
-                            settings.putGroupAuto(g.id, b)
+                            viewModel.setAutoGroupChatEnabled(g.id, b)
                         }, colors = SwitchDefaults.colors(checkedThumbColor = Primary, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
                     }
                     HorizontalDivider(color = Divider)

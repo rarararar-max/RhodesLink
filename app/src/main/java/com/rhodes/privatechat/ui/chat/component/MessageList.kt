@@ -82,19 +82,27 @@ fun MessageList(
 ) {
     // 渐进展示逻辑
     var prevRawSize by remember { mutableIntStateOf(0) }
+    var initialLoadDone by remember { mutableStateOf(false) }
     var displayCount by remember { mutableIntStateOf(Int.MAX_VALUE) }
     if (progressiveDisplay) {
-        LaunchedEffect(messages) {
-            if (prevRawSize == 0 || messages.size < prevRawSize) {
+        if (!initialLoadDone) {
+            LaunchedEffect(Unit) {
                 displayCount = messages.size
-            } else if (messages.size > prevRawSize) {
-                displayCount = prevRawSize + 1
-                for (i in (prevRawSize + 1) until messages.size) {
-                    kotlinx.coroutines.delay((500L + (Math.random() * 2000)).toLong())
-                    displayCount = i + 1
-                }
+                prevRawSize = messages.size
+                initialLoadDone = true
             }
-            prevRawSize = messages.size
+        } else {
+            LaunchedEffect(messages) {
+                if (messages.size < prevRawSize) {
+                    displayCount = messages.size
+                } else if (messages.size > prevRawSize) {
+                    for (i in (prevRawSize) until messages.size) {
+                        kotlinx.coroutines.delay((300L + (Math.random() * 1000)).toLong())
+                        displayCount = i + 1
+                    }
+                }
+                prevRawSize = messages.size
+            }
         }
     } else {
         displayCount = messages.size

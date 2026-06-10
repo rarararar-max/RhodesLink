@@ -31,6 +31,11 @@ DELETE FROM memory_anchors WHERE expiresAt < ?;
 deleteOldAnchors:
 DELETE FROM memory_anchors WHERE createdAt < ?;
 
+enforceAnchorRetain:
+DELETE FROM memory_anchors WHERE operatorId = ? AND id NOT IN (
+    SELECT id FROM memory_anchors WHERE operatorId = ? ORDER BY createdAt DESC LIMIT ?
+);
+
 insertAllAnchors:
 INSERT OR REPLACE INTO memory_anchors(sessionId, operatorId, type, content, isPrivate, createdAt, expiresAt)
 VALUES (?, ?, ?, ?, ?, ?, ?);

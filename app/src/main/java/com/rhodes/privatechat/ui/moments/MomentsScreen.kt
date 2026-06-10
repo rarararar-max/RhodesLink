@@ -18,6 +18,7 @@ import androidx.compose.material.icons.automirrored.filled.Message
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.animation.core.animate
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -49,12 +50,14 @@ import com.rhodes.privatechat.viewmodel.MainViewModel
 fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick: (String) -> Unit = {}, onUnreadMessages: () -> Unit = {}, modifier: Modifier = Modifier) {
     val moments by viewModel.moments.collectAsState()
     val genStatus by viewModel.momentGenerateStatus.collectAsState()
-    var showPost by remember { mutableStateOf(false) }
-    var isGenerating by remember { mutableStateOf(false) }
-    var replyData by remember { mutableStateOf<Triple<Long, Long, String>?>(null) }
-    var showReplyDialog by remember { mutableStateOf(false) }
-    var showCommentDialog by remember { mutableStateOf(false) }
-    var commentMomentId by remember { mutableLongStateOf(0L) }
+    var showPost by rememberSaveable { mutableStateOf(false) }
+    var isGenerating by rememberSaveable { mutableStateOf(false) }
+    var showReplyDialog by rememberSaveable { mutableStateOf(false) }
+    var showCommentDialog by rememberSaveable { mutableStateOf(false) }
+    var commentMomentId by rememberSaveable { mutableLongStateOf(0L) }
+    var replyMomentId by rememberSaveable { mutableLongStateOf(0L) }
+    var replyParentId by rememberSaveable { mutableLongStateOf(0L) }
+    var replyParentName by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
     val prevCount = remember { mutableIntStateOf(0) }
     var unreadMsgCount by remember { mutableIntStateOf(viewModel.getUnreadCommentCount()) }
@@ -84,7 +87,7 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
             }
             if (!genStatus.running) {
                 TextButton(onClick = { viewModel.forceGenerateMoments() }) {
-                    Text(if (genStatus.msg.contains("失败")) "重新催发" else "催发", fontSize = 12.sp, color = AccentOrange, fontWeight = FontWeight.SemiBold)
+                    Text(if (!genStatus.running && genStatus.msg != "全部完成" && genStatus.msg != "开始生成..." && genStatus.msg.isNotBlank()) "重新催发" else "催发", fontSize = 12.sp, color = AccentOrange, fontWeight = FontWeight.SemiBold)
                 }
             } else {
                 Text(genStatus.msg, fontSize = 12.sp, color = AccentOrange, modifier = Modifier.padding(horizontal = 12.dp))
@@ -109,7 +112,9 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
                 items(moments, key = { it.id }) { moment ->
                     MomentCardWithInteraction(moment = moment, viewModel = viewModel,
                         onReply = { commentId, name ->
-                            replyData = Triple(moment.id, commentId, name)
+                            replyMomentId = moment.id
+                            replyParentId = commentId
+                            replyParentName = name
                             showReplyDialog = true
                         },
                         onComment = {
@@ -128,9 +133,10 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
     // Reply dialog at screen level
     // Reply dialog - with key to prevent flash
     if (showReplyDialog) {
-        val dialogKey = "${replyData?.first ?: 0}_${replyData?.second ?: 0}_${System.currentTimeMillis()}"
-        val (momentId, parentId, parentName) = replyData ?: Triple(0L, 0L, "")
-        var replyText by remember { mutableStateOf("") }
+        val momentId = replyMomentId
+        val parentId = replyParentId
+        val parentName = replyParentName
+    var replyText by rememberSaveable { mutableStateOf("") }
         LaunchedEffect(Unit) { /* stabilize initial composition */ }
         AlertDialog(onDismissRequest = { showReplyDialog = false }, title = { Text("回复 $parentName", color = TextPrimary) }, text = {
             OutlinedTextField(value = replyText, onValueChange = { replyText = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("@$parentName...") }, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Primary, unfocusedBorderColor = Divider))
@@ -145,7 +151,7 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
 
     // Comment dialog - at screen level
     if (showCommentDialog) {
-        var commentText by remember { mutableStateOf("") }
+        var commentText by rememberSaveable { mutableStateOf("") }
         LaunchedEffect(Unit) { /* stabilize */ }
         AlertDialog(onDismissRequest = { showCommentDialog = false }, title = { Text("写评论", color = TextPrimary) }, text = {
             OutlinedTextField(value = commentText, onValueChange = { commentText = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("说点什么...", color = TextTertiary) }, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Primary, unfocusedBorderColor = Divider))
@@ -164,7 +170,7 @@ private fun MomentCardWithInteraction(moment: MomentEntity, viewModel: MainViewM
     val likes by viewModel.getLikes(moment.id).collectAsState(initial = emptyList())
     val comments by viewModel.getCommentsForMoment(moment.id).collectAsState(initial = emptyList())
     val userProfile by viewModel.userProfile.collectAsState()
-    val liked = likes.any { it.operatorName == userProfile.nickname }
+    val liked = likes.any { it.operatorId == "user" }
     val operatorList by viewModel.operators.collectAsState()
     val momentOp = remember(moment, operatorList) { operatorList.find { it.name == moment.operatorName || it.id == moment.operatorId } }
     Column(Modifier.fillMaxWidth().background(Surface).padding(start = 12.dp, end = 12.dp, top = 14.dp, bottom = 8.dp)) {
@@ -187,7 +193,7 @@ private fun MomentCardWithInteraction(moment: MomentEntity, viewModel: MainViewM
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(formatTime(moment.createdAt), fontSize = 11.sp, color = TextTertiary)
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { viewModel.likeMoment(moment.id, "user", userProfile.nickname) }.padding(4.dp)) { Icon(if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder, null, tint = if (liked) ErrorRed else TextTertiary, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(2.dp)); Text("${moment.likeCount}", fontSize = 11.sp, color = if (liked) ErrorRed else TextTertiary) }
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { viewModel.likeMoment(moment.id, "user", userProfile.nickname) }.padding(4.dp)) { Icon(if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder, null, tint = if (liked) ErrorRed else TextTertiary, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(2.dp)); Text("${likes.size}", fontSize = 11.sp, color = if (liked) ErrorRed else TextTertiary) }
                         Spacer(Modifier.width(12.dp))
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { onComment() }.padding(4.dp)) { Icon(Icons.AutoMirrored.Filled.Message, null, tint = TextTertiary, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(2.dp)); Text("${comments.size}", fontSize = 11.sp, color = TextTertiary) }
                     }

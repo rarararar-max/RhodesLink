@@ -80,7 +80,10 @@ fun MomentDetailScreen(
         LazyColumn(Modifier.weight(1f)) {
             item {
                 MomentDetailCard(moment, likes, comments, userName, onOperatorClick,
-                    operatorAvatarUri = momentOp?.avatarUri ?: "") { commentId, name ->
+                    operatorAvatarUri = if (moment.isUserPost && viewModel.getUserProfile().avatarUri.isNotBlank())
+                        viewModel.getUserProfile().avatarUri
+                    else
+                        momentOp?.avatarUri ?: "") { commentId, name ->
                     replyTarget = if (replyTarget.second == name) Triple(0L, "", "") else Triple(commentId, name, "")
                 }
             }

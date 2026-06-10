@@ -167,6 +167,10 @@ private fun SessionItem(session: ChatSessionEntity, onClick: () -> Unit, onLongC
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (session.isPinned) {
+                        Icon(Icons.Default.PushPin, null, tint = Primary, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                    }
                     Text(session.operatorName, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Spacer(modifier = Modifier.weight(1f))
                     Text(formatSessionTime(session.lastTime), fontSize = 12.sp, color = TextSecondary)

@@ -77,6 +77,7 @@ class MainViewModel(
         const val PROP_PRICE = 100
         /** 防止多个 ViewModel 实例并发执行自动生成 */
         private val autoGenerating = java.util.concurrent.atomic.AtomicBoolean(false)
+        private val _globalMomentStatus = MutableStateFlow(MomentGenerateStatus())
     }
     val dataViewModel = DataViewModel(repository, settings, viewModelScope)
     val mahjongViewModel = MahjongViewModel(repository, settings, sharedUtils, viewModelScope) { appState.operators.value }
@@ -96,7 +97,7 @@ class MainViewModel(
     val dispatchViewModel = DispatchViewModel(repository, settings, sharedUtils, operatorStateUpdater, appState, viewModelScope, { refreshAllOperatorStatus() }) { getUserProfile() }
     val groupChatViewModel = GroupChatViewModel(repository, settings, sharedUtils, appState, viewModelScope, { chatViewModel.markSessionRead(it) }, { unhideSession(it) }, { getUserProfile() }, { t, m -> chatViewModel.getPromptTemplate(t, m) }, { s, msgs -> chatViewModel.generateShortTermSummary(s, msgs) }, sessionMessageCounter)
 
-    private val _momentGenerateStatus = MutableStateFlow(MomentGenerateStatus())
+    private val _momentGenerateStatus: MutableStateFlow<MomentGenerateStatus> get() = _globalMomentStatus
     val momentGenerateStatus: StateFlow<MomentGenerateStatus> = _momentGenerateStatus.asStateFlow()
 
     // Chat state delegates to ChatViewModel
@@ -188,6 +189,7 @@ class MainViewModel(
     }
 
     init {
+        android.util.Log.d("MainVM", "** [DBG] ** init 实例: ${System.identityHashCode(this)}")
         viewModelScope.launch {
             repository.insertPresetOperators()
             // 初始角色默认关闭自动发动态和主动私聊权限
@@ -206,11 +208,15 @@ class MainViewModel(
             }
             repository.migrateOldRelationships()
             repository.initPresetGroups()
-            // 新群组默认从主页隐藏，仅在通讯录显示
-            val groupIds = listOf("group_elite", "group_penguin", "group_lungmen", "group_rhine", "group_sui")
-            val hidden = settings.hiddenIds.toMutableSet()
-            hidden.addAll(groupIds)
-            settings.hiddenIds = hidden
+            // 新群组默认从主页隐藏，仅在通讯录显示（只执行一次）
+            val initialHiddenDone = settings.getBoolean("initial_hidden_done", false)
+            if (!initialHiddenDone) {
+                val groupIds = listOf("group_elite", "group_penguin", "group_lungmen", "group_rhine", "group_sui")
+                val hidden = settings.hiddenIds.toMutableSet()
+                hidden.addAll(groupIds)
+                settings.hiddenIds = hidden
+                settings.putBoolean("initial_hidden_done", true)
+            }
             cleanupExpired()
             settings.dispatchFastMode = false
             autoGenerateTodayMoments()
@@ -228,7 +234,18 @@ class MainViewModel(
             while (true) {
                 dataViewModel.cleanupAllExpired()
                 try { repository.cleanupExpiredData() } catch (_: Exception) { }
+                // 每个干员保留最多 200 条锚点
+                for (op in _operators.value) {
+                    try { repository.enforceAnchorRetain(op.id, 200) } catch (_: Exception) { }
+                }
                 delay(6 * 60 * 60 * 1000L)
+            }
+        }
+        // 派遣后台监控（每分钟检查，推进段落或结算超时派遣）
+        viewModelScope.launch {
+            while (true) {
+                delay(60_000)
+                dispatchViewModel.checkActiveDispatches()
             }
         }
         dataViewModel.cleanupAllExpired()
@@ -445,10 +462,25 @@ class MainViewModel(
     }
 
     private suspend fun autoGenerateTodayMoments() {
+        android.util.Log.d("MomentGen", "** [DBG] ** 自动生成开始")
+        // 清理旧版残留的过量动态（最多保留 60 条最新）
+        val allNow = repository.getAllMomentsSync()
+        android.util.Log.d("MomentGen", "** [DBG] ** 当前动态总数=${allNow.size}")
+        if (allNow.size > 60) {
+            val keepCount = 40
+            val sorted = allNow.sortedByDescending { it.createdAt }
+            if (sorted.size > keepCount) {
+                val cutoff = sorted[keepCount - 1].createdAt
+                repository.deleteOldMoments(cutoff)
+                android.util.Log.d("MomentGen", "清理旧动after: 保留${keepCount}条, 删除了${allNow.size - keepCount}条")
+            }
+        }
         if (!autoGenerating.compareAndSet(false, true)) return
         try {
             val dateKey = beijingSdf("yyyyMMdd").format(java.util.Date())
-            val target = intPref("daily_moment_target", 3)
+            val target = intPref("daily_moment_target", 2)
+            val permCount = _operators.value.count { settings.getOperatorDynPermission(it.id) }
+            android.util.Log.d("MomentGen", "** [DBG] ** target=$target 有权限=$permCount 总干员=${_operators.value.size}")
             if (target <= 0) return
             generateAllMoments(target, dateKey) { /* silent */ }
             // 清理 7 天前的计数
@@ -658,6 +690,7 @@ ${summaries}
                     keywords = parsed.keywords.joinToString(","),
                     preferences = parsed.preferences.joinToString(","),
                     taboos = parsed.taboos.joinToString(","),
+                    createdAt = System.currentTimeMillis(),
                     expiresAt = System.currentTimeMillis() + intPref("clean_days", 30) * 86_400_000L
                 ))
             } else {
@@ -668,6 +701,7 @@ ${summaries}
                         sessionId = session.id, operatorId = session.operatorId,
                         type = MemoryType.LONG_TERM, content = fallback,
                         keywords = "", preferences = "", taboos = "",
+                        createdAt = System.currentTimeMillis(),
                         expiresAt = System.currentTimeMillis() + intPref("clean_days", 30) * 86_400_000L
                     ))
                 }
@@ -1052,7 +1086,7 @@ ${summaries}
                                     commenters.forEach { commenter ->
                                         try {
                                             val cmtReplacements = mapOf(
-                                                "COMMENTER_NAME" to commenter.name, "COMMENTER_PERSONA" to (commenter.privatePrompt.ifBlank { commenter.description }),
+                                                "COMMENTER_NAME" to commenter.name, "COMMENTER_PERSONA" to (commenter.groupPrompt.ifBlank { commenter.description }),
                                                 "POST_CONTENT" to c,
                                                 "COMMENT_MIN_CHARS" to intPref("comment_min_chars", 10).toString(),
                                                 "COMMENT_MAX_CHARS" to intPref("comment_max_chars", 40).toString()
@@ -1086,81 +1120,17 @@ ${summaries}
             if (eligible.isEmpty()) { onProgress("全部完成"); return@launch }
             val op = eligible.random()
             onProgress("发布中...")
-            try {
-                val profile = getUserProfile()
-                val impression = repository.getLongTermImpression(op.id)?.content ?: "无"
-                val chatSummary = repository.getShortTermMemory("session_${op.id}")?.content?.take(100) ?: "无"
-                val memories = pickAnchors(repository.getPublicAnchors(op.id), 3).joinToString("\n") { "- ${anchorTimeLabel(it)} ${it.content}" }.ifBlank { "无" }
-                val existingPosts = repository.getMomentsPaged(10, 0).filter { it.operatorId == op.id }
-                val recentPosts = existingPosts.take(3).joinToString("\n") { "- ${it.content.take(50)}" }.ifBlank { "无" }
-                val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
-                val timeOfDay = getTimeOfDay(cal.get(java.util.Calendar.HOUR_OF_DAY))
-                val fakeTs = System.currentTimeMillis()
-                val mmtTpl = getPromptTemplate("moment")
-                val mmtReplacements = mapOf(
-                    "OPERATOR_NAME" to op.name, "OPERATOR_PERSONA" to op.privatePrompt.ifBlank { op.description },
-                    "TIME_OF_DAY" to timeOfDay, "LONG_TERM_IMPRESSION" to impression,
-                    "RECENT_CHAT_SUMMARY" to chatSummary, "RECENT_MEMORIES" to memories,
-                    "RECENT_POSTS" to recentPosts,
-                    "CURRENT_DATE" to beijingSdf("yyyy年MM月dd日").format(fakeTs),
-                    "USER_NAME" to profile.nickname,
-                    "MOMENT_MIN_CHARS" to intPref("moment_min_chars", 50).toString(),
-                    "MOMENT_MAX_CHARS" to intPref("moment_max_chars", 200).toString()
-                )
-                val prompt = applyTemplate(mmtTpl, mmtReplacements)
-                var momentResult = ""
-                repeat(3) { attempt ->
-                    try {
-                        momentResult = ""
-                        momentResult = withTimeout(15_000) { chat(listOf(AiMessage("system", prompt)), "Moment") }
-                        if (momentResult.isNotBlank()) return@repeat
-                    } catch (_: Exception) { if (attempt < 2) delay((1000L * (attempt + 1))) }
-                }
-                trackTokens("moment", prompt, momentResult)
-                var content = momentResult.trim()
-                while (content.startsWith("\"") && content.endsWith("\"") && content.length > 2) {
-                    content = content.substring(1, content.length - 1).trim()
-                }
-                content = content.removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
-                if (content.isNotBlank()) {
-                    val moment = Moment(operatorId = op.id, operatorName = op.name, content = content, createdAt = fakeTs)
-                    val momentId = repository.insertMoment(moment)
-                    refreshMomentsNow()
-                    onProgress("全部完成")
-                    // 互动异步化：点赞和评论在后台生成，UI 立即显示动态
-                    val opId = op.id; val c = content
-                    viewModelScope.launch {
-                        try {
-                            val likers = _operators.value.filter { it.id != opId && it.name != profile.nickname }.shuffled().take((3..8).random())
-                            likers.forEach { liker -> repository.insertLike(MomentLike(momentId = momentId, operatorId = liker.id, operatorName = liker.name, createdAt = System.currentTimeMillis())) }
-                            repository.updateLikeCount(momentId, likers.size)
-                            val commenters = _operators.value.filter { it.id != opId && it.name != profile.nickname }.shuffled().take((1..3).random())
-                            val cmtTpl = getPromptTemplate("moment_comment")
-                            var actualComments = 0
-                            commenters.forEach { commenter ->
-                                try {
-                                    val cmtReplacements = mapOf(
-                                        "COMMENTER_NAME" to commenter.name, "COMMENTER_PERSONA" to (commenter.privatePrompt.ifBlank { commenter.description }),
-                                        "POST_CONTENT" to c,
-                                        "COMMENT_MIN_CHARS" to intPref("comment_min_chars", 10).toString(),
-                                        "COMMENT_MAX_CHARS" to intPref("comment_max_chars", 40).toString()
-                                    )
-                                    val cp = applyTemplate(cmtTpl, cmtReplacements)
-                                    val cc = withTimeout(8_000) { chat(listOf(AiMessage("system", cp)), "Moment") }.trim()
-                                    trackTokens("moment", cp, cc)
-                                    if (cc.isNotBlank()) { repository.insertComment(MomentComment(momentId = momentId, operatorId = commenter.id, operatorName = commenter.name, content = cc, createdAt = System.currentTimeMillis())); actualComments++ }
-                                } catch (_: Exception) {}
-                            }
-                            repository.updateCommentCount(momentId, actualComments)
-                        } catch (_: Exception) {}
-                    }
-                } else { onProgress("全部完成") }
-            } catch (_: Exception) { onProgress("全部完成") }
+            val momentId = generateOneForOpSync(op)
+            if (momentId != null) {
+                refreshMomentsNow()
+                generateLikesAndComments(momentId, op)
+            }
+            onProgress("全部完成")
         }
     }
 
-    /** 为指定干员生成 1 条动态，返回是否成功 */
-    private suspend fun generateOneForOp(op: Operator): Boolean {
+    /** 为指定干员同步生成 1 条动态（不含点赞评论），返回 momentId */
+    private suspend fun generateOneForOpSync(op: Operator): Long? {
         return try {
             val profile = getUserProfile()
             val impression = repository.getLongTermImpression(op.id)?.content ?: "无"
@@ -1200,35 +1170,39 @@ ${summaries}
             if (content.isNotBlank()) {
                 val moment = Moment(operatorId = op.id, operatorName = op.name, content = content, createdAt = fakeTs)
                 val momentId = repository.insertMoment(moment)
-                val opId = op.id; val c = content
-                viewModelScope.launch {
+                momentId
+            } else null
+        } catch (_: Exception) { null }
+    }
+
+    /** 异步生成点赞和评论（不阻塞调用方） */
+    private fun generateLikesAndComments(momentId: Long, op: Operator) {
+        viewModelScope.launch {
+            try {
+                val profile = getUserProfile()
+                val opId = op.id
+                val likers = _operators.value.filter { it.id != opId && it.name != profile.nickname }.shuffled().take((3..8).random())
+                likers.forEach { liker -> repository.insertLike(MomentLike(momentId = momentId, operatorId = liker.id, operatorName = liker.name, createdAt = System.currentTimeMillis())) }
+                repository.updateLikeCount(momentId, likers.size)
+                val commenters = _operators.value.filter { it.id != opId && it.name != profile.nickname }.shuffled().take((1..3).random())
+                val cmtTpl = getPromptTemplate("moment_comment")
+                var actualComments = 0
+                commenters.forEach { commenter ->
                     try {
-                        val likers = _operators.value.filter { it.id != opId && it.name != profile.nickname }.shuffled().take((3..8).random())
-                        likers.forEach { liker -> repository.insertLike(MomentLike(momentId = momentId, operatorId = liker.id, operatorName = liker.name, createdAt = System.currentTimeMillis())) }
-                        repository.updateLikeCount(momentId, likers.size)
-                        val commenters = _operators.value.filter { it.id != opId && it.name != profile.nickname }.shuffled().take((1..3).random())
-                        val cmtTpl = getPromptTemplate("moment_comment")
-                        var actualComments = 0
-                        commenters.forEach { commenter ->
-                            try {
-                                val cmtReplacements = mapOf(
-                                    "COMMENTER_NAME" to commenter.name, "COMMENTER_PERSONA" to (commenter.privatePrompt.ifBlank { commenter.description }),
-                                    "POST_CONTENT" to c,
-                                    "COMMENT_MIN_CHARS" to intPref("comment_min_chars", 10).toString(),
-                                    "COMMENT_MAX_CHARS" to intPref("comment_max_chars", 40).toString()
-                                )
-                                val cp = applyTemplate(cmtTpl, cmtReplacements)
-                                val cc = withTimeout(8_000) { chat(listOf(AiMessage("system", cp)), "Moment") }.trim()
-                                trackTokens("moment", cp, cc)
-                                if (cc.isNotBlank()) { repository.insertComment(MomentComment(momentId = momentId, operatorId = commenter.id, operatorName = commenter.name, content = cc, createdAt = System.currentTimeMillis())); actualComments++ }
-                            } catch (_: Exception) {}
-                        }
-                        repository.updateCommentCount(momentId, actualComments)
+                        val cmtReplacements = mapOf(
+                            "COMMENTER_NAME" to commenter.name, "COMMENTER_PERSONA" to (commenter.groupPrompt.ifBlank { commenter.description }),
+                            "POST_CONTENT" to "", "COMMENT_MIN_CHARS" to intPref("comment_min_chars", 10).toString(),
+                            "COMMENT_MAX_CHARS" to intPref("comment_max_chars", 40).toString()
+                        )
+                        val cp = applyTemplate(cmtTpl, cmtReplacements)
+                        val cc = withTimeout(8_000) { chat(listOf(AiMessage("system", cp)), "Moment") }.trim()
+                        trackTokens("moment", cp, cc)
+                        if (cc.isNotBlank()) { repository.insertComment(MomentComment(momentId = momentId, operatorId = commenter.id, operatorName = commenter.name, content = cc, createdAt = System.currentTimeMillis())); actualComments++ }
                     } catch (_: Exception) {}
                 }
-                true
-            } else false
-        } catch (_: Exception) { false }
+                repository.updateCommentCount(momentId, actualComments)
+            } catch (_: Exception) {}
+        }
     }
 
     fun generateInspirations(callback: (List<String>) -> Unit) = chatViewModel.generateInspirations(callback)
@@ -1277,13 +1251,13 @@ ${summaries}
 
             val alreadyReplied = mutableSetOf<String>()
             if (parentCommentId > 0 && replyToName.isNotBlank() && replyToName != moment.operatorName && replyToName != userName) {
-                triggerSingleAiReply(momentId, replyToName, content, parentCommentId, userName)
+                triggerSingleAiReply(momentId, replyToName, content, rootParentId, userName)
                 alreadyReplied.add(replyToName)
                 delay((1500L + (Math.random() * 1500).toLong()))
             }
 
             if (moment.operatorName != "我" && moment.operatorName != userName && moment.operatorName !in alreadyReplied) {
-                triggerSingleAiReply(momentId, moment.operatorName, content, parentCommentId, userName, "你是${moment.operatorName}。用户${userName}在你的动态下评论了：「${content}」。请用10-50字自然回复。只输出回复内容本身，不要加任何前缀如「回复xxx」或冒号。直接输出纯文本。")
+                triggerSingleAiReply(momentId, moment.operatorName, content, rootParentId, userName, "你是${moment.operatorName}。用户${userName}在你的动态下评论了：「${content}」。请用10-50字自然回复。只输出回复内容本身，不要加任何前缀如「回复xxx」或冒号。直接输出纯文本。")
                 alreadyReplied.add(moment.operatorName)
                 delay((1500L + (Math.random() * 1500).toLong()))
             }
@@ -1295,7 +1269,7 @@ ${summaries}
                 .take(1 + (Math.random() * 2).toInt())
             for (bystander in bystanders) {
                 val bp = "你是${bystander}。你刚看到${moment.operatorName}的动态下，用户${userName}评论了「${content}」。请用10-40字凑热闹式地回复这条评论（看戏、调侃、起哄风格）。直接输出纯文本。"
-                triggerSingleAiReply(momentId, bystander, content, parentCommentId, userName, bp)
+                triggerSingleAiReply(momentId, bystander, content, rootParentId, userName, bp)
                 delay((1500L + (Math.random() * 1500).toLong()))
             }
         }
@@ -1323,6 +1297,7 @@ ${summaries}
             val userName = profile.nickname
             val moment = Moment(operatorId = "user", operatorName = userName, content = content, isUserPost = true, mentionedOperatorIds = mentionedOps.joinToString(","), createdAt = System.currentTimeMillis())
             val momentId = repository.insertMoment(moment)
+            refreshMomentsNow()
             // 创建动态锚点（仅动态发布者自己 + 随机3个围观干员）
             val anchorOps = listOf(moment.operatorId) + _operators.value.filter { it.id != moment.operatorId }.shuffled().take(3).map { it.id }
             for (opId in anchorOps.distinct()) {
@@ -1344,15 +1319,13 @@ ${summaries}
             val others = (allOpNames - mentioned.toSet()).shuffled().take((randomCount - mentioned.size).coerceAtLeast(0))
             val repliers = (mentioned + others).distinct().take(5)
             val c = content; val u = userName
-            viewModelScope.launch {
-                for ((i, name) in repliers.withIndex()) {
-                    if (i > 0) delay((1500L + (Math.random() * 1500).toLong()))
+            for ((i, name) in repliers.withIndex()) {
+                if (i > 0) delay((1500L + (Math.random() * 1500).toLong()))
                     val prompt = "你是${name}。用户扮演的角色${u}发布了动态：「${c}」。请用10-40字评论这条动态（根据你的性格自然回应）。直接输出纯文本。注意：你是${name}，不是${u}，不要替${u}说话。"
                     triggerSingleAiReply(momentId, name, c, 0, u, prompt)
                 }
             }
         }
-    }
 
     fun generateDispatchStart(dispatchId: String, taskType: String, budget: Int, operatorIds: List<String>) =
         dispatchViewModel.generateDispatchStart(dispatchId, taskType, budget, operatorIds)
@@ -1383,16 +1356,19 @@ ${summaries}
             val candidates = _operators.value.filter {
                 settings.getOperatorDynPermission(it.id)
             }.shuffled().take(5)
+            android.util.Log.d("MainVM", "** [DBG] ** forceGenerateMoments: candidates=${candidates.size} VM=${System.identityHashCode(this)}")
             for (op in candidates) {
                 _momentGenerateStatus.value = MomentGenerateStatus(running = true, msg = "${op.name}发布中...")
-                if (generateOneForOp(op)) {
+                val momentId = generateOneForOpSync(op)
+                if (momentId != null) {
                     generated++
                     refreshMomentsNow()
+                    generateLikesAndComments(momentId, op)
                 }
             }
             _momentGenerateStatus.value = MomentGenerateStatus(
                 running = false,
-                msg = if (generated > 0) "全部完成" else "无可用干员"
+                msg = if (generated > 0) "生成完成（${generated}条）" else "无可用干员"
             )
             refreshMomentsNow()
         }

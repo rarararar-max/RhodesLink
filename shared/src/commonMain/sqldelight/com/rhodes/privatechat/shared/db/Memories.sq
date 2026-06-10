@@ -26,6 +26,9 @@ SELECT * FROM memories WHERE type = 'LONG_TERM' ORDER BY createdAt DESC;
 getLatestDaily:
 SELECT * FROM memories WHERE type = 'DAILY' ORDER BY createdAt DESC LIMIT 1;
 
+getLatestPrivateDaily:
+SELECT * FROM memories WHERE operatorId = ? AND type = 'DAILY' ORDER BY createdAt DESC LIMIT 1;
+
 getMemoriesBySession:
 SELECT * FROM memories WHERE sessionId = ? AND type = ? ORDER BY createdAt ASC;
 

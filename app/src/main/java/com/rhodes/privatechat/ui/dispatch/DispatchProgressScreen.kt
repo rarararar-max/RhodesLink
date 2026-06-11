@@ -59,7 +59,8 @@ fun DispatchProgressScreen(
         Log.i(TAG, "[ProgressScreen] 开始加载 dispatchId=$dispatchId")
         // 轮询等待记录出现（AI 生成中 status="generating"）
         var rec = viewModel.repository.getDispatch(dispatchId)
-        while (rec == null) { delay(500); rec = viewModel.repository.getDispatch(dispatchId) }
+        var waitSec = 0
+        while (rec == null) { delay(1000); waitSec++; rec = viewModel.repository.getDispatch(dispatchId); if (waitSec > 30) { done = true; errorMsg = "派遣加载超时"; return@LaunchedEffect } }
         val r = rec!!
         Log.d(TAG, "[ProgressScreen] 记录已加载 status=${r.status} task=${r.taskType} segs=${r.totalSegments} logLen=${r.logChain.length}")
         taskType = r.taskType
@@ -70,10 +71,12 @@ fun DispatchProgressScreen(
         // 等待 AI 生成完成（status 变为 active 或 cancelled）
         if (r.status == "generating") {
             Log.d(TAG, "[ProgressScreen] 等待AI生成完成...")
+            var genSec = 0
             while (true) {
-                delay(1000)
+                delay(1000); genSec++
                 val updated = viewModel.repository.getDispatch(dispatchId) ?: break
                 if (updated.status != "generating") { rec = updated; break }
+                if (genSec > 120) { done = true; errorMsg = "AI 生成超时，请重试"; return@LaunchedEffect }
             }
             Log.i(TAG, "[ProgressScreen] AI生成完成 status=${rec?.status}")
         }
@@ -120,7 +123,10 @@ fun DispatchProgressScreen(
         Log.i(TAG, "[ProgressScreen] 初始段落数=${initialSegments.size}")
 
         // 定时检查 DB 中新增的段落 + 按时间解锁
+        var totalWaitMin = 0
         while (true) {
+            // 总超时（120 分钟）
+            if (totalWaitMin > 120) { done = true; errorMsg = "派遣超时"; break }
             // 从 DB 拉取最新数据
             val currentRec = viewModel.repository.getDispatch(dispatchId)
             if (currentRec == null) { delay(3000); continue }
@@ -158,7 +164,7 @@ fun DispatchProgressScreen(
                 Log.i(TAG, "[ProgressScreen] 所有段落已解锁，执行finishDispatch")
                 viewModel.finishDispatch(dispatchId)
             }
-            delay(3000)
+            delay(3000); totalWaitMin++
         }
     }
 

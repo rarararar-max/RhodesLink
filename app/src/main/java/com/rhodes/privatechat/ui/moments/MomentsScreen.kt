@@ -33,6 +33,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import coil3.compose.AsyncImage
@@ -47,7 +49,7 @@ import com.rhodes.privatechat.viewmodel.MainViewModel
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick: (String) -> Unit = {}, onUnreadMessages: () -> Unit = {}, modifier: Modifier = Modifier) {
+fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick: (String) -> Unit = {}, onUnreadMessages: () -> Unit = {}, onMomentClick: (Long, Long, String) -> Unit = { _, _, _ -> }, modifier: Modifier = Modifier) {
     val moments by viewModel.moments.collectAsState()
     val genStatus by viewModel.momentGenerateStatus.collectAsState()
     var showPost by rememberSaveable { mutableStateOf(false) }
@@ -60,20 +62,21 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
     var replyParentName by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
     val prevCount = remember { mutableIntStateOf(0) }
-    var unreadMsgCount by remember { mutableIntStateOf(viewModel.getUnreadCommentCount()) }
-    LaunchedEffect(Unit) {
+    var unreadMsgCount by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) { unreadMsgCount = viewModel.getUnreadCommentCountSuspend() }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
         viewModel.refreshMomentsNow()
         while (true) {
-            viewModel.refreshMomentsNow()
-            unreadMsgCount = viewModel.getUnreadCommentCount()
             delay(5_000)
+            if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                viewModel.refreshMomentsNow()
+                unreadMsgCount = viewModel.getUnreadCommentCountSuspend()
+            }
         }
     }
 
     LaunchedEffect(moments.size) {
-        if (moments.size > prevCount.intValue && moments.isNotEmpty()) {
-            listState.animateScrollToItem(0)
-        }
         prevCount.intValue = moments.size
     }
 
@@ -101,9 +104,7 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
             onRefresh = {
                 if (!isGenerating) {
                     isGenerating = true
-                    viewModel.generateOneMoment { progress ->
-                        if (progress == "全部完成") isGenerating = false
-                    }
+                    viewModel.generateOneMoment { _, done -> if (done) isGenerating = false }
                 }
             }
         ) {
@@ -121,7 +122,8 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
                             commentMomentId = moment.id
                             showCommentDialog = true
                         },
-                        onOperatorClick = onOperatorClick)
+                        onOperatorClick = onOperatorClick,
+                        onMomentClick = { onMomentClick(moment.id, 0L, "") })
                 }
                 item { Spacer(Modifier.height(16.dp)) }
             }
@@ -137,14 +139,16 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
         val parentId = replyParentId
         val parentName = replyParentName
     var replyText by rememberSaveable { mutableStateOf("") }
+    var replySending by remember { mutableStateOf(false) }
         LaunchedEffect(Unit) { /* stabilize initial composition */ }
         AlertDialog(onDismissRequest = { showReplyDialog = false }, title = { Text("回复 $parentName", color = TextPrimary) }, text = {
             OutlinedTextField(value = replyText, onValueChange = { replyText = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("@$parentName...") }, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Primary, unfocusedBorderColor = Divider))
         }, confirmButton = {
             TextButton(onClick = {
-                if (replyText.isBlank()) return@TextButton
+                if (replyText.isBlank() || replySending) return@TextButton
+                replySending = true
                 viewModel.commentOnMoment(momentId, "user", viewModel.getUserProfile().nickname, replyText, parentId, parentName)
-                replyText = ""; showReplyDialog = false
+                replyText = ""; showReplyDialog = false; replySending = false
             }) { Text("发送", color = Primary) }
         }, dismissButton = { TextButton(onClick = { showReplyDialog = false }) { Text("取消", color = TextSecondary) } })
     }
@@ -152,21 +156,23 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
     // Comment dialog - at screen level
     if (showCommentDialog) {
         var commentText by rememberSaveable { mutableStateOf("") }
+        var commentSending by remember { mutableStateOf(false) }
         LaunchedEffect(Unit) { /* stabilize */ }
         AlertDialog(onDismissRequest = { showCommentDialog = false }, title = { Text("写评论", color = TextPrimary) }, text = {
             OutlinedTextField(value = commentText, onValueChange = { commentText = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("说点什么...", color = TextTertiary) }, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Primary, unfocusedBorderColor = Divider))
         }, confirmButton = {
             TextButton(onClick = {
-                if (commentText.isBlank()) return@TextButton
+                if (commentText.isBlank() || commentSending) return@TextButton
+                commentSending = true
                 viewModel.commentOnMoment(commentMomentId, "user", viewModel.getUserProfile().nickname, commentText, 0, "")
-                commentText = ""; showCommentDialog = false
+                commentText = ""; showCommentDialog = false; commentSending = false
             }) { Text("发布", color = Primary) }
         }, dismissButton = { TextButton(onClick = { showCommentDialog = false }) { Text("取消", color = TextSecondary) } })
     }
 }
 
 @Composable
-private fun MomentCardWithInteraction(moment: MomentEntity, viewModel: MainViewModel, onReply: (Long, String) -> Unit = { _, _ -> }, onComment: () -> Unit = {}, onOperatorClick: (String) -> Unit = {}) {
+private fun MomentCardWithInteraction(moment: MomentEntity, viewModel: MainViewModel, onReply: (Long, String) -> Unit = { _, _ -> }, onComment: () -> Unit = {}, onOperatorClick: (String) -> Unit = {}, onMomentClick: () -> Unit = {}) {
     val likes by viewModel.getLikes(moment.id).collectAsState(initial = emptyList())
     val comments by viewModel.getCommentsForMoment(moment.id).collectAsState(initial = emptyList())
     val userProfile by viewModel.userProfile.collectAsState()
@@ -188,7 +194,7 @@ private fun MomentCardWithInteraction(moment: MomentEntity, viewModel: MainViewM
             Column(Modifier.weight(1f)) {
                 Text(moment.operatorName, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Primary, modifier = Modifier.clickable { onOperatorClick(moment.operatorName) })
                 Spacer(Modifier.height(4.dp))
-                Text(moment.content, fontSize = 15.sp, color = TextPrimary, lineHeight = 22.sp)
+                Text(moment.content, fontSize = 15.sp, color = TextPrimary, lineHeight = 22.sp, modifier = Modifier.clickable { onMomentClick() })
                 Spacer(Modifier.height(6.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(formatTime(moment.createdAt), fontSize = 11.sp, color = TextTertiary)
@@ -253,7 +259,7 @@ private fun MomentCardWithInteraction(moment: MomentEntity, viewModel: MainViewM
 @Composable private fun PostDialog(operators: List<com.rhodes.privatechat.data.db.entity.OperatorEntity>, onDismiss: () -> Unit, onPost: (String, List<String>) -> Unit) {
     var text by remember { mutableStateOf("") }; var showAtPicker by remember { mutableStateOf(false) }; val names = remember(operators) { operators.filter { it.name != "系统" }.map { it.name } }
     // 从文本中解析已被 @ 的干员
-    val mentionedInText = remember(text) { names.filter { text.contains("@$it") } }
+    val mentionedInText = remember(text) { names.filter { Regex("@${Regex.escape(it)}(\\s|\$|，|。|！|？)").containsMatchIn(text) } }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("发布动态", color = TextPrimary) }, text = {
         Column {
             OutlinedTextField(value = text, onValueChange = { text = it }, modifier = Modifier.fillMaxWidth().height(100.dp), placeholder = { Text("用 @+干员名 艾特干员，如：@能天使", color = TextTertiary) }, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Primary, unfocusedBorderColor = Divider))

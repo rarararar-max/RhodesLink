@@ -12,6 +12,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 class MomentsViewModel(
     private val repository: ChatRepository,
@@ -24,19 +27,23 @@ class MomentsViewModel(
         const val DEBUG = true
     }
 
+    private val likeMutex = Mutex()
+
     fun getLikes(momentId: Long): Flow<List<MomentLike>> = repository.getLikesFlow(momentId)
     fun getCommentsForMoment(momentId: Long): Flow<List<MomentComment>> = repository.getComments(momentId)
 
     fun likeMoment(momentId: Long, operatorId: String, operatorName: String) {
         scope.launch {
-            val existing = repository.getLike(momentId, operatorId)
-            if (existing == null) {
-                repository.insertLike(MomentLike(momentId = momentId, operatorId = operatorId, operatorName = operatorName, createdAt = System.currentTimeMillis()))
-            } else {
-                repository.deleteLike(momentId, operatorId)
+            likeMutex.withLock {
+                val existing = repository.getLike(momentId, operatorId)
+                if (existing == null) {
+                    repository.insertLike(MomentLike(momentId = momentId, operatorId = operatorId, operatorName = operatorName, createdAt = System.currentTimeMillis()))
+                } else {
+                    repository.deleteLike(momentId, operatorId)
+                }
+                val count = repository.getLikeCount(momentId)
+                repository.updateLikeCount(momentId, count)
             }
-            val count = repository.getLikeCount(momentId)
-            repository.updateLikeCount(momentId, count)
         }
     }
 
@@ -55,6 +62,19 @@ class MomentsViewModel(
         val cutoff = System.currentTimeMillis() - 30L * 86400000L
         return try {
             runBlocking(Dispatchers.IO) {
+                repository.getUnreadCommentCount(cutoff, profile.nickname)
+            }
+        } catch (e: Exception) {
+            if (DEBUG) Log.e("AI调试输出", "getUnreadCommentCount error: ${e.message}")
+            0
+        }
+    }
+
+    suspend fun getUnreadCommentCountSuspend(): Int {
+        val profile = getUserProfile()
+        val cutoff = System.currentTimeMillis() - 30L * 86400000L
+        return try {
+            withContext(Dispatchers.IO) {
                 repository.getUnreadCommentCount(cutoff, profile.nickname)
             }
         } catch (e: Exception) {

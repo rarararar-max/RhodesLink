@@ -152,7 +152,8 @@ data object MomentsRoute : Screen {
                 val op = viewModel.findOperatorByName(name)
                 if (op != null) navigator.push(ChatOperator(op))
             },
-            onUnreadMessages = { navigator.push(UnreadMessagesRoute) }
+            onUnreadMessages = { navigator.push(UnreadMessagesRoute) },
+            onMomentClick = { momentId, commentId, name -> navigator.push(MomentDetailRoute(momentId, commentId, name)) }
         )
     }
 }

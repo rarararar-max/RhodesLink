@@ -459,7 +459,7 @@ object PromptTemplates {
 {{MEMBER_PROFILES}}
 
 【系统约束 · 最高优先级】
-- 所有人同处一个物理空间，正在进行线下聚会聊天
+- 所有干员同处一个物理空间，正在进行线下聚会聊天
 - 严禁提及以下词汇：屏幕、消息、通讯器、终端、在线、离线、冒泡、回复、发送、刷新、信号、网络、APP
 - 所有对话必须是当面说出口的话，模拟真实聚会氛围
 - 干员发言中可以使用括号动作描述展示姿势与动作，如（挥手）、（叹气）
@@ -500,12 +500,6 @@ object PromptTemplates {
 - 当前群成员名单：{{MEMBER_NAMES}}
 - 你只能生成以上名单中的角色的发言。
 - 不在名单中的角色视为已退群或被禁言，不要生成他们的发言。
-
-【旁白规则】
-- 旁白不是必须的，只在需要描写环境或气氛时使用
-- 如果本轮没有场景变化，可以省略旁白条目
-- 旁白只描写现场环境、人物动作、气氛，禁止电子设备相关内容
-- 旁白条目必须放在数组最前面
 
 用户最新发言：{{USER_MESSAGE}}
 
@@ -626,13 +620,14 @@ object PromptTemplates {
 
 【输出格式 · 最高优先级】
 严格输出以下JSON数组，不添加任何其他文字：
-[{"speaker":"干员名","message":"对话内容"},{"speaker":"干员名","message":"对话内容"}]
+[{"speaker":"干员名","message":"对话内容"},{"speaker":"旁白","message":"场景描写","type":"narration"}]
 
 每条消息{{GROUP_MSG_MIN}}~{{GROUP_MSG_MAX}}字。{{GROUP_MODE_FORMAT}}
 
 【输出字段解释】
 - speaker：发言者名字，填干员名
 - message：发言内容，填台词。纯文字聊天，禁止括号动作和神态描写
+- type：可选字段，旁白条目标type="narration"，干员发言不需要此字段
 
 【JSON格式铁律】
 - 只输出一行JSON数组，不加```json```标记或任何额外文字
@@ -792,6 +787,8 @@ object PromptTemplates {
 - 你只能生成以上名单中的角色的发言。
 - 不在名单中的角色视为已退群或被禁言，不要生成他们的发言。
 
+用户最新发言：{{USER_MESSAGE}}
+
 直接输出JSON数组。
 
 【输出示例 · 仅示范结构，不要模仿内容】
@@ -814,6 +811,7 @@ object PromptTemplates {
 【背景】
 对{{USER_NAME}}的印象：{{LONG_TERM_IMPRESSION}}
 最近聊天摘要：{{RECENT_CHAT_SUMMARY}}
+昨天你和{{USER_NAME}}的互动：{{RECENT_DAILY_SUMMARY}}
 最近注意到的事：{{RECENT_MEMORIES}}
 
 【避免重复】
@@ -873,6 +871,9 @@ object PromptTemplates {
 
 【昨日全体聊天总结】
 {{DAILY_SUMMARY}}
+
+【你与{{USER_NAME}}昨天聊天的回顾】
+{{PRIVATE_DAILY_SUMMARY}}
 
 【昨天你与{{USER_NAME}}的互动】
 私聊摘要：{{PRIVATE_SUMMARY}}

@@ -81,27 +81,18 @@ fun MessageList(
     modifier: Modifier = Modifier,
 ) {
     // 渐进展示逻辑
-    var prevRawSize by remember { mutableIntStateOf(0) }
-    var initialLoadDone by remember { mutableStateOf(false) }
     var displayCount by remember { mutableIntStateOf(Int.MAX_VALUE) }
     if (progressiveDisplay) {
-        if (!initialLoadDone) {
-            LaunchedEffect(Unit) {
-                displayCount = messages.size
-                prevRawSize = messages.size
-                initialLoadDone = true
-            }
-        } else {
-            LaunchedEffect(messages) {
-                if (messages.size < prevRawSize) {
-                    displayCount = messages.size
-                } else if (messages.size > prevRawSize) {
-                    for (i in (prevRawSize) until messages.size) {
-                        kotlinx.coroutines.delay((300L + (Math.random() * 1000)).toLong())
-                        displayCount = i + 1
-                    }
+        LaunchedEffect(Unit) { displayCount = messages.size }
+        LaunchedEffect(messages) {
+            val oldCount = displayCount
+            if (messages.size > oldCount) {
+                for (i in oldCount until messages.size) {
+                    kotlinx.coroutines.delay((300L + (Math.random() * 1000)).toLong())
+                    displayCount = i + 1
                 }
-                prevRawSize = messages.size
+            } else {
+                displayCount = messages.size
             }
         }
     } else {
@@ -112,7 +103,11 @@ fun MessageList(
     // 自动滚动到底部
     LaunchedEffect(displayMessages.size) {
         if (displayMessages.isNotEmpty()) {
-            listState.scrollToItem(displayMessages.size - 1)
+            val layoutInfo = listState.layoutInfo
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            if (lastVisible >= displayMessages.size - 2) {
+                listState.animateScrollToItem(displayMessages.size - 1)
+            }
         }
     }
 
@@ -255,31 +250,3 @@ private fun MessageBubble(
     }
 }
 
-@Composable
-private fun OfflineInfo(message: ChatUiMessage) {
-    Column(modifier = Modifier.padding(start = 4.dp, bottom = 4.dp)) {
-        if (message.emotion.isNotBlank()) {
-            Text(message.emotion, fontSize = 12.sp, color = TextSecondary, fontStyle = FontStyle.Italic,
-                modifier = Modifier.padding(bottom = 2.dp))
-        }
-        if (message.location.isNotBlank() || message.activity.isNotBlank()) {
-            Row(modifier = Modifier.padding(bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (message.location.isNotBlank()) {
-                    InfoBadge(message.location, Color(0xFFE0E7FF), Color(0xFF4338CA))
-                    Spacer(modifier = Modifier.width(4.dp))
-                }
-                if (message.activity.isNotBlank()) {
-                    InfoBadge(message.activity, Color(0xFFFEE2E2), Color(0xFFB91C1C))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun InfoBadge(text: String, color: Color, textColor: Color) {
-    Text(text, fontSize = 10.sp, color = textColor, fontWeight = FontWeight.Medium,
-        modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(color)
-            .padding(horizontal = 6.dp, vertical = 2.dp)
-            .border(0.5.dp, textColor.copy(alpha = 0.3f), RoundedCornerShape(6.dp)))
-}

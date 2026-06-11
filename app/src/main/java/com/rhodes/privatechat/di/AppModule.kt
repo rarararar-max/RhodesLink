@@ -32,7 +32,7 @@ val appModule = module {
     }
 
     // === MainViewModel ===
-    viewModel {
+    single {
         MainViewModel(get(), get(), get<SettingsRepository>(), get(), get(), get())
     }
 }

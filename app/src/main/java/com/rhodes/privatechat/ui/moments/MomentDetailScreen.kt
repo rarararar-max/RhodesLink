@@ -83,9 +83,12 @@ fun MomentDetailScreen(
                     operatorAvatarUri = if (moment.isUserPost && viewModel.getUserProfile().avatarUri.isNotBlank())
                         viewModel.getUserProfile().avatarUri
                     else
-                        momentOp?.avatarUri ?: "") { commentId, name ->
-                    replyTarget = if (replyTarget.second == name) Triple(0L, "", "") else Triple(commentId, name, "")
-                }
+                        momentOp?.avatarUri ?: "",
+                    onLike = { viewModel.likeMoment(momentId, "user", userName) },
+                    onReply = { commentId, name ->
+                        replyTarget = if (replyTarget.second == name) Triple(0L, "", "") else Triple(commentId, name, "")
+                    }
+                )
             }
             item { Spacer(Modifier.height(8.dp)) }
         }
@@ -127,7 +130,8 @@ private fun MomentDetailCard(
     userName: String,
     onOperatorClick: (String) -> Unit,
     operatorAvatarUri: String = "",
-    onReply: (Long, String) -> Unit
+    onReply: (Long, String) -> Unit,
+    onLike: () -> Unit = {}
 ) {
     Column(Modifier.fillMaxWidth().background(Surface).padding(16.dp)) {
         Row(verticalAlignment = Alignment.Top) {
@@ -141,13 +145,16 @@ private fun MomentDetailCard(
                 Text(SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()).apply { timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai") }.format(Date(moment.createdAt)), fontSize = 11.sp, color = TextTertiary)
             }
         }
-        if (likes.isNotEmpty()) {
-            Spacer(Modifier.height(8.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.Favorite, null, tint = ErrorRed, modifier = Modifier.size(14.dp))
-                Spacer(Modifier.width(4.dp))
-                Text("${likes.size}人赞了", fontSize = 12.sp, color = TextSecondary)
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            val liked = likes.any { it is com.rhodes.privatechat.data.db.entity.MomentLikeEntity && it.operatorId == "user" }
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { onLike() }.padding(4.dp)) {
+                Icon(if (liked) Icons.Default.Favorite else Icons.Default.FavoriteBorder, null, tint = if (liked) ErrorRed else TextTertiary, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(2.dp))
+                Text("${likes.size}", fontSize = 11.sp, color = if (liked) ErrorRed else TextTertiary)
             }
+            Spacer(Modifier.width(8.dp))
+            Text("${likes.size}人赞了", fontSize = 12.sp, color = TextSecondary)
         }
         if (comments.isNotEmpty()) {
             Spacer(Modifier.height(8.dp))

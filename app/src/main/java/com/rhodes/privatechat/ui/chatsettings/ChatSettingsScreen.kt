@@ -234,6 +234,7 @@ private fun GeneralTab(settings: SettingsRepository, onPromptEditor: () -> Unit 
 
 @Composable
 private fun OtherTab(settings: SettingsRepository) {
+    var isDarkMode by remember { mutableStateOf(settings.darkMode) }
 
     Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Card).padding(16.dp)) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -269,6 +270,7 @@ private fun ParamSlider(settings: SettingsRepository, key: String, label: String
         }
         Slider(value = value, onValueChange = { v ->
             if (pairKey != null) {
+                pairValue = settings.getInt(pairKey, defaultVal).toFloat()
                 if (isMinSide) {
                     if (v <= pairValue) { value = v }
                     else { value = pairValue; pairValue = v }

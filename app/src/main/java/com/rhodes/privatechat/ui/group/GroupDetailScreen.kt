@@ -91,12 +91,6 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
         )
     }
 
-    // 自动滚动（渐进展示时由 MessageList 处理，这里处理非渐进场景）
-    LaunchedEffect(uiMessages.size) {
-        if (uiMessages.isNotEmpty()) {
-        }
-    }
-
     Box(modifier = modifier.fillMaxSize()) {
     Box(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding().clickable(
         interactionSource = remember { MutableInteractionSource() },
@@ -130,6 +124,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                     modifier = Modifier.weight(1f)
                 )
 
+                val groupLoading by viewModel.groupLoading.collectAsState()
                 ChatInputBar(
                     text = inputText,
                     onTextChange = { inputText = it },
@@ -139,6 +134,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                             inputText = ""
                         }
                     },
+                    enabled = !groupLoading,
                     currentMode = currentMode,
                     onModeChange = { currentMode = it; settings.putGroupMode(groupId, it) },
                     showModePicker = showModePicker,

@@ -362,7 +362,9 @@ class MainViewModel(
             "DIA_MIN" to intPref("dia_min", 10).toString(),
             "DIA_MAX" to intPref("dia_max", 300).toString(),
             "SEG_MIN" to (intPref("nar_seg_min", 1) + intPref("dia_seg_min", 1)).toString(),
-            "SEG_MAX" to (intPref("nar_seg_max", 3) + intPref("dia_seg_max", 3)).toString()
+            "SEG_MAX" to (intPref("nar_seg_max", 3) + intPref("dia_seg_max", 3)).toString(),
+            "TRANSITION_NOTICE" to "",
+            "GROUP_CONTEXT" to ""
         )
         val prompt = applyTemplate(getPromptTemplate("private", "online"), replacements)
         try {
@@ -463,33 +465,32 @@ class MainViewModel(
 
     private suspend fun autoGenerateTodayMoments() {
         android.util.Log.d("MomentGen", "** [DBG] ** 自动生成开始")
-        // 清理旧版残留的过量动态（最多保留 60 条最新）
+        // 清理旧版残留的过量动态（保留 7 天内的）
         val allNow = repository.getAllMomentsSync()
         android.util.Log.d("MomentGen", "** [DBG] ** 当前动态总数=${allNow.size}")
-        if (allNow.size > 60) {
-            val keepCount = 40
-            val sorted = allNow.sortedByDescending { it.createdAt }
-            if (sorted.size > keepCount) {
-                val cutoff = sorted[keepCount - 1].createdAt
-                repository.deleteOldMoments(cutoff)
-                android.util.Log.d("MomentGen", "清理旧动after: 保留${keepCount}条, 删除了${allNow.size - keepCount}条")
-            }
+        val weekAgo = System.currentTimeMillis() - 7 * 24 * 60 * 60 * 1000L
+        val oldMoments = allNow.filter { it.createdAt < weekAgo }
+        if (oldMoments.size > 10) {
+            repository.deleteOldMoments(weekAgo)
+            android.util.Log.d("MomentGen", "** [DBG] ** 清理了 ${oldMoments.size} 条 7 天前的动态")
         }
         if (!autoGenerating.compareAndSet(false, true)) return
-        try {
-            val dateKey = beijingSdf("yyyyMMdd").format(java.util.Date())
-            val target = intPref("daily_moment_target", 2)
-            val permCount = _operators.value.count { settings.getOperatorDynPermission(it.id) }
-            android.util.Log.d("MomentGen", "** [DBG] ** target=$target 有权限=$permCount 总干员=${_operators.value.size}")
-            if (target <= 0) return
-            generateAllMoments(target, dateKey) { /* silent */ }
-            // 清理 7 天前的计数
-            val weekAgo = beijingSdf("yyyyMMdd").format(java.util.Date(System.currentTimeMillis() - 7 * 86400000L))
-            for (op in _operators.value) {
-                settings.removeMomentCount(op.id, weekAgo)
+        viewModelScope.launch {
+            try {
+                val dateKey = beijingSdf("yyyyMMdd").format(java.util.Date())
+                val target = intPref("daily_moment_target", 2)
+                val permCount = _operators.value.count { settings.getOperatorDynPermission(it.id) }
+                android.util.Log.d("MomentGen", "** [DBG] ** target=$target 有权限=$permCount 总干员=${_operators.value.size}")
+                if (target <= 0) return@launch
+                generateAllMoments(target, dateKey) { /* silent */ }
+                // 清理 7 天前的计数
+                val weekAgo = beijingSdf("yyyyMMdd").format(java.util.Date(System.currentTimeMillis() - 7 * 86400000L))
+                for (op in _operators.value) {
+                    settings.removeMomentCount(op.id, weekAgo)
+                }
+            } finally {
+                autoGenerating.set(false)
             }
-        } finally {
-            autoGenerating.set(false)
         }
     }
 
@@ -621,7 +622,7 @@ class MainViewModel(
             val anchors = parsed.anchors.map { a ->
                 MemoryAnchor(
                     sessionId = session.id, operatorId = session.operatorId,
-                    type = com.rhodes.privatechat.shared.model.AnchorType.valueOf(a.type.uppercase()),
+                    type = try { com.rhodes.privatechat.shared.model.AnchorType.valueOf(a.type.uppercase()) } catch (_: Exception) { com.rhodes.privatechat.shared.model.AnchorType.EVENT },
                     content = a.content, isPrivate = a.isPrivate,
                     createdAt = System.currentTimeMillis(),
                     expiresAt = System.currentTimeMillis() + intPref("clean_days", 30) * 86_400_000L
@@ -690,8 +691,7 @@ ${summaries}
                     keywords = parsed.keywords.joinToString(","),
                     preferences = parsed.preferences.joinToString(","),
                     taboos = parsed.taboos.joinToString(","),
-                    createdAt = System.currentTimeMillis(),
-                    expiresAt = System.currentTimeMillis() + intPref("clean_days", 30) * 86_400_000L
+                    createdAt = System.currentTimeMillis()
                 ))
             } else {
                 // 降级：纯文本存入 impression
@@ -701,8 +701,7 @@ ${summaries}
                         sessionId = session.id, operatorId = session.operatorId,
                         type = MemoryType.LONG_TERM, content = fallback,
                         keywords = "", preferences = "", taboos = "",
-                        createdAt = System.currentTimeMillis(),
-                        expiresAt = System.currentTimeMillis() + intPref("clean_days", 30) * 86_400_000L
+                        createdAt = System.currentTimeMillis()
                     ))
                 }
             }
@@ -735,9 +734,6 @@ ${summaries}
             }
         }
     }
-
-    private suspend fun notifyNearbyObservers(movedOpIds: List<String>) =
-        operatorStateUpdater.notifyNearbyObservers(movedOpIds)
 
     private suspend fun updateOperatorIntimacy(operatorId: String, delta: Int) =
         operatorStateUpdater.updateOperatorIntimacy(operatorId, delta)
@@ -857,14 +853,6 @@ ${summaries}
 
     private fun relationshipGroupDesc(aName: String, bName: String, type: com.rhodes.privatechat.shared.model.RelationshipType): String =
         sharedUtils.relationshipGroupDesc(aName, bName, type)
-
-    private fun generateDailyIfNeeded() {
-        val today = beijingSdf("yyyyMMdd").format(java.util.Date())
-        val last = settings.dailySummaryDate
-        if (today == last) return
-        settings.dailySummaryDate = today
-        viewModelScope.launch { generateDailySummary(java.util.Date(System.currentTimeMillis() - 86_400_000)) }
-    }
 
     private suspend fun generateDailySummary(dayBegin: java.util.Date) {
         try {
@@ -1017,7 +1005,7 @@ ${summaries}
                     d
                 } else 0
                 // 每个干员基于名称哈希偏移，让不同干员落到不同时段
-                val offset = kotlin.math.abs(op.name.hashCode()) % allSlots.size
+                val offset = (op.name.hashCode() and Int.MAX_VALUE) % allSlots.size
                 var generated = startIdx
                 for (i in startIdx until target) {
                     val slotIdx = (offset + i) % allSlots.size
@@ -1050,6 +1038,7 @@ ${summaries}
                             "TIME_OF_DAY" to timeOfDay, "LONG_TERM_IMPRESSION" to impression,
                             "RECENT_CHAT_SUMMARY" to chatSummary, "RECENT_MEMORIES" to memories,
                             "RECENT_POSTS" to recentPosts,
+                            "RECENT_DAILY_SUMMARY" to (repository.getLatestPrivateDaily(op.id)?.content ?: "无"),
                             "CURRENT_DATE" to beijingSdf("yyyy年MM月dd日").format(fakeTs),
                             "USER_NAME" to profile.nickname,
                             "MOMENT_MIN_CHARS" to intPref("moment_min_chars", 50).toString(),
@@ -1066,7 +1055,7 @@ ${summaries}
                             } catch (_: Exception) { if (attempt < 2) delay((1000L * (attempt + 1))) }
                         }
                         trackTokens("moment", prompt, momentResult)
-                        val content = momentResult.trim().removePrefix("\"").removeSuffix("\"")
+                        val content = cleanAiOutput(momentResult)
                         if (content.isNotBlank()) {
                             if (isAuto) settings.putMomentCount(op.id, today, generated + 1)
                             val moment = Moment(operatorId = op.id, operatorName = op.name, content = content, createdAt = fakeTs)
@@ -1114,19 +1103,31 @@ ${summaries}
     }
 
     /** 手动下拉刷新：只随机生成 1 条动态 */
-    fun generateOneMoment(onProgress: (String) -> Unit = {}) {
+    fun generateOneMoment(onProgress: (String, Boolean) -> Unit = { _, _ -> }) {
         viewModelScope.launch {
-            val eligible = _operators.value.filter { settings.getOperatorDynPermission(it.id) }
-            if (eligible.isEmpty()) { onProgress("全部完成"); return@launch }
-            val op = eligible.random()
-            onProgress("发布中...")
-            val momentId = generateOneForOpSync(op)
-            if (momentId != null) {
-                refreshMomentsNow()
-                generateLikesAndComments(momentId, op)
+            try {
+                val eligible = _operators.value.filter { settings.getOperatorDynPermission(it.id) }
+                if (eligible.isEmpty()) { onProgress("", true); return@launch }
+                val op = eligible.random()
+                onProgress("发布中...", false)
+                val momentId = generateOneForOpSync(op)
+                if (momentId != null) {
+                    refreshMomentsNow()
+                    generateLikesAndComments(momentId, op)
+                }
+            } finally {
+                onProgress("", true)
             }
-            onProgress("全部完成")
         }
+    }
+
+    private fun cleanAiOutput(raw: String): String {
+        var content = raw.trim()
+        while (content.startsWith("\"") && content.endsWith("\"") && content.length > 1) {
+            content = content.removePrefix("\"").removeSuffix("\"").trim()
+        }
+        content = content.removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        return content
     }
 
     /** 为指定干员同步生成 1 条动态（不含点赞评论），返回 momentId */
@@ -1147,6 +1148,7 @@ ${summaries}
                 "TIME_OF_DAY" to timeOfDay, "LONG_TERM_IMPRESSION" to impression,
                 "RECENT_CHAT_SUMMARY" to chatSummary, "RECENT_MEMORIES" to memories,
                 "RECENT_POSTS" to recentPosts,
+                "RECENT_DAILY_SUMMARY" to (repository.getLatestPrivateDaily(op.id)?.content ?: "无"),
                 "CURRENT_DATE" to beijingSdf("yyyy年MM月dd日").format(fakeTs),
                 "USER_NAME" to profile.nickname,
                 "MOMENT_MIN_CHARS" to intPref("moment_min_chars", 50).toString(),
@@ -1162,11 +1164,7 @@ ${summaries}
                 } catch (_: Exception) { if (attempt < 2) delay((1000L * (attempt + 1))) }
             }
             trackTokens("moment", prompt, momentResult)
-            var content = momentResult.trim()
-            while (content.startsWith("\"") && content.endsWith("\"") && content.length > 2) {
-                content = content.substring(1, content.length - 1).trim()
-            }
-            content = content.removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+            var content = cleanAiOutput(momentResult)
             if (content.isNotBlank()) {
                 val moment = Moment(operatorId = op.id, operatorName = op.name, content = content, createdAt = fakeTs)
                 val momentId = repository.insertMoment(moment)
@@ -1181,6 +1179,8 @@ ${summaries}
             try {
                 val profile = getUserProfile()
                 val opId = op.id
+                val moment = repository.getMoment(momentId)
+                val postContent = moment?.content ?: ""
                 val likers = _operators.value.filter { it.id != opId && it.name != profile.nickname }.shuffled().take((3..8).random())
                 likers.forEach { liker -> repository.insertLike(MomentLike(momentId = momentId, operatorId = liker.id, operatorName = liker.name, createdAt = System.currentTimeMillis())) }
                 repository.updateLikeCount(momentId, likers.size)
@@ -1191,7 +1191,7 @@ ${summaries}
                     try {
                         val cmtReplacements = mapOf(
                             "COMMENTER_NAME" to commenter.name, "COMMENTER_PERSONA" to (commenter.groupPrompt.ifBlank { commenter.description }),
-                            "POST_CONTENT" to "", "COMMENT_MIN_CHARS" to intPref("comment_min_chars", 10).toString(),
+                            "POST_CONTENT" to postContent, "COMMENT_MIN_CHARS" to intPref("comment_min_chars", 10).toString(),
                             "COMMENT_MAX_CHARS" to intPref("comment_max_chars", 40).toString()
                         )
                         val cp = applyTemplate(cmtTpl, cmtReplacements)
@@ -1250,13 +1250,13 @@ ${summaries}
             val userName = getUserProfile().nickname
 
             val alreadyReplied = mutableSetOf<String>()
-            if (parentCommentId > 0 && replyToName.isNotBlank() && replyToName != moment.operatorName && replyToName != userName) {
+            if (parentCommentId > 0 && replyToName.isNotBlank() && replyToName.trim() != moment.operatorName.trim() && replyToName.trim() != userName.trim()) {
                 triggerSingleAiReply(momentId, replyToName, content, rootParentId, userName)
                 alreadyReplied.add(replyToName)
                 delay((1500L + (Math.random() * 1500).toLong()))
             }
 
-            if (moment.operatorName != "我" && moment.operatorName != userName && moment.operatorName !in alreadyReplied) {
+            if (moment.operatorName != "我" && moment.operatorName.trim() != userName.trim() && moment.operatorName !in alreadyReplied) {
                 triggerSingleAiReply(momentId, moment.operatorName, content, rootParentId, userName, "你是${moment.operatorName}。用户${userName}在你的动态下评论了：「${content}」。请用10-50字自然回复。只输出回复内容本身，不要加任何前缀如「回复xxx」或冒号。直接输出纯文本。")
                 alreadyReplied.add(moment.operatorName)
                 delay((1500L + (Math.random() * 1500).toLong()))
@@ -1327,18 +1327,10 @@ ${summaries}
             }
         }
 
-    fun generateDispatchStart(dispatchId: String, taskType: String, budget: Int, operatorIds: List<String>) =
-        dispatchViewModel.generateDispatchStart(dispatchId, taskType, budget, operatorIds)
-
-    fun generateDispatchProgress(dispatchId: String, taskType: String, budget: Int, operatorIds: List<String>, roundNum: Int, logSummary: String) =
-        dispatchViewModel.generateDispatchProgress(dispatchId, taskType, budget, operatorIds, roundNum, logSummary)
-
-    fun generateDispatchEnd(dispatchId: String, taskType: String, duration: Int, budget: Int, operatorIds: List<String>) =
-        dispatchViewModel.generateDispatchEnd(dispatchId, taskType, duration, budget, operatorIds)
-
     // === Moments delegation ===
     fun getMomentBadge(): Int = momentsViewModel.getMomentBadge()
     fun getUnreadCommentCount(): Int = momentsViewModel.getUnreadCommentCount()
+    suspend fun getUnreadCommentCountSuspend(): Int = momentsViewModel.getUnreadCommentCountSuspend()
     fun markMomentsSeen() = momentsViewModel.markMomentsSeen()
     fun loadInboxComments(callback: (List<MomentComment>) -> Unit) = momentsViewModel.loadInboxComments(callback)
     fun markAllCommentsRead() = momentsViewModel.markAllCommentsRead()
@@ -1350,27 +1342,35 @@ ${summaries}
     suspend fun getMessageRanking(): List<SenderCount> = dataViewModel.getMessageRanking()
     suspend fun getDailyRanking(): List<SenderCount> = dataViewModel.getDailyRanking()
     fun forceGenerateMoments() {
+        if (!autoGenerating.compareAndSet(false, true)) {
+            android.util.Log.w("MainVM", "正在生成中，跳过强制生成")
+            return
+        }
         _momentGenerateStatus.value = MomentGenerateStatus(running = true, msg = "开始生成...")
         viewModelScope.launch {
-            var generated = 0
-            val candidates = _operators.value.filter {
-                settings.getOperatorDynPermission(it.id)
-            }.shuffled().take(5)
-            android.util.Log.d("MainVM", "** [DBG] ** forceGenerateMoments: candidates=${candidates.size} VM=${System.identityHashCode(this)}")
-            for (op in candidates) {
-                _momentGenerateStatus.value = MomentGenerateStatus(running = true, msg = "${op.name}发布中...")
-                val momentId = generateOneForOpSync(op)
-                if (momentId != null) {
-                    generated++
-                    refreshMomentsNow()
-                    generateLikesAndComments(momentId, op)
+            try {
+                var generated = 0
+                val candidates = _operators.value.filter {
+                    settings.getOperatorDynPermission(it.id)
+                }.shuffled().take(5)
+                android.util.Log.d("MainVM", "** [DBG] ** forceGenerateMoments: candidates=${candidates.size} VM=${System.identityHashCode(this)}")
+                for (op in candidates) {
+                    _momentGenerateStatus.value = MomentGenerateStatus(running = true, msg = "${op.name}发布中...")
+                    val momentId = generateOneForOpSync(op)
+                    if (momentId != null) {
+                        generated++
+                        refreshMomentsNow()
+                        generateLikesAndComments(momentId, op)
+                    }
                 }
+                _momentGenerateStatus.value = MomentGenerateStatus(
+                    running = false,
+                    msg = if (generated > 0) "生成完成（${generated}条）" else "无可用干员"
+                )
+                refreshMomentsNow()
+            } finally {
+                autoGenerating.set(false)
             }
-            _momentGenerateStatus.value = MomentGenerateStatus(
-                running = false,
-                msg = if (generated > 0) "生成完成（${generated}条）" else "无可用干员"
-            )
-            refreshMomentsNow()
         }
     }
 
@@ -1421,7 +1421,8 @@ ${summaries}
                     "USER_BIO" to profile.bio,
                     "USER_RELATION" to (op.userRelation.ifBlank { "未知" }),
                     "LONG_TERM_IMPRESSION" to (repository.getLongTermImpression(operatorId)?.content ?: "无"),
-                    "DAILY_SUMMARY" to (repository.getLatestDaily()?.content?.let { it } ?: "无"),
+                    "DAILY_SUMMARY" to (repository.getLatestDaily()?.content ?: "无"),
+                    "PRIVATE_DAILY_SUMMARY" to (repository.getLatestPrivateDaily(operatorId)?.content ?: "无"),
                     "PRIVATE_SUMMARY" to (repository.getPrivateChatSummary(operatorId)?.take(200) ?: "无"),
                     "GROUP_SUMMARIES" to groupSummaries,
                     "RECENT_MEMORIES" to recentMemories,

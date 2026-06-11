@@ -23,8 +23,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.withTimeout
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.encodeToString
+import kotlinx.coroutines.withTimeout
 
 private val json = Json { ignoreUnknownKeys = true }
 
@@ -45,7 +47,7 @@ class GroupChatViewModel(
         const val DEBUG = true
     }
 
-    private val groupActivityCache = mutableMapOf<String, String>()
+    private val groupActivityCache = ConcurrentHashMap<String, String>()
     private val _groupMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val groupMessages: StateFlow<List<ChatMessage>> = _groupMessages.asStateFlow()
 
@@ -56,13 +58,14 @@ class GroupChatViewModel(
     val currentGroupId: StateFlow<String> = _currentGroupId.asStateFlow()
 
     private var groupMessagesJob: Job? = null
-    private val groupMessageMutexes = mutableMapOf<String, Mutex>()
-    private fun mutexFor(groupId: String): Mutex = groupMessageMutexes.getOrPut(groupId) { Mutex() }
+    private val groupMessageMutexes = ConcurrentHashMap<String, Mutex>()
+    private fun mutexFor(groupId: String): Mutex = groupMessageMutexes.computeIfAbsent(groupId) { Mutex() }
 
     // 自动群聊
     private val autoGroupChatJobs = mutableMapOf<String, Job>()
     private val autoChatGenerations = mutableMapOf<String, Long>()
     private val lastUserMsgTime = mutableMapOf<String, Long>()
+    private val groupAiJobs = ConcurrentHashMap<String, Job>()
 
     fun setCurrentGroup(groupSessionId: String) {
         _currentGroupId.value = groupSessionId
@@ -165,12 +168,15 @@ class GroupChatViewModel(
             val sinceLastMsg = System.currentTimeMillis() - (lastUserMsgTime[groupId] ?: 0L)
             val firstDelay = if (sinceLastMsg < 30_000) 30_000 - sinceLastMsg else 10_000L
             delay(firstDelay)
+            var loopCount = 0
             while (isAutoGroupChatEnabled(groupId)) {
+                loopCount++
+                if (loopCount > 50) break
                 if (autoChatGenerations[groupId] != generation) break
                 val session = repository.getSession(groupId) ?: break
                 val mode = getGroupChatMode(groupId)
                 sendGroupMessage(groupId, groupName, "", mode, isAuto = true)
-                val interval = minMs + (Math.random() * (maxMs - minMs)).toLong()
+                val interval = minMs + (Math.random() * (maxMs - minMs).coerceAtLeast(0L)).toLong()
                 val tickMs = 1000L
                 var remaining = interval
                 while (remaining > 0 && isAutoGroupChatEnabled(groupId)) {
@@ -222,7 +228,8 @@ class GroupChatViewModel(
     }
 
     fun sendGroupMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online", autoSpeak: Boolean = false, isAuto: Boolean = false) {
-        scope.launch {
+        groupAiJobs[groupSessionId]?.cancel()
+        val job = scope.launch {
             // 步骤1: 用户消息立即插入（不持锁），消息即时显示
             if (!isAuto && text.isNotBlank()) {
                 val userMsgId = repository.getNextMessageId()
@@ -240,10 +247,13 @@ class GroupChatViewModel(
             }
 
             // 步骤2: AI 处理 — 串行化（持锁）
-            mutexFor(groupSessionId).lock()
+            var mutexLocked = false
             try {
+                mutexFor(groupSessionId).lock()
+                mutexLocked = true
                 _groupLoading.value = true
-                val session = repository.getSession(groupSessionId) ?: run { _groupLoading.value = false; return@launch }
+                groupAiJobs[groupSessionId] = coroutineContext[Job]!!
+                val session = repository.getSession(groupSessionId) ?: run { _groupLoading.value = false; if (mutexLocked) { mutexFor(groupSessionId).unlock(); mutexLocked = false }; return@launch }
                 val memberIds = session.members.split(",").map { it.trim() }.filter { it.isNotBlank() }
                 val allOps = appState.operators.value
                 val opsById = allOps.associateBy { it.id }
@@ -273,7 +283,7 @@ class GroupChatViewModel(
                 val memberProfiles = buildString {
                     for (m in activeMembers.shuffled()) {
                         val key = "${groupSessionId}_${m.id}"
-                        val act = groupActivityCache.getOrPut(key) { "活跃${"%.1f".format(0.5 + Math.random() * 0.5)}" }
+                        val act = groupActivityCache.computeIfAbsent(key) { "活跃${"%.1f".format(0.5 + Math.random() * 0.5)}" }
                         val titleStr = if (m.title.isBlank()) "" else "，${m.title}"
                         append("${m.name}（${act}${titleStr}）：${m.groupPrompt.ifBlank { m.description }}\n")
                     }
@@ -331,7 +341,7 @@ class GroupChatViewModel(
                 }
                 val promptText = apiMessages.firstOrNull()?.content ?: ""
                 if (DEBUG) sharedUtils.logAiCall("GroupChat", promptText, "(requesting...)", apiMessages)
-                val rawBase = withTimeout(45_000) { sharedUtils.chat(apiMessages, "GroupChat") }.trim()
+                val rawBase = withTimeout(60_000) { sharedUtils.chat(apiMessages, "GroupChat") }.trim()
                     .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
                 sharedUtils.trackTokens("group", apiMessages, rawBase)
                 if (DEBUG) sharedUtils.logAiCall("GroupChat", promptText, rawBase, apiMessages)
@@ -344,14 +354,7 @@ class GroupChatViewModel(
                     val aiMsgId = repository.getNextMessageId()
                     val storedContent = if (filtered.isNotEmpty()) {
                         try {
-                            buildString {
-                                append("[")
-                                results.forEachIndexed { i, r ->
-                                    if (i > 0) append(",")
-                                    append("{\"speaker\":\"${r.speaker}\",\"message\":\"${r.message}\",\"type\":\"${r.type}\"}")
-                                }
-                                append("]")
-                            }
+                            json.encodeToString(filtered)
                         } catch (_: Exception) { rawBase }
                     } else rawBase
                     repository.sendMessage(groupSessionId, ChatMessage(
@@ -394,14 +397,17 @@ class GroupChatViewModel(
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                 Log.e("GroupChat", "Timeout: ${e.message}")
                 repository.sendMessage(groupSessionId, ChatMessage(id = repository.getNextMessageId(), sessionId = groupSessionId, senderName = "系统", content = "响应超时，请重试", type = "system", mode = mode, isMe = false))
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // 被新消息取消，不做任何事
             } catch (e: Exception) {
                 Log.e("GroupChat", "Error: ${e.message}", e)
                 repository.sendMessage(groupSessionId, ChatMessage(id = repository.getNextMessageId(), sessionId = groupSessionId, senderName = "系统", content = "对方网络不太好，没有收到信息", type = "system", mode = mode, isMe = false))
             } finally {
                 _groupLoading.value = false
-                mutexFor(groupSessionId).unlock()
+                if (mutexLocked) mutexFor(groupSessionId).unlock()
             }
         }
+        groupAiJobs[groupSessionId] = job
     }
 
     private fun extractGroupResults(raw: String): List<GroupMsgResult> {
@@ -420,9 +426,13 @@ class GroupChatViewModel(
         } catch (_: Exception) {}
 
         try {
-            val regex = Regex(""""speaker"\s*:\s*"([^"]*)"\s*,\s*"message"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*"type"\s*:\s*"([^"]*)"""")
-            val results = regex.findAll(raw).map { m ->
-                GroupMsgResult(speaker = m.groupValues[1], message = m.groupValues[2], type = m.groupValues[3])
+            val objPattern = Regex("""\{[^}]*\}""")
+            val results = objPattern.findAll(raw).mapNotNull { match ->
+                val obj = match.value
+                val speaker = Regex(""""speaker"\s*:\s*"([^"]*)"""").find(obj)?.groupValues?.getOrNull(1) ?: return@mapNotNull null
+                val message = Regex(""""message"\s*:\s*"((?:[^"\\]|\\.)*)"""").find(obj)?.groupValues?.getOrNull(1) ?: return@mapNotNull null
+                val type = Regex(""""type"\s*:\s*"([^"]*)"""").find(obj)?.groupValues?.getOrNull(1) ?: "dialogue"
+                GroupMsgResult(speaker = speaker, message = message, type = type)
             }.filter { it.message.isNotBlank() }.toList()
             if (results.isNotEmpty()) return results
         } catch (_: Exception) {}

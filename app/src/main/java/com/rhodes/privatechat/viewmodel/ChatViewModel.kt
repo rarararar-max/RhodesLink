@@ -36,8 +36,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 
@@ -96,15 +98,13 @@ class ChatViewModel(
     private var impressionMsgCounter: Int
         get() = settings.impressionMsgCounter
         set(v) { settings.impressionMsgCounter = v }
-    private val sessionMessageCounter = mutableMapOf<String, Int>()
     private val shortTermThreshold: Int get() = settings.summaryThreshold
-    private val updateMutex = Mutex()
-    private var lastDbUpdate = 0L
-    private val chatAiMutexes = mutableMapOf<String, Mutex>()
-    private fun aiMutexFor(sessionId: String): Mutex = chatAiMutexes.getOrPut(sessionId) { Mutex() }
+    private val chatAiMutexes = ConcurrentHashMap<String, Mutex>()
+    private fun aiMutexFor(sessionId: String): Mutex = chatAiMutexes.computeIfAbsent(sessionId) { Mutex() }
     private var analysisGuidance = ""
     private var modeTransitionNotice = ""
     private var messagesJob: Job? = null
+    private val chatAiJobs = ConcurrentHashMap<String, Job>()
 
     init {
         loadHypnosis()
@@ -133,7 +133,7 @@ class ChatViewModel(
     suspend fun generateShortTermSummary(session: ChatSession, messageSource: List<ChatMessage>? = null) {
         try {
             val msgs = messageSource ?: repository.getMessagesSync(session.id)
-            val retain = settings.summaryRetain
+            val retain = settings.summaryRetain.coerceAtLeast(1)
             val recent = msgs.takeLast(retain)
             val older = msgs.dropLast(retain)
             if (older.isEmpty()) return
@@ -301,21 +301,24 @@ ${text}"""
         _inputText.value = ""
         generateDailyIfNeeded()
 
-        viewModelScope.launch {
-            // 步骤1：用户消息插入（无锁，即时显示）
+        // 取消该会话上一条正在处理的 AI
+        chatAiJobs[session.id]?.cancel()
+        val job = viewModelScope.launch {
+            analysisGuidance = ""
             messageCounter++
             val msgId = repository.getNextMessageId()
-            repository.sendMessage(session.id, ChatMessage(
-                id = msgId, sessionId = session.id,
-                senderName = "我", content = text, type = "text", mode = _currentMode.value, isMe = true
-            ))
-            _loadingSessions.value = _loadingSessions.value + session.id
-
-            // 步骤2：AI 处理（持锁，串行化，防止多条消息的 AI 回复乱序）
-            aiMutexFor(session.id).lock()
             val aiMsgId = repository.getNextMessageId()
             val mode = _currentMode.value
+            var mutexLocked = false
             try {
+                repository.sendMessage(session.id, ChatMessage(
+                    id = msgId, sessionId = session.id,
+                    senderName = "我", content = text, type = "text", mode = _currentMode.value, isMe = true
+                ))
+                _loadingSessions.update { it + session.id }
+
+                aiMutexFor(session.id).lock()
+                mutexLocked = true
 
                 if (settings.dualModel) {
                     analysisGuidance = ""
@@ -417,7 +420,7 @@ ${recentDialogues}
                 if (dailyCount < 5000) { val balance = settings.lmb; settings.lmb = balance + 10; settings.dailyLmbCount = dailyCount + 1 }
                 decrementHypnosis()
                 decrementMindRead()
-                if (messageCounter >= shortTermThreshold) { generateShortTermSummary(session); messageCounter = 0 }
+                if (messageCounter >= shortTermThreshold) { generateShortTermSummary(session); generatePrivateDailySummary(session.operatorId); messageCounter = 0 }
                 impressionMsgCounter++
                 val impThreshold = settings.impressionThreshold
                 if (impThreshold > 0 && impressionMsgCounter >= impThreshold) { generateLongTermImpression(session); impressionMsgCounter = 0 }
@@ -428,17 +431,19 @@ ${recentDialogues}
                     onUnhideSession(session.id)
                 }
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-                repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = "响应超时，请重试", type = "text", mode = mode, isMe = false))
+                repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = classifyError(e), type = "text", mode = mode, isMe = false))
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // 被新消息取消，不做任何事
             } catch (e: Exception) {
-                repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = "对方网络不太好，没有收到信息", type = "text", mode = mode, isMe = false))
-            } finally { _loadingSessions.value = _loadingSessions.value - session.id; aiMutexFor(session.id).unlock() }
+                repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = classifyError(e), type = "text", mode = mode, isMe = false))
+            } finally { _loadingSessions.update { it - session.id }; if (mutexLocked) aiMutexFor(session.id).unlock() }
         }
+        chatAiJobs[session.id] = job
     }
 
     fun recallMessage(msgId: Long) {
         viewModelScope.launch {
             repository.deleteMessage(msgId)
-            _messages.value = _messages.value.filter { it.id != msgId }
         }
     }
 
@@ -452,10 +457,8 @@ ${recentDialogues}
             if (DEBUG) Log.d("ChatVM", "recallSegment msgId=$msgId segIdx=$segmentIndex newContent=${newContent?.take(80)}")
             if (newContent == null) {
                 repository.deleteMessage(msgId)
-                _messages.value = _messages.value.filter { it.id != msgId }
             } else {
                 repository.updateMessageContent(msgId, newContent)
-                _messages.value = _messages.value.map { if (it.id == msgId) it.copy(content = newContent) else it }
             }
         }
     }
@@ -548,10 +551,46 @@ ${recentDialogues}
         val idx = _messages.value.indexOfFirst { it.id == msgId }
         if (idx < 0) return
         val userMsg = _messages.value.take(idx).lastOrNull { it.isMe } ?: return
-        viewModelScope.launch { repository.deleteMessage(msgId); repository.deleteMessage(userMsg.id) }
-        _messages.value = _messages.value.filter { it.id != msgId && it.id != userMsg.id }
-        _inputText.value = userMsg.content
-        sendMessage()
+        val mode = _currentMode.value
+        viewModelScope.launch {
+            // 插入占位消息（API 成功前不删原文）
+            val placeholderId = repository.getNextMessageId()
+            val placeholder = ChatMessage(id = placeholderId, sessionId = session.id, senderName = session.operatorName, content = "正在重新生成...", type = "text", mode = mode, isMe = false)
+            repository.sendMessage(session.id, placeholder)
+            _messages.value = _messages.value + placeholder
+            _inputText.value = userMsg.content
+
+            var mutexLocked = false
+            try {
+                aiMutexFor(session.id).lock()
+                mutexLocked = true
+                val apiMessages = buildApiMessages(userMsg.content)
+                val parsed = withTimeout(60_000) { sharedUtils.chatWithRetry(apiMessages) }
+                sharedUtils.trackTokens("private", apiMessages, parsed.toString())
+                val serializedJson = try { json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed) } catch (_: Exception) { parsed.toString() }
+                val rawJson = sharedUtils.aiService.cleanJson(serializedJson)
+                if (rawJson.isNotBlank()) {
+                    // 成功：删旧消息 + 占位，插入新 AI 回复
+                    repository.deleteMessage(msgId)
+                    repository.deleteMessage(userMsg.id)
+                    repository.deleteMessage(placeholderId)
+                    val newAiMsgId = repository.getNextMessageId()
+                    repository.sendMessage(session.id, ChatMessage(id = newAiMsgId, sessionId = session.id, senderName = session.operatorName, content = rawJson, type = "ai_json", mode = mode, isMe = false))
+                    _messages.value = _messages.value.filter { it.id != msgId && it.id != userMsg.id && it.id != placeholderId }
+                    if (parsed.emotion.isNotBlank() || parsed.location.isNotBlank() || parsed.state.isNotBlank()) {
+                        operatorStateUpdater.updateOperatorStatus(session.operatorId, parsed.location, parsed.state, parsed.emotion) { opId, newLoc, newAct, newEmo ->
+                            if (opId == _selectedOperator.value?.id) { _selectedOperator.value = _selectedOperator.value?.copy(location = newLoc, activity = newAct, emotion = newEmo) }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // 失败：删占位，保留原文，显示错误
+                repository.deleteMessage(placeholderId)
+                _messages.value = _messages.value.filter { it.id != placeholderId }
+                val errId = repository.getNextMessageId()
+                repository.sendMessage(session.id, ChatMessage(id = errId, sessionId = session.id, senderName = session.operatorName, content = classifyError(e), type = "text", mode = mode, isMe = false))
+            } finally { if (mutexLocked) aiMutexFor(session.id).unlock() }
+        }
     }
 
     fun continueAiMessage(msgId: Long) {
@@ -560,11 +599,71 @@ ${recentDialogues}
         if (idx < 0) return
         val mode = _currentMode.value
         viewModelScope.launch {
-            aiMutexFor(session.id).lock()
+            val aiMsgId = repository.getNextMessageId()
+            var mutexLocked = false
             try {
-                val aiMsgId = repository.getNextMessageId()
+                aiMutexFor(session.id).lock()
+                mutexLocked = true
                 val previousUser = _messages.value.take(idx).lastOrNull { it.isMe }
                 modeTransitionNotice = "【继续指令】请自然地继续说下去，不要复述或总结之前说过的话。"
+
+                // 深度分析模式（和 sendMessage 一致）
+                if (settings.dualModel && previousUser != null) {
+                    analysisGuidance = ""
+                    try {
+                        val profile = appState.userProfile.value
+                        val recentDialogues = _messages.value.takeLast(6).joinToString("\n") { m -> "${if (m.isMe) "用户" else "你"}：${m.content}" }
+                        val analysisPrompt = """你是罗德岛的资深心理顾问与战术分析员。你的唯一任务是分析对话并输出指定JSON。你只输出JSON，不参与任何对话。
+
+【任务】
+分析用户最新消息的深层意图、情绪和需求，并为干员的回应提供策略指导。
+
+【思考流程】
+1. 阅读最近对话，理解脉络
+2. 分析用户最新消息的字面意思和潜在意图
+3. 推断用户当前情绪状态
+4. 判断用户最核心的情感/行动需求
+5. 基于干员人设给出回复策略建议
+
+【输出字段解释】
+{
+  "intent_analysis": "用户字面意思与深层意图综合分析，50字内",
+  "user_emotion": "推断用户当前情绪状态，简洁自然描述",
+  "user_need": "用户核心情感/行动需求，可组合描述",
+  "suggested_emotion": "建议干员应表现的情绪，需贴合人设",
+  "reply_guidance": "回复策略指导，60字内，具体可操作",
+  "affection_mod": -2到2的整数，对用户的好感度即时波动
+}
+
+【内容规范】
+- intent_analysis 必须包含表面和深层含义
+- user_emotion 用生活化语言
+- user_need 必须明确用户想要什么回应
+- suggested_emotion 贴合具体干员人设
+- reply_guidance 给出可操作策略
+- affection_mod 必须是整数，综合判断用户态度
+
+以下是你需要分析的信息：
+当前系统时间：${sharedUtils.beijingSdf("HH:mm").format(java.util.Date())}
+用户最新消息：${previousUser.content}
+用户信息：${profile.nickname}，${profile.gender}
+干员：${session.operatorName}
+最近对话：
+${recentDialogues}
+当前模式：${_currentMode.value}
+
+请基于以上信息进行分析，直接输出JSON对象。
+{"intent_analysis":"","user_emotion":"","user_need":"","suggested_emotion":"","reply_guidance":"","affection_mod":0}"""
+                        val analysisResult = withTimeout(15_000) { sharedUtils.chat(listOf(AiMessage("system", analysisPrompt)), "Chat") }
+                        sharedUtils.trackTokens("private_analysis", analysisPrompt, analysisResult)
+                        val result = sharedUtils.aiService.cleanJson(analysisResult)
+                        val analysis: AnalysisResult? = try { json.decodeFromString<AnalysisResult>(result) } catch (_: Exception) { null }
+                        if (analysis != null) {
+                            analysisGuidance = "【用户意图分析】${analysis.intent_analysis}\n【用户情绪】${analysis.user_emotion}\n【核心需求】${analysis.user_need}\n【建议干员情绪】${analysis.suggested_emotion}\n【回复策略】${analysis.reply_guidance}\n【好感度修正】${analysis.affection_mod}"
+                        }
+                    } catch (_: Exception) { analysisGuidance = "" }
+                }
+
                 val apiMessages = buildApiMessages(previousUser?.content ?: "")
                 val parsed = withTimeout(60_000) { sharedUtils.chatWithRetry(apiMessages) }
                 sharedUtils.trackTokens("private", apiMessages, parsed.toString())
@@ -575,8 +674,8 @@ ${recentDialogues}
                         if (opId == _selectedOperator.value?.id) { _selectedOperator.value = _selectedOperator.value?.copy(location = newLoc, activity = newAct, emotion = newEmo) }
                     }
                 }
-            } catch (e: Exception) { /* 错误已通过占位消息的更新处理 */ }
-            finally { aiMutexFor(session.id).unlock(); modeTransitionNotice = "" }
+            } catch (e: Exception) { repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = classifyError(e), type = "text", mode = mode, isMe = false)) }
+            finally { if (mutexLocked) aiMutexFor(session.id).unlock(); modeTransitionNotice = "" }
         }
     }
 
@@ -639,7 +738,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
 严格输出纯JSON，不要添加任何其他文字、markdown标记或解释：
 {"suggestions":["第一条承接话题的回复","第二条关心的回复","第三条行动邀约的回复"]}
 """.trimIndent()
-                val rawResult = withTimeout(10_000) { sharedUtils.chat(listOf(AiMessage("system", prompt))) }
+                val rawResult = withTimeout(15_000) { sharedUtils.chat(listOf(AiMessage("system", prompt))) }
                 val base = rawResult.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
                 val results = try { json.decodeFromString<SuggestionResponse>(base).suggestions.filter { it.isNotBlank() } } catch (_: Exception) {
                     try { json.decodeFromString<SuggestionResponse>(base.replace("，", ",").replace("：", ":")).suggestions.filter { it.isNotBlank() } } catch (_: Exception) { emptyList() }
@@ -651,18 +750,11 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
 
     // === Private helpers ===
 
-    private fun updateAiMessage(msgId: Long, content: String) {
-        viewModelScope.launch {
-            updateMutex.withLock {
-                val now = System.currentTimeMillis()
-                if (now - lastDbUpdate < 100) delay(100 - (now - lastDbUpdate))
-                repository.updateMessageContent(msgId, content)
-                lastDbUpdate = System.currentTimeMillis()
-            }
-            if (_currentSession.value != null) {
-                _messages.value = _messages.value.map { if (it.id == msgId) it.copy(content = content) else it }
-            }
-        }
+    private fun classifyError(e: Exception): String = when {
+        e.message?.contains("401") == true || e.message?.contains("api key", true) == true -> "API Key 无效或已过期，请在设置中检查"
+        e.message?.contains("402") == true || e.message?.contains("insufficient", true) == true || e.message?.contains("quota") == true -> "API 余额不足，请充值后重试"
+        e is kotlinx.coroutines.TimeoutCancellationException || e.message?.contains("timeout", true) == true -> "响应超时，请重试"
+        else -> "对方网络不太好，没有收到信息"
     }
 
     private suspend fun buildApiMessages(userContent: String = ""): List<AiMessage> {
@@ -820,11 +912,11 @@ ${summaries}
                 val preferences = obj["preferences"]?.jsonArray?.mapNotNull { it.jsonPrimitive?.content }?.joinToString(",") ?: ""
                 val taboos = obj["taboos"]?.jsonArray?.mapNotNull { it.jsonPrimitive?.content }?.joinToString(",") ?: ""
                 if (impression.isNotBlank()) {
-                    repository.saveMemory(Memory(sessionId = session.id, operatorId = session.operatorId, type = MemoryType.LONG_TERM, content = impression, keywords = keywords, preferences = preferences, taboos = taboos, createdAt = System.currentTimeMillis(), expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L))
+                    repository.saveMemory(Memory(sessionId = session.id, operatorId = session.operatorId, type = MemoryType.LONG_TERM, content = impression, keywords = keywords, preferences = preferences, taboos = taboos, createdAt = System.currentTimeMillis()))
                 }
             } catch (_: Exception) {
                 if (rawResult.isNotBlank()) {
-                    repository.saveMemory(Memory(sessionId = session.id, operatorId = session.operatorId, type = MemoryType.LONG_TERM, content = rawResult, createdAt = System.currentTimeMillis(), expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L))
+                    repository.saveMemory(Memory(sessionId = session.id, operatorId = session.operatorId, type = MemoryType.LONG_TERM, content = rawResult, createdAt = System.currentTimeMillis()))
                 }
             }
         } catch (_: Exception) {}

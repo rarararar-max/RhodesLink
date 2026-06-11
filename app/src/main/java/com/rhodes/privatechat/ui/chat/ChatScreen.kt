@@ -27,6 +27,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -105,11 +106,11 @@ fun ChatScreen(
     var bgUri by remember { mutableStateOf<String?>(settings.getString("bg_${op.id}", "")) }
     var cropTarget by remember { mutableStateOf<Uri?>(null) }
     val bgPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> cropTarget = uri }
-    var showBgReset by remember { mutableStateOf(false) }
-    var showExport by remember { mutableStateOf(false) }
-    var showClearConfirm by remember { mutableStateOf(false) }
+    var showBgReset by rememberSaveable { mutableStateOf(false) }
+    var showExport by rememberSaveable { mutableStateOf(false) }
+    var showClearConfirm by rememberSaveable { mutableStateOf(false) }
     val showModePicker = remember { mutableStateOf(false) }
-    var showPropShop by remember { mutableStateOf(false) }
+    var showPropShop by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -152,7 +153,7 @@ fun ChatScreen(
                     text = inputText,
                     onTextChange = { viewModel.updateInputText(it) },
                     onSend = { viewModel.sendMessage() },
-                    enabled = true,
+                    enabled = !isLoading,
                     currentMode = currentMode,
                     onModeChange = { viewModel.setMode(it) },
                     placeholder = if (hypnosisRounds > 0) "催眠中 · 剩余${hypnosisRounds}轮" else "消息...",
@@ -278,7 +279,8 @@ private fun PropShopDialog(
                         Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(PrimaryContainer).clickable {
                             if (balance < PROP_PRICE) { Toast.makeText(context, "余额不足", Toast.LENGTH_SHORT).show(); return@clickable }
                             if (viewModel.mindReadRounds.value > 0) { Toast.makeText(context, "读心效果已生效中", Toast.LENGTH_SHORT).show(); return@clickable }
-                            viewModel.buyProp("看穿眼镜", context)
+                            val err = viewModel.buyProp("看穿眼镜", context)
+                            if (err != null) { Toast.makeText(context, err, Toast.LENGTH_SHORT).show(); return@clickable }
                             loading = true
                             scope.launch {
                                 try {

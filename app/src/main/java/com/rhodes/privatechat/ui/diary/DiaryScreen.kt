@@ -93,6 +93,7 @@ fun DiaryScreen(
 
     // 每次进入或切换干员时从 DB 加载已有日记
     LaunchedEffect(selectedName) {
+        isGenerating = false
         diaryContent = null
         val opId = diaryOps.find { it.name == selectedName }?.id ?: return@LaunchedEffect
         val cal = Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai"))

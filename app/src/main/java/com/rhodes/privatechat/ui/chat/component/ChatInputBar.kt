@@ -78,7 +78,7 @@ fun ChatInputBar(
 ) {
     var showInspire by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
-    var localSuggestions by remember(suggestions, text) { mutableStateOf(suggestions) }
+    var localSuggestions by remember(suggestions) { mutableStateOf(suggestions) }
 
     Column(modifier = modifier.fillMaxWidth().background(Surface)) {
         // 顶部指示器（如催眠状态）

@@ -854,28 +854,6 @@ ${summaries}
     private fun relationshipGroupDesc(aName: String, bName: String, type: com.rhodes.privatechat.shared.model.RelationshipType): String =
         sharedUtils.relationshipGroupDesc(aName, bName, type)
 
-    private suspend fun generateDailySummary(dayBegin: java.util.Date) {
-        try {
-            val dayEnd = java.util.Date(dayBegin.time + 86_400_000)
-            val startMs = dayBegin.time; val endMs = dayEnd.time
-            val allMsgs = repository.getMessagesInRange(startMs, endMs)
-            if (allMsgs.size < 4) return
-            val profile = getUserProfile()
-            val text = allMsgs.joinToString("\n") { "${it.senderName}：${it.content.take(60)}" }
-            val dateStr = beijingSdf("yyyy年MM月dd日").format(dayBegin)
-            val prompt = "请总结${dateStr}的聊天记录，生成50-150字的每日摘要。直接输出纯文本。\n${text}"
-            val content = withTimeout(15_000) { chat(listOf(AiMessage("system", prompt)), "Memory") }.trim()
-            trackTokens("memory", prompt, content)
-            if (content.isNotBlank()) {
-                repository.saveMemory(Memory(
-                    sessionId = "daily_${dateStr}", operatorId = "daily",
-                    type = MemoryType.DAILY, content = content,
-                    expiresAt = System.currentTimeMillis() + intPref("clean_days", 30) * 86_400_000L
-                ))
-            }
-        } catch (_: Exception) {}
-    }
-
     private suspend fun chat(messages: List<AiMessage>, logTag: String = "Chat"): String =
         sharedUtils.chat(messages, logTag)
 
@@ -1299,7 +1277,7 @@ ${summaries}
             val momentId = repository.insertMoment(moment)
             refreshMomentsNow()
             // 创建动态锚点（仅动态发布者自己 + 随机3个围观干员）
-            val anchorOps = listOf(moment.operatorId) + _operators.value.filter { it.id != moment.operatorId }.shuffled().take(3).map { it.id }
+            val anchorOps = _operators.value.filter { it.id != "user" }.shuffled().take(3).map { it.id }
             for (opId in anchorOps.distinct()) {
                 repository.saveAnchor(com.rhodes.privatechat.shared.model.MemoryAnchor(
                     sessionId = "anchor_${System.currentTimeMillis()}",

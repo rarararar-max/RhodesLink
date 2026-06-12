@@ -40,8 +40,6 @@ class DataViewModel(
             val now = System.currentTimeMillis()
             val msgDays = settings.cleanDaysMessages
             repository.deleteOldMessages(now - msgDays * 86400000L)
-            val anchorDays = settings.cleanDaysAnchors
-            repository.deleteOldAnchors(now - anchorDays * 86400000L)
             val diaryDays = settings.cleanDaysDiaries
             repository.deleteOldDiaries(now - diaryDays * 86400000L)
             val momentDays = settings.cleanDaysMoments

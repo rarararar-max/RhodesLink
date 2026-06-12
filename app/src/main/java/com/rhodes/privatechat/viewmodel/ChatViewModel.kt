@@ -819,7 +819,15 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         val last = settings.dailySummaryDate
         if (today == last) return
         settings.dailySummaryDate = today
-        viewModelScope.launch { generateDailySummary(java.util.Date(System.currentTimeMillis() - 86_400_000)) }
+        viewModelScope.launch {
+            val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
+            cal.add(java.util.Calendar.DAY_OF_MONTH, -1)
+            cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+            cal.set(java.util.Calendar.MINUTE, 0)
+            cal.set(java.util.Calendar.SECOND, 0)
+            cal.set(java.util.Calendar.MILLISECOND, 0)
+            generateDailySummary(cal.time)
+        }
     }
 
     private suspend fun generateDailySummary(dayBegin: java.util.Date) {
@@ -840,6 +848,10 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         try {
             val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
             cal.add(java.util.Calendar.DAY_OF_MONTH, -1)
+            cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+            cal.set(java.util.Calendar.MINUTE, 0)
+            cal.set(java.util.Calendar.SECOND, 0)
+            cal.set(java.util.Calendar.MILLISECOND, 0)
             val dayBegin = cal.time
             val dayEnd = java.util.Date(dayBegin.time + 86_400_000)
             val session = repository.getSessionByOperator(operatorId) ?: return

@@ -15,9 +15,6 @@ SELECT * FROM memory_anchors WHERE operatorId = ? AND isPrivate = 0 AND expiresA
 getAllAnchors:
 SELECT * FROM memory_anchors WHERE operatorId = ? AND expiresAt > ? ORDER BY createdAt DESC;
 
-getRecentAnchors:
-SELECT * FROM memory_anchors WHERE sessionId = ? AND type = ? AND createdAt > ? ORDER BY createdAt DESC;
-
 getAnchorCount:
 SELECT COUNT(*) FROM memory_anchors;
 
@@ -35,7 +32,3 @@ enforceAnchorRetain:
 DELETE FROM memory_anchors WHERE operatorId = ? AND id NOT IN (
     SELECT id FROM memory_anchors WHERE operatorId = ? ORDER BY createdAt DESC LIMIT ?
 );
-
-insertAllAnchors:
-INSERT OR REPLACE INTO memory_anchors(sessionId, operatorId, type, content, isPrivate, createdAt, expiresAt)
-VALUES (?, ?, ?, ?, ?, ?, ?);

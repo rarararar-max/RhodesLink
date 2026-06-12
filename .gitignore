@@ -1,19 +1,32 @@
-*.iml
+# Kotlin
+.kotlin/
+
+# Gradle
 .gradle
-/local.properties
+
+# IDE
+*.iml
 /.idea/caches
 /.idea/libraries
 /.idea/modules.xml
 /.idea/workspace.xml
 /.idea/navEditor.xml
 /.idea/assetWizardSettings.xml
+/.idea/.name
+/.idea/deploymentTargetSelector.xml
+/.idea/deviceManager.xml
+/.idea/inspectionProfiles/
+/.idea/codeStyles/
+.idea
 .DS_Store
+
+# 构建
 /build
-shared/build
+*/build
 /captures
 .externalNativeBuild
 .cxx
-local.properties
+/local.properties
 
 # 构建产物
 /apk-output/

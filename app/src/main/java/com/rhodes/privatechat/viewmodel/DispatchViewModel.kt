@@ -5,6 +5,7 @@ import com.rhodes.privatechat.shared.model.AnchorType
 import com.rhodes.privatechat.shared.model.DispatchRecord
 import com.rhodes.privatechat.shared.model.DispatchEnd
 import com.rhodes.privatechat.shared.model.MemoryAnchor
+import com.rhodes.privatechat.util.DebugLogger
 import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.shared.network.AIService
 import com.rhodes.privatechat.shared.model.AiMessage
@@ -42,16 +43,26 @@ class DispatchViewModel(
     private val finishingIds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private val generatingSegments = mutableSetOf<String>()
 
-    // 段落辅助函数
+    // 段落辅助函数（按固定标记分割，避免AI正文中的\n\n干扰）
     private fun parseSegmentCount(logChain: String): Int {
         if (logChain.isBlank()) return 0
-        return logChain.split("\n\n").filter { it.isNotBlank() }.size
+        val markers = listOf("【开局】", "【第", "【结局】", "【已中断】")
+        var count = 0
+        var pos = 0
+        while (pos < logChain.length) {
+            val found = markers.mapNotNull { m ->
+                val idx = logChain.indexOf(m, pos)
+                if (idx >= 0) idx to m else null
+            }.minByOrNull { it.first }
+            if (found == null) break
+            count++
+            pos = found.first + found.second.length
+        }
+        return count
     }
 
     private suspend fun generateDispatchProgressSuspend(dispatchId: String, taskType: String, budget: Int, operatorIds: List<String>, roundNum: Int, logSummary: String, logChain: String): Boolean {
         val ops = operatorIds.mapNotNull { repository.getOperator(it) }
-        val names = ops.joinToString("、") { it.name }
-        val memberCount = ops.size
         val profiles = ops.joinToString("\n") { "${it.name}：${it.description}" }
         val budgetLevel = when { budget < 300 -> "低"; budget < 800 -> "中"; else -> "高" }
         repeat(3) { attempt ->
@@ -65,13 +76,13 @@ class DispatchViewModel(
 【派遣信息】
 任务类型：${taskType}
 预算等级：${budgetLevel}（低预算事件倾向危险和损失，高预算倾向顺利和意外收获）
-前情提要：${logSummary.take(100)}
+前情提要：${logSummary.take(200)}
 
 【成员档案】
 ${profiles}
 
 【写作要求】
-- ${dMn}~${dMx}字，第三人称叙事，承接前情，剧情连贯
+- ${dMn}~${dMx + 100}字，第三人称叙事，承接前情，剧情连贯
 - 本轮必须出现一个具体事件：遭遇敌人、发现遗迹、天气突变、物资丢失、队员争执等
 - 所有成员必须被提及，名字和人设必须与前文一致
 
@@ -79,17 +90,24 @@ ${profiles}
 - 全文使用角色名字称呼角色，禁止使用"我""我的""我们""咱们"
 - 角色之间的对话中用"对方""博士""队长"等第三人称称呼
 
+【格式约束】
+- 只输出叙事文本，不要输出JSON、格式标记、Markdown
+
 直接输出过程叙事。
 """.trimIndent()
+                DebugLogger.log("Dispatch/AI", "过程段请求: id=$dispatchId, 第${roundNum}轮, prompt长度=${prompt.length}")
                 val rawResult = withTimeout(20_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Dispatch") }
                 sharedUtils.trackTokens("dispatch", prompt, rawResult)
                 val newLog = logChain + "\n\n【第${roundNum}轮】" + rawResult
                 repository.updateDispatch(dispatchId, newLog, "active")
+                DebugLogger.log("Dispatch/AI", "过程段成功: id=$dispatchId, 第${roundNum}轮, ${rawResult.length}字")
                 return true
             } catch (e: Exception) {
+                DebugLogger.log("Dispatch/AI", "过程段异常: id=$dispatchId, attempt=${attempt + 1}, ${e.message?.take(100)}")
                 if (attempt < 2) delay(1000L * (attempt + 1))
             }
         }
+        DebugLogger.log("Dispatch/AI", "过程段3次失败: id=$dispatchId")
         return false
     }
 
@@ -104,7 +122,17 @@ ${profiles}
         Log.i(TAG, "[startDispatch] 启动派遣 id=$id task=$task duration=${duration}h budget=$budget segments=$totalSeg interval=${interval}ms ops=${operatorIds.size}")
         scope.launch {
             try {
-                // 1. 插入 generating 记录，立即导航
+                // 1. 先扣预算（防止崩溃后记录残留但预算未扣）
+                val balance = settings.lmb
+                if (balance < budget) {
+                    Log.w(TAG, "[startDispatch] 余额不足，取消")
+                    startingLock.set(false); generatingDispatchId = null
+                    return@launch
+                }
+                settings.lmb = balance - budget
+                DebugLogger.log("Dispatch", "已扣除预算: id=$id, budget=$budget, 余额=${settings.lmb}")
+
+                // 2. 插入 generating 记录，立即导航
                 repository.insertDispatch(DispatchRecord(
                     id = id, taskType = task, durationHours = duration,
                     budget = budget, netProfit = 0, operatorIds = operatorIds.joinToString(","),
@@ -114,14 +142,7 @@ ${profiles}
                 Log.d(TAG, "[startDispatch] 已插入generating记录，导航到进度页")
                 onSuccess()
 
-                // 2. 扣除预算、更新干员状态
-                val balance = settings.lmb
-                if (balance < budget) {
-                    Log.w(TAG, "[startDispatch] 余额不足，取消")
-                    repository.updateDispatch(id, "", "cancelled", System.currentTimeMillis(), 0)
-                    return@launch
-                }
-                settings.lmb = balance - budget
+                // 3. 更新干员状态
                 for (opId in operatorIds) {
                     val op = repository.getOperator(opId) ?: continue
                     repository.updateOperator(op.copy(location = "外出", activity = task, emotion = "专注"))
@@ -164,21 +185,28 @@ ${profiles}
 
                 // 生成结局叙事（失败不影响结算）
                 var netProfit = d.netProfit
+                var reward = 0
                 if (d.logChain.isNotBlank()) {
-                    val endNet = generateDispatchEndSuspend(dispatchId, d.taskType, d.durationHours, d.budget, d.operatorIds.split(","))
-                    if (endNet != 0) netProfit = endNet
+                    val result = generateDispatchEndSuspend(dispatchId, d.taskType, d.durationHours, d.budget, d.operatorIds.split(","))
+                    netProfit = result.first; reward = result.second
+                } else {
+                    DebugLogger.log("Dispatch", "logChain为空，跳过结局生成: id=$dispatchId")
                 }
 
-                // 重新读取，结算
+                // 重新读取，结算（预算已在开始时扣除，这里只加 currency_reward）
                 val updated = repository.getDispatch(dispatchId) ?: d
                 repository.updateDispatch(dispatchId, updated.logChain, "finished", System.currentTimeMillis(), netProfit)
                 Log.d(TAG, "[finishDispatch] 已更新为finished")
                 refreshAllOperatorStatus()
                 val balance = settings.lmb
-                settings.lmb = balance + netProfit
-                Log.d(TAG, "[finishDispatch] 入账 $netProfit，余额 ${balance + netProfit}")
+                val addAmount = if (reward > 0) reward else netProfit + d.budget
+                settings.lmb = balance + addAmount
+                DebugLogger.log("Dispatch", "入账: id=$dispatchId, add=$addAmount (reward=$reward netProfit=$netProfit), 余额=${settings.lmb}")
                 val profile = getUserProfile()
-                val items = try { val arr = Json.parseToJsonElement(updated.items) as JsonArray; arr.map { it.jsonPrimitive.content }.take(3).joinToString("、") } catch (_: Exception) { "未知" }
+                val items = try {
+                    val arr = Json.parseToJsonElement(updated.items) as? JsonArray
+                    if (arr != null && arr.isNotEmpty()) arr.map { it.jsonPrimitive.content }.take(3).joinToString("、") else "无"
+                } catch (_: Exception) { "未知" }
                 val allOps = appState.operators.value
                 val memberIds = updated.operatorIds.split(",").map { it.trim() }.filter { it.isNotBlank() }
                 val memberNames = memberIds.mapNotNull { id -> allOps.find { it.id == id || it.name == id }?.name }.take(3).joinToString("、")
@@ -191,12 +219,12 @@ ${profiles}
         }
     }
 
-    private suspend fun generateDispatchEndSuspend(dispatchId: String, taskType: String, duration: Int, budget: Int, operatorIds: List<String>): Int {
+    private suspend fun generateDispatchEndSuspend(dispatchId: String, taskType: String, duration: Int, budget: Int, operatorIds: List<String>): Pair<Int, Int> {
         val ops = operatorIds.mapNotNull { repository.getOperator(it) }
         val names = ops.joinToString("、") { it.name }
         val memberCount = ops.size
         val profiles = ops.joinToString("\n") { "${it.name}：${it.description}" }
-        val dispatch = repository.getDispatch(dispatchId) ?: return 0
+        val dispatch = repository.getDispatch(dispatchId) ?: return Pair(0, 0)
         repeat(3) { attempt ->
             try {
                 val dMn = settings.dispatchMinChars; val dMx = settings.dispatchMaxChars
@@ -216,7 +244,7 @@ ${dispatch.logChain.take(200)}
 ${profiles}
 
 【写作要求】
-- ${dMn}~${dMx}字结局叙事
+- ${dMn}~${dMx + 50}字结局叙事
 - 描写小队返回罗德岛的场景：疲惫、收获、伤病、意外发现
 - 结局有情绪收束：疲惫后的欣慰、失落中的意外收获、一个被当宝贝捡回来的废品
 - 描述本次任务获得的所有物品
@@ -242,23 +270,35 @@ ${profiles}
 
 直接输出JSON对象。
 """.trimIndent()
+                DebugLogger.log("Dispatch/AI", "结局请求: id=$dispatchId")
                 val rawResult = withTimeout(20_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Dispatch") }
                 sharedUtils.trackTokens("dispatch", prompt, rawResult)
                 val cleaned = sharedUtils.aiService.cleanJson(rawResult.trim())
-                val ending = try { json.decodeFromString<DispatchEnd>(cleaned) } catch (_: Exception) { null }
+                val ending = try { json.decodeFromString<DispatchEnd>(cleaned) } catch (_: Exception) {
+                    DebugLogger.log("Dispatch/AI", "结局JSON解析失败: ${rawResult.take(100)}")
+                    null
+                }
                 val reward = (ending?.currency_reward ?: 0).coerceIn(0, budget * 10)
                 val netP = reward - budget
                 val newLog = dispatch.logChain + "\n\n【结局】" + (ending?.ending_content ?: rawResult.take(500))
-                repository.updateDispatch(dispatchId, newLog, "active")
-                Log.i(TAG, "[generateDispatchEndSuspend] 成功 reward=$reward netProfit=$netP")
-                return netP
+                val itemsJson = if (ending?.items != null && ending.items.isNotEmpty()) json.encodeToString(ending.items) else "[]"
+                repository.insertDispatch(DispatchRecord(
+                    id = dispatchId, taskType = taskType, durationHours = duration,
+                    budget = budget, netProfit = netP, operatorIds = operatorIds.joinToString(","),
+                    logChain = newLog, status = "active", startTime = dispatch.startTime,
+                    totalSegments = dispatch.totalSegments, segmentInterval = dispatch.segmentInterval, items = itemsJson
+                ))
+                Log.i(TAG, "[generateDispatchEndSuspend] 成功 reward=$reward netProfit=$netP items=${ending?.items}")
+                DebugLogger.log("Dispatch/AI", "结局成功: reward=$reward, items=${ending?.items}")
+                return Pair(netP, reward)
             } catch (e: Exception) {
+                DebugLogger.log("Dispatch/AI", "结局异常: attempt=${attempt + 1}, ${e.message?.take(100)}")
                 Log.w(TAG, "[generateDispatchEndSuspend] attempt=${attempt + 1} 异常: ${e.message}")
                 if (attempt < 2) delay(1000L * (attempt + 1))
             }
         }
         Log.e(TAG, "[generateDispatchEndSuspend] 3次尝试全部失败")
-        return 0
+        return Pair(0, 0)
     }
 
     fun cancelDispatch(dispatchId: String) {
@@ -367,7 +407,10 @@ ${profiles}
             val startTime = existingRecord?.startTime ?: System.currentTimeMillis()
             val ok = generateDispatchStartSuspend(dispatchId, taskType, budget, operatorIds, totalSeg, interval, startTime)
             if (!ok) {
-                Log.e(TAG, "[generateDispatchStart] 生成失败，标记cancelled")
+                Log.e(TAG, "[generateDispatchStart] 生成失败，退款并标记cancelled")
+                val cur = settings.lmb
+                settings.lmb = cur + budget
+                DebugLogger.log("Dispatch", "recovery开局失败退款: id=$dispatchId, budget=$budget")
                 repository.getDispatch(dispatchId)?.let { d ->
                     if (d.status == "generating") {
                         repository.updateDispatch(dispatchId, "\n\n【生成失败，已取消】", "cancelled", System.currentTimeMillis(), 0)

@@ -4,6 +4,7 @@ import android.util.Log
 import com.rhodes.privatechat.shared.model.MomentComment
 import com.rhodes.privatechat.shared.model.MomentLike
 import com.rhodes.privatechat.shared.data.ChatRepository
+import com.rhodes.privatechat.util.DebugLogger
 import com.rhodes.privatechat.viewmodel.shared.AppStateHolder
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.viewmodel.shared.UserProfile
@@ -34,15 +35,24 @@ class MomentsViewModel(
 
     fun likeMoment(momentId: Long, operatorId: String, operatorName: String) {
         scope.launch {
-            likeMutex.withLock {
-                val existing = repository.getLike(momentId, operatorId)
-                if (existing == null) {
-                    repository.insertLike(MomentLike(momentId = momentId, operatorId = operatorId, operatorName = operatorName, createdAt = System.currentTimeMillis()))
-                } else {
-                    repository.deleteLike(momentId, operatorId)
+            try {
+                likeMutex.withLock {
+                    val existing = repository.getLike(momentId, operatorId)
+                    if (existing == null) {
+                        repository.insertLike(MomentLike(momentId = momentId, operatorId = operatorId, operatorName = operatorName, createdAt = System.currentTimeMillis()))
+                        DebugLogger.log("Moment", "点赞: momentId=$momentId, user=$operatorName")
+                    } else {
+                        repository.deleteLike(momentId, operatorId)
+                        DebugLogger.log("Moment", "取消点赞: momentId=$momentId, user=$operatorName")
+                    }
+                    val count = repository.getLikeCount(momentId)
+                    repository.updateLikeCount(momentId, count)
                 }
-                val count = repository.getLikeCount(momentId)
-                repository.updateLikeCount(momentId, count)
+                val fresh = withContext(Dispatchers.Default) { repository.getAllMomentsSync() }
+                appState.refreshMoments(fresh)
+            } catch (e: Exception) {
+                DebugLogger.log("Moment/ERROR", "likeMoment: ${e.message}")
+                if (DEBUG) Log.e("MomentsVM", "likeMoment error: ${e.message}", e)
             }
         }
     }

@@ -102,18 +102,35 @@ fun DispatchProgressScreen(
 
         fun parseSegmentsFromLog(log: String): List<Map<String, Any?>> {
             if (log.isBlank()) return emptyList()
-            return try {
-                val arr = Json.parseToJsonElement(log) as? JsonArray
-                if (arr != null) {
-                    arr.map { el ->
-                        val obj = el.jsonObject
-                        mapOf("type" to (obj["type"]?.jsonPrimitive?.content ?: "progress"), "content" to (obj["content"]?.jsonPrimitive?.content ?: ""))
-                    }
-                } else {
-                    log.split("\n\n").filter { it.isNotBlank() }.map { mapOf("type" to "progress", "content" to it.trim()) }
+            val markers = listOf("【开局】", "【第", "【结局】", "【已中断】")
+            val rawSegments = mutableListOf<String>()
+            var pos = 0
+            while (pos < log.length) {
+                val next = markers.mapNotNull { m ->
+                    val idx = log.indexOf(m, pos)
+                    if (idx >= 0) idx to m else null
+                }.minByOrNull { it.first }
+                if (next == null) break
+                val start = next.first
+                if (start > pos) rawSegments.add(log.substring(pos, start).trim())
+                pos = start
+                val end = markers.mapNotNull { m ->
+                    val idx = log.indexOf(m, start + next.second.length)
+                    if (idx >= 0) idx else null
+                }.minOrNull() ?: log.length
+                rawSegments.add(log.substring(start, end).trim())
+                pos = end
+            }
+            if (pos < log.length) rawSegments.add(log.substring(pos).trim())
+            return rawSegments.filter { it.isNotBlank() }.map { seg ->
+                val type = when {
+                    seg.startsWith("【结局】") -> "ending"
+                    seg.startsWith("【开局】") || seg.startsWith("【第") -> "progress"
+                    seg.startsWith("【已中断】") -> "cancelled"
+                    else -> "progress"
                 }
-            } catch (_: Exception) {
-                log.split("\n\n").filter { it.isNotBlank() }.map { mapOf("type" to "progress", "content" to it.trim()) }
+                val content = seg.replace(Regex("^【[^】]+】"), "").trim()
+                mapOf("type" to type, "content" to content)
             }
         }
 

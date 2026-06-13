@@ -76,6 +76,7 @@ class ChatRepository(wrapper: DatabaseWrapper) {
     suspend fun saveMemory(memory: Memory) = memories.saveMemory(memory)
     suspend fun getAllLongTermImpressions() = memories.getAllLongTermImpressions()
     suspend fun getLatestDaily() = memories.getLatestDaily()
+    suspend fun getLatestDailyBySession(sessionId: String) = memories.getLatestDailyBySession(sessionId)
     suspend fun getLatestPrivateDaily(operatorId: String) = memories.getLatestPrivateDaily(operatorId)
     suspend fun enforceMemoryRetain(sessionId: String, keepCount: Int) = memories.enforceMemoryRetain(sessionId, keepCount)
     suspend fun deleteAllImpressions() = memories.deleteAllImpressions()

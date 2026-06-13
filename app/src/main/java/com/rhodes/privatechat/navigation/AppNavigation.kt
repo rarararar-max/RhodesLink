@@ -173,7 +173,8 @@ private fun SettingsTabContent(navigator: Navigator) {
         onChatParams = { navigator.push(ChatSettingsRoute) },
         onDataManage = { navigator.push(DataManagementRoute) },
         onPermissions = { navigator.push(PermissionsRoute) },
-        onCredits = { navigator.push(CreditsRoute) }
+        onCredits = { navigator.push(CreditsRoute) },
+        onDebugLog = { navigator.push(DebugLogRoute) }
     )
 }
 

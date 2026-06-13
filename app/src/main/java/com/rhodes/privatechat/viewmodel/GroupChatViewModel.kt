@@ -6,6 +6,7 @@ import com.rhodes.privatechat.shared.model.ChatMessage
 import com.rhodes.privatechat.shared.model.ChatSession
 import com.rhodes.privatechat.shared.model.MemoryAnchor
 import com.rhodes.privatechat.shared.model.Operator
+import com.rhodes.privatechat.util.DebugLogger
 import com.rhodes.privatechat.shared.model.RelationshipType
 import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.shared.network.AIService
@@ -68,11 +69,12 @@ class GroupChatViewModel(
     private val groupAiJobs = ConcurrentHashMap<String, Job>()
 
     fun setCurrentGroup(groupSessionId: String) {
+        DebugLogger.log("GroupChat", "设置当前群聊: $groupSessionId")
         _currentGroupId.value = groupSessionId
         markSessionRead(groupSessionId)
         groupMessagesJob?.cancel()
         groupMessagesJob = scope.launch {
-            repository.getMessages(groupSessionId).collect { _groupMessages.value = it }
+            repository.getMessages(groupSessionId).collect { _groupMessages.value = it; DebugLogger.log("GroupChat/DB", "群消息刷新, count=${it.size}") }
         }
     }
 
@@ -237,6 +239,7 @@ class GroupChatViewModel(
                     id = userMsgId, sessionId = groupSessionId,
                     senderName = "我", content = text, type = "text", mode = mode, isMe = true
                 ))
+                DebugLogger.log("GroupChat/DB", "群用户消息已写入, session=$groupSessionId, id=$userMsgId, text=${text.take(50)}")
                 resetAutoGroupChatTimer(groupSessionId)
                 unhideSession(groupSessionId)
                 val today = sharedUtils.beijingSdf("yyyyMMdd").format(java.util.Date())
@@ -253,7 +256,11 @@ class GroupChatViewModel(
                 mutexLocked = true
                 _groupLoading.value = true
                 groupAiJobs[groupSessionId] = coroutineContext[Job]!!
-                val session = repository.getSession(groupSessionId) ?: run { _groupLoading.value = false; if (mutexLocked) { mutexFor(groupSessionId).unlock(); mutexLocked = false }; return@launch }
+                val session = repository.getSession(groupSessionId) ?: run {
+                    DebugLogger.log("GroupChat", "⚠️ 群session不存在: $groupSessionId")
+                    _groupLoading.value = false; if (mutexLocked) { mutexFor(groupSessionId).unlock(); mutexLocked = false }; return@launch
+                }
+                DebugLogger.log("GroupChat", "群session加载成功: ${session.operatorName}, members=${session.members}")
                 val memberIds = session.members.split(",").map { it.trim() }.filter { it.isNotBlank() }
                 val allOps = appState.operators.value
                 val opsById = allOps.associateBy { it.id }
@@ -307,7 +314,7 @@ class GroupChatViewModel(
                     "USER_BIO" to profile.bio.ifBlank { "无" }, "RELATION_HINTS" to relationHints,
                     "MEMBER_PRIVATE_CONTEXT" to memberPrivateContext,
                     "SHORT_TERM_SUMMARY" to groupSummary, "GROUP_SUMMARY" to groupSummary,
-                    "DAILY_SUMMARY" to (repository.getLatestDaily()?.content ?: "无"),
+                    "DAILY_SUMMARY" to ((repository.getLatestDailyBySession(groupSessionId) ?: repository.getLatestDaily())?.content ?: "无"),
                     "LONG_TERM_IMPRESSION" to longTermImpression,
                     "MEMBER_PROFILES" to memberProfiles.toString(),
                     "GROUP_NAR_SEG_MIN" to settings.groupNarSegMin.toString(),
@@ -392,6 +399,8 @@ class GroupChatViewModel(
                         val freshMsgs = repository.getMessagesSync(gs.id)
                         generateShortTermSummary(gs, freshMsgs)
                         sessionMessageCounter[groupSessionId] = 0
+                        // 生成群聊每日摘要（昨日消息 >1 条时）
+                        generateGroupDailySummary(groupSessionId, gs.operatorName)
                     }
                 }
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
@@ -438,6 +447,35 @@ class GroupChatViewModel(
         } catch (_: Exception) {}
 
         return emptyList()
+    }
+
+    private suspend fun generateGroupDailySummary(groupSessionId: String, groupName: String) {
+        try {
+            val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
+            cal.add(java.util.Calendar.DAY_OF_MONTH, -1)
+            cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+            cal.set(java.util.Calendar.MINUTE, 0)
+            cal.set(java.util.Calendar.SECOND, 0)
+            cal.set(java.util.Calendar.MILLISECOND, 0)
+            val dayBegin = cal.time
+            val dayEnd = java.util.Date(dayBegin.time + 86_400_000)
+            val msgs = repository.getMessagesInRange(dayBegin.time, dayEnd.time)
+                .filter { it.sessionId == groupSessionId }
+            if (msgs.size <= 1) return
+            val text = msgs.joinToString("\n") { "${it.senderName}：${it.content.take(60)}" }
+            val dateStr = sharedUtils.beijingSdf("yyyy年MM月dd日").format(dayBegin)
+            val prompt = "请总结${dateStr}「${groupName}」的聊天记录，生成50-150字的每日摘要。直接输出纯文本。\n${text}"
+            val content = withTimeout(15_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Memory") }.trim()
+            if (content.isNotBlank()) {
+                repository.saveMemory(com.rhodes.privatechat.shared.model.Memory(
+                    sessionId = groupSessionId, operatorId = groupSessionId,
+                    type = com.rhodes.privatechat.shared.model.MemoryType.DAILY, content = content,
+                    createdAt = System.currentTimeMillis(),
+                    expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L
+                ))
+                DebugLogger.log("GroupChat", "群聊每日摘要已生成: $groupSessionId")
+            }
+        } catch (_: Exception) {}
     }
 
     private suspend fun getGroupRelationshipContext(members: List<Operator>): String {

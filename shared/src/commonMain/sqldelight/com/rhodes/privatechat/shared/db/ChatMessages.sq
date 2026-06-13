@@ -32,10 +32,10 @@ getMessageCount:
 SELECT COUNT(*) FROM chat_messages;
 
 getMessageCountPerSender:
-SELECT senderName, COUNT(*) AS cnt FROM chat_messages WHERE isMe = 0 AND senderName != '' AND senderName != '系统' GROUP BY senderName ORDER BY cnt DESC;
+SELECT senderName, COUNT(*) AS cnt FROM chat_messages WHERE isMe = 0 AND senderName != '' AND senderName != '系统' AND sessionId NOT LIKE 'group_%' GROUP BY senderName ORDER BY cnt DESC;
 
 getMessageCountPerSenderSince:
-SELECT senderName, COUNT(*) AS cnt FROM chat_messages WHERE isMe = 0 AND senderName != '' AND senderName != '系统' AND timestamp >= ? GROUP BY senderName ORDER BY cnt DESC;
+SELECT senderName, COUNT(*) AS cnt FROM chat_messages WHERE isMe = 0 AND senderName != '' AND senderName != '系统' AND sessionId NOT LIKE 'group_%' AND timestamp >= ? GROUP BY senderName ORDER BY cnt DESC;
 
 getMessagesInRange:
 SELECT * FROM chat_messages WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp ASC;

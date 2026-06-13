@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.HorizontalDivider
@@ -56,6 +57,7 @@ fun SettingsScreen(
     onProfile: () -> Unit = {}, onModel: () -> Unit = {},
     onChatParams: () -> Unit = {}, onDataManage: () -> Unit = {},
     onPermissions: () -> Unit = {}, onCredits: () -> Unit = {},
+    onDebugLog: () -> Unit = {},
     userNickname: String = "博士", userGender: String = "", userAvatarUri: String = "", modifier: Modifier = Modifier
 ) {
     val settings: SettingsRepository = koinInject()
@@ -92,6 +94,7 @@ fun SettingsScreen(
             SettingItem(SettingEntry(Icons.Default.AutoFixHigh, "数据管理", "统计信息与自动清理", iconColor = Color(0xFF8B5CF6)), onClick = onDataManage)
             SettingItem(SettingEntry(Icons.Default.Build, "权限管理", "干员主动消息与动态权限", iconColor = Color(0xFFFF9800)), onClick = onPermissions)
             SettingItem(SettingEntry(Icons.Default.Favorite, "感谢", "支持股东名单", iconColor = Primary), onClick = onCredits)
+            SettingItem(SettingEntry(Icons.Default.BugReport, "调试日志", "查看详细运行日志", iconColor = Color(0xFF607D8B)), onClick = onDebugLog)
         }
     }
     }

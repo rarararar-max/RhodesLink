@@ -22,22 +22,31 @@ class SharedUtils(
     // === AI 调用 ===
 
     /** 非流式聊天：发送请求，等待完整响应后返回 */
-    suspend fun chat(messages: List<AiMessage>, logTag: String = "Chat"): String {
+    suspend fun chat(messages: List<AiMessage>, logTag: String = "Chat", category: String = ""): String {
         val temp = settings.aiTemperature
         val prompt = messages.firstOrNull()?.content ?: ""
         logAiCall("→$logTag", prompt, "(requesting...)", messages)
         val result = aiService.chat(
             settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl, temperature = temp
         )
-        if (DEBUG) logAiCall("←$logTag", prompt, result, messages)
-        return result
+        if (DEBUG) logAiCall("←$logTag", prompt, result.content, messages)
+        if (category.isNotBlank() && (result.inputTokens > 0 || result.outputTokens > 0)) {
+            trackTokens(category, result.inputTokens, result.outputTokens)
+        }
+        return result.content
     }
 
     /** 非流式聊天 + JSON解析重试：解析失败时重新请求，最多重试3次 */
-    suspend fun chatWithRetry(messages: List<AiMessage>, logTag: String = "Chat"): com.rhodes.privatechat.shared.model.OfflineModeResponse {
+    suspend fun chatWithRetry(messages: List<AiMessage>, logTag: String = "Chat", category: String = ""): com.rhodes.privatechat.shared.model.OfflineModeResponse {
         val temp = settings.aiTemperature
         val prompt = messages.firstOrNull()?.content ?: ""
         logAiCall("→$logTag", prompt, "(requesting with retry...)", messages)
+        val rawResult = aiService.chat(
+            settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl, temperature = temp
+        )
+        if (category.isNotBlank() && (rawResult.inputTokens > 0 || rawResult.outputTokens > 0)) {
+            trackTokens(category, rawResult.inputTokens, rawResult.outputTokens)
+        }
         val result = aiService.chatWithRetry(
             settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl,
             temperature = temp, logTag = logTag
@@ -69,23 +78,38 @@ class SharedUtils(
     }
 
     fun trackTokens(category: String, prompt: String, response: String) {
-        val estimate = ((prompt.length + response.length) / 2).coerceAtLeast(1)
-        addTokenEstimate(category, estimate)
+        val input = (prompt.length / 2).coerceAtLeast(1)
+        val output = (response.length / 2).coerceAtLeast(1)
+        val total = input + output
+        addTokenCounts(category, input, output, total)
     }
 
     /** 统计完整消息列表的token消耗（包含系统提示词+聊天历史+响应） */
     fun trackTokens(category: String, messages: List<AiMessage>, response: String) {
         val totalInput = messages.sumOf { it.content.length }
-        val estimate = ((totalInput + response.length) / 2).coerceAtLeast(1)
-        addTokenEstimate(category, estimate)
+        val input = (totalInput / 2).coerceAtLeast(1)
+        val output = (response.length / 2).coerceAtLeast(1)
+        val total = input + output
+        addTokenCounts(category, input, output, total)
     }
 
-    private fun addTokenEstimate(category: String, estimate: Int) {
-        val current = settings.getTokenCount(category)
-        settings.putTokenCount(category, current + estimate)
+    /** 真实API token消耗（输入/输出分离） */
+    fun trackTokens(category: String, inputTokens: Int, outputTokens: Int) {
+        addTokenCounts(category, inputTokens, outputTokens, inputTokens + outputTokens)
+    }
+
+    private fun addTokenCounts(category: String, input: Int, output: Int, total: Int) {
+        // 旧字段（总计，兼容旧UI）
+        val oldTotal = settings.getTokenCount(category)
+        settings.putTokenCount(category, oldTotal + total)
         val today = beijingSdf("yyyy-MM-dd").format(java.util.Date())
-        val dailyCurrent = settings.getDailyTokenCount(category, today)
-        settings.putDailyTokenCount(category, today, dailyCurrent + estimate)
+        val oldDaily = settings.getDailyTokenCount(category, today)
+        settings.putDailyTokenCount(category, today, oldDaily + total)
+        // 新字段（输入/输出分离）
+        settings.addInputTokenCount(category, input)
+        settings.addOutputTokenCount(category, output)
+        settings.addDailyInputTokenCount(category, today, input)
+        settings.addDailyOutputTokenCount(category, today, output)
     }
 
     // === 配置访问 ===
@@ -176,6 +200,11 @@ class SharedUtils(
                 it.type == AnchorType.PREFERENCE || it.type == AnchorType.TABOO || it.type == AnchorType.PLAN
             }.sortedByDescending { it.createdAt }
             picked.addAll(oldPicks.take(maxCount - picked.size))
+        }
+        // 限制事件类和情绪类锚点最多 2 条，防止刷屏
+        listOf(AnchorType.EVENT, AnchorType.EMOTION).forEach { t ->
+            val overLimit = picked.filter { it.type == t }.drop(2)
+            picked.removeAll(overLimit)
         }
         return picked.take(maxCount)
     }

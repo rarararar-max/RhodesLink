@@ -16,6 +16,7 @@ import com.rhodes.privatechat.shared.model.AnalysisResult
 import com.rhodes.privatechat.shared.model.SuggestionResponse
 import com.rhodes.privatechat.shared.network.AIService
 import com.rhodes.privatechat.shared.model.AiMessage
+import com.rhodes.privatechat.util.DebugLogger
 import com.rhodes.privatechat.viewmodel.shared.AppStateHolder
 import com.rhodes.privatechat.viewmodel.shared.OperatorStateUpdater
 import com.rhodes.privatechat.shared.settings.SettingsRepository
@@ -86,10 +87,6 @@ class ChatViewModel(
     val hypnosisCommand: StateFlow<String> = _hypnosisCommand.asStateFlow()
     private val _hypnosisRounds = MutableStateFlow(0)
     val hypnosisRounds: StateFlow<Int> = _hypnosisRounds.asStateFlow()
-    private val _mindReadRounds = MutableStateFlow(0)
-    val mindReadRounds: StateFlow<Int> = _mindReadRounds.asStateFlow()
-    private val _mindReadContent = MutableStateFlow("")
-    val mindReadContent: StateFlow<String> = _mindReadContent.asStateFlow()
 
     // Internal state
     private var messageCounter: Int
@@ -193,16 +190,12 @@ ${text}"""
         if (prevOp != null) {
             settings.putString("hypnosis_cmd_${prevOp.id}", _hypnosisCommand.value)
             settings.putInt("hypnosis_round_${prevOp.id}", _hypnosisRounds.value)
-            settings.putString("mind_read_${prevOp.id}", _mindReadContent.value)
-            settings.putInt("mind_read_rounds_${prevOp.id}", _mindReadRounds.value)
         }
         _selectedOperator.value = operator
         messageCounter = 0
-        // 恢复新干员的催眠/读心状态
+        // 恢复新干员的催眠状态
         _hypnosisCommand.value = settings.getString("hypnosis_cmd_${operator.id}", "")
         _hypnosisRounds.value = settings.getInt("hypnosis_round_${operator.id}", 0)
-        _mindReadContent.value = settings.getString("mind_read_${operator.id}", "")
-        _mindReadRounds.value = settings.getInt("mind_read_rounds_${operator.id}", 0)
         settings.hypnosisCmd = _hypnosisCommand.value
         settings.hypnosisRound = _hypnosisRounds.value
         viewModelScope.launch {
@@ -223,15 +216,11 @@ ${text}"""
         if (prevOp != null) {
             settings.putString("hypnosis_cmd_${prevOp.id}", _hypnosisCommand.value)
             settings.putInt("hypnosis_round_${prevOp.id}", _hypnosisRounds.value)
-            settings.putString("mind_read_${prevOp.id}", _mindReadContent.value)
-            settings.putInt("mind_read_rounds_${prevOp.id}", _mindReadRounds.value)
         }
         _selectedOperator.value = operator
         messageCounter = 0
         _hypnosisCommand.value = settings.getString("hypnosis_cmd_${operator.id}", "")
         _hypnosisRounds.value = settings.getInt("hypnosis_round_${operator.id}", 0)
-        _mindReadContent.value = settings.getString("mind_read_${operator.id}", "")
-        _mindReadRounds.value = settings.getInt("mind_read_rounds_${operator.id}", 0)
         settings.hypnosisCmd = _hypnosisCommand.value
         settings.hypnosisRound = _hypnosisRounds.value
         val session = repository.getOrCreateSession(operator.id, operator.name, operator.avatarUri)
@@ -307,14 +296,17 @@ ${text}"""
             analysisGuidance = ""
             messageCounter++
             val msgId = repository.getNextMessageId()
-            val aiMsgId = repository.getNextMessageId()
             val mode = _currentMode.value
+            var aiMsgId = 0L
             var mutexLocked = false
             try {
                 repository.sendMessage(session.id, ChatMessage(
                     id = msgId, sessionId = session.id,
                     senderName = "我", content = text, type = "text", mode = _currentMode.value, isMe = true
                 ))
+                DebugLogger.log("Chat/DB", "用户消息已写入, session=${session.id}, id=$msgId, text=${text.take(50)}")
+                aiMsgId = repository.getNextMessageId()
+                DebugLogger.log("Chat/DB", "AI消息ID已获取, aiMsgId=$aiMsgId")
                 _loadingSessions.update { it + session.id }
 
                 aiMutexFor(session.id).lock()
@@ -394,13 +386,16 @@ ${recentDialogues}
                 }
 
                 val apiMessages = buildApiMessages(text)
+                DebugLogger.log("Chat/AI", "请求AI, session=${session.id}, mode=$mode, prompt长度=${apiMessages.size}")
                 val parsed = withTimeout(60_000) { sharedUtils.chatWithRetry(apiMessages) }
+                DebugLogger.log("Chat/AI", "AI响应成功, emotion=${parsed.emotion}, dialogue=${parsed.dialogue.take(30)}")
                 sharedUtils.trackTokens("private", apiMessages, parsed.toString())
                 val serializedJson = try { json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed) } catch (_: Exception) { parsed.toString() }
                 val rawJson = sharedUtils.aiService.cleanJson(serializedJson)
                 var aiResponseCount = 1
                 if (rawJson.isNotBlank()) {
                     repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = rawJson, type = "ai_json", mode = mode, isMe = false))
+                    DebugLogger.log("Chat/DB", "AI响应已写入, session=${session.id}, id=$aiMsgId")
                     if (parsed.emotion.isNotBlank() || parsed.location.isNotBlank() || parsed.state.isNotBlank()) {
                         operatorStateUpdater.updateOperatorStatus(session.operatorId, parsed.location, parsed.state, parsed.emotion) { opId, newLoc, newAct, newEmo ->
                             if (opId == _selectedOperator.value?.id) {
@@ -419,7 +414,6 @@ ${recentDialogues}
                 val dailyCount = settings.dailyLmbCount
                 if (dailyCount < 5000) { val balance = settings.lmb; settings.lmb = balance + 10; settings.dailyLmbCount = dailyCount + 1 }
                 decrementHypnosis()
-                decrementMindRead()
                 if (messageCounter >= shortTermThreshold) { generateShortTermSummary(session); generatePrivateDailySummary(session.operatorId); messageCounter = 0 }
                 impressionMsgCounter++
                 val impThreshold = settings.impressionThreshold
@@ -431,10 +425,12 @@ ${recentDialogues}
                     onUnhideSession(session.id)
                 }
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                DebugLogger.log("Chat/AI", "AI超时, session=${session.id}")
                 repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = classifyError(e), type = "text", mode = mode, isMe = false))
             } catch (e: kotlinx.coroutines.CancellationException) {
-                // 被新消息取消，不做任何事
+                DebugLogger.log("Chat/AI", "AI被取消, session=${session.id}")
             } catch (e: Exception) {
+                DebugLogger.log("Chat/AI", "AI错误: ${e.message?.take(100)}, session=${session.id}")
                 repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = classifyError(e), type = "text", mode = mode, isMe = false))
             } finally { _loadingSessions.update { it - session.id }; if (mutexLocked) aiMutexFor(session.id).unlock() }
         }
@@ -682,8 +678,6 @@ ${recentDialogues}
     fun setHypnosis(command: String) { _hypnosisCommand.value = command; _hypnosisRounds.value = 10; settings.hypnosisCmd = command; settings.hypnosisRound = 10 }
     fun decrementHypnosis() { if (_hypnosisRounds.value > 0) _hypnosisRounds.value = _hypnosisRounds.value - 1; settings.hypnosisRound = _hypnosisRounds.value }
     fun loadHypnosis() { _hypnosisCommand.value = settings.hypnosisCmd; _hypnosisRounds.value = settings.hypnosisRound }
-    fun setMindRead(innerThought: String) { _mindReadContent.value = innerThought; _mindReadRounds.value = 3 }
-    fun decrementMindRead() { if (_mindReadRounds.value > 0) _mindReadRounds.value = _mindReadRounds.value - 1 }
 
     fun generateInspirations(callback: (List<String>) -> Unit) {
         val op = _selectedOperator.value ?: return
@@ -768,7 +762,6 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         val profile = appState.userProfile.value
         val analysisBlock = if (settings.dualModel && analysisGuidance.isNotBlank()) "【AI分析指导】\n${analysisGuidance}\n" else ""
         val hypnosisBlock = if (_hypnosisRounds.value > 0) "【催眠状态】\n${_hypnosisCommand.value}\n剩余${_hypnosisRounds.value}轮\n" else ""
-        val mindReadBlock = if (_mindReadRounds.value > 0) "【读心术生效中】\n你能看到${profile.nickname}的内心独白：${_mindReadContent.value}\n剩余${_mindReadRounds.value}轮\n" else ""
         val mode = _currentMode.value
         // 群聊回顾：找出该干员参与的各群聊 3 天内的短摘要
         val THREE_DAYS = 3 * 24 * 60 * 60 * 1000L
@@ -786,7 +779,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         val systemPrompt = sharedUtils.compactTemplate(sharedUtils.applyTemplate(getPromptTemplate("private", mode), mapOf(
             "CURRENT_TIME" to sharedUtils.beijingSdf("yyyy-MM-dd HH:mm").format(java.util.Date()),
             "USER_NAME" to profile.nickname, "USER_GENDER" to profile.gender.ifBlank { "未知" }, "USER_BIO" to profile.bio.ifBlank { "无" },
-            "USER_CONTENT" to userContent, "AI_ANALYSIS" to analysisBlock,             "HYPNOSIS" to hypnosisBlock, "MIND_READ" to mindReadBlock,
+            "USER_CONTENT" to userContent, "AI_ANALYSIS" to analysisBlock,             "HYPNOSIS" to hypnosisBlock,
             "TRANSITION_NOTICE" to transitionNotice,
             "OPERATOR_NAME" to (op?.name ?: session.operatorName), "OPERATOR_TITLE" to (op?.title ?: ""),
             "OPERATOR_PERSONA" to (op?.privatePrompt?.ifBlank { op.description } ?: ""),

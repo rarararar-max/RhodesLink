@@ -126,6 +126,8 @@ class AIService(private val client: HttpClient = createHttpClient()) {
 
     // --- Non-streaming chat (primary) ---
 
+    data class ChatResult(val content: String, val inputTokens: Int = 0, val outputTokens: Int = 0)
+
     suspend fun chat(
         apiKey: String,
         messages: List<AiMessage>,
@@ -133,7 +135,7 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         modelName: String = "deepseek-chat",
         customUrl: String = "",
         temperature: Double = 0.95
-    ): String {
+    ): ChatResult {
         val config = providers[providerId] ?: providers["deepseek"]!!
         val url = if (config.id == "custom") customUrl else config.baseUrl
         val model = modelName
@@ -162,7 +164,10 @@ class AIService(private val client: HttpClient = createHttpClient()) {
 
         val responseBody = response.bodyAsText()
         val completion = json.decodeFromString<NonStreamResponse>(responseBody)
-        return completion.choices?.firstOrNull()?.message?.content ?: ""
+        val content = completion.choices?.firstOrNull()?.message?.content ?: ""
+        val inputTokens = completion.usage?.promptTokens ?: 0
+        val outputTokens = completion.usage?.completionTokens ?: 0
+        return ChatResult(content, inputTokens, outputTokens)
     }
 
     /**
@@ -183,9 +188,9 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         var lastRaw = ""
         for (attempt in 1..maxRetries) {
             try {
-                val raw = chat(apiKey, messages, providerId, modelName, customUrl, temperature)
-                lastRaw = raw
-                val cleaned = cleanJson(raw)
+                val result = chat(apiKey, messages, providerId, modelName, customUrl, temperature)
+                lastRaw = result.content
+                val cleaned = cleanJson(lastRaw)
                 val parsed = json.decodeFromString<OfflineModeResponse>(cleaned)
                 return parsed
             } catch (e: Exception) {

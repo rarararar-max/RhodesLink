@@ -55,7 +55,7 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
-data class TokenCategory(val key: String, val name: String, val tokens: Int, val color: Color)
+data class TokenCategory(val key: String, val name: String, val tokens: Int, val color: Color, val inputTokens: Int = 0, val outputTokens: Int = 0)
 
 @Composable
 fun TokenStatsScreen(
@@ -84,9 +84,27 @@ fun TokenStatsScreen(
 
     // 按 tab 切换刷新数据
     val todayStr = remember { bjSdf.format(Date()) }
+    fun sumDaily(cat: TokenCategory, settings: SettingsRepository, start: Calendar, end: Calendar, sdf: SimpleDateFormat): TokenCategory {
+        var total = 0; var input = 0; var output = 0
+        val scan = Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
+        scan.time = start.time
+        while (scan <= end) {
+            val d = sdf.format(scan.time)
+            total += settings.getDailyTokenCount(cat.key, d)
+            input += settings.getDailyInputTokenCount(cat.key, d)
+            output += settings.getDailyOutputTokenCount(cat.key, d)
+            scan.add(Calendar.DAY_OF_MONTH, 1)
+        }
+        return cat.copy(tokens = total, inputTokens = input, outputTokens = output)
+    }
+
     val todayData = remember(tabIndex) {
         allCategories.map { cat ->
-            cat.copy(tokens = settings.getDailyTokenCount(cat.key, todayStr))
+            cat.copy(
+                tokens = settings.getDailyTokenCount(cat.key, todayStr),
+                inputTokens = settings.getDailyInputTokenCount(cat.key, todayStr),
+                outputTokens = settings.getDailyOutputTokenCount(cat.key, todayStr)
+            )
         }
     }
 
@@ -97,23 +115,20 @@ fun TokenStatsScreen(
         c.set(Calendar.DAY_OF_WEEK, Calendar.MONDAY)
         if (c.time.after(Date())) c.add(Calendar.WEEK_OF_YEAR, -1)
         val ws = bjSdf.format(c.time)
-        allCategories.map { cat ->
-            var sum = 0
-            val scan = Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
-            scan.time = bjSdf.parse(ws)!!
-            val today = Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
-            while (scan <= today) {
-                sum += settings.getDailyTokenCount(cat.key, bjSdf.format(scan.time))
-                scan.add(Calendar.DAY_OF_MONTH, 1)
-            }
-            cat.copy(tokens = sum)
-        }
+        val weekStart = Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
+        weekStart.time = bjSdf.parse(ws)!!
+        val today = Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
+        allCategories.map { cat -> sumDaily(cat, settings, weekStart, today, bjSdf) }
     }
 
     // 读取全部数据
     val allData = remember(tabIndex) {
         allCategories.map { cat ->
-            cat.copy(tokens = settings.getTokenCount(cat.key))
+            cat.copy(
+                tokens = settings.getTokenCount(cat.key),
+                inputTokens = settings.getInputTokenCount(cat.key),
+                outputTokens = settings.getOutputTokenCount(cat.key)
+            )
         }
     }
 
@@ -177,6 +192,10 @@ fun TokenStatsScreen(
                     Text(if (tabIndex == 0) "今日Token消耗" else if (tabIndex == 1) "本周Token消耗" else "历史总Token消耗", fontSize = 13.sp, color = TextSecondary)
                     Spacer(Modifier.height(4.dp))
                     Text(formatTokens(total), fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Primary)
+                    Spacer(Modifier.height(4.dp))
+                    val totalIn = currentData.sumOf { it.inputTokens }
+                    val totalOut = currentData.sumOf { it.outputTokens }
+                    Text("输入 ${formatTokens(totalIn)}  +  输出 ${formatTokens(totalOut)}", fontSize = 13.sp, color = TextSecondary)
                 }
             }
             Spacer(Modifier.height(12.dp))
@@ -261,14 +280,22 @@ fun TokenStatsScreen(
             Box(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Card).padding(16.dp)) {
                 Column {
                     Text("明细", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(4.dp))
+                    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        Text("分类", fontSize = 11.sp, color = TextSecondary, modifier = Modifier.weight(1f))
+                        Text("输入", fontSize = 11.sp, color = TextSecondary, modifier = Modifier.width(50.dp))
+                        Text("输出", fontSize = 11.sp, color = TextSecondary, modifier = Modifier.width(50.dp))
+                        Text("总计", fontSize = 11.sp, color = TextSecondary, modifier = Modifier.width(50.dp))
+                    }
+                    Spacer(Modifier.height(4.dp))
                     currentData.forEach { cat ->
                         Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                             Box(modifier = Modifier.size(12.dp).clip(RoundedCornerShape(3.dp)).background(cat.color))
                             Spacer(Modifier.width(8.dp))
                             Text(cat.name, fontSize = 13.sp, color = TextPrimary, modifier = Modifier.weight(1f))
-                            Text(formatTokens(cat.tokens), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-                            Text(" (${if (total > 0) (cat.tokens * 100f / total).toInt() else 0}%)", fontSize = 11.sp, color = TextSecondary)
+                            Text(formatTokens(cat.inputTokens), fontSize = 12.sp, color = TextSecondary, modifier = Modifier.width(50.dp))
+                            Text(formatTokens(cat.outputTokens), fontSize = 12.sp, color = TextSecondary, modifier = Modifier.width(50.dp))
+                            Text(formatTokens(cat.tokens), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, modifier = Modifier.width(50.dp))
                         }
                     }
                 }

@@ -29,6 +29,7 @@ import com.rhodes.privatechat.shared.model.MomentComment
 import com.rhodes.privatechat.shared.model.Moment
 import com.rhodes.privatechat.shared.model.MomentLike
 import com.rhodes.privatechat.shared.model.Operator
+import com.rhodes.privatechat.util.DebugLogger
 import com.rhodes.privatechat.shared.data.SenderCount
 import com.rhodes.privatechat.shared.data.BfsNode
 import com.rhodes.privatechat.viewmodel.shared.AppStateHolder
@@ -40,7 +41,9 @@ import com.rhodes.privatechat.viewmodel.shared.UserProfile
 import com.rhodes.privatechat.shared.model.AnalysisResult
 import com.rhodes.privatechat.shared.model.AiMessage
 import com.rhodes.privatechat.shared.model.OfflineModeResponse
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -77,6 +80,10 @@ class MainViewModel(
         const val PROP_PRICE = 100
         /** 防止多个 ViewModel 实例并发执行自动生成 */
         private val autoGenerating = java.util.concurrent.atomic.AtomicBoolean(false)
+        /** 防止手动催发与自动生成互相阻塞 */
+        private val forceGenerating = java.util.concurrent.atomic.AtomicBoolean(false)
+        /** 催发专用 scope，不依赖 viewModelScope，切页面不中断 */
+        private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         private val _globalMomentStatus = MutableStateFlow(MomentGenerateStatus())
     }
     val dataViewModel = DataViewModel(repository, settings, viewModelScope)
@@ -113,8 +120,6 @@ class MainViewModel(
     val isLoading: StateFlow<Boolean> get() = chatViewModel.isLoading
     val hypnosisCommand: StateFlow<String> get() = chatViewModel.hypnosisCommand
     val hypnosisRounds: StateFlow<Int> get() = chatViewModel.hypnosisRounds
-    val mindReadRounds: StateFlow<Int> get() = chatViewModel.mindReadRounds
-    val mindReadContent: StateFlow<String> get() = chatViewModel.mindReadContent
 
     // Shared state delegates to AppStateHolder
     private val _operators get() = appState.operators
@@ -355,12 +360,12 @@ class MainViewModel(
             "USER_RELATION" to (op.userRelation.ifBlank { "未知" }),
             "NAR_SEG_MIN" to intPref("nar_seg_min", 1).toString(),
             "NAR_SEG_MAX" to intPref("nar_seg_max", 3).toString(),
-            "NAR_MIN" to intPref("nar_min", 50).toString(),
-            "NAR_MAX" to intPref("nar_max", 300).toString(),
+            "NAR_MIN" to settings.narMin.toString(),
+            "NAR_MAX" to settings.narMax.toString(),
             "DIA_SEG_MIN" to intPref("dia_seg_min", 1).toString(),
             "DIA_SEG_MAX" to intPref("dia_seg_max", 3).toString(),
             "DIA_MIN" to intPref("dia_min", 10).toString(),
-            "DIA_MAX" to intPref("dia_max", 300).toString(),
+            "DIA_MAX" to settings.diaMax.toString(),
             "SEG_MIN" to (intPref("nar_seg_min", 1) + intPref("dia_seg_min", 1)).toString(),
             "SEG_MAX" to (intPref("nar_seg_max", 3) + intPref("dia_seg_max", 3)).toString(),
             "TRANSITION_NOTICE" to "",
@@ -548,6 +553,17 @@ class MainViewModel(
         return null
     }
 
+    fun insertMessage(sessionId: String, senderName: String, content: String) {
+        viewModelScope.launch {
+            val msgId = repository.getNextMessageId()
+            repository.sendMessage(sessionId, com.rhodes.privatechat.shared.model.ChatMessage(
+                id = msgId, sessionId = sessionId,
+                senderName = senderName, content = content,
+                type = "text", mode = "online", isMe = false
+            ))
+        }
+    }
+
     private suspend fun generateShortTermSummary(session: ChatSession, messageSource: List<ChatMessage>? = null) {
         val source = messageSource ?: chatViewModel.getMessagesSnapshot()
         val recentMsgs = source.takeLast(40)
@@ -630,7 +646,7 @@ class MainViewModel(
             }
             repository.saveAnchors(anchors)
             // 保留条数限制
-            val retain = intPref("summary_retain", 5)
+            val retain = settings.summaryRetain
             repository.enforceMemoryRetain(session.id, retain)
         } catch (_: Exception) { }
     }
@@ -780,8 +796,7 @@ ${summaries}
         val keys = listOf(
             "summary_threshold" to settings.summaryThreshold, "summary_retain" to settings.summaryRetain,
             "impression_threshold" to settings.impressionThreshold, "history_messages" to settings.historyMessages,
-            "online_min_chars" to settings.onlineMinChars, "online_max_chars" to settings.onlineMaxChars,
-            "online_min_segs" to settings.onlineMinSegs, "online_max_segs" to settings.onlineMaxSegs,
+
             "nar_seg_min" to settings.narSegMin, "nar_seg_max" to settings.narSegMax,
             "nar_min" to settings.narMin, "nar_max" to settings.narMax,
             "dia_seg_min" to settings.diaSegMin, "dia_seg_max" to settings.diaSegMax,
@@ -791,7 +806,7 @@ ${summaries}
             "group_nar_seg_min" to settings.groupNarSegMin, "group_nar_seg_max" to settings.groupNarSegMax,
             "group_nar_min" to settings.groupNarMin, "group_nar_max" to settings.groupNarMax,
             "group_chat_min_interval" to settings.groupChatMinInterval, "group_chat_max_interval" to settings.groupChatMaxInterval,
-            "group_auto_min" to settings.groupAutoMin, "group_auto_max" to settings.groupAutoMax,
+
             "moment_min_chars" to settings.momentMinChars, "moment_max_chars" to settings.momentMaxChars,
             "diary_min_chars" to settings.diaryMinChars, "diary_max_chars" to settings.diaryMaxChars,
             "dispatch_min_chars" to settings.dispatchMinChars, "dispatch_max_chars" to settings.dispatchMaxChars,
@@ -958,8 +973,6 @@ ${summaries}
     fun setHypnosis(command: String) = chatViewModel.setHypnosis(command)
     fun decrementHypnosis() = chatViewModel.decrementHypnosis()
     fun loadHypnosis() = chatViewModel.loadHypnosis()
-    fun setMindRead(innerThought: String) = chatViewModel.setMindRead(innerThought)
-    fun decrementMindRead() = chatViewModel.decrementMindRead()
 
     fun sendGroupMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online", autoSpeak: Boolean = false, isAuto: Boolean = false) =
         groupChatViewModel.sendGroupMessage(groupSessionId, groupName, text, mode, autoSpeak, isAuto)
@@ -1019,8 +1032,8 @@ ${summaries}
                             "RECENT_DAILY_SUMMARY" to (repository.getLatestPrivateDaily(op.id)?.content ?: "无"),
                             "CURRENT_DATE" to beijingSdf("yyyy年MM月dd日").format(fakeTs),
                             "USER_NAME" to profile.nickname,
-                            "MOMENT_MIN_CHARS" to intPref("moment_min_chars", 50).toString(),
-                            "MOMENT_MAX_CHARS" to intPref("moment_max_chars", 200).toString()
+"MOMENT_MIN_CHARS" to settings.momentMinChars.toString(),
+                    "MOMENT_MAX_CHARS" to settings.momentMaxChars.toString()
                         )
                         val prompt = applyTemplate(mmtTpl, mmtReplacements)
                         val temp = intPref("ai_temperature", 95).toDouble() / 100.0
@@ -1090,8 +1103,8 @@ ${summaries}
                 onProgress("发布中...", false)
                 val momentId = generateOneForOpSync(op)
                 if (momentId != null) {
-                    refreshMomentsNow()
                     generateLikesAndComments(momentId, op)
+                    refreshMomentsNow()
                 }
             } finally {
                 onProgress("", true)
@@ -1129,8 +1142,8 @@ ${summaries}
                 "RECENT_DAILY_SUMMARY" to (repository.getLatestPrivateDaily(op.id)?.content ?: "无"),
                 "CURRENT_DATE" to beijingSdf("yyyy年MM月dd日").format(fakeTs),
                 "USER_NAME" to profile.nickname,
-                "MOMENT_MIN_CHARS" to intPref("moment_min_chars", 50).toString(),
-                "MOMENT_MAX_CHARS" to intPref("moment_max_chars", 200).toString()
+                "MOMENT_MIN_CHARS" to settings.momentMinChars.toString(),
+                "MOMENT_MAX_CHARS" to settings.momentMaxChars.toString()
             )
             val prompt = applyTemplate(mmtTpl, mmtReplacements)
             var momentResult = ""
@@ -1153,7 +1166,7 @@ ${summaries}
 
     /** 异步生成点赞和评论（不阻塞调用方） */
     private fun generateLikesAndComments(momentId: Long, op: Operator) {
-        viewModelScope.launch {
+        appScope.launch {
             try {
                 val profile = getUserProfile()
                 val opId = op.id
@@ -1162,6 +1175,7 @@ ${summaries}
                 val likers = _operators.value.filter { it.id != opId && it.name != profile.nickname }.shuffled().take((3..8).random())
                 likers.forEach { liker -> repository.insertLike(MomentLike(momentId = momentId, operatorId = liker.id, operatorName = liker.name, createdAt = System.currentTimeMillis())) }
                 repository.updateLikeCount(momentId, likers.size)
+                DebugLogger.log("Moment", "生成点赞完成: momentId=$momentId, count=${likers.size}")
                 val commenters = _operators.value.filter { it.id != opId && it.name != profile.nickname }.shuffled().take((1..3).random())
                 val cmtTpl = getPromptTemplate("moment_comment")
                 var actualComments = 0
@@ -1176,10 +1190,15 @@ ${summaries}
                         val cc = withTimeout(8_000) { chat(listOf(AiMessage("system", cp)), "Moment") }.trim()
                         trackTokens("moment", cp, cc)
                         if (cc.isNotBlank()) { repository.insertComment(MomentComment(momentId = momentId, operatorId = commenter.id, operatorName = commenter.name, content = cc, createdAt = System.currentTimeMillis())); actualComments++ }
-                    } catch (_: Exception) {}
+                    } catch (e: Exception) {
+                        DebugLogger.log("Moment", "评论生成失败: ${e.message?.take(100)}")
+                    }
                 }
                 repository.updateCommentCount(momentId, actualComments)
-            } catch (_: Exception) {}
+                DebugLogger.log("Moment", "生成评论完成: momentId=$momentId, count=$actualComments")
+            } catch (e: Exception) {
+                DebugLogger.log("Moment", "生成点赞评论异常: ${e.message?.take(100)}")
+            }
         }
     }
 
@@ -1190,6 +1209,7 @@ ${summaries}
     fun commentOnMoment(momentId: Long, operatorId: String, operatorName: String, content: String, parentCommentId: Long = 0, replyToName: String = "") {
         val cleanContent = content.trim()
         if (cleanContent.isBlank()) return
+        DebugLogger.log("Moment", "用户发评论: momentId=$momentId, content=${cleanContent.take(50)}, parentId=$parentCommentId, replyTo=$replyToName")
         viewModelScope.launch {
             // 微信模式：向上追溯到根一级评论，所有回复挂在一级下面
             val rootParentId = if (parentCommentId > 0) {
@@ -1200,6 +1220,7 @@ ${summaries}
                     parentCommentId
             } else 0L
             repository.insertComment(MomentComment(momentId = momentId, operatorId = operatorId, operatorName = operatorName, content = cleanContent, parentCommentId = rootParentId, replyToName = replyToName, createdAt = System.currentTimeMillis()))
+            DebugLogger.log("Moment/DB", "评论已写入DB, momentId=$momentId")
             // 创建评论锚点（仅动态发布者 + 被回复者，不扩散到全干员）
             if (operatorId == "user") {
                 val moment = _moments.value.find { it.id == momentId }
@@ -1217,7 +1238,7 @@ ${summaries}
                             content = "${getUserProfile().nickname}${targetName}：${content.take(30)}",
                             isPrivate = false,
                             createdAt = System.currentTimeMillis(),
-                            expiresAt = System.currentTimeMillis() + intPref("clean_days", 30) * 86_400_000L
+                            expiresAt = System.currentTimeMillis() + 86_400_000L
                         ))
                     }
                 }
@@ -1270,11 +1291,13 @@ ${summaries}
 
 
     fun postUserMoment(content: String, mentionedOps: List<String>) {
+        DebugLogger.log("Moment", "用户发动态: content=${content.take(50)}, mentioned=$mentionedOps")
         viewModelScope.launch {
             val profile = getUserProfile()
             val userName = profile.nickname
             val moment = Moment(operatorId = "user", operatorName = userName, content = content, isUserPost = true, mentionedOperatorIds = mentionedOps.joinToString(","), createdAt = System.currentTimeMillis())
             val momentId = repository.insertMoment(moment)
+            DebugLogger.log("Moment/DB", "动态已写入DB, id=$momentId")
             refreshMomentsNow()
             // 创建动态锚点（仅动态发布者自己 + 随机3个围观干员）
             val anchorOps = _operators.value.filter { it.id != "user" }.shuffled().take(3).map { it.id }
@@ -1320,25 +1343,27 @@ ${summaries}
     suspend fun getMessageRanking(): List<SenderCount> = dataViewModel.getMessageRanking()
     suspend fun getDailyRanking(): List<SenderCount> = dataViewModel.getDailyRanking()
     fun forceGenerateMoments() {
-        if (!autoGenerating.compareAndSet(false, true)) {
+        if (!forceGenerating.compareAndSet(false, true)) {
             android.util.Log.w("MainVM", "正在生成中，跳过强制生成")
             return
         }
+        DebugLogger.log("Moment", "手动催发开始")
         _momentGenerateStatus.value = MomentGenerateStatus(running = true, msg = "开始生成...")
-        viewModelScope.launch {
+        appScope.launch {
             try {
                 var generated = 0
                 val candidates = _operators.value.filter {
                     settings.getOperatorDynPermission(it.id)
                 }.shuffled().take(5)
+                DebugLogger.log("Moment", "催发候选干员: ${candidates.size}人")
                 android.util.Log.d("MainVM", "** [DBG] ** forceGenerateMoments: candidates=${candidates.size} VM=${System.identityHashCode(this)}")
                 for (op in candidates) {
                     _momentGenerateStatus.value = MomentGenerateStatus(running = true, msg = "${op.name}发布中...")
                     val momentId = generateOneForOpSync(op)
                     if (momentId != null) {
                         generated++
-                        refreshMomentsNow()
                         generateLikesAndComments(momentId, op)
+                        refreshMomentsNow()
                     }
                 }
                 _momentGenerateStatus.value = MomentGenerateStatus(
@@ -1347,7 +1372,7 @@ ${summaries}
                 )
                 refreshMomentsNow()
             } finally {
-                autoGenerating.set(false)
+                forceGenerating.set(false)
             }
         }
     }
@@ -1361,10 +1386,12 @@ ${summaries}
     suspend fun getAllImpressions(): List<Memory> = dataViewModel.getAllImpressions()
     suspend fun deleteAllImpressions() = dataViewModel.deleteAllImpressions()
     fun generateDiary(operatorId: String, onResult: (String) -> Unit) {
+        DebugLogger.log("Diary", "偷看日记: operatorId=$operatorId")
         viewModelScope.launch {
-            val op = repository.getOperator(operatorId) ?: run { onResult(""); return@launch }
+            val op = repository.getOperator(operatorId) ?: run { DebugLogger.log("Diary", "干员不存在: $operatorId"); onResult(""); return@launch }
             val profile = getUserProfile()
             try {
+                DebugLogger.log("Diary", "开始生成日记: ${op.name}")
                 // 用北京时间计算昨天和今天的日期
                 val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
                 cal.add(java.util.Calendar.DAY_OF_MONTH, -1)
@@ -1420,9 +1447,13 @@ ${summaries}
                             expiresAt = System.currentTimeMillis() + intPref("clean_days", 30) * 86_400_000L
                         ))
                     }
+                    DebugLogger.log("Diary", "日记生成成功: ${text.take(50)}")
                     onResult(text)
-                } else { onResult("") }
-            } catch (_: Exception) { onResult("") }
+                } else { DebugLogger.log("Diary", "日记生成为空"); onResult("") }
+            } catch (e: Exception) {
+                DebugLogger.log("Diary", "日记生成异常: ${e.message?.take(100)}")
+                onResult("")
+            }
         }
     }
 }

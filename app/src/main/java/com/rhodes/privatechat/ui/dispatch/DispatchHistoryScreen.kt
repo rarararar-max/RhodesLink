@@ -66,14 +66,35 @@ fun DispatchHistoryScreen(
 
         if (selected != null) {
             val entry = selected!!
-            val segments = try {
-                val arr = Json.parseToJsonElement(entry.logChain) as JsonArray
-                arr.map { obj ->
-                    val o = obj.jsonObject
-                    Triple(o["type"]?.jsonPrimitive?.content ?: "", o["content"]?.jsonPrimitive?.content ?: "", "")
+            val markers = listOf("【开局】", "【第", "【结局】", "【已中断】")
+            val rawSegments = mutableListOf<String>()
+            var pos = 0
+            while (pos < entry.logChain.length) {
+                val next = markers.mapNotNull { m ->
+                    val idx = entry.logChain.indexOf(m, pos)
+                    if (idx >= 0) idx to m else null
+                }.minByOrNull { it.first }
+                if (next == null) break
+                val start = next.first
+                if (start > pos) rawSegments.add(entry.logChain.substring(pos, start).trim())
+                pos = start
+                val end = markers.mapNotNull { m ->
+                    val idx = entry.logChain.indexOf(m, start + next.second.length)
+                    if (idx >= 0) idx else null
+                }.minOrNull() ?: entry.logChain.length
+                rawSegments.add(entry.logChain.substring(start, end).trim())
+                pos = end
+            }
+            if (pos < entry.logChain.length) rawSegments.add(entry.logChain.substring(pos).trim())
+            val segments = rawSegments.filter { it.isNotBlank() }.map { seg ->
+                val type = when {
+                    seg.startsWith("【结局】") -> "ending"
+                    seg.startsWith("【开局】") || seg.startsWith("【第") -> "progress"
+                    seg.startsWith("【已中断】") -> "cancelled"
+                    else -> "progress"
                 }
-            } catch (_: Exception) {
-                entry.logChain.split("\n\n").filter { it.isNotBlank() }.map { Triple("", it, "") }
+                val content = seg.replace(Regex("^【[^】]+】"), "").trim()
+                Triple(type, content, "")
             }
 
             LazyColumn(Modifier.padding(12.dp)) {

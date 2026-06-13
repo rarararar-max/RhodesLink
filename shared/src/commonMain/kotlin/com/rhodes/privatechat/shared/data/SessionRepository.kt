@@ -90,7 +90,9 @@ class SessionRepository(private val wrapper: DatabaseWrapper) {
 
     // --- Preset groups ---
     suspend fun initPresetGroups() = withContext(Dispatchers.Default) {
-        if (db.chatSessionsQueries.getGroupCount().executeAsOne() > 0L) return@withContext
+        val presetIds = listOf("group_elite", "group_penguin", "group_lungmen", "group_rhine", "group_sui")
+        val allExist = presetIds.all { id -> db.chatSessionsQueries.getSession(id).executeAsOneOrNull() != null }
+        if (allExist) return@withContext
         val now = Clock.System.now().toEpochMilliseconds()
         val groups = listOf(
             ChatSession(id = "group_elite", operatorId = "group_elite", operatorName = "精英干员茶水间",

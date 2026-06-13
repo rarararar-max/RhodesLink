@@ -59,7 +59,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = settings.putInt("summary_threshold", value)
 
     var summaryRetain: Int
-        get() = settings.getInt("summary_retain", 10)
+        get() = settings.getInt("summary_retain", 5)
         set(value) = settings.putInt("summary_retain", value)
 
     var impressionThreshold: Int
@@ -72,7 +72,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     // === 聊天配置 ===
     var aiTemperature: Double
-        get() = settings.getInt("ai_temperature", 95).toDouble() / 100.0
+        get() = settings.getInt("ai_temperature", 80).toDouble() / 100.0
         set(value) = settings.putInt("ai_temperature", (value * 100).toInt())
 
     var cleanDays: Int
@@ -95,11 +95,11 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = settings.putInt("nar_seg_max", value)
 
     var narMin: Int
-        get() = settings.getInt("nar_min", 20)
+        get() = settings.getInt("nar_min", 50)
         set(value) = settings.putInt("nar_min", value)
 
     var narMax: Int
-        get() = settings.getInt("nar_max", 150)
+        get() = settings.getInt("nar_max", 300)
         set(value) = settings.putInt("nar_max", value)
 
     var diaSegMin: Int
@@ -115,25 +115,8 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = settings.putInt("dia_min", value)
 
     var diaMax: Int
-        get() = settings.getInt("dia_max", 80)
+        get() = settings.getInt("dia_max", 300)
         set(value) = settings.putInt("dia_max", value)
-
-    // === 联机模式 ===
-    var onlineMinChars: Int
-        get() = settings.getInt("online_min_chars", 10)
-        set(value) = settings.putInt("online_min_chars", value)
-
-    var onlineMaxChars: Int
-        get() = settings.getInt("online_max_chars", 100)
-        set(value) = settings.putInt("online_max_chars", value)
-
-    var onlineMinSegs: Int
-        get() = settings.getInt("online_min_segs", 1)
-        set(value) = settings.putInt("online_min_segs", value)
-
-    var onlineMaxSegs: Int
-        get() = settings.getInt("online_max_segs", 3)
-        set(value) = settings.putInt("online_max_segs", value)
 
     // === 派遣设置 ===
     var dispatchFastMode: Boolean
@@ -145,12 +128,12 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = settings.putInt("dispatch_min_chars", value)
 
     var dispatchMaxChars: Int
-        get() = settings.getInt("dispatch_max_chars", 200)
+        get() = settings.getInt("dispatch_max_chars", 300)
         set(value) = settings.putInt("dispatch_max_chars", value)
 
     // === 动态/日记设置 ===
     var momentMinChars: Int
-        get() = settings.getInt("moment_min_chars", 30)
+        get() = settings.getInt("moment_min_chars", 50)
         set(value) = settings.putInt("moment_min_chars", value)
 
     var momentMaxChars: Int
@@ -287,15 +270,6 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = getString("mahjong_history_json", "")
         set(value) = putString("mahjong_history_json", value)
 
-    // === 群聊自动参数 ===
-    var groupAutoMin: Int
-        get() = getInt("group_auto_min", 20)
-        set(value) = putInt("group_auto_min", value)
-
-    var groupAutoMax: Int
-        get() = getInt("group_auto_max", 120)
-        set(value) = putInt("group_auto_max", value)
-
     var groupMsgMin: Int
         get() = getInt("group_msg_min", 10)
         set(value) = putInt("group_msg_min", value)
@@ -386,7 +360,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
     fun removeMomentCount(operatorId: String, date: String) =
         remove("moment_count_${operatorId}_$date")
 
-    // === Token 追踪 ===
+    // === Token 追踪（旧字段：总计，兼容旧数据）===
 
     fun getTokenCount(category: String): Int =
         getInt("token_$category", 0)
@@ -399,6 +373,32 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     fun putDailyTokenCount(category: String, date: String, value: Int) =
         putInt("daily_${category}_$date", value)
+
+    // === Token 追踪（新字段：输入/输出分离）===
+
+    fun getInputTokenCount(category: String): Int =
+        getInt("token_in_$category", 0)
+
+    fun getOutputTokenCount(category: String): Int =
+        getInt("token_out_$category", 0)
+
+    fun addInputTokenCount(category: String, delta: Int) =
+        putInt("token_in_$category", getInputTokenCount(category) + delta)
+
+    fun addOutputTokenCount(category: String, delta: Int) =
+        putInt("token_out_$category", getOutputTokenCount(category) + delta)
+
+    fun getDailyInputTokenCount(category: String, date: String): Int =
+        getInt("daily_in_${category}_$date", 0)
+
+    fun getDailyOutputTokenCount(category: String, date: String): Int =
+        getInt("daily_out_${category}_$date", 0)
+
+    fun addDailyInputTokenCount(category: String, date: String, delta: Int) =
+        putInt("daily_in_${category}_$date", getDailyInputTokenCount(category, date) + delta)
+
+    fun addDailyOutputTokenCount(category: String, date: String, delta: Int) =
+        putInt("daily_out_${category}_$date", getDailyOutputTokenCount(category, date) + delta)
 
     // === 通用方法 ===
     fun getString(key: String, default: String = ""): String =

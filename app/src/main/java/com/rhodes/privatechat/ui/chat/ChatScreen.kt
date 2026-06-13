@@ -141,7 +141,7 @@ fun ChatScreen(
                 MessageList(
                     messages = messages,
                     listState = listState,
-                    progressiveDisplay = true,
+                    progressiveDisplay = false,
                     onRecall = { msgId, segIdx -> viewModel.recallMessageSegment(msgId, segIdx) },
                     onRegenerate = { viewModel.regenerateAiMessage(it) },
                     onContinue = { viewModel.continueAiMessage(it) },
@@ -278,7 +278,6 @@ private fun PropShopDialog(
                         Spacer(modifier = Modifier.height(6.dp))
                         Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(PrimaryContainer).clickable {
                             if (balance < PROP_PRICE) { Toast.makeText(context, "余额不足", Toast.LENGTH_SHORT).show(); return@clickable }
-                            if (viewModel.mindReadRounds.value > 0) { Toast.makeText(context, "读心效果已生效中", Toast.LENGTH_SHORT).show(); return@clickable }
                             val err = viewModel.buyProp("看穿眼镜", context)
                             if (err != null) { Toast.makeText(context, err, Toast.LENGTH_SHORT).show(); return@clickable }
                             loading = true
@@ -335,7 +334,10 @@ ${recentChats.ifBlank { "暂无" }}
                                     ), "InnerThoughts")
                                     val thoughtText = innerThoughts
                                     if (!thoughtText.isNullOrBlank()) {
-                                        viewModel.setMindRead(thoughtText)
+                                        val session = viewModel.currentSession.value
+                                        if (session != null) {
+                                            viewModel.insertMessage(session.id, viewModel.selectedOperator.value?.name ?: "干员", "（内心独白）${thoughtText}")
+                                        }
                                     }
                                 } catch (_: Exception) { innerThoughts = "读取失败，请重试" }
                                 loading = false

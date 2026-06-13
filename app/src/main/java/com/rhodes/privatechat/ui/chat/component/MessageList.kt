@@ -80,18 +80,23 @@ fun MessageList(
     progressiveDisplay: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
-    // 渐进展示逻辑
+    // 渐进展示逻辑：首次加载全部立即显示，后续新消息逐条出现（首条无延迟）
     var displayCount by remember { mutableIntStateOf(Int.MAX_VALUE) }
+    var initialLoadDone by remember { mutableStateOf(false) }
     if (progressiveDisplay) {
-        LaunchedEffect(Unit) { displayCount = messages.size }
         LaunchedEffect(messages) {
-            val oldCount = displayCount
-            if (messages.size > oldCount) {
+            if (!initialLoadDone && messages.isNotEmpty()) {
+                displayCount = messages.size
+                initialLoadDone = true
+            } else if (initialLoadDone && messages.size > displayCount) {
+                val oldCount = displayCount
                 for (i in oldCount until messages.size) {
-                    kotlinx.coroutines.delay((300L + (Math.random() * 1000)).toLong())
+                    if (i > oldCount) {
+                        kotlinx.coroutines.delay((500L + (Math.random() * 500)).toLong())
+                    }
                     displayCount = i + 1
                 }
-            } else {
+            } else if (messages.size < displayCount) {
                 displayCount = messages.size
             }
         }
@@ -100,14 +105,10 @@ fun MessageList(
     }
     val displayMessages = messages.take(displayCount)
 
-    // 自动滚动到底部
+    // 消息数量变化时自动滚动到底部（用户发送、AI回复等）
     LaunchedEffect(displayMessages.size) {
         if (displayMessages.isNotEmpty()) {
-            val layoutInfo = listState.layoutInfo
-            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            if (lastVisible >= displayMessages.size - 2) {
-                listState.animateScrollToItem(displayMessages.size - 1)
-            }
+            listState.scrollToItem(displayMessages.size - 1)
         }
     }
 

@@ -39,6 +39,12 @@ class MemoryRepository(private val wrapper: DatabaseWrapper) {
         }.executeAsOneOrNull()
     }
 
+    suspend fun getLatestDailyBySession(sessionId: String): Memory? = withContext(Dispatchers.Default) {
+        db.memoriesQueries.getLatestMemory(sessionId, MemoryType.DAILY.name) { id, sid, opId, type, content, keywords, preferences, taboos, createdAt, expiresAt ->
+            Memory(id, sid, opId, try { MemoryType.valueOf(type) } catch (_: Exception) { MemoryType.DAILY }, content, keywords, preferences, taboos, createdAt, expiresAt)
+        }.executeAsOneOrNull()
+    }
+
     suspend fun getLatestPrivateDaily(operatorId: String): Memory? = withContext(Dispatchers.Default) {
         db.memoriesQueries.getLatestPrivateDaily(operatorId) { id, sid, opId, type, content, keywords, preferences, taboos, createdAt, expiresAt ->
             Memory(id, sid, opId, try { MemoryType.valueOf(type) } catch (_: Exception) { MemoryType.DAILY }, content, keywords, preferences, taboos, createdAt, expiresAt)

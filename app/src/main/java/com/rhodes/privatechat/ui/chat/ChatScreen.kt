@@ -141,7 +141,7 @@ fun ChatScreen(
                 MessageList(
                     messages = messages,
                     listState = listState,
-                    progressiveDisplay = false,
+                    progressiveDisplay = true,
                     onRecall = { msgId, segIdx -> viewModel.recallMessageSegment(msgId, segIdx) },
                     onRegenerate = { viewModel.regenerateAiMessage(it) },
                     onContinue = { viewModel.continueAiMessage(it) },

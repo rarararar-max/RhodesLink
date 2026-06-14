@@ -17,7 +17,9 @@ import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.viewmodel.shared.SharedUtils
 import com.rhodes.privatechat.viewmodel.shared.UserProfile
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -36,7 +38,6 @@ class GroupChatViewModel(
     private val settings: SettingsRepository,
     private val sharedUtils: SharedUtils,
     private val appState: AppStateHolder,
-    private val scope: CoroutineScope,
     private val markSessionRead: (String) -> Unit,
     private val unhideSession: suspend (String) -> Unit,
     private val getUserProfile: () -> UserProfile,
@@ -44,6 +45,7 @@ class GroupChatViewModel(
     private val generateShortTermSummary: suspend (ChatSession, List<ChatMessage>?) -> Unit,
     private val sessionMessageCounter: MutableMap<String, Int>
 ) {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     companion object {
         const val DEBUG = true
     }

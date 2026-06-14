@@ -102,7 +102,7 @@ class MainViewModel(
     private val sessionMessageCounter = mutableMapOf<String, Int>()
     val momentsViewModel = MomentsViewModel(repository, settings, appState, viewModelScope) { getUserProfile() }
     val dispatchViewModel = DispatchViewModel(repository, settings, sharedUtils, operatorStateUpdater, appState, viewModelScope, { refreshAllOperatorStatus() }) { getUserProfile() }
-    val groupChatViewModel = GroupChatViewModel(repository, settings, sharedUtils, appState, viewModelScope, { chatViewModel.markSessionRead(it) }, { unhideSession(it) }, { getUserProfile() }, { t, m -> chatViewModel.getPromptTemplate(t, m) }, { s, msgs -> chatViewModel.generateShortTermSummary(s, msgs) }, sessionMessageCounter)
+    val groupChatViewModel = GroupChatViewModel(repository, settings, sharedUtils, appState, { chatViewModel.markSessionRead(it) }, { unhideSession(it) }, { getUserProfile() }, { t, m -> chatViewModel.getPromptTemplate(t, m) }, { s, msgs -> chatViewModel.generateShortTermSummary(s, msgs) }, sessionMessageCounter)
 
     private val _momentGenerateStatus: MutableStateFlow<MomentGenerateStatus> get() = _globalMomentStatus
     val momentGenerateStatus: StateFlow<MomentGenerateStatus> = _momentGenerateStatus.asStateFlow()
@@ -197,19 +197,22 @@ class MainViewModel(
         android.util.Log.d("MainVM", "** [DBG] ** init 实例: ${System.identityHashCode(this)}")
         viewModelScope.launch {
             repository.insertPresetOperators()
-            // 初始角色默认关闭自动发动态和主动私聊权限
-            val allOps = repository.getAllOperatorsSync()
-            for (op in allOps) {
-                settings.putOperatorDynPermission(op.id, false)
-                settings.putOperatorMsgPermission(op.id, false)
-            }
-            // 部分角色开启自动发言和发动态
-            val enabledOps = setOf("amiya", "kaltsit", "suzuran", "shu", "muelsyse", "exusiai", "priestess", "goldenglow", "zhuang_fangyi", "loxy")
-            for (op in allOps) {
-                if (op.id in enabledOps) {
-                    settings.putOperatorDynPermission(op.id, true)
-                    settings.putOperatorMsgPermission(op.id, true)
+            // 只在首次安装时设置默认权限，不覆盖用户手动修改
+            val permissionsDone = settings.getBoolean("permissions_initialized", false)
+            if (!permissionsDone) {
+                val allOps = repository.getAllOperatorsSync()
+                for (op in allOps) {
+                    settings.putOperatorDynPermission(op.id, false)
+                    settings.putOperatorMsgPermission(op.id, false)
                 }
+                val enabledOps = setOf("amiya", "kaltsit", "suzuran", "shu", "muelsyse", "exusiai", "priestess", "goldenglow", "zhuang_fangyi", "loxy")
+                for (op in allOps) {
+                    if (op.id in enabledOps) {
+                        settings.putOperatorDynPermission(op.id, true)
+                        settings.putOperatorMsgPermission(op.id, true)
+                    }
+                }
+                settings.putBoolean("permissions_initialized", true)
             }
             repository.migrateOldRelationships()
             repository.initPresetGroups()
@@ -311,8 +314,6 @@ class MainViewModel(
             viewModelScope.launch {
                 val delayMs = 5*60*1000 + (Math.random() * 5*60*1000).toLong()
                 delay(delayMs)
-                // 如果该干员当前正在聊天中，跳过（避免多余未读标记）
-                if (chatViewModel.selectedOperator.value?.id == op.id) return@launch
                 // 延迟到期后检查用户最近是否发了消息（5分钟内），是则取消
                 val session = repository.getSessionByOperator(op.id)
                 if (session != null) {
@@ -461,6 +462,12 @@ class MainViewModel(
             } else op.emotion
 
             repository.updateOperator(op.copy(location = loc, activity = activity, emotion = emotion))
+        }
+        // 同步聊天页顶栏的干员状态
+        val selected = chatViewModel.selectedOperator.value
+        if (selected != null) {
+            val fresh = repository.getOperator(selected.id)
+            if (fresh != null) chatViewModel.updateSelectedOperator(fresh)
         }
     }
 

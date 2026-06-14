@@ -15,6 +15,7 @@ import org.koin.java.KoinJavaComponent.inject
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        com.rhodes.privatechat.util.DebugLogger.log("Lifecycle", "onCreate savedInstanceState=${savedInstanceState != null}")
         val settings: SettingsRepository by inject(SettingsRepository::class.java)
         isDarkMode = settings.darkMode
         window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
@@ -27,5 +28,25 @@ class MainActivity : ComponentActivity() {
                 AppNavigation()
             }
         }
+    }
+    override fun onPause() {
+        super.onPause()
+        com.rhodes.privatechat.util.DebugLogger.log("Lifecycle", "onPause")
+    }
+    override fun onStop() {
+        super.onStop()
+        com.rhodes.privatechat.util.DebugLogger.log("Lifecycle", "onStop")
+    }
+    override fun onDestroy() {
+        super.onDestroy()
+        com.rhodes.privatechat.util.DebugLogger.log("Lifecycle", "onDestroy")
+    }
+    override fun onRestart() {
+        super.onRestart()
+        com.rhodes.privatechat.util.DebugLogger.log("Lifecycle", "onRestart")
+    }
+    override fun onResume() {
+        super.onResume()
+        com.rhodes.privatechat.util.DebugLogger.log("Lifecycle", "onResume")
     }
 }

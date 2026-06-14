@@ -11,16 +11,23 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
@@ -81,6 +88,9 @@ fun DiaryScreen(
         }
     }
     val context = LocalContext.current
+    var searchText by remember { mutableStateOf("") }
+    val filteredOps = if (searchText.isBlank()) diaryOps
+        else diaryOps.filter { it.name.contains(searchText, ignoreCase = true) }
     var selectedName by rememberSaveable { mutableStateOf("") }
     LaunchedEffect(diaryOps) {
         if (selectedName.isEmpty() || diaryOps.none { it.name == selectedName }) {
@@ -124,17 +134,45 @@ fun DiaryScreen(
         }
         HorizontalDivider(color = Divider)
 
+        // 搜索框
+        Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = searchText, onValueChange = { searchText = it },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("搜索干员...", fontSize = 14.sp, color = TextTertiary) },
+                leadingIcon = { Icon(Icons.Default.Search, null, tint = TextTertiary, modifier = Modifier.size(18.dp)) },
+                trailingIcon = {
+                    if (searchText.isNotBlank()) IconButton(onClick = { searchText = "" }, modifier = Modifier.size(18.dp)) {
+                        Icon(Icons.Default.Clear, "清除", tint = TextTertiary, modifier = Modifier.size(14.dp))
+                    }
+                },
+                shape = RoundedCornerShape(12.dp), singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Divider, unfocusedBorderColor = Divider),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { })
+            )
+        }
+        HorizontalDivider(color = Divider)
+
         Row(modifier = Modifier.fillMaxSize()) {
             AnimatedVisibility(visible = showPanel, enter = slideInHorizontally(initialOffsetX = { -it }), exit = slideOutHorizontally(targetOffsetX = { -it })) {
                 Column(modifier = Modifier.fillMaxHeight().width(88.dp).background(Surface)) {
                     LazyColumn {
-                        items(diaryOps) { op ->
+                        if (filteredOps.isEmpty() && searchText.isNotBlank()) {
+                            item {
+                                Box(Modifier.fillMaxWidth().padding(vertical = 20.dp), contentAlignment = Alignment.Center) {
+                                    Text("无匹配", fontSize = 12.sp, color = TextTertiary)
+                                }
+                            }
+                        } else {
+                            items(filteredOps) { op ->
                             val opEntity = operators.find { it.id == op.id || it.name == op.name }
                             Column(modifier = Modifier.fillMaxWidth().background(if (op.name == selectedName) Primary.copy(alpha = 0.1f) else Color.Transparent).clickable { selectedName = op.name }.padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                                 OperatorAvatarImage(avatarUri = opEntity?.avatarUri ?: "", name = op.name, modifier = Modifier.size(40.dp))
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(op.name, fontSize = 10.sp, color = if (op.name == selectedName) Primary else TextSecondary)
                             }
+                        }
                         }
                     }
                 }

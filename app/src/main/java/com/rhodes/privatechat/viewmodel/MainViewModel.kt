@@ -220,7 +220,7 @@ class MainViewModel(
             // 新群组默认从主页隐藏，仅在通讯录显示（只执行一次）
             val initialHiddenDone = settings.getBoolean("initial_hidden_done", false)
             if (!initialHiddenDone) {
-                val groupIds = listOf("group_elite", "group_penguin", "group_lungmen", "group_rhine", "group_sui")
+                val groupIds = listOf("group_elite")
                 val hidden = settings.hiddenIds.toMutableSet()
                 hidden.addAll(groupIds)
                 settings.hiddenIds = hidden
@@ -537,7 +537,7 @@ class MainViewModel(
         val hidden = settings.hiddenIds.toMutableSet()
         hidden.add(sessionId)
         settings.hiddenIds = hidden
-        appState.clearChatListOnly()
+        appState.refreshAllSessions(appState.allSessions.value, hidden)
     }
 
     fun clearAllMessages() = sessionViewModel.clearAllMessages()
@@ -930,7 +930,7 @@ ${summaries}
         dispatchViewModel.startDispatch(id, task, duration, budget, operatorIds, onSuccess)
     fun finishDispatch(dispatchId: String) = dispatchViewModel.finishDispatch(dispatchId)
 
-    fun deleteGroup(groupSessionId: String) = groupChatViewModel.deleteGroup(groupSessionId)
+    fun deleteGroup(groupSessionId: String, onComplete: () -> Unit = {}) = groupChatViewModel.deleteGroup(groupSessionId, onComplete)
 
     fun isAutoGroupChatEnabled(groupId: String): Boolean = groupChatViewModel.isAutoGroupChatEnabled(groupId)
     fun setAutoGroupChatEnabled(groupId: String, enabled: Boolean) = groupChatViewModel.setAutoGroupChatEnabled(groupId, enabled)

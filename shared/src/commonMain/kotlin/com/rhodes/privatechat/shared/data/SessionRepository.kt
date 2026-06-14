@@ -90,33 +90,21 @@ class SessionRepository(private val wrapper: DatabaseWrapper) {
 
     // --- Preset groups ---
     suspend fun initPresetGroups() = withContext(Dispatchers.Default) {
-        val presetIds = listOf("group_elite", "group_penguin", "group_lungmen", "group_rhine", "group_sui")
-        val allExist = presetIds.all { id -> db.chatSessionsQueries.getSession(id).executeAsOneOrNull() != null }
-        if (allExist) return@withContext
         val now = Clock.System.now().toEpochMilliseconds()
         val groups = listOf(
             ChatSession(id = "group_elite", operatorId = "group_elite", operatorName = "精英干员茶水间",
                 members = "blaze,rosmontis,logos,misery,ascalon,arc",
-                rules = "精英干员的非正式聊天群，出任务之余闲聊放松。", lastTime = now),
-            ChatSession(id = "group_penguin", operatorId = "group_penguin", operatorName = "企鹅物流快乐群",
-                members = "exusiai,texas,croissant,sora",
-                rules = "企鹅物流内部群，聊送件日常、约饭。", lastTime = now),
-            ChatSession(id = "group_lungmen", operatorId = "group_lungmen", operatorName = "龙门近卫局工作群",
-                members = "chen,hoshiguma,waaifu,swire,lin",
-                rules = "龙门近卫局工作沟通群。", lastTime = now),
-            ChatSession(id = "group_rhine", operatorId = "group_rhine", operatorName = "莱茵生命学术交流",
-                members = "saria,silence,muelsyse,ifrit,ptilopsis",
-                rules = "莱茵生命前同事交流群。学术讨论为主。", lastTime = now),
-            ChatSession(id = "group_sui", operatorId = "group_sui", operatorName = "岁家乐游",
-                members = "chongyue,shu,ling,nian,dusk,yu",
-                rules = "岁家兄弟姐妹群。聊家常、分享美食。", lastTime = now)
+                rules = "精英干员的非正式聊天群，出任务之余闲聊放松。", lastTime = now)
         )
         groups.forEach { group ->
-            db.chatSessionsQueries.insertSession(
-                group.id, group.operatorId, group.operatorName, group.lastMessage, group.lastTime,
-                group.mode, if (group.isPinned) 1L else 0L, group.unreadCount.toLong(),
-                group.members, group.rules, group.avatarUri, group.mutedMembers
-            )
+            val exists = db.chatSessionsQueries.getSession(group.id).executeAsOneOrNull() != null
+            if (!exists) {
+                db.chatSessionsQueries.insertSession(
+                    group.id, group.operatorId, group.operatorName, group.lastMessage, group.lastTime,
+                    group.mode, if (group.isPinned) 1L else 0L, group.unreadCount.toLong(),
+                    group.members, group.rules, group.avatarUri, group.mutedMembers
+                )
+            }
         }
     }
 

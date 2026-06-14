@@ -208,9 +208,8 @@ fun GroupEditScreen(
             text = { Text("解散后群聊将永久删除且无法恢复，确定要解散吗？", color = TextSecondary) },
             confirmButton = {
                 TextButton(onClick = {
-                    viewModel.deleteGroup(groupId)
                     showDismissConfirm = false
-                    onBack()
+                    viewModel.deleteGroup(groupId) { onBack() }
                 }) { Text("确认解散", color = ErrorRed) }
             },
             dismissButton = { TextButton(onClick = { showDismissConfirm = false }) { Text("取消", color = TextSecondary) } }

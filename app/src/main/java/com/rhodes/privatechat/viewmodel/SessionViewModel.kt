@@ -34,7 +34,7 @@ class SessionViewModel(
                 hidden.add(session.id)
             }
             settings.hiddenIds = hidden
-            appState.clearChatListOnly()
+            appState.refreshAllSessions(appState.allSessions.value, hidden)
         }
     }
 

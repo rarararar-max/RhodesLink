@@ -131,12 +131,13 @@ class GroupChatViewModel(
         scope.launch { repository.deleteSessionMessages(groupId) }
     }
 
-    fun deleteGroup(groupSessionId: String) {
+    fun deleteGroup(groupSessionId: String, onComplete: () -> Unit = {}) {
         stopAutoGroupChat(groupSessionId)
         settings.remove("group_auto_$groupSessionId")
         scope.launch {
             repository.deleteSessionMessages(groupSessionId)
             repository.deleteSession(groupSessionId)
+            onComplete()
         }
     }
 

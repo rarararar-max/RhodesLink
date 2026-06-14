@@ -422,7 +422,7 @@ private fun RelationshipEditItem(
         }
         Spacer(modifier = Modifier.height(8.dp))
         Text("${opName}是${rel.relatedOperatorName}的", fontSize = 12.sp, color = TextPrimary, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 4.dp))
-        TypeDropdown(selected = rel.type, onSelect = { onUpdate(rel.copy(type = it)) })
+        TypePicker(selected = rel.type, onSelect = { onUpdate(rel.copy(type = it)) })
         Spacer(modifier = Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("亲密度", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.width(48.dp))
@@ -435,27 +435,54 @@ private fun RelationshipEditItem(
 }
 
 @Composable
-private fun TypeDropdown(selected: RelationshipType, onSelect: (RelationshipType) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
+private fun TypePicker(selected: RelationshipType, onSelect: (RelationshipType) -> Unit) {
+    var showPicker by remember { mutableStateOf(false) }
     Column {
         Text("关系类型", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(bottom = 4.dp))
-        Box {
-            Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(Surface)
-                .clickable { expanded = true }.padding(horizontal = 12.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(typeName(selected), fontSize = 13.sp, color = TextPrimary)
-                Text("▼", fontSize = 10.sp, color = TextTertiary)
-            }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, containerColor = Surface, modifier = Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
-                RelationshipType.values().forEach { type ->
-                    DropdownMenuItem(
-                        text = { Text(typeName(type), color = if (type == selected) Blue400 else TextPrimary) },
-                        onClick = { onSelect(type); expanded = false }
-                    )
-                }
-            }
+        Row(
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(Surface)
+                .clickable { showPicker = true }.padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(typeName(selected), fontSize = 13.sp, color = TextPrimary)
+            Text("▼", fontSize = 10.sp, color = TextTertiary)
         }
+    }
+    if (showPicker) {
+        AlertDialog(
+            onDismissRequest = { showPicker = false },
+            title = { Text("选择关系类型", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary) },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    RelationshipType.values().forEach { type ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (type == selected) PrimaryContainer else Color.Transparent)
+                                .clickable { onSelect(type); showPicker = false }
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                typeName(type),
+                                fontSize = 14.sp,
+                                color = if (type == selected) Primary else TextPrimary,
+                                fontWeight = if (type == selected) FontWeight.SemiBold else FontWeight.Normal
+                            )
+                        }
+                        if (type != RelationshipType.values().last()) {
+                            HorizontalDivider(color = Divider.copy(alpha = 0.3f))
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showPicker = false }) {
+                    Text("取消", color = TextSecondary)
+                }
+            },
+            containerColor = Card
+        )
     }
 }
 

@@ -9,14 +9,15 @@ object DebugLogger {
     private const val MAX_ENTRIES = 500
     private val entries = mutableListOf<LogEntry>()
     private val lock = Any()
+    private val idCounter = java.util.concurrent.atomic.AtomicInteger(0)
 
-    data class LogEntry(val timestamp: Long, val tag: String, val message: String) {
+    data class LogEntry(val id: Int, val timestamp: Long, val tag: String, val message: String) {
         val formattedTime: String get() =
             SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date(timestamp))
     }
 
     fun log(tag: String, message: String) {
-        val entry = LogEntry(System.currentTimeMillis(), tag, message)
+        val entry = LogEntry(idCounter.incrementAndGet(), System.currentTimeMillis(), tag, message)
         synchronized(lock) {
             entries.add(entry)
             if (entries.size > MAX_ENTRIES) {

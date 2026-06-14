@@ -44,6 +44,7 @@ import com.rhodes.privatechat.shared.model.OfflineModeResponse
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -349,6 +350,7 @@ class MainViewModel(
             "OPERATOR_NAME" to op.name,
             "OPERATOR_TITLE" to (if (op.title.isNullOrBlank()) "" else "（${op.title}）"),
             "OPERATOR_PERSONA" to (op.privatePrompt.ifBlank { op.description }),
+            "OPERATOR_GENDER" to (op.gender.ifBlank { "" }),
             "CURRENT_LOCATION" to op.location,
             "CURRENT_STATE" to op.activity,
             "CURRENT_EMOTION" to op.emotion,
@@ -487,12 +489,14 @@ class MainViewModel(
             android.util.Log.d("MomentGen", "** [DBG] ** 清理了 ${oldMoments.size} 条 7 天前的动态")
         }
         if (!autoGenerating.compareAndSet(false, true)) return
+        DebugLogger.log("MomentGen", "autoGenerating=true")
         viewModelScope.launch {
             try {
                 val dateKey = beijingSdf("yyyyMMdd").format(java.util.Date())
                 val target = intPref("daily_moment_target", 2)
                 val permCount = _operators.value.count { settings.getOperatorDynPermission(it.id) }
                 android.util.Log.d("MomentGen", "** [DBG] ** target=$target 有权限=$permCount 总干员=${_operators.value.size}")
+                DebugLogger.log("MomentGen", "调用 generateAllMoments target=$target dateKey=$dateKey")
                 if (target <= 0) return@launch
                 generateAllMoments(target, dateKey) { /* silent */ }
                 // 清理 7 天前的计数
@@ -502,6 +506,7 @@ class MainViewModel(
                 }
             } finally {
                 autoGenerating.set(false)
+                DebugLogger.log("MomentGen", "autoGenerating=false")
             }
         }
     }
@@ -895,8 +900,9 @@ ${summaries}
                      autoPost: Boolean = true, allowChat: Boolean = true,
                      relationships: List<com.rhodes.privatechat.shared.model.Relationship> = emptyList(),
                      activityLevel: Float = 0.5f,
+                     gender: String = "",
                      onComplete: () -> Unit = {}) =
-        operatorViewModel.saveOperator(id, name, title, description, privatePrompt, groupPrompt, userRelation, avatarUri, autoPost, allowChat, relationships, activityLevel, onComplete)
+        operatorViewModel.saveOperator(id, name, title, description, privatePrompt, groupPrompt, userRelation, avatarUri, autoPost, allowChat, relationships, activityLevel, gender, onComplete)
 
     fun loadRelationships(operatorId: String, callback: (List<com.rhodes.privatechat.shared.model.Relationship>) -> Unit) =
         operatorViewModel.loadRelationships(operatorId, callback)
@@ -983,7 +989,7 @@ ${summaries}
 
     fun sendGroupMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online", autoSpeak: Boolean = false, isAuto: Boolean = false, onMessageSent: () -> Unit = {}) =
         groupChatViewModel.sendGroupMessage(groupSessionId, groupName, text, mode, autoSpeak, isAuto, onMessageSent)
-    fun generateAllMoments(target: Int = 1, dateKey: String = "", force: Boolean = false, onProgress: (String) -> Unit = {}) {
+    suspend fun generateAllMoments(target: Int = 1, dateKey: String = "", force: Boolean = false, onProgress: (String) -> Unit = {}) {
         val isAuto = dateKey.isNotBlank()
         val today = dateKey.ifBlank { beijingSdf("yyyyMMdd").format(java.util.Date()) }
         // 全天 9 个时段，从清晨到深夜
@@ -993,7 +999,9 @@ ${summaries}
         )
         val currentHour = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
             .get(java.util.Calendar.HOUR_OF_DAY)
-        viewModelScope.launch {
+        coroutineScope {
+            DebugLogger.log("MomentGen", "generateAllMoments 内部协程启动 isAuto=$isAuto target=$target force=$force operators=${_operators.value.size}")
+            var totalGenerated = 0
             for (op in _operators.value) {
                 val allowDyn = settings.getOperatorDynPermission(op.id)
                 if (!allowDyn && !force) continue
@@ -1058,6 +1066,8 @@ ${summaries}
                             if (isAuto) settings.putMomentCount(op.id, today, generated + 1)
                             val moment = Moment(operatorId = op.id, operatorName = op.name, content = content, createdAt = fakeTs)
                             val momentId = repository.insertMoment(moment)
+                            totalGenerated++
+                            DebugLogger.log("MomentGen", "插入动态: operator=${op.name}, id=$momentId, total=$totalGenerated")
                             refreshMomentsNow()
                             generated++
                             // 互动异步化：点赞和评论在后台生成，不阻塞下一条动态
@@ -1425,6 +1435,7 @@ ${summaries}
                 val dReplacements = mapOf(
                     "OPERATOR_NAME" to op.name,
                     "OPERATOR_PERSONA" to (op.privatePrompt.ifBlank { op.description }),
+                    "OPERATOR_GENDER" to (op.gender.ifBlank { "" }),
                     "CURRENT_DATE" to todayDisplay,
                     "YESTERDAY_DATE" to yesterdayDisplay,
                     "DIARY_MIN_CHARS" to settings.diaryMinChars.toString(),

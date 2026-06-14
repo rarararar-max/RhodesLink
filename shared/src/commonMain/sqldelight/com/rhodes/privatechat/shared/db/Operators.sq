@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS operators (
     name TEXT NOT NULL,
     title TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL DEFAULT '',
+    gender TEXT NOT NULL DEFAULT '',
     avatarUri TEXT NOT NULL DEFAULT '',
     location TEXT NOT NULL DEFAULT '宿舍',
     activity TEXT NOT NULL DEFAULT '休息',
@@ -31,11 +32,11 @@ getCount:
 SELECT COUNT(*) FROM operators;
 
 insertOperator:
-INSERT OR REPLACE INTO operators(id, name, title, description, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, userRelation, lmb, attack, defense, meldPref, activityLevel)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO operators(id, name, title, description, gender, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, userRelation, lmb, attack, defense, meldPref, activityLevel)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 updateOperator:
-UPDATE operators SET name = ?, title = ?, description = ?, avatarUri = ?, location = ?, activity = ?, emotion = ?, intimacy = ?, privatePrompt = ?, groupPrompt = ?, userRelation = ?, lmb = ?, attack = ?, defense = ?, meldPref = ?, activityLevel = ?
+UPDATE operators SET name = ?, title = ?, description = ?, gender = ?, avatarUri = ?, location = ?, activity = ?, emotion = ?, intimacy = ?, privatePrompt = ?, groupPrompt = ?, userRelation = ?, lmb = ?, attack = ?, defense = ?, meldPref = ?, activityLevel = ?
 WHERE id = ?;
 
 updateIntimacy:
@@ -51,8 +52,8 @@ deleteOperator:
 DELETE FROM operators WHERE id = ?;
 
 insertAllOperators:
-INSERT OR REPLACE INTO operators(id, name, title, description, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, userRelation, lmb, attack, defense, meldPref, activityLevel)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO operators(id, name, title, description, gender, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, userRelation, lmb, attack, defense, meldPref, activityLevel)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 deleteAllOperators:
 DELETE FROM operators;

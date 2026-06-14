@@ -8,6 +8,7 @@ data class Operator(
     val name: String,
     val title: String = "",
     val description: String = "",
+    val gender: String = "",
     val avatarUri: String = "",
     val location: String = "宿舍",
     val activity: String = "休息",

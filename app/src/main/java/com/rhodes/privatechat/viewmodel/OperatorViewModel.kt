@@ -23,6 +23,7 @@ class OperatorViewModel(
         autoPost: Boolean = true, allowChat: Boolean = true,
         relationships: List<Relationship> = emptyList(),
         activityLevel: Float = 0.5f,
+        gender: String = "",
         onComplete: () -> Unit = {}
     ) {
         scope.launch {
@@ -30,7 +31,8 @@ class OperatorViewModel(
                 val existing = repository.getOperator(id)
                 val op = Operator(
                     id = id, name = name, title = title,
-                    description = description, location = existing?.location ?: "宿舍",
+                    description = description, gender = gender,
+                    location = existing?.location ?: "宿舍",
                     activity = existing?.activity ?: "休息", emotion = existing?.emotion ?: "平静",
                     intimacy = existing?.intimacy ?: 0,
                     privatePrompt = if (privatePrompt.isNotBlank()) privatePrompt else existing?.privatePrompt ?: "",

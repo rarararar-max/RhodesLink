@@ -66,7 +66,7 @@ fun DebugLogScreen(onBack: () -> Unit) {
                 modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                items(logs, key = { "${it.timestamp}_${it.tag}" }) { entry ->
+                items(logs, key = { it.id }) { entry ->
                     val tagColor = when {
                         entry.tag.contains("ERROR") -> ErrorRed
                         entry.tag.contains("AI") -> AccentOrange

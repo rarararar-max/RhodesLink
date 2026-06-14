@@ -22,6 +22,7 @@ object PromptTemplates {
 
 【你扮演的角色信息】
 名字：{{OPERATOR_NAME}}
+性别：{{OPERATOR_GENDER}}
 身份：{{OPERATOR_TITLE}}
 人设：{{OPERATOR_PERSONA}}
 
@@ -36,8 +37,6 @@ object PromptTemplates {
 姓名：{{USER_NAME}}
 性别：{{USER_GENDER}}
 设定：{{USER_BIO}}
-
-用户最新的发言是：{{USER_CONTENT}}
 
 {{AI_ANALYSIS}}
 {{HYPNOSIS}}
@@ -163,6 +162,7 @@ object PromptTemplates {
 
 【你扮演的角色信息】
 名字：{{OPERATOR_NAME}}
+性别：{{OPERATOR_GENDER}}
 身份：{{OPERATOR_TITLE}}
 人设：{{OPERATOR_PERSONA}}
 
@@ -171,8 +171,6 @@ object PromptTemplates {
 你所在的位置是：{{CURRENT_LOCATION}}
 你正在做的事情是：{{CURRENT_STATE}}
 你此刻的情绪是：{{CURRENT_EMOTION}}
-
-用户的描述是：{{USER_CONTENT}}
 
 {{AI_ANALYSIS}}
 {{HYPNOSIS}}
@@ -290,6 +288,7 @@ object PromptTemplates {
 
 【你扮演的角色信息】
 名字：{{OPERATOR_NAME}}
+性别：{{OPERATOR_GENDER}}
 身份：{{OPERATOR_TITLE}}
 人设：{{OPERATOR_PERSONA}}
 
@@ -304,8 +303,6 @@ object PromptTemplates {
 姓名：{{USER_NAME}}
 性别：{{USER_GENDER}}
 设定：{{USER_BIO}}
-
-用户最新的发言是：{{USER_CONTENT}}
 
 {{AI_ANALYSIS}}
 {{HYPNOSIS}}
@@ -856,7 +853,7 @@ object PromptTemplates {
 
     private val DIARY = """
 【角色】
-你是一名明日方舟干员，名叫{{OPERATOR_NAME}}。现在是{{CURRENT_DATE}}，你正在写昨天的日记，回顾昨天发生的事情。
+你是一名明日方舟干员，名叫{{OPERATOR_NAME}}，{{OPERATOR_GENDER}}。现在是{{CURRENT_DATE}}，你正在写昨天的日记，回顾昨天发生的事情。
 
 【你的性格与人设】
 {{OPERATOR_PERSONA}}

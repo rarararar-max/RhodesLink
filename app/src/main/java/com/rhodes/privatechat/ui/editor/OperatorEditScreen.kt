@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
@@ -90,6 +91,7 @@ fun OperatorEditScreen(
 
     var name by remember { mutableStateOf(operator?.name ?: "新干员") }
     var title by remember { mutableStateOf(operator?.title ?: "") }
+    var gender by remember { mutableStateOf(operator?.gender ?: "") }
     var activity by remember { mutableFloatStateOf(operator?.activityLevel ?: 0.5f) }
     val settings: SettingsRepository = koinInject()
     var autoPost by remember { mutableStateOf(settings.getOperatorDynPermission(operator?.id ?: "")) }
@@ -119,6 +121,7 @@ fun OperatorEditScreen(
             autoPost = autoPost, allowChat = allowChat,
             relationships = relationships,
             activityLevel = activity,
+            gender = gender,
             onComplete = { onBack() }
         )
     }
@@ -141,6 +144,17 @@ fun OperatorEditScreen(
                         shape = RoundedCornerShape(8.dp),
                         colors = fieldColors(),
                         singleLine = true
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                LabeledField("性别（选填）") {
+                    OutlinedTextField(
+                        value = gender, onValueChange = { gender = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = fieldColors(),
+                        singleLine = true,
+                        placeholder = { Text("如：男、女、无性别", fontSize = 13.sp, color = TextTertiary) }
                     )
                 }
                 Spacer(modifier = Modifier.height(8.dp))
@@ -433,7 +447,7 @@ private fun TypeDropdown(selected: RelationshipType, onSelect: (RelationshipType
                 Text(typeName(selected), fontSize = 13.sp, color = TextPrimary)
                 Text("▼", fontSize = 10.sp, color = TextTertiary)
             }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, containerColor = Surface) {
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, containerColor = Surface, modifier = Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
                 RelationshipType.values().forEach { type ->
                     DropdownMenuItem(
                         text = { Text(typeName(type), color = if (type == selected) Blue400 else TextPrimary) },

@@ -332,13 +332,7 @@ ${recentChats.ifBlank { "暂无" }}
                                     innerThoughts = viewModel.sharedUtils.chat(listOf(
                                         AiMessage("system", innerPrompt)
                                     ), "InnerThoughts")
-                                    val thoughtText = innerThoughts
-                                    if (!thoughtText.isNullOrBlank()) {
-                                        val session = viewModel.currentSession.value
-                                        if (session != null) {
-                                            viewModel.insertMessage(session.id, viewModel.selectedOperator.value?.name ?: "干员", "（内心独白）${thoughtText}")
-                                        }
-                                    }
+                                    // 内心独白只在弹窗显示，不插入聊天记录
                                 } catch (_: Exception) { innerThoughts = "读取失败，请重试" }
                                 loading = false
                             }

@@ -101,7 +101,7 @@ fun DataManagementScreen(
                                         settings.putInt(item.prefKey, days)
                                         viewModel.cleanupAllExpired()
                                         refreshKey++
-                                        android.widget.Toast.makeText(context, "已清理${item.label}", android.widget.Toast.LENGTH_SHORT).show()
+                                        android.widget.Toast.makeText(context, "已保存", android.widget.Toast.LENGTH_SHORT).show()
                                     }.padding(horizontal = 8.dp, vertical = 4.dp)
                             )
                         }

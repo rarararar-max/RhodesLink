@@ -543,7 +543,6 @@ ${recentDialogues}
             val placeholder = ChatMessage(id = placeholderId, sessionId = session.id, senderName = session.operatorName, content = "正在重新生成...", type = "text", mode = mode, isMe = false)
             repository.sendMessage(session.id, placeholder)
             _messages.value = _messages.value + placeholder
-            _inputText.value = userMsg.content
 
             var mutexLocked = false
             try {
@@ -555,13 +554,12 @@ ${recentDialogues}
                 val serializedJson = try { json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed) } catch (_: Exception) { parsed.toString() }
                 val rawJson = sharedUtils.aiService.cleanJson(serializedJson)
                 if (rawJson.isNotBlank()) {
-                    // 成功：删旧消息 + 占位，插入新 AI 回复
+                    // 成功：删旧 AI 回复 + 占位，用新 AI 回复替换
                     repository.deleteMessage(msgId)
-                    repository.deleteMessage(userMsg.id)
                     repository.deleteMessage(placeholderId)
                     val newAiMsgId = repository.getNextMessageId()
                     repository.sendMessage(session.id, ChatMessage(id = newAiMsgId, sessionId = session.id, senderName = session.operatorName, content = rawJson, type = "ai_json", mode = mode, isMe = false))
-                    _messages.value = _messages.value.filter { it.id != msgId && it.id != userMsg.id && it.id != placeholderId }
+                    _messages.value = _messages.value.filter { it.id != msgId && it.id != placeholderId }
                     if (parsed.emotion.isNotBlank() || parsed.location.isNotBlank() || parsed.state.isNotBlank()) {
                         operatorStateUpdater.updateOperatorStatus(session.operatorId, parsed.location, parsed.state, parsed.emotion) { opId, newLoc, newAct, newEmo ->
                             if (opId == _selectedOperator.value?.id) { _selectedOperator.value = _selectedOperator.value?.copy(location = newLoc, activity = newAct, emotion = newEmo) }
@@ -771,10 +769,11 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         val systemPrompt = sharedUtils.compactTemplate(sharedUtils.applyTemplate(getPromptTemplate("private", mode), mapOf(
             "CURRENT_TIME" to sharedUtils.beijingSdf("yyyy-MM-dd HH:mm").format(java.util.Date()),
             "USER_NAME" to profile.nickname, "USER_GENDER" to profile.gender.ifBlank { "未知" }, "USER_BIO" to profile.bio.ifBlank { "无" },
-            "USER_CONTENT" to userContent, "AI_ANALYSIS" to analysisBlock,             "HYPNOSIS" to hypnosisBlock,
+            "AI_ANALYSIS" to analysisBlock,             "HYPNOSIS" to hypnosisBlock,
             "TRANSITION_NOTICE" to transitionNotice,
             "OPERATOR_NAME" to (op?.name ?: session.operatorName), "OPERATOR_TITLE" to (op?.title ?: ""),
             "OPERATOR_PERSONA" to (op?.privatePrompt?.ifBlank { op.description } ?: ""),
+            "OPERATOR_GENDER" to (op?.gender?.ifBlank { "" } ?: ""),
             "CURRENT_LOCATION" to (op?.location ?: "宿舍"), "CURRENT_STATE" to (op?.activity ?: "休息"), "CURRENT_EMOTION" to (op?.emotion ?: "平静"),
             "LONG_TERM_IMPRESSION" to (longTerm?.content ?: "暂无"),
             "MEMORY_ANCHORS" to sharedUtils.pickAnchors(anchors, 5).joinToString("\n") { "- ${sharedUtils.anchorTimeLabel(it)} ${it.content}" }.ifBlank { "暂无" },
@@ -791,11 +790,19 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             "SEG_MIN" to (settings.narSegMin + settings.diaSegMin).toString(),
             "SEG_MAX" to (settings.narSegMax + settings.diaSegMax).toString()
         )))
-        val messages = repository.getMessagesSync(session.id).let { msgs ->
+        val rawMsgs = repository.getMessagesSync(session.id).let { msgs ->
             val limit = settings.historyMessages
             if (limit > 0) msgs.takeLast(limit) else msgs
-        }.map { msg -> AiMessage(if (msg.isMe) "user" else "assistant", if (msg.isMe) "用户：${msg.content}" else msg.content) }.toMutableList()
+        }.toMutableList()
+        // 去掉最后一条用户消息，避免与 {{USER_CONTENT}} 重复
+        if (rawMsgs.lastOrNull()?.isMe == true && rawMsgs.last().content == userContent) {
+            rawMsgs.removeAt(rawMsgs.lastIndex)
+        }
+        val messages = rawMsgs.map { msg -> AiMessage(if (msg.isMe) "user" else "assistant", if (msg.isMe) "用户：${msg.content}" else msg.content) }.toMutableList()
         messages.add(0, AiMessage("system", systemPrompt))
+        if (userContent.isNotBlank()) {
+            messages.add(AiMessage("user", "用户：$userContent"))
+        }
         return messages
     }
 

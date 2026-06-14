@@ -288,7 +288,8 @@ class GroupChatViewModel(
                         val key = "${groupSessionId}_${m.id}"
                         val act = groupActivityCache.computeIfAbsent(key) { "活跃${"%.1f".format(0.5 + Math.random() * 0.5)}" }
                         val titleStr = if (m.title.isBlank()) "" else "，${m.title}"
-                        append("${m.name}（${act}${titleStr}）：${m.groupPrompt.ifBlank { m.description }}\n")
+                        val genderStr = if (m.gender.isNotBlank()) "，${m.gender}" else ""
+                        append("${m.name}（${act}${genderStr}${titleStr}）：${m.groupPrompt.ifBlank { m.description }}\n")
                     }
                 }
                 val userMessage = if (isAuto) "" else if (autoSpeak) "（群聊已空闲一段时间，干员们自然地闲聊起来，无需等待用户发言。）" else text
@@ -332,6 +333,10 @@ class GroupChatViewModel(
                 val allHistory = repository.getMessagesSync(groupSessionId).let { msgs ->
                     val limited = if (historyLimit > 0) msgs.takeLast(historyLimit) else msgs
                     limited.filter { msg -> msg.isMe || msg.type == "system" || msg.senderName in activeNames }
+                }.toMutableList()
+                // 去掉最后一条用户消息，避免与下文重复
+                if (!isAuto && allHistory.lastOrNull()?.isMe == true) {
+                    allHistory.removeAt(allHistory.lastIndex)
                 }
                 for (msg in allHistory) {
                     val role = if (msg.isMe) "user" else "assistant"

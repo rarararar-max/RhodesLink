@@ -39,13 +39,15 @@ class DataViewModel(
         scope.launch {
             val now = System.currentTimeMillis()
             val msgDays = settings.cleanDaysMessages
-            repository.deleteOldMessages(now - msgDays * 86400000L)
+            if (msgDays > 0) repository.deleteOldMessages(now - msgDays * 86400000L)
             val diaryDays = settings.cleanDaysDiaries
-            repository.deleteOldDiaries(now - diaryDays * 86400000L)
+            if (diaryDays > 0) repository.deleteOldDiaries(now - diaryDays * 86400000L)
             val momentDays = settings.cleanDaysMoments
-            repository.deleteOldMoments(now - momentDays * 86400000L)
+            if (momentDays > 0) repository.deleteOldMoments(now - momentDays * 86400000L)
             val dispatchDays = settings.cleanDaysDispatches
-            repository.deleteOldDispatches(now - dispatchDays * 86400000L)
+            if (dispatchDays > 0) repository.deleteOldDispatches(now - dispatchDays * 86400000L)
+            val anchorDays = settings.cleanDaysAnchors
+            if (anchorDays > 0) repository.deleteOldAnchors(now - anchorDays * 86400000L)
         }
     }
 

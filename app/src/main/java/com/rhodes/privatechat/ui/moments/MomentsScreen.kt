@@ -11,7 +11,9 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Message
@@ -279,7 +281,7 @@ private fun MomentCardWithInteraction(moment: MomentEntity, viewModel: MainViewM
         val allOps = operators
         var selectedMentions by remember { mutableStateOf(setOf<String>()) }
         AlertDialog(onDismissRequest = { showAtPicker = false }, title = { Text("@谁？", color = TextPrimary) }, text = {
-            Column {
+            Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
                 names.forEach { name ->
                     val checked = name in selectedMentions
                     val opEntity = allOps.find { it.name == name }

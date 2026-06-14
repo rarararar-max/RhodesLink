@@ -1047,7 +1047,8 @@ ${summaries}
                             "RECENT_DAILY_SUMMARY" to (repository.getLatestPrivateDaily(op.id)?.content ?: "无"),
                             "CURRENT_DATE" to beijingSdf("yyyy年MM月dd日").format(fakeTs),
                             "USER_NAME" to profile.nickname,
-"MOMENT_MIN_CHARS" to settings.momentMinChars.toString(),
+                            "USER_GENDER" to profile.gender.ifBlank { "" },
+                            "MOMENT_MIN_CHARS" to settings.momentMinChars.toString(),
                     "MOMENT_MAX_CHARS" to settings.momentMaxChars.toString()
                         )
                         val prompt = applyTemplate(mmtTpl, mmtReplacements)
@@ -1159,6 +1160,7 @@ ${summaries}
                 "RECENT_DAILY_SUMMARY" to (repository.getLatestPrivateDaily(op.id)?.content ?: "无"),
                 "CURRENT_DATE" to beijingSdf("yyyy年MM月dd日").format(fakeTs),
                 "USER_NAME" to profile.nickname,
+                "USER_GENDER" to profile.gender.ifBlank { "" },
                 "MOMENT_MIN_CHARS" to settings.momentMinChars.toString(),
                 "MOMENT_MAX_CHARS" to settings.momentMaxChars.toString()
             )
@@ -1441,6 +1443,7 @@ ${summaries}
                     "DIARY_MIN_CHARS" to settings.diaryMinChars.toString(),
                     "DIARY_MAX_CHARS" to settings.diaryMaxChars.toString(),
                     "USER_NAME" to profile.nickname,
+                    "USER_GENDER" to profile.gender.ifBlank { "" },
                     "USER_BIO" to profile.bio,
                     "USER_RELATION" to (op.userRelation.ifBlank { "未知" }),
                     "LONG_TERM_IMPRESSION" to (repository.getLongTermImpression(operatorId)?.content ?: "无"),

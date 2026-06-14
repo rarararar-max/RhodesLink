@@ -803,7 +803,7 @@ object PromptTemplates {
 发布一条动态。直接输出动态文本，不加任何前缀或格式标记。
 
 【当前信息】
-今天是{{CURRENT_DATE}}，{{TIME_OF_DAY}}。罗德岛的管理者：{{USER_NAME}}
+今天是{{CURRENT_DATE}}，{{TIME_OF_DAY}}。用户：{{USER_NAME}}（{{USER_GENDER}}）
 
 【背景】
 对{{USER_NAME}}的印象：{{LONG_TERM_IMPRESSION}}
@@ -862,7 +862,7 @@ object PromptTemplates {
 以第一人称"我"写一篇昨天（{{YESTERDAY_DATE}}）的日记，{{DIARY_MIN_CHARS}}~{{DIARY_MAX_CHARS}}字。直接输出日记文本，不加任何前缀或格式标记。
 
 【关于你与用户的关系】
-用户{{USER_NAME}}：{{USER_BIO}}
+用户{{USER_NAME}}（{{USER_GENDER}}）：{{USER_BIO}}
 你与{{USER_NAME}}的关系：{{USER_RELATION}}
 你对{{USER_NAME}}的长期印象：{{LONG_TERM_IMPRESSION}}
 

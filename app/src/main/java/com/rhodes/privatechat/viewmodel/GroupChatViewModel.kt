@@ -266,6 +266,18 @@ class GroupChatViewModel(
                 val mutedIds = session.mutedMembers.split(",").map { it.trim() }.filter { it.isNotBlank() }.toSet()
                 val activeMembers = members.filter { it.id !in mutedIds && it.name !in mutedIds }
 
+                // 全员禁言时直接返回，不调用 AI
+                if (activeMembers.isEmpty()) {
+                    repository.sendMessage(groupSessionId, ChatMessage(
+                        id = repository.getNextMessageId(), sessionId = groupSessionId,
+                        senderName = "系统", content = "所有成员已被禁言，无法回复",
+                        type = "system", mode = mode, isMe = false
+                    ))
+                    _groupLoading.value = false
+                    if (mutexLocked) { mutexFor(groupSessionId).unlock(); mutexLocked = false }
+                    return@launch
+                }
+
                 val profile = getUserProfile()
                 val relContext = getGroupRelationshipContext(activeMembers)
                 val relationHints = if (relContext.isNotBlank()) relContext else "无"

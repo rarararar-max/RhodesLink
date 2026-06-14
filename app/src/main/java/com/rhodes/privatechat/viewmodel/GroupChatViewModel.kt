@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import java.util.concurrent.ConcurrentHashMap
+import java.io.IOException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 import kotlinx.coroutines.withTimeout
@@ -60,6 +61,9 @@ class GroupChatViewModel(
     private val _currentGroupId = MutableStateFlow("")
     val currentGroupId: StateFlow<String> = _currentGroupId.asStateFlow()
 
+    private val _lastSendError = MutableStateFlow("")
+    val lastSendError: StateFlow<String> = _lastSendError.asStateFlow()
+
     private var groupMessagesJob: Job? = null
     private val groupMessageMutexes = ConcurrentHashMap<String, Mutex>()
     private fun mutexFor(groupId: String): Mutex = groupMessageMutexes.computeIfAbsent(groupId) { Mutex() }
@@ -91,21 +95,10 @@ class GroupChatViewModel(
         _groupMessages.value = _groupMessages.value.filter { it.id != msgId }
     }
 
-    /** 撤回群聊多段消息中的单个段落 */
+    /** 撤回群聊消息：删除整条（不分段） */
     fun recallMessageSegment(msgId: Long, segmentIndex: Int) {
-        if (segmentIndex < 0) { removeMessage(msgId); scope.launch { repository.deleteMessage(msgId) }; return }
-        val msg = _groupMessages.value.find { it.id == msgId } ?: return
-        if (msg.type != "ai_json") { removeMessage(msgId); scope.launch { repository.deleteMessage(msgId) }; return }
-        scope.launch {
-            val newContent = removeSegmentFromArray(msg.content, segmentIndex)
-            if (newContent == null) {
-                repository.deleteMessage(msgId)
-                _groupMessages.value = _groupMessages.value.filter { it.id != msgId }
-            } else {
-                repository.updateMessageContent(msgId, newContent)
-                _groupMessages.value = _groupMessages.value.map { if (it.id == msgId) it.copy(content = newContent) else it }
-            }
-        }
+        removeMessage(msgId)
+        scope.launch { repository.deleteMessage(msgId) }
     }
 
     private fun removeSegmentFromArray(content: String, segmentIndex: Int): String? {
@@ -231,7 +224,7 @@ class GroupChatViewModel(
         }
     }
 
-    fun sendGroupMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online", autoSpeak: Boolean = false, isAuto: Boolean = false) {
+    fun sendGroupMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online", autoSpeak: Boolean = false, isAuto: Boolean = false, onMessageSent: () -> Unit = {}) {
         groupAiJobs[groupSessionId]?.cancel()
         val job = scope.launch {
             // 步骤1: 用户消息立即插入（不持锁），消息即时显示
@@ -242,6 +235,7 @@ class GroupChatViewModel(
                     senderName = "我", content = text, type = "text", mode = mode, isMe = true
                 ))
                 DebugLogger.log("GroupChat/DB", "群用户消息已写入, session=$groupSessionId, id=$userMsgId, text=${text.take(50)}")
+                onMessageSent()
                 resetAutoGroupChatTimer(groupSessionId)
                 unhideSession(groupSessionId)
                 val today = sharedUtils.beijingSdf("yyyyMMdd").format(java.util.Date())
@@ -411,14 +405,28 @@ class GroupChatViewModel(
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // 被新消息取消，不做任何事
             } catch (e: Exception) {
+                val errMsg = classifyGroupError(e)
                 Log.e("GroupChat", "Error: ${e.message}", e)
-                repository.sendMessage(groupSessionId, ChatMessage(id = repository.getNextMessageId(), sessionId = groupSessionId, senderName = "系统", content = "对方网络不太好，没有收到信息", type = "system", mode = mode, isMe = false))
+                DebugLogger.log("GroupChat/Error", "发送失败: $errMsg")
+                repository.sendMessage(groupSessionId, ChatMessage(id = repository.getNextMessageId(), sessionId = groupSessionId, senderName = "系统", content = errMsg, type = "system", mode = mode, isMe = false))
+                _lastSendError.value = errMsg
             } finally {
                 _groupLoading.value = false
                 if (mutexLocked) mutexFor(groupSessionId).unlock()
             }
         }
         groupAiJobs[groupSessionId] = job
+    }
+
+    fun clearSendError() { _lastSendError.value = "" }
+
+    private fun classifyGroupError(e: Exception): String = when {
+        e.message?.contains("401") == true || e.message?.contains("api key", true) == true -> "API Key 无效或已过期，请在设置中检查"
+        e.message?.contains("402") == true || e.message?.contains("insufficient", true) == true || e.message?.contains("quota") == true -> "API 余额不足，请充值后重试"
+        e.message?.contains("429") == true -> "AI 服务请求太频繁，请稍后重试"
+        e.message?.contains("5") == true && e.message?.contains("50") == true -> "AI 服务暂时不可用，请稍后重试"
+        e is java.io.IOException || e.message?.contains("connect", true) == true || e.message?.contains("network", true) == true -> "网络连接失败，请检查网络"
+        else -> "发送失败：${e.message?.take(50) ?: "未知错误"}"
     }
 
     private fun extractGroupResults(raw: String): List<GroupMsgResult> {

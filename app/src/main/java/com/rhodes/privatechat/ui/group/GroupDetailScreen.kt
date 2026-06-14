@@ -61,6 +61,13 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
     val groupLoading by viewModel.groupLoading.collectAsState()
     val sessions by viewModel.allSessions.collectAsState()
     val groupSession = remember(groupId, sessions) { sessions.find { it.id == groupId } }
+    val sendError by viewModel.groupChatViewModel.lastSendError.collectAsState()
+    LaunchedEffect(sendError) {
+        if (sendError.isNotBlank()) {
+            android.widget.Toast.makeText(ctx, sendError, android.widget.Toast.LENGTH_LONG).show()
+            viewModel.groupChatViewModel.clearSendError()
+        }
+    }
 
     DisposableEffect(groupId) {
         if (groupId.isNotBlank()) viewModel.setCurrentGroup(groupId)
@@ -130,8 +137,9 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                     onTextChange = { inputText = it },
                     onSend = { text ->
                         if (text.isNotBlank() && groupId.isNotBlank()) {
-                            viewModel.sendGroupMessage(groupId, groupName, text, currentMode)
-                            inputText = ""
+                            viewModel.sendGroupMessage(groupId, groupName, text, currentMode) {
+                                inputText = ""
+                            }
                         }
                     },
                     enabled = !groupLoading,

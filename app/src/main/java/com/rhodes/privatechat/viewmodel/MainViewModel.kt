@@ -981,8 +981,8 @@ ${summaries}
     fun decrementHypnosis() = chatViewModel.decrementHypnosis()
     fun loadHypnosis() = chatViewModel.loadHypnosis()
 
-    fun sendGroupMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online", autoSpeak: Boolean = false, isAuto: Boolean = false) =
-        groupChatViewModel.sendGroupMessage(groupSessionId, groupName, text, mode, autoSpeak, isAuto)
+    fun sendGroupMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online", autoSpeak: Boolean = false, isAuto: Boolean = false, onMessageSent: () -> Unit = {}) =
+        groupChatViewModel.sendGroupMessage(groupSessionId, groupName, text, mode, autoSpeak, isAuto, onMessageSent)
     fun generateAllMoments(target: Int = 1, dateKey: String = "", force: Boolean = false, onProgress: (String) -> Unit = {}) {
         val isAuto = dateKey.isNotBlank()
         val today = dateKey.ifBlank { beijingSdf("yyyyMMdd").format(java.util.Date()) }

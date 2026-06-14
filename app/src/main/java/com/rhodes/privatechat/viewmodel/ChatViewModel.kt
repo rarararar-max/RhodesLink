@@ -443,20 +443,9 @@ ${recentDialogues}
         }
     }
 
-    /** 撤回多段 JSON 消息中的单个段落，而非整条消息 */
+    /** 撤回：删除整条消息（不分段） */
     fun recallMessageSegment(msgId: Long, segmentIndex: Int) {
-        if (segmentIndex < 0) { recallMessage(msgId); return }
-        val msg = _messages.value.find { it.id == msgId } ?: return
-        if (msg.type != "ai_json") { recallMessage(msgId); return }
-        viewModelScope.launch {
-            val newContent = removeSegmentFromJson(msg.content, segmentIndex)
-            if (DEBUG) Log.d("ChatVM", "recallSegment msgId=$msgId segIdx=$segmentIndex newContent=${newContent?.take(80)}")
-            if (newContent == null) {
-                repository.deleteMessage(msgId)
-            } else {
-                repository.updateMessageContent(msgId, newContent)
-            }
-        }
+        recallMessage(msgId)
     }
 
     /** 从 JSON 内容中移除指定索引的段落，返回修改后的 JSON；若无剩余段落则返回 null */
@@ -747,8 +736,11 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
     private fun classifyError(e: Exception): String = when {
         e.message?.contains("401") == true || e.message?.contains("api key", true) == true -> "API Key 无效或已过期，请在设置中检查"
         e.message?.contains("402") == true || e.message?.contains("insufficient", true) == true || e.message?.contains("quota") == true -> "API 余额不足，请充值后重试"
+        e.message?.contains("429") == true -> "AI 服务请求太频繁，请稍后重试"
+        e.message?.contains("5") == true && e.message?.contains("50") == true -> "AI 服务暂时不可用，请稍后重试"
         e is kotlinx.coroutines.TimeoutCancellationException || e.message?.contains("timeout", true) == true -> "响应超时，请重试"
-        else -> "对方网络不太好，没有收到信息"
+        e is java.io.IOException || e.message?.contains("connect", true) == true || e.message?.contains("network", true) == true -> "网络连接失败，请检查网络"
+        else -> "发送失败：${e.message?.take(50) ?: "未知错误"}"
     }
 
     private suspend fun buildApiMessages(userContent: String = ""): List<AiMessage> {

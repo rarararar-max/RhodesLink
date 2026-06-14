@@ -30,11 +30,14 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -79,6 +82,12 @@ fun ChatInputBar(
     var showInspire by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     var localSuggestions by remember(suggestions) { mutableStateOf(suggestions) }
+    var tfValue by remember { mutableStateOf(TextFieldValue(text)) }
+    LaunchedEffect(text) {
+        if (text != tfValue.text) {
+            tfValue = TextFieldValue(text, TextRange(text.length))
+        }
+    }
 
     Column(modifier = modifier.fillMaxWidth().background(Surface)) {
         // 顶部指示器（如催眠状态）
@@ -109,6 +118,12 @@ fun ChatInputBar(
             AnimatedVisibility(visible = showMenu, enter = slideInVertically(initialOffsetY = { it }), exit = slideOutVertically(targetOffsetY = { it })) {
                 Column(modifier = Modifier.fillMaxWidth().background(Card).padding(12.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        MenuChip("( )", Primary) {
+                            val pos = tfValue.selection.start
+                            val newText = tfValue.text.substring(0, pos) + "()" + tfValue.text.substring(pos)
+                            tfValue = TextFieldValue(newText, TextRange(pos + 1))
+                            onTextChange(newText)
+                        }
                         menuItems()
                     }
                 }
@@ -131,7 +146,10 @@ fun ChatInputBar(
                 }
             }
             OutlinedTextField(
-                value = text, onValueChange = onTextChange, modifier = Modifier.weight(1f),
+                value = tfValue, onValueChange = { newValue ->
+                    tfValue = newValue
+                    onTextChange(newValue.text)
+                }, modifier = Modifier.weight(1f),
                 placeholder = { Text(placeholder, fontSize = 14.sp, color = TextTertiary) },
                 shape = RoundedCornerShape(20.dp), singleLine = false, enabled = true,
                 minLines = 1, maxLines = 4,
@@ -149,7 +167,7 @@ fun ChatInputBar(
                 }
             }
             IconButton(
-                onClick = { onSend(text) },
+                onClick = { onSend(tfValue.text) },
                 enabled = enabled && text.isNotBlank(),
                 modifier = Modifier.size(36.dp).clip(CircleShape)
                     .background(if (text.isNotBlank() && enabled) Primary else Color.Transparent)

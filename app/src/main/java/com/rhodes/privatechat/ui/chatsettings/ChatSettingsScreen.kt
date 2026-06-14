@@ -122,17 +122,17 @@ private fun HelpButton(message: String) {
 @Composable
 private fun PrivateTab(settings: SettingsRepository) {
     SectionTitle("台词（共用：线上/线下/导演）")
-    ParamSlider(settings, "dia_seg_min", "最少台词段数", 1, 1f..10f, "所有模式共用：AI回复中台词段落的最少段数")
-    ParamSlider(settings, "dia_seg_max", "最多台词段数", 3, 1f..10f, "所有模式共用：AI回复中台词段落的最多段数")
-    ParamSlider(settings, "dia_min", "台词最少字数", 10, 1f..1000f, "所有模式共用：每段台词的最少字数", step = 5f, pairKey = "dia_max", isMinSide = true)
-    ParamSlider(settings, "dia_max", "台词最多字数", 80, 1f..1000f, "所有模式共用：每段台词的最多字数", step = 5f, pairKey = "dia_min", isMinSide = false)
+    ParamSlider(settings, "dia_seg_min", "最少台词段数", 1, 1f..10f, "AI每次回复最少说几句话。设太高（>3）AI会被迫凑字数，不自然")
+    ParamSlider(settings, "dia_seg_max", "最多台词段数", 3, 1f..10f, "AI每次回复最多说几句话。设太小（<2）AI只能回一句短的，没深度")
+    ParamSlider(settings, "dia_min", "台词最少字数", 10, 1f..1000f, "每句话最少写多少个字。设太大（>50）AI每句都像写作文，不像聊天", step = 5f, pairKey = "dia_max", isMinSide = true)
+    ParamSlider(settings, "dia_max", "台词最多字数", 300, 1f..1000f, "每句话最多写多少个字。设太小（<20）AI答得敷衍，设太大（>500）AI变得啰嗦", step = 5f, pairKey = "dia_min", isMinSide = false)
     Spacer(modifier = Modifier.height(12.dp))
 
     SectionTitle("旁白（线下/导演模式）")
-    ParamSlider(settings, "nar_seg_min", "最少旁白段数", 1, 1f..10f, "线下/导演模式：旁白段落最少段数。线上模式旁白极简≤20字，不由本参数控制")
-    ParamSlider(settings, "nar_seg_max", "最多旁白段数", 3, 1f..10f, "线下/导演模式：旁白段落最多段数")
-    ParamSlider(settings, "nar_min", "旁白最少字数", 20, 1f..1000f, "线下/导演模式：每段旁白的最少字数", step = 5f, pairKey = "nar_max", isMinSide = true)
-    ParamSlider(settings, "nar_max", "旁白最多字数", 150, 1f..1000f, "线下/导演模式：每段旁白的最多字数", step = 5f, pairKey = "nar_min", isMinSide = false)
+    ParamSlider(settings, "nar_seg_min", "最少旁白段数", 1, 1f..10f, "环境描写最少出现几次。线下/导演模式有效，线上模式旁白很短不由这里控制")
+    ParamSlider(settings, "nar_seg_max", "最多旁白段数", 3, 1f..10f, "环境描写最多出现几次。设多了（>5）剧本文案太浓")
+    ParamSlider(settings, "nar_min", "旁白最少字数", 50, 1f..1000f, "每段环境描写最少写多少个字。太短（<20）描写没画面感", step = 5f, pairKey = "nar_max", isMinSide = true)
+    ParamSlider(settings, "nar_max", "旁白最多字数", 300, 1f..1000f, "每段环境描写最多写多少个字。太大（>500）场景描写喧宾夺主", step = 5f, pairKey = "nar_min", isMinSide = false)
 }
 
 // ── Tab 1: 群聊 ──
@@ -140,36 +140,36 @@ private fun PrivateTab(settings: SettingsRepository) {
 @Composable
 private fun GroupTab(settings: SettingsRepository) {
     SectionTitle("消息长度")
-    ParamSlider(settings, "group_msg_min", "每条消息最小字数", 10, 5f..50f, "群聊中每条AI消息的最少字数")
-    ParamSlider(settings, "group_msg_max", "每条消息最大字数", 100, 30f..200f, "群聊中每条AI消息的最多字数", step = 5f, pairKey = "group_msg_min", isMinSide = false)
+    ParamSlider(settings, "group_msg_min", "每条消息最小字数", 10, 5f..50f, "群里每条消息最少写几个字")
+    ParamSlider(settings, "group_msg_max", "每条消息最大字数", 100, 30f..200f, "群里每条消息最多写几个字。群聊不宜太长，设大（>200）一人发一段话群就冷场了", step = 5f, pairKey = "group_msg_min", isMinSide = false)
 
     Spacer(Modifier.height(12.dp)); SectionTitle("发言频率")
-    ParamSlider(settings, "group_speech_min", "每轮每人最少发言次数", 1, 0f..3f, "每个干员每轮群聊至少发言几次")
-    ParamSlider(settings, "group_speech_max", "每轮每人最多发言次数", 2, 1f..5f, "每个干员每轮群聊最多发言几次")
+    ParamSlider(settings, "group_speech_min", "每轮每人最少发言", 1, 0f..3f, "每次群聊每个干员至少说几次话。设0等于允许干员不加入对话")
+    ParamSlider(settings, "group_speech_max", "每轮每人最多发言", 2, 1f..5f, "每次群聊每个干员最多说几次话。设太大（>5）有人一直刷屏")
 
     Spacer(Modifier.height(12.dp)); SectionTitle("自动发言间隔")
-    ParamSlider(settings, "group_chat_min_interval", "自动发言最小间隔(秒)", 60, 5f..600f, "AI自动发言的最小间隔时间", step = 5f)
-    ParamSlider(settings, "group_chat_max_interval", "自动发言最大间隔(秒)", 180, 30f..900f, "AI自动发言的最大间隔时间", step = 10f)
+    ParamSlider(settings, "group_chat_min_interval", "自动发言最小间隔(秒)", 60, 5f..600f, "群聊没说话时，系统自动让干员聊起来的最小等待时间。设太小（<10）群像发疯一样不停聊", step = 5f)
+    ParamSlider(settings, "group_chat_max_interval", "自动发言最大间隔(秒)", 180, 30f..900f, "群聊没说话时，系统自动让干员开始聊的最大等待时间。设太大（>600）群活跃不起来", step = 10f)
 
     Spacer(Modifier.height(12.dp)); SectionTitle("群聊旁白(线上/线下/导演)")
-    ParamSlider(settings, "group_nar_seg_min", "最少旁白段数", 1, 1f..10f, "群聊每轮最少旁白段数，线上模式旁白用户不可见")
-    ParamSlider(settings, "group_nar_seg_max", "最多旁白段数", 3, 1f..10f, "群聊每轮最多旁白段数，线上模式旁白用户不可见")
-    ParamSlider(settings, "group_nar_min", "旁白最小字数", 20, 20f..200f, "群聊线下/导演模式每段旁白最少字数。线上模式旁白不超过20字不由本参数控制", step = 5f, pairKey = "group_nar_max", isMinSide = true)
-    ParamSlider(settings, "group_nar_max", "旁白最大字数", 100, 50f..300f, "群聊线下/导演模式每段旁白最多字数。线上模式旁白不超过20字不由本参数控制", step = 5f, pairKey = "group_nar_min", isMinSide = false)
+    ParamSlider(settings, "group_nar_seg_min", "最少旁白段数", 1, 1f..10f, "群聊每轮环境描写最少几次。线上模式旁白用户不可见")
+    ParamSlider(settings, "group_nar_seg_max", "最多旁白段数", 3, 1f..10f, "群聊每轮环境描写最多几次。设多了（>5）剧本文案太浓")
+    ParamSlider(settings, "group_nar_min", "旁白最小字数", 20, 20f..200f, "每段环境描写最少几个字。线上模式旁白很短不由这里控制", step = 5f, pairKey = "group_nar_max", isMinSide = true)
+    ParamSlider(settings, "group_nar_max", "旁白最大字数", 100, 50f..300f, "每段环境描写最多几个字。群聊旁白太长（>200）像私聊剧本", step = 5f, pairKey = "group_nar_min", isMinSide = false)
 }
 
 // ── Tab 2: 记忆与印象 ──
 
 @Composable
 private fun MemoryTab(settings: SettingsRepository) {
-    ParamSlider(settings, "summary_threshold", "触发滚动摘要的消息轮数", 20, 3f..200f, "每N条消息后自动生成一次对话摘要，用于长期上下文记忆", step = 1f)
-    ParamSlider(settings, "summary_retain", "滚动摘要保留条数", 10, 1f..20f, "保留最近N条摘要用于注入对话上下文", step = 1f)
+    ParamSlider(settings, "summary_threshold", "触发总结的聊天条数", 20, 3f..200f, "聊多少句话后，AI会自动把前面聊的内容总结一遍。设太小（<5）频繁总结浪费钱，太大（>100）AI记不住前面聊了什么", step = 1f)
+    ParamSlider(settings, "summary_retain", "保留最近几条总结", 5, 1f..20f, "保留最近几次的总结，下次聊天时给AI看。设太小（1）之前的总结被丢掉，设太大（>20）消耗Token多", step = 1f)
     Spacer(modifier = Modifier.height(12.dp))
-    ParamSlider(settings, "impression_threshold", "触发长期印象更新的最少消息数", 50, 1f..50f, "每N条消息后更新一次AI对用户的长期印象", step = 1f)
+    ParamSlider(settings, "impression_threshold", "触发印象更新的聊天条数", 50, 1f..50f, "聊多少句话后，AI会重新总结对你的整体印象。设太小（<10）频繁更新没必要，设0关闭", step = 1f)
     Spacer(modifier = Modifier.height(12.dp))
-    ParamSlider(settings, "history_messages", "保留最近消息轮数（0=全部）", 20, 0f..200f, "只向AI发送最近N条历史消息，超出部分由摘要补充上下文，防止Token爆表", step = 1f)
+    ParamSlider(settings, "history_messages", "每次回复最多回看几句", 20, 0f..200f, "AI回看最近多少句话来生成回复。0=全部。设太小（<5）AI记不住上下文，太大（>200）消耗Token多", step = 1f)
     Spacer(modifier = Modifier.height(12.dp))
-    ParamSlider(settings, "clean_days", "记忆过期天数", 30, 1f..365f, "超过此天数的短期摘要、每日摘要和长期印象将自动删除", step = 5f)
+    ParamSlider(settings, "clean_days", "记忆过期天数", 30, 1f..365f, "AI对你的总结和印象保留多少天。太短（<7）AI频繁忘记，太长（>90）旧印象一直生效", step = 5f)
 }
 
 // ── Tab 3: 功能 ──
@@ -177,28 +177,28 @@ private fun MemoryTab(settings: SettingsRepository) {
 @Composable
 private fun FeatureTab(settings: SettingsRepository) {
     SectionTitle("日记生成")
-    ParamSlider(settings, "diary_min_chars", "日记最小字数", 50, 50f..500f, "控制AI生成日记的最小字数", step = 10f, pairKey = "diary_max_chars", isMinSide = true)
-    ParamSlider(settings, "diary_max_chars", "日记最大字数", 300, 100f..800f, "控制AI生成日记的最大字数，越大内容越详细", step = 10f, pairKey = "diary_min_chars", isMinSide = false)
+    ParamSlider(settings, "diary_min_chars", "日记最小字数", 50, 50f..500f, "干员日记每篇最少写几个字", step = 10f, pairKey = "diary_max_chars", isMinSide = true)
+    ParamSlider(settings, "diary_max_chars", "日记最大字数", 300, 100f..800f, "干员日记每篇最多写几个字。设太小（<100）日记没内容，太大（>500）太长了", step = 10f, pairKey = "diary_min_chars", isMinSide = false)
 
     Spacer(Modifier.height(12.dp)); SectionTitle("动态生成")
-    ParamSlider(settings, "moment_min_chars", "动态最小字数", 30, 20f..300f, "控制AI生成动态的最小字数", step = 5f, pairKey = "moment_max_chars", isMinSide = true)
-    ParamSlider(settings, "moment_max_chars", "动态最大字数", 200, 80f..500f, "控制AI生成动态的最大字数", step = 5f, pairKey = "moment_min_chars", isMinSide = false)
-    ParamSlider(settings, "daily_moment_target", "每人每日动态目标数", 2, 1f..10f, "每天自动触发动态生成的条数目标，少于这个数会自动补充")
+    ParamSlider(settings, "moment_min_chars", "动态最小字数", 50, 20f..300f, "干员发朋友圈最少写几个字", step = 5f, pairKey = "moment_max_chars", isMinSide = true)
+    ParamSlider(settings, "moment_max_chars", "动态最大字数", 200, 80f..500f, "干员发朋友圈最多写几个字。太小（<30）没内容，太大（>400）像写小作文", step = 5f, pairKey = "moment_min_chars", isMinSide = false)
+    ParamSlider(settings, "daily_moment_target", "每人每日动态目标", 2, 1f..10f, "每天最多自动生成几条新动态。设太大（>5）首页全是历史动态刷屏。只在启动App时触发")
 
     Spacer(Modifier.height(12.dp)); SectionTitle("评论生成")
-    ParamSlider(settings, "comment_min_chars", "评论最少字数", 10, 5f..30f, "AI评论每条最少字数")
-    ParamSlider(settings, "comment_max_chars", "评论最多字数", 40, 10f..100f, "AI评论每条最多字数", step = 5f, pairKey = "comment_min_chars", isMinSide = false)
+    ParamSlider(settings, "comment_min_chars", "评论最少字数", 10, 5f..30f, "干员评论动态最少写几个字")
+    ParamSlider(settings, "comment_max_chars", "评论最多字数", 40, 10f..100f, "干员评论动态最多写几个字", step = 5f, pairKey = "comment_min_chars", isMinSide = false)
 
     Spacer(Modifier.height(12.dp)); SectionTitle("派遣故事")
-    ParamSlider(settings, "dispatch_min_chars", "每段最小字数", 50, 50f..400f, "派遣故事每段（准备/过程/结局各段）的字数下限。总字数=每段字数×段数", step = 10f, pairKey = "dispatch_max_chars", isMinSide = true)
-    ParamSlider(settings, "dispatch_max_chars", "每段最大字数", 200, 200f..800f, "派遣故事每段的字数上限", step = 10f, pairKey = "dispatch_min_chars", isMinSide = false)
+    ParamSlider(settings, "dispatch_min_chars", "每段最小字数", 50, 50f..400f, "派遣故事每段（准备/过程/结局）最少写几个字。总字数=每段字数×段数", step = 10f, pairKey = "dispatch_max_chars", isMinSide = true)
+    ParamSlider(settings, "dispatch_max_chars", "每段最大字数", 300, 200f..800f, "派遣故事每段最多写几个字。设太小（<100）故事太单薄", step = 10f, pairKey = "dispatch_min_chars", isMinSide = false)
 }
 
 // ── Tab 4: 通用 ──
 
 @Composable
 private fun GeneralTab(settings: SettingsRepository, onPromptEditor: () -> Unit = {}) {
-    ParamSlider(settings, "ai_temperature", "AI 温度", 95, 0f..200f, step = 5f, tip = "控制AI回复的随机性，值越低越保守，值越高越有创意（当前值/100）")
+    ParamSlider(settings, "ai_temperature", "AI 温度", 80, 0f..200f, step = 5f, tip = "AI说话的风格。越低越正经（机器人感强），越高越奔放（容易跑偏）。建议60-90之间调。当前值/100")
     Spacer(modifier = Modifier.height(12.dp))
     var dualModel by remember { mutableStateOf(settings.dualModel) }
     Row(
@@ -234,8 +234,6 @@ private fun GeneralTab(settings: SettingsRepository, onPromptEditor: () -> Unit 
 
 @Composable
 private fun OtherTab(settings: SettingsRepository) {
-    var isDarkMode by remember { mutableStateOf(settings.darkMode) }
-
     Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Card).padding(16.dp)) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
@@ -246,8 +244,8 @@ private fun OtherTab(settings: SettingsRepository) {
                 }
                 Text("切换应用界面的深色/浅色主题，默认深色", fontSize = 12.sp, color = TextSecondary)
             }
-            Switch(checked = isDarkMode, onCheckedChange = {
-                isDarkMode = it
+            Switch(checked = com.rhodes.privatechat.ui.theme.isDarkMode, onCheckedChange = {
+                com.rhodes.privatechat.ui.theme.isDarkMode = it
                 settings.darkMode = it
             }, colors = SwitchDefaults.colors(checkedThumbColor = Blue400, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
         }

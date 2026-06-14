@@ -26,7 +26,7 @@ fun copyToInternalStorage(context: Context, uri: Uri): String {
 }
 
 /** 加载并缩放 bitmap 到合适尺寸 */
-fun decodeSampledBitmap(context: Context, uri: Uri, maxDim: Int = 2048): Bitmap? {
+fun decodeSampledBitmap(context: Context, uri: Uri, maxDim: Int = 1024): Bitmap? {
     return try {
         // 先读取尺寸
         val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }

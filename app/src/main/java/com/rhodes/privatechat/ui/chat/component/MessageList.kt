@@ -147,10 +147,23 @@ private fun MessageBubble(
 ) {
     if (message.isSystem) {
         if (message.isNarration) {
-            // 旁白：屏幕居中，圆角矩形半透明气泡，文字左对齐
-            Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp), contentAlignment = Alignment.Center) {
+            // 旁白：屏幕居中，圆角矩形半透明气泡，文字左对齐，支持长按撤回
+            val context = LocalContext.current
+            var showNarrationMenu by remember { mutableStateOf(false) }
+            Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp).combinedClickable(onLongClick = { showNarrationMenu = true }, onClick = {}), contentAlignment = Alignment.Center) {
                 Box(modifier = Modifier.fillMaxWidth(0.9f).clip(RoundedCornerShape(12.dp)).background(TextTertiary.copy(alpha = 0.1f)).padding(horizontal = 16.dp, vertical = 8.dp)) {
                     Text(message.content, fontSize = 14.sp, color = TextPrimary, fontStyle = FontStyle.Italic, textAlign = TextAlign.Start, lineHeight = 20.sp)
+                }
+                DropdownMenu(expanded = showNarrationMenu, onDismissRequest = { showNarrationMenu = false }, containerColor = Surface) {
+                    DropdownMenuItem(text = { Row { Icon(Icons.Default.ContentCopy, null, tint = TextPrimary, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text("复制", color = TextPrimary) } },
+                        onClick = {
+                            (context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager)
+                                ?.setPrimaryClip(ClipData.newPlainText("msg", message.content))
+                            Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+                            showNarrationMenu = false
+                        })
+                    DropdownMenuItem(text = { Row { Icon(Icons.Default.Delete, null, tint = ErrorRed, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text("撤回", color = ErrorRed) } },
+                        onClick = { onRecall(); showNarrationMenu = false })
                 }
             }
         } else {

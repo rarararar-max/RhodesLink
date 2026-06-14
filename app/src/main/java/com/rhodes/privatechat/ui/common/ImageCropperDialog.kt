@@ -108,10 +108,16 @@ fun ImageCropperDialog(
                     val srcW = (vw / scale).coerceIn(1f, bmp.width - srcLeft)
                     val srcH = (cropH / scale).coerceIn(1f, bmp.height - srcTop)
                     if (srcW > 0 && srcH > 0) {
-                        val cropped = Bitmap.createBitmap(bmp, srcLeft.toInt(), srcTop.toInt(), srcW.toInt(), srcH.toInt())
-                        val destFile = File(context.cacheDir, "crop_${System.currentTimeMillis()}.jpg")
-                        FileOutputStream(destFile).use { out -> cropped.compress(Bitmap.CompressFormat.JPEG, 90, out) }
-                        onConfirm(Uri.fromFile(destFile))
+                        try {
+                            val cropped = Bitmap.createBitmap(bmp, srcLeft.toInt(), srcTop.toInt(), srcW.toInt(), srcH.toInt())
+                            bmp.recycle()
+                            val destFile = File(context.cacheDir, "crop_${System.currentTimeMillis()}.jpg")
+                            FileOutputStream(destFile).use { out -> cropped.compress(Bitmap.CompressFormat.JPEG, 90, out) }
+                            cropped.recycle()
+                            onConfirm(Uri.fromFile(destFile))
+                        } catch (_: Exception) {
+                            Toast.makeText(context, "裁剪失败，请选择较小的图片", Toast.LENGTH_SHORT).show()
+                        }
                     } else {
                         Toast.makeText(context, "裁剪区域无效，请调整图片位置", Toast.LENGTH_SHORT).show()
                     }

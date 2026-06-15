@@ -174,7 +174,8 @@ class GroupChatViewModel(
                 val session = repository.getSession(groupId) ?: break
                 val mode = getGroupChatMode(groupId)
                 sendGroupMessage(groupId, groupName, "", mode, isAuto = true)
-                val interval = minMs + (Math.random() * (maxMs - minMs).coerceAtLeast(0L)).toLong()
+                    val interval = minMs + (Math.random() * (maxMs - minMs).coerceAtLeast(0L)).toLong()
+                    DebugLogger.log("GroupChat", "自动发言: id=$groupId, 间隔=${interval / 1000}秒, min=${minMs / 1000}秒, max=${maxMs / 1000}秒")
                 val tickMs = 1000L
                 var remaining = interval
                 while (remaining > 0 && isAutoGroupChatEnabled(groupId)) {

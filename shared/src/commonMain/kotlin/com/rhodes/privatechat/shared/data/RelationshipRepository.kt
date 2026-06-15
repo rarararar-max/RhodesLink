@@ -13,7 +13,6 @@ class RelationshipRepository(private val wrapper: DatabaseWrapper) {
 
     // --- Relationships ---
     suspend fun migrateOldRelationships() = withContext(Dispatchers.Default) {
-        db.relationshipsQueries.deleteByType("FAMILY")
         db.relationshipsQueries.deletePresets()
         insertPresetRelationships()
     }

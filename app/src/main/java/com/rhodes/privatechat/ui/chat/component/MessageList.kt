@@ -151,7 +151,7 @@ private fun MessageBubble(
             val context = LocalContext.current
             var showNarrationMenu by remember { mutableStateOf(false) }
             Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp).combinedClickable(onLongClick = { showNarrationMenu = true }, onClick = {}), contentAlignment = Alignment.Center) {
-                Box(modifier = Modifier.fillMaxWidth(0.9f).clip(RoundedCornerShape(12.dp)).background(TextTertiary.copy(alpha = 0.1f)).padding(horizontal = 16.dp, vertical = 8.dp)) {
+                Box(modifier = Modifier.fillMaxWidth(0.9f).clip(RoundedCornerShape(12.dp)).background(Card.copy(alpha = 0.85f)).padding(horizontal = 16.dp, vertical = 8.dp)) {
                     Text(message.content, fontSize = 14.sp, color = TextPrimary, fontStyle = FontStyle.Italic, textAlign = TextAlign.Start, lineHeight = 20.sp)
                 }
                 DropdownMenu(expanded = showNarrationMenu, onDismissRequest = { showNarrationMenu = false }, containerColor = Surface) {

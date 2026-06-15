@@ -51,7 +51,7 @@ fun ImageCropperDialog(
     var scale by remember { mutableFloatStateOf(1f) }
     var panX by remember { mutableFloatStateOf(0f) }
     var panY by remember { mutableFloatStateOf(0f) }
-    val bitmap = remember(imageUri) { decodeSampledBitmap(context, imageUri, 2048) }
+    val bitmap = remember(imageUri) { decodeSampledBitmap(context, imageUri, 1024) }
 
     Dialog(onDismissRequest = onCancel) {
         Box(modifier = Modifier.fillMaxWidth().background(Color(0xFF1C1C1E)).padding(8.dp)) {

@@ -388,8 +388,12 @@ ${recentDialogues}
                 val apiMessages = buildApiMessages(text)
                 DebugLogger.log("Chat/AI", "请求AI, session=${session.id}, mode=$mode, prompt长度=${apiMessages.size}")
                 val parsed = withTimeout(60_000) { sharedUtils.chatWithRetry(apiMessages) }
-                DebugLogger.log("Chat/AI", "AI响应成功, emotion=${parsed.emotion}, dialogue=${parsed.dialogue.take(30)}")
-                sharedUtils.trackTokens("private", apiMessages, parsed.toString())
+                if (parsed.dialogue.isNotEmpty() || parsed.emotion.isNotEmpty()) {
+                    DebugLogger.log("Chat/AI", "AI响应成功, emotion=${parsed.emotion}, dialogue=${parsed.dialogue.take(30)}")
+                    sharedUtils.trackTokens("private", apiMessages, parsed.toString())
+                } else {
+                    DebugLogger.log("Chat/AI", "AI返回为空或降级，跳过token统计")
+                }
                 val serializedJson = try { json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed) } catch (_: Exception) { parsed.toString() }
                 val rawJson = sharedUtils.aiService.cleanJson(serializedJson)
                 var aiResponseCount = 1

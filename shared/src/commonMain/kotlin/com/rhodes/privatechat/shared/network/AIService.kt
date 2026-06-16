@@ -7,6 +7,10 @@ import com.rhodes.privatechat.shared.model.StreamChunk
 import com.rhodes.privatechat.shared.model.StreamError
 import com.rhodes.privatechat.shared.model.NonStreamResponse
 import com.rhodes.privatechat.shared.model.OfflineModeResponse
+import com.rhodes.privatechat.shared.model.GoogleGenerationRequest
+import com.rhodes.privatechat.shared.model.GoogleContent
+import com.rhodes.privatechat.shared.model.GooglePart
+import com.rhodes.privatechat.shared.model.GoogleGenerateResponse
 import com.rhodes.privatechat.shared.model.Segment
 import com.rhodes.privatechat.shared.model.SummaryResponse
 import io.ktor.client.HttpClient
@@ -137,37 +141,73 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         temperature: Double = 0.95
     ): ChatResult {
         val config = providers[providerId] ?: providers["deepseek"]!!
-        val url = if (config.id == "custom") customUrl else config.baseUrl
         val model = modelName
 
-        val requestBody = ChatCompletionRequest(
-            model = model,
-            messages = messages,
-            stream = false,
-            temperature = temperature
-        )
+        // 自填厂商 URL 校验
+        if (config.id == "custom" && customUrl.isBlank()) {
+            throw Exception("自填厂商的 URL 不能为空，请在设置中填写 API 地址")
+        }
+        val url = if (config.id == "custom") customUrl else config.baseUrl
 
-        val response: HttpResponse = client.post(url) {
-            contentType(ContentType.Application.Json)
-            if (config.id == "google") {
-                header("X-Goog-Api-Key", apiKey)
-            } else {
+        if (config.isOpenAICompat) {
+            // OpenAI 兼容格式
+            val requestBody = ChatCompletionRequest(
+                model = model,
+                messages = messages,
+                stream = false,
+                temperature = temperature
+            )
+            val response: HttpResponse = client.post(url) {
+                contentType(ContentType.Application.Json)
                 header("Authorization", "Bearer $apiKey")
+                setBody(requestBody)
             }
-            setBody(requestBody)
+            if (!response.status.isSuccess()) {
+                val errorBody = response.bodyAsChannel().readUTF8Line() ?: "Unknown error"
+                throw Exception("API error ${response.status.value}: $errorBody")
+            }
+            val responseBody = response.bodyAsText()
+            val completion = json.decodeFromString<NonStreamResponse>(responseBody)
+            val content = completion.choices?.firstOrNull()?.message?.content ?: ""
+            val inputTokens = completion.usage?.promptTokens ?: 0
+            val outputTokens = completion.usage?.completionTokens ?: 0
+            return ChatResult(content, inputTokens, outputTokens)
         }
 
-        if (!response.status.isSuccess()) {
-            val errorBody = response.bodyAsChannel().readUTF8Line() ?: "Unknown error"
-            throw Exception("API error ${response.status.value}: $errorBody")
+        // === Google Gemini 专用格式 ===
+        if (config.id == "google") {
+            val systemMsg = messages.firstOrNull { it.role == "system" }
+            val chatMsgs = messages.filter { it.role != "system" }
+            val googleBody = GoogleGenerationRequest(
+                contents = chatMsgs.map { msg ->
+                    GoogleContent(
+                        parts = listOf(GooglePart(text = msg.content)),
+                        role = if (msg.role == "user") "user" else "model"
+                    )
+                },
+                systemInstruction = systemMsg?.let {
+                    GoogleContent(parts = listOf(GooglePart(text = it.content)))
+                }
+            )
+            val googleUrl = "${url}/${model}:generateContent"
+            val response: HttpResponse = client.post(googleUrl) {
+                contentType(ContentType.Application.Json)
+                header("X-Goog-Api-Key", apiKey)
+                setBody(googleBody)
+            }
+            if (!response.status.isSuccess()) {
+                val errorBody = response.bodyAsChannel().readUTF8Line() ?: "Unknown error"
+                throw Exception("Google API error ${response.status.value}: $errorBody")
+            }
+            val responseBody = response.bodyAsText()
+            val googleResp = json.decodeFromString<GoogleGenerateResponse>(responseBody)
+            val content = googleResp.candidates?.firstOrNull()?.content?.parts?.joinToString("") { it.text } ?: ""
+            val inputTokens = googleResp.usageMetadata?.promptTokenCount ?: 0
+            val outputTokens = googleResp.usageMetadata?.candidatesTokenCount ?: 0
+            return ChatResult(content, inputTokens, outputTokens)
         }
 
-        val responseBody = response.bodyAsText()
-        val completion = json.decodeFromString<NonStreamResponse>(responseBody)
-        val content = completion.choices?.firstOrNull()?.message?.content ?: ""
-        val inputTokens = completion.usage?.promptTokens ?: 0
-        val outputTokens = completion.usage?.completionTokens ?: 0
-        return ChatResult(content, inputTokens, outputTokens)
+        throw Exception("不支持的厂商: ${config.id}")
     }
 
     /**
@@ -192,6 +232,10 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                 lastRaw = result.content
                 val cleaned = cleanJson(lastRaw)
                 val parsed = json.decodeFromString<OfflineModeResponse>(cleaned)
+                // 检查是否有实际内容（防止AI输出{}）
+                if (parsed.segments.isNullOrEmpty() && parsed.dialogue.isBlank()) {
+                    throw Exception("AI返回为空内容")
+                }
                 return parsed
             } catch (e: Exception) {
                 println("WARN: [$logTag] JSON解析失败 (attempt $attempt/$maxRetries): ${e.message}")

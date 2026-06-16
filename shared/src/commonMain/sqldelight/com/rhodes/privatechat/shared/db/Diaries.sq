@@ -11,7 +11,10 @@ getDiariesByOperator:
 SELECT * FROM diaries WHERE operatorId = ? ORDER BY date DESC;
 
 getDiary:
-SELECT * FROM diaries WHERE operatorId = ? AND date = ?;
+SELECT * FROM diaries WHERE operatorId = ? AND date = ? ORDER BY id DESC LIMIT 1;
+
+getAllDiaryEntries:
+SELECT * FROM diaries WHERE operatorId = ? ORDER BY id DESC;
 
 getDiaryDates:
 SELECT DISTINCT date FROM diaries WHERE operatorId = ? ORDER BY date DESC;

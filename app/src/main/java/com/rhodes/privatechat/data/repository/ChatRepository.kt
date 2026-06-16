@@ -108,6 +108,7 @@ class ChatRepository(
 
     fun getDiariesByOperator(operatorId: String): Flow<List<Diary>> = shared.getDiariesByOperator(operatorId)
 
+    suspend fun getAllDiaryEntries(operatorId: String): List<Diary> = shared.getAllDiaryEntries(operatorId)
     suspend fun getDiaryDates(operatorId: String): List<String> = shared.getDiaryDates(operatorId)
 
     suspend fun getDiaryCount(): Int = shared.getDiaryCount()

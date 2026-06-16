@@ -279,6 +279,13 @@ object PromptTemplates {
 }
 示例中展示了4个元素（2段旁白+2段台词）。你的实际输出段数由参数控制：旁白{{NAR_SEG_MIN}}~{{NAR_SEG_MAX}}段，台词{{DIA_SEG_MIN}}~{{DIA_SEG_MAX}}段。
 
+【输出前自检 · 必须执行】
+检查 segments 中的每一条：
+- content 用第一人称（"我"、"我的"等）→ type 必须为 "dialogue"
+- content 用第三人称（角色名、"她"、"他"等）→ type 必须为 "narration"
+- 相邻段 type 不能相同
+- 第一段必须是 narration，最后一段必须是 dialogue
+
 以{{OPERATOR_NAME}}的身份，用第一人称自然回应，直接输出JSON对象。
 """.trimIndent()
 
@@ -404,6 +411,20 @@ object PromptTemplates {
   ],
   "affection_mod": 0
 }
+
+【输出前自检 · 必须执行】
+检查 segments 中的每一条：
+- content 用第一人称（"我"、"我的"等）→ type 必须为 "dialogue"
+- content 用第三人称（角色名、"她"、"他"等）→ type 必须为 "narration"
+- 相邻段 type 不能相同
+- 第一段必须是 narration，最后一段必须是 dialogue
+
+【输出前自检 · 必须执行】
+检查 segments 中的每一条：
+- content 用第一人称（"我"、"我的"等）→ type 必须为 "dialogue"
+- content 用第三人称（角色名、"她"、"他"等）→ type 必须为 "narration"
+- 相邻段 type 不能相同
+- 第一段必须是 narration，最后一段必须是 dialogue
 
 以{{OPERATOR_NAME}}的身份，用第一人称自然回应，直接输出JSON对象。
 """.trimIndent()

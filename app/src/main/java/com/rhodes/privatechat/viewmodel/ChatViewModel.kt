@@ -92,9 +92,6 @@ class ChatViewModel(
     private var messageCounter: Int
         get() = settings.messageCounter
         set(v) { settings.messageCounter = v }
-    private var impressionMsgCounter: Int
-        get() = settings.impressionMsgCounter
-        set(v) { settings.impressionMsgCounter = v }
     private val shortTermThreshold: Int get() = settings.summaryThreshold
     private val chatAiMutexes = ConcurrentHashMap<String, Mutex>()
     private fun aiMutexFor(sessionId: String): Mutex = chatAiMutexes.computeIfAbsent(sessionId) { Mutex() }
@@ -385,57 +382,91 @@ ${recentDialogues}
                     } catch (_: Exception) { analysisGuidance = "" }
                 }
 
-                val apiMessages = buildApiMessages(text)
-                DebugLogger.log("Chat/AI", "请求AI, session=${session.id}, mode=$mode, prompt长度=${apiMessages.size}")
-                val parsed = withTimeout(60_000) { sharedUtils.chatWithRetry(apiMessages) }
-                if (parsed.dialogue.isNotEmpty() || parsed.emotion.isNotEmpty()) {
-                    DebugLogger.log("Chat/AI", "AI响应成功, emotion=${parsed.emotion}, dialogue=${parsed.dialogue.take(30)}")
-                    sharedUtils.trackTokens("private", apiMessages, parsed.toString())
-                } else {
-                    DebugLogger.log("Chat/AI", "AI返回为空或降级，跳过token统计")
-                }
-                val serializedJson = try { json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed) } catch (_: Exception) { parsed.toString() }
-                val rawJson = sharedUtils.aiService.cleanJson(serializedJson)
-                var aiResponseCount = 1
-                if (rawJson.isNotBlank()) {
-                    repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = rawJson, type = "ai_json", mode = mode, isMe = false))
-                    DebugLogger.log("Chat/DB", "AI响应已写入, session=${session.id}, id=$aiMsgId")
-                    if (parsed.emotion.isNotBlank() || parsed.location.isNotBlank() || parsed.state.isNotBlank()) {
-                        operatorStateUpdater.updateOperatorStatus(session.operatorId, parsed.location, parsed.state, parsed.emotion) { opId, newLoc, newAct, newEmo ->
-                            if (opId == _selectedOperator.value?.id) {
-                                _selectedOperator.value = _selectedOperator.value?.copy(location = newLoc, activity = newAct, emotion = newEmo)
-                            }
+                var retryCount = 0
+                val maxRetries = 3
+                var lastError: Exception? = null
+                while (retryCount < maxRetries) {
+                    try {
+                        val apiMessages = buildApiMessages(text)
+                        DebugLogger.log("Chat/AI", "请求AI, session=${session.id}, mode=$mode, prompt长度=${apiMessages.size}")
+                        val parsed = withTimeout(90_000) { sharedUtils.chatWithRetry(apiMessages) }
+                        if (parsed.dialogue.isNotEmpty() || parsed.emotion.isNotEmpty()) {
+                            DebugLogger.log("Chat/AI", "AI响应成功, emotion=${parsed.emotion}, dialogue=${parsed.dialogue.take(30)}")
+                            sharedUtils.trackTokens("private", apiMessages, parsed.toString())
+                        } else {
+                            DebugLogger.log("Chat/AI", "AI返回为空或降级，跳过token统计")
                         }
+                        val serializedJson = try { json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed) } catch (_: Exception) { parsed.toString() }
+                        val rawJson = sharedUtils.aiService.cleanJson(serializedJson)
+                        var aiResponseCount = 1
+                        if (rawJson.isNotBlank()) {
+                            repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = rawJson, type = "ai_json", mode = mode, isMe = false))
+                            DebugLogger.log("Chat/DB", "AI响应已写入, session=${session.id}, id=$aiMsgId")
+                            if (parsed.emotion.isNotBlank() || parsed.location.isNotBlank() || parsed.state.isNotBlank()) {
+                                operatorStateUpdater.updateOperatorStatus(session.operatorId, parsed.location, parsed.state, parsed.emotion) { opId, newLoc, newAct, newEmo ->
+                                    if (opId == _selectedOperator.value?.id) {
+                                        _selectedOperator.value = _selectedOperator.value?.copy(location = newLoc, activity = newAct, emotion = newEmo)
+                                    }
+                                }
+                            }
+                            aiResponseCount = 1
+                            modeTransitionNotice = ""
+                        }
+                        val affectionMod = parsed.affection_mod
+                        operatorStateUpdater.updateOperatorIntimacy(session.operatorId, 1 + affectionMod.coerceIn(-3, 3))
+                        val today = settings.rewardDate
+                        val currentDate = sharedUtils.beijingSdf("yyyyMMdd").format(java.util.Date())
+                        if (today != currentDate) { settings.rewardDate = currentDate; settings.dailyLmbCount = 0 }
+                        val dailyCount = settings.dailyLmbCount
+                        if (dailyCount < 5000) { val balance = settings.lmb; settings.lmb = balance + 10; settings.dailyLmbCount = dailyCount + 1 }
+                        decrementHypnosis()
+                        if (messageCounter >= shortTermThreshold) { generateShortTermSummary(session); generatePrivateDailySummary(session.operatorId); messageCounter = 0 }
+                        val impKey = "impression_${session.operatorId}"
+                        val impCount = settings.getInt(impKey, 0) + 1
+                        settings.putInt(impKey, impCount)
+                        val impThreshold = settings.impressionThreshold
+                        if (impThreshold > 0 && impCount >= impThreshold) {
+                            generateLongTermImpression(session)
+                            settings.putInt(impKey, 0)
+                        }
+                        val currentSessionId = _currentSession.value?.id ?: ""
+                        if (currentSessionId != session.id) {
+                            val sess = repository.getSession(session.id)
+                            if (sess != null) repository.insertSession(sess.copy(unreadCount = sess.unreadCount + aiResponseCount))
+                            onUnhideSession(session.id)
+                        }
+                        lastError = null
+                        break  // 成功，退出重试循环
+                    } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                        DebugLogger.log("Chat/AI", "AI超时, session=${session.id}")
+                        repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = classifyError(e), type = "text", mode = mode, isMe = false))
+                        break
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        DebugLogger.log("Chat/AI", "AI被取消, session=${session.id}")
+                        break
+                    } catch (e: Exception) {
+                        val isContextError = e.message?.contains("400") == true &&
+                            (e.message?.contains("context_length", true) == true ||
+                             e.message?.contains("maximum context", true) == true ||
+                             e.message?.contains("token", true) == true ||
+                             e.message?.contains("length", true) == true)
+                        if (isContextError && retryCount < maxRetries - 1 && settings.historyMessages > 5) {
+                            val newLimit = (settings.historyMessages / 2).coerceAtLeast(5)
+                            settings.historyMessages = newLimit
+                            retryCount++
+                            DebugLogger.log("Chat/AI", "上下文超限，降级历史轮数为$newLimit，第${retryCount}次重试")
+                            continue
+                        }
+                        lastError = e
+                        break
                     }
-                    aiResponseCount = 1
-                    modeTransitionNotice = ""
                 }
-                val affectionMod = parsed.affection_mod
-                operatorStateUpdater.updateOperatorIntimacy(session.operatorId, 1 + affectionMod.coerceIn(-3, 3))
-                val today = settings.rewardDate
-                val currentDate = sharedUtils.beijingSdf("yyyyMMdd").format(java.util.Date())
-                if (today != currentDate) { settings.rewardDate = currentDate; settings.dailyLmbCount = 0 }
-                val dailyCount = settings.dailyLmbCount
-                if (dailyCount < 5000) { val balance = settings.lmb; settings.lmb = balance + 10; settings.dailyLmbCount = dailyCount + 1 }
-                decrementHypnosis()
-                if (messageCounter >= shortTermThreshold) { generateShortTermSummary(session); generatePrivateDailySummary(session.operatorId); messageCounter = 0 }
-                impressionMsgCounter++
-                val impThreshold = settings.impressionThreshold
-                if (impThreshold > 0 && impressionMsgCounter >= impThreshold) { generateLongTermImpression(session); impressionMsgCounter = 0 }
-                val currentSessionId = _currentSession.value?.id ?: ""
-                if (currentSessionId != session.id) {
-                    val sess = repository.getSession(session.id)
-                    if (sess != null) repository.insertSession(sess.copy(unreadCount = sess.unreadCount + aiResponseCount))
-                    onUnhideSession(session.id)
+                if (lastError != null) {
+                    DebugLogger.log("Chat/AI", "AI错误: ${lastError.message?.take(100)}, session=${session.id}")
+                    val errorMsg = if (retryCount > 0) "上下文超限，已降级至${settings.historyMessages}轮后仍失败：${classifyError(lastError)}"
+                                   else classifyError(lastError)
+                    repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = errorMsg, type = "text", mode = mode, isMe = false))
                 }
-            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-                DebugLogger.log("Chat/AI", "AI超时, session=${session.id}")
-                repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = classifyError(e), type = "text", mode = mode, isMe = false))
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                DebugLogger.log("Chat/AI", "AI被取消, session=${session.id}")
-            } catch (e: Exception) {
-                DebugLogger.log("Chat/AI", "AI错误: ${e.message?.take(100)}, session=${session.id}")
-                repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = classifyError(e), type = "text", mode = mode, isMe = false))
             } finally { _loadingSessions.update { it - session.id }; if (mutexLocked) aiMutexFor(session.id).unlock() }
         }
         chatAiJobs[session.id] = job
@@ -553,7 +584,7 @@ ${recentDialogues}
                 aiMutexFor(session.id).lock()
                 mutexLocked = true
                 val apiMessages = buildApiMessages(userMsg.content)
-                val parsed = withTimeout(60_000) { sharedUtils.chatWithRetry(apiMessages) }
+                val parsed = withTimeout(90_000) { sharedUtils.chatWithRetry(apiMessages) }
                 sharedUtils.trackTokens("private", apiMessages, parsed.toString())
                 val serializedJson = try { json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed) } catch (_: Exception) { parsed.toString() }
                 val rawJson = sharedUtils.aiService.cleanJson(serializedJson)
@@ -652,7 +683,7 @@ ${recentDialogues}
                 }
 
                 val apiMessages = buildApiMessages(previousUser?.content ?: "")
-                val parsed = withTimeout(60_000) { sharedUtils.chatWithRetry(apiMessages) }
+                val parsed = withTimeout(90_000) { sharedUtils.chatWithRetry(apiMessages) }
                 sharedUtils.trackTokens("private", apiMessages, parsed.toString())
                 val serializedJson = try { json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed) } catch (_: Exception) { parsed.toString() }
                 repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = serializedJson, type = "ai_json", mode = mode, isMe = false))
@@ -807,6 +838,20 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         if (userContent.isNotBlank()) {
             messages.add(AiMessage("user", "用户：$userContent"))
         }
+        // 估算总 token，超限则丢弃最早的历史消息
+        val maxPromptTokens = settings.maxContextTokens - 2000
+        var totalTokens = messages.sumOf { (it.content.length * 1.3).toInt() + 10 }
+        com.rhodes.privatechat.util.DebugLogger.log("Chat/Token", "估算token=$totalTokens, 上限=$maxPromptTokens, 消息数=${messages.size}")
+        if (totalTokens > maxPromptTokens) {
+            var dropIdx = 1
+            while (messages.size > 2 && totalTokens > maxPromptTokens) {
+                if (dropIdx >= messages.size - 1) break
+                messages.removeAt(dropIdx)
+                totalTokens = messages.sumOf { (it.content.length * 1.3).toInt() + 10 }
+                dropIdx++
+            }
+            com.rhodes.privatechat.util.DebugLogger.log("Chat/Token", "截断后: 消息数=${messages.size}, 估算token=$totalTokens")
+        }
         return messages
     }
 
@@ -873,40 +918,24 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
     private suspend fun generateLongTermImpression(session: ChatSession) {
         try {
             val op = repository.getOperator(session.operatorId) ?: return
-            val shortTerm = repository.getShortTermMemory(session.id)
-            val anchors = repository.getAnchors(session.operatorId)
-            val anchorText = sharedUtils.pickAnchors(anchors, 5).joinToString("\n") { "- ${it.content}" }
             val profile = appState.userProfile.value
             val oldImpression = repository.getLongTermImpression(session.operatorId)
             val oldImpressionText = oldImpression?.content ?: "无"
-            val summaries = listOfNotNull(shortTerm?.content, anchorText.ifBlank { null }).joinToString("\n\n").ifBlank { "无" }
+            val impThreshold = settings.impressionThreshold.coerceAtLeast(1)
+            val msgs = repository.getMessagesSync(session.id).filter { !it.isMe }.takeLast(impThreshold)
+            if (msgs.isEmpty()) return
+            val messagesText = msgs.joinToString("\n") { "${it.senderName}：${it.content.take(100)}" }
             val prompt = """
-你是罗德岛的心理档案员。基于多次对话摘要总结干员对用户的长期印象。每次更新时融合旧印象和新摘要。
+基于以下${op.name}与${profile.nickname}的最近${msgs.size}条对话，总结${op.name}对${profile.nickname}的整体印象。
 
-总结用户${profile.nickname}在${op.name}眼中的整体印象。
-
-输出JSON：{"impression":"50~200字印象描述，使用'用户'指代对方","keywords":["关键词1","关键词2","关键词3"],"preferences":["偏好1","偏好2"],"taboos":["禁忌1"]}
-
-字段说明：
-- impression：完整人像描述，包含性格特质、偏好、情感模式、互动风格
-- keywords：3~5个关键词，最突出特点
-- preferences：2~4个持续偏好标签
-- taboos：0~2个持续禁忌标签，无则空数组
-
-质量要求：
-- impression要有整体感，不是零散信息堆砌
-- 旧印象与新信息冲突时以新信息为准
-- 标签从所有摘要中综合提取
-
-宁缺毋滥：
-- 如果对话内容不足以支撑足够标签，可返回少于标准数量
-- 不要为了凑数而编造不存在的标签
-
-之前的印象（在此基础上融合更新）：
+之前的印象（如有则融合更新）：
 ${oldImpressionText}
 
-新的对话摘要：
-${summaries}
+最近的对话记录：
+${messagesText}
+
+输出JSON：
+{"impression":"50~200字印象描述","keywords":["关键词1","关键词2","关键词3"],"preferences":["偏好1","偏好2"],"taboos":["禁忌1"]}
 
 直接输出JSON对象。
 """.trimIndent()
@@ -924,7 +953,7 @@ ${summaries}
                 }
             } catch (_: Exception) {
                 if (rawResult.isNotBlank()) {
-                    repository.saveMemory(Memory(sessionId = session.id, operatorId = session.operatorId, type = MemoryType.LONG_TERM, content = rawResult, createdAt = System.currentTimeMillis()))
+                    DebugLogger.log("Chat/Impression", "印象JSON解析失败: ${rawResult.take(100)}")
                 }
             }
         } catch (_: Exception) {}
@@ -940,7 +969,8 @@ ${summaries}
         Log.d(aiTag, "║ messages: ${_messages.value.size}")
         Log.d(aiTag, "║ currentMode: ${_currentMode.value}")
         Log.d(aiTag, "║ messageCounter: $messageCounter / $shortTermThreshold")
-        Log.d(aiTag, "║ impressionMsgCounter: $impressionMsgCounter")
+        val opId = _selectedOperator.value?.id ?: "?"
+        Log.d(aiTag, "║ impression_${opId}: ${settings.getInt("impression_$opId", 0)}")
         Log.d(aiTag, "╚══════════════════════════════════════")
     }
 }

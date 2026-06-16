@@ -105,7 +105,14 @@ fun ChatScreen(
 
     var bgUri by remember { mutableStateOf<String?>(settings.getString("bg_${op.id}", "")) }
     var cropTarget by remember { mutableStateOf<Uri?>(null) }
-    val bgPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> cropTarget = uri }
+    val bgPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            try { cropTarget = uri } catch (e: Exception) {
+                com.rhodes.privatechat.util.DebugLogger.log("ChatScreen/ERROR", "选图失败: ${e.message}")
+                android.widget.Toast.makeText(context, "无法加载此图片，请尝试其他图片", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
     var showBgReset by rememberSaveable { mutableStateOf(false) }
     var showExport by rememberSaveable { mutableStateOf(false) }
     var showClearConfirm by rememberSaveable { mutableStateOf(false) }

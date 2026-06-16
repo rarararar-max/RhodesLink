@@ -8,7 +8,8 @@ data class ChatCompletionRequest(
     val model: String = "deepseek-chat",
     val messages: List<AiMessage>,
     val stream: Boolean = true,
-    val temperature: Double = 0.95
+    val temperature: Double = 0.95,
+    val max_tokens: Int? = null
 )
 
 @Serializable
@@ -118,6 +119,43 @@ data class ProviderConfig(
     val baseUrl: String,
     val models: List<String>,
     val isOpenAICompat: Boolean = true
+)
+
+// === Google Gemini 请求/响应模型 ===
+
+@Serializable
+data class GoogleGenerationRequest(
+    val contents: List<GoogleContent>,
+    @SerialName("system_instruction") val systemInstruction: GoogleContent? = null
+)
+
+@Serializable
+data class GoogleContent(
+    val parts: List<GooglePart>,
+    val role: String = "user"
+)
+
+@Serializable
+data class GooglePart(
+    val text: String
+)
+
+@Serializable
+data class GoogleGenerateResponse(
+    val candidates: List<GoogleCandidate>? = null,
+    @SerialName("usageMetadata") val usageMetadata: GoogleUsage? = null
+)
+
+@Serializable
+data class GoogleCandidate(
+    val content: GoogleContent? = null
+)
+
+@Serializable
+data class GoogleUsage(
+    @SerialName("promptTokenCount") val promptTokenCount: Int = 0,
+    @SerialName("candidatesTokenCount") val candidatesTokenCount: Int = 0,
+    @SerialName("totalTokenCount") val totalTokenCount: Int = 0
 )
 
 @Serializable

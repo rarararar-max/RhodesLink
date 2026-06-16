@@ -60,7 +60,7 @@ class OperatorStateUpdater(
         val dailyCap = settings.dailyIntimacyCap.coerceIn(1, 20)
         val clamped = (dailyTotal + delta).coerceIn(-dailyCap, dailyCap)
         val actualDelta = clamped - dailyTotal
-        repository.updateIntimacy(operatorId, (op.intimacy + actualDelta).coerceIn(0, 100))
+        repository.updateIntimacy(operatorId, (op.intimacy + actualDelta).coerceIn(0, 1000))
         settings.putString("intimacy_date_$operatorId", today)
         settings.putInt("intimacy_daily_$operatorId", clamped)
     }

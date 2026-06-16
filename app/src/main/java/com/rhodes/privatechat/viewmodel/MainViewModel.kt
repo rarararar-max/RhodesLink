@@ -276,7 +276,7 @@ class MainViewModel(
         viewModelScope.launch {
             refreshAllOperatorStatus()
             while (true) {
-                kotlinx.coroutines.delay(3_600_000) // 每小时
+                kotlinx.coroutines.delay(15 * 60 * 1000L) // 每15分钟
                 refreshAllOperatorStatus()
                 checkAndTriggerProactiveMessages()
             }
@@ -304,7 +304,7 @@ class MainViewModel(
             val lastUserMsgTime = repository.getLastUserMessageTime(session.id)
             val lastUserOrSession = lastUserMsgTime ?: session.lastTime
             val lastSent = lastProactiveMsgTime[op.id] ?: 0L
-            (now - maxOf(lastUserOrSession, lastSent)) >= 2 * 3_600_000
+            (now - maxOf(lastUserOrSession, lastSent)) >= 30 * 60 * 1000L
         }
         if (candidates.size < 1) return
         // 随机选 1-2 人
@@ -361,16 +361,17 @@ class MainViewModel(
             "SHORT_TERM_SUMMARY" to (shortTerm?.content ?: "无"),
             "NEARBY_OPERATORS" to nearby.joinToString("\n") { "- ${it.name}正在${it.location}${it.activity}，${it.emotion}" }.ifBlank { "" },
             "USER_RELATION" to (op.userRelation.ifBlank { "未知" }),
-            "NAR_SEG_MIN" to intPref("nar_seg_min", 1).toString(),
-            "NAR_SEG_MAX" to intPref("nar_seg_max", 3).toString(),
-            "NAR_MIN" to settings.narMin.toString(),
-            "NAR_MAX" to settings.narMax.toString(),
-            "DIA_SEG_MIN" to intPref("dia_seg_min", 1).toString(),
-            "DIA_SEG_MAX" to intPref("dia_seg_max", 3).toString(),
+            // 主动消息只发一句话（1段台词，无旁白）
+            "NAR_SEG_MIN" to "0",
+            "NAR_SEG_MAX" to "0",
+            "NAR_MIN" to "0",
+            "NAR_MAX" to "0",
+            "DIA_SEG_MIN" to "1",
+            "DIA_SEG_MAX" to "1",
             "DIA_MIN" to intPref("dia_min", 10).toString(),
             "DIA_MAX" to settings.diaMax.toString(),
-            "SEG_MIN" to (intPref("nar_seg_min", 1) + intPref("dia_seg_min", 1)).toString(),
-            "SEG_MAX" to (intPref("nar_seg_max", 3) + intPref("dia_seg_max", 3)).toString(),
+            "SEG_MIN" to "1",
+            "SEG_MAX" to "1",
             "TRANSITION_NOTICE" to "",
             "GROUP_CONTEXT" to ""
         )
@@ -1419,13 +1420,6 @@ ${summaries}
                 cal.add(java.util.Calendar.DAY_OF_MONTH, 1)
                 val todayDisplay = sharedUtils.beijingSdf("yyyy年MM月dd日").format(cal.time)
 
-                // 防重复：昨天已生成则直接返回已有内容
-                val existing = repository.getDiary(operatorId, yesterdayStr)
-                if (existing != null) {
-                    onResult(existing.content)
-                    return@launch
-                }
-
                 val groupSummaries = _allSessions.value.filter { session ->
                     session.operatorId.startsWith("group_") && session.members.split(",").map { it.trim() }.any { it == operatorId || it == op.name }
                 }
@@ -1458,7 +1452,7 @@ ${summaries}
                 val text = withTimeout(25_000) { sharedUtils.chat(listOf(AiMessage("system", prompt))) }.trim()
                 sharedUtils.trackTokens("diary", prompt, text)
                 if (text.isNotBlank()) {
-                    repository.insertDiary(Diary(operatorId = operatorId, operatorName = op.name, content = text, date = yesterdayStr))
+                    repository.insertDiary(Diary(operatorId = operatorId, operatorName = op.name, content = text, date = yesterdayStr, createdAt = System.currentTimeMillis()))
                     for (observer in _operators.value.filter { it.id != operatorId }.shuffled().take(3)) {
                         repository.saveAnchor(MemoryAnchor(
                             sessionId = "anchor_${System.currentTimeMillis()}",

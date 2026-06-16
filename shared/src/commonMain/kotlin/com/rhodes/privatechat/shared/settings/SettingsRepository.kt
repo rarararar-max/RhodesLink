@@ -70,6 +70,10 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = settings.getInt("history_messages", 20)
         set(value) = settings.putInt("history_messages", value)
 
+    var maxContextTokens: Int
+        get() = settings.getInt("max_context_tokens", 32000)
+        set(value) = settings.putInt("max_context_tokens", value)
+
     // === 聊天配置 ===
     var aiTemperature: Double
         get() = settings.getInt("ai_temperature", 80).toDouble() / 100.0

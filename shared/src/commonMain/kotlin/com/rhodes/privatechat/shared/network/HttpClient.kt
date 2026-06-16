@@ -18,8 +18,8 @@ fun createHttpClient(): HttpClient = HttpClient(createPlatformEngine()) {
         })
     }
     install(HttpTimeout) {
-        requestTimeoutMillis = 30_000
+        requestTimeoutMillis = 60_000
         connectTimeoutMillis = 15_000
-        socketTimeoutMillis = 30_000
+        socketTimeoutMillis = 60_000
     }
 }

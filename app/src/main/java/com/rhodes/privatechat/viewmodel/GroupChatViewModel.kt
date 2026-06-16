@@ -49,7 +49,13 @@ class GroupChatViewModel(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     companion object {
         const val DEBUG = true
+        /** 静态共享，避免不同 ViewModel 实例干扰 */
+        private val globalAutoChatGenerations = ConcurrentHashMap<String, Long>()
+        private val globalAutoGroupChatJobs = ConcurrentHashMap<String, Job>()
     }
+
+    private val autoChatGenerations get() = globalAutoChatGenerations
+    private val autoGroupChatJobs get() = globalAutoGroupChatJobs
 
     private val groupActivityCache = ConcurrentHashMap<String, String>()
     private val _groupMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
@@ -69,8 +75,6 @@ class GroupChatViewModel(
     private fun mutexFor(groupId: String): Mutex = groupMessageMutexes.computeIfAbsent(groupId) { Mutex() }
 
     // 自动群聊
-    private val autoGroupChatJobs = mutableMapOf<String, Job>()
-    private val autoChatGenerations = mutableMapOf<String, Long>()
     private val lastUserMsgTime = mutableMapOf<String, Long>()
     private val groupAiJobs = ConcurrentHashMap<String, Job>()
 
@@ -147,6 +151,10 @@ class GroupChatViewModel(
     fun setAutoGroupChatEnabled(groupId: String, enabled: Boolean) {
         settings.putGroupAuto(groupId, enabled)
         if (enabled) {
+            if (autoGroupChatJobs[groupId]?.isActive == true) {
+                DebugLogger.log("GroupChat/Auto", "跳过启动: id=$groupId, 已有活跃协程")
+                return
+            }
             scope.launch {
                 val session = repository.getSession(groupId)
                 if (session != null) startAutoGroupChat(groupId, session.operatorName)
@@ -157,25 +165,30 @@ class GroupChatViewModel(
     }
 
     private fun startAutoGroupChat(groupId: String, groupName: String) {
-        stopAutoGroupChat(groupId)
+        val existing = autoGroupChatJobs[groupId]
+        if (existing?.isActive == true) {
+            DebugLogger.log("GroupChat/Auto", "跳过启动: id=$groupId, 已有活跃协程")
+            return
+        }
+        autoGroupChatJobs[groupId]?.cancel()
+        autoGroupChatJobs.remove(groupId)
         val generation = (autoChatGenerations[groupId] ?: 0L) + 1L
         autoChatGenerations[groupId] = generation
         val minMs = settings.groupChatMinInterval * 1000L
         val maxMs = settings.groupChatMaxInterval * 1000L
+        DebugLogger.log("GroupChat/Auto", "启动: id=$groupId, gen=$generation, min=${minMs/1000}秒, max=${maxMs/1000}秒")
         autoGroupChatJobs[groupId] = scope.launch {
-            val sinceLastMsg = System.currentTimeMillis() - (lastUserMsgTime[groupId] ?: 0L)
-            val firstDelay = if (sinceLastMsg < 30_000) 30_000 - sinceLastMsg else 10_000L
-            delay(firstDelay)
             var loopCount = 0
             while (isAutoGroupChatEnabled(groupId)) {
                 loopCount++
                 if (loopCount > 50) break
-                if (autoChatGenerations[groupId] != generation) break
-                val session = repository.getSession(groupId) ?: break
-                val mode = getGroupChatMode(groupId)
-                sendGroupMessage(groupId, groupName, "", mode, isAuto = true)
-                    val interval = minMs + (Math.random() * (maxMs - minMs).coerceAtLeast(0L)).toLong()
-                    DebugLogger.log("GroupChat", "自动发言: id=$groupId, 间隔=${interval / 1000}秒, min=${minMs / 1000}秒, max=${maxMs / 1000}秒")
+                if (autoChatGenerations[groupId] != generation) {
+                    DebugLogger.log("GroupChat/Auto", "gen变化退出: id=$groupId")
+                    break
+                }
+                // 先等待完整间隔，再发消息（首次也一样）
+                val interval = minMs + (Math.random() * (maxMs - minMs).coerceAtLeast(0L)).toLong()
+                DebugLogger.log("GroupChat/Auto", "第${loopCount}轮: id=$groupId, 等待${interval/1000}秒, gen=$generation")
                 val tickMs = 1000L
                 var remaining = interval
                 while (remaining > 0 && isAutoGroupChatEnabled(groupId)) {
@@ -184,21 +197,18 @@ class GroupChatViewModel(
                     remaining -= tickMs
                 }
                 if (autoChatGenerations[groupId] != generation) break
+                // 等够间隔，发消息
+                DebugLogger.log("GroupChat/Auto", "发消息: id=$groupId, loop=$loopCount")
+                val session = repository.getSession(groupId) ?: break
+                val mode = getGroupChatMode(groupId)
+                sendGroupMessage(groupId, groupName, "", mode, isAuto = true)
             }
         }
     }
 
     fun resetAutoGroupChatTimer(groupId: String) {
+        DebugLogger.log("GroupChat/Auto", "重置计时器: id=$groupId")
         lastUserMsgTime[groupId] = System.currentTimeMillis()
-        autoChatGenerations[groupId] = (autoChatGenerations[groupId] ?: 0L) + 1L
-        autoGroupChatJobs[groupId]?.cancel()
-        autoGroupChatJobs.remove(groupId)
-        scope.launch {
-            val session = repository.getSession(groupId)
-            if (session != null && isAutoGroupChatEnabled(groupId)) {
-                startAutoGroupChat(groupId, session.operatorName)
-            }
-        }
     }
 
     private fun getGroupChatMode(groupId: String): String =
@@ -361,9 +371,23 @@ class GroupChatViewModel(
                     val userMsg = if (autoSpeak) "（群聊已空闲一段时间，干员们自然地闲聊起来，无需等待用户发言。）" else text
                     apiMessages.add(AiMessage("user", "用户：$userMsg"))
                 }
+                // 估算总 token，超限则丢弃最早的历史消息
+                val maxPromptTokens = settings.maxContextTokens - 2000
+                var totalTokens = apiMessages.sumOf { (it.content.length * 1.3).toInt() + 10 }
+                com.rhodes.privatechat.util.DebugLogger.log("GroupChat/Token", "估算token=$totalTokens, 上限=$maxPromptTokens, 消息数=${apiMessages.size}")
+                if (totalTokens > maxPromptTokens) {
+                    var dropIdx = 1
+                    while (apiMessages.size > 2 && totalTokens > maxPromptTokens) {
+                        if (dropIdx >= apiMessages.size - 1) break
+                        apiMessages.removeAt(dropIdx)
+                        totalTokens = apiMessages.sumOf { (it.content.length * 1.3).toInt() + 10 }
+                        dropIdx++
+                    }
+                    com.rhodes.privatechat.util.DebugLogger.log("GroupChat/Token", "截断后: 消息数=${apiMessages.size}, 估算token=$totalTokens")
+                }
                 val promptText = apiMessages.firstOrNull()?.content ?: ""
                 if (DEBUG) sharedUtils.logAiCall("GroupChat", promptText, "(requesting...)", apiMessages)
-                val rawBase = withTimeout(60_000) { sharedUtils.chat(apiMessages, "GroupChat") }.trim()
+                val rawBase = withTimeout(90_000) { sharedUtils.chat(apiMessages, "GroupChat") }.trim()
                     .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
                 sharedUtils.trackTokens("group", apiMessages, rawBase)
                 if (DEBUG) sharedUtils.logAiCall("GroupChat", promptText, rawBase, apiMessages)
@@ -371,7 +395,8 @@ class GroupChatViewModel(
                 if (results.isEmpty() && rawBase.isNotBlank()) {
                     results = listOf(GroupMsgResult(speaker = "系统", message = rawBase.take(500), type = "narration"))
                 }
-                val filtered = results.filter { it.message.isNotBlank() }
+                val validSpeakers = members.map { it.name }.toSet() + "旁白" + "系统"
+                val filtered = results.filter { it.message.isNotBlank() && it.speaker in validSpeakers }
                 if (filtered.isNotEmpty()) {
                     val aiMsgId = repository.getNextMessageId()
                     val storedContent = if (filtered.isNotEmpty()) {

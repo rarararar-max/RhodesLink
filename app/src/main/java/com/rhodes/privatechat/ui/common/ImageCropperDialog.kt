@@ -12,9 +12,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -35,6 +37,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.util.decodeSampledBitmap
 import java.io.File
 import java.io.FileOutputStream
@@ -51,6 +54,7 @@ fun ImageCropperDialog(
     var scale by remember { mutableFloatStateOf(1f) }
     var panX by remember { mutableFloatStateOf(0f) }
     var panY by remember { mutableFloatStateOf(0f) }
+    var showUseOriginal by remember { mutableStateOf(false) }
     val bitmap = remember(imageUri) { decodeSampledBitmap(context, imageUri, 1024) }
 
     Dialog(onDismissRequest = onCancel) {
@@ -116,7 +120,7 @@ fun ImageCropperDialog(
                             cropped.recycle()
                             onConfirm(Uri.fromFile(destFile))
                         } catch (_: Exception) {
-                            Toast.makeText(context, "裁剪失败，请选择较小的图片", Toast.LENGTH_SHORT).show()
+                            showUseOriginal = true
                         }
                     } else {
                         Toast.makeText(context, "裁剪区域无效，请调整图片位置", Toast.LENGTH_SHORT).show()
@@ -126,5 +130,22 @@ fun ImageCropperDialog(
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF5B8DEF))
             ) { Text("确认裁剪", fontSize = 16.sp) }
         }
+    }
+    if (showUseOriginal) {
+        AlertDialog(
+            onDismissRequest = { showUseOriginal = false },
+            title = { Text("裁剪失败", color = TextPrimary) },
+            text = { Text("无法裁剪此图片，是否直接使用原图？", color = TextSecondary) },
+            confirmButton = {
+                TextButton(onClick = { onConfirm(imageUri); showUseOriginal = false }) {
+                    Text("直接使用", color = Primary)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showUseOriginal = false }) {
+                    Text("取消", color = TextSecondary)
+                }
+            }
+        )
     }
 }

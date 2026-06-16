@@ -126,6 +126,7 @@ class ChatRepository(wrapper: DatabaseWrapper) {
     suspend fun insertDiary(diary: Diary) = diaries.insertDiary(diary)
     suspend fun getDiary(operatorId: String, date: String) = diaries.getDiary(operatorId, date)
     fun getDiariesByOperator(operatorId: String) = diaries.getDiariesByOperator(operatorId)
+    suspend fun getAllDiaryEntries(operatorId: String) = diaries.getAllDiaryEntries(operatorId)
     suspend fun getDiaryDates(operatorId: String) = diaries.getDiaryDates(operatorId)
     suspend fun getDiaryCount() = diaries.getDiaryCount()
     suspend fun deleteOldDiaries(cutoff: Long) = diaries.deleteOldDiaries(cutoff)

@@ -20,8 +20,8 @@ android {
         applicationId = "com.rhodes.privatechat"
         minSdk = 26
         targetSdk = 35
-        versionCode = 13
-        versionName = "1.02"
+        versionCode = 14
+        versionName = "1.03"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

@@ -17,11 +17,15 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -40,16 +44,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import com.rhodes.privatechat.shared.model.Diary
 import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.text.SimpleDateFormat
-import java.util.Calendar
-import java.util.Locale
-import java.util.TimeZone
+
 
 data class DiaryOp(val id: String, val name: String, val color: Color, val hasDiary: Boolean = false)
 
@@ -67,24 +69,9 @@ fun DiaryScreen(
     modifier: Modifier = Modifier
 ) {
     val operators by viewModel.operators.collectAsState()
-    val diaryMap = remember { mutableStateMapOf<String, Boolean>() }
-    val yesterdayKey = remember {
-        val cal = Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai"))
-        cal.add(Calendar.DAY_OF_MONTH, -1)
-        SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply {
-            timeZone = TimeZone.getTimeZone("Asia/Shanghai")
-        }.format(cal.time)
-    }
-    // 异步查询各干员是否有日记
-    LaunchedEffect(operators, yesterdayKey) {
-        for (op in operators) {
-            val d = withContext(Dispatchers.IO) { viewModel.repository.getDiary(op.id, yesterdayKey) }
-            diaryMap[op.id] = d != null
-        }
-    }
-    val diaryOps: List<DiaryOp> = remember(operators, diaryMap) {
+    val diaryOps: List<DiaryOp> = remember(operators) {
         operators.mapIndexed { i, op ->
-            DiaryOp(op.id, op.name, colorPalette[i % colorPalette.size], diaryMap[op.id] == true)
+            DiaryOp(op.id, op.name, colorPalette[i % colorPalette.size])
         }
     }
     val context = LocalContext.current
@@ -97,24 +84,69 @@ fun DiaryScreen(
             selectedName = diaryOps.firstOrNull()?.name ?: ""
         }
     }
+    val scope = rememberCoroutineScope()
     var showPanel by remember { mutableStateOf(true) }
     var diaryContent by rememberSaveable { mutableStateOf<String?>(null) }
     var isGenerating by remember { mutableStateOf(false) }
+    var diaryEntries by remember { mutableStateOf<List<com.rhodes.privatechat.shared.model.Diary>>(emptyList()) }
+    var currentDateIdx by remember { mutableIntStateOf(0) }
+    var currentDateLabel by remember { mutableStateOf("") }
+    var dataLoaded by remember { mutableStateOf(false) }
 
-    // 每次进入或切换干员时从 DB 加载已有日记
-    LaunchedEffect(selectedName) {
-        isGenerating = false
-        diaryContent = null
-        val opId = diaryOps.find { it.name == selectedName }?.id ?: return@LaunchedEffect
-        val cal = Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai"))
-        cal.add(Calendar.DAY_OF_MONTH, -1)
-        val yesterday = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply {
-            timeZone = TimeZone.getTimeZone("Asia/Shanghai")
-        }.format(cal.time)
-        val existing = withContext(Dispatchers.IO) {
-            viewModel.repository.getDiary(opId, yesterday)
+    // 加载干员日记条目（独立的挂起函数，不会被级联取消）
+    fun loadDiaryEntries(name: String) {
+        val opId = diaryOps.find { it.name == name }?.id
+        com.rhodes.privatechat.util.DebugLogger.log("Diary", "loadDiaryEntries: name=$name, opId=$opId, diaryOps.size=${diaryOps.size}")
+        if (opId == null) {
+            com.rhodes.privatechat.util.DebugLogger.log("Diary", "opId为空, 跳过")
+            return
         }
-        if (existing != null) diaryContent = existing.content
+        scope.launch {
+            try {
+                isGenerating = false
+                currentDateIdx = 0
+                dataLoaded = false
+                com.rhodes.privatechat.util.DebugLogger.log("Diary", "开始加载日记: opId=$opId")
+                val entries = withContext(Dispatchers.IO) {
+                    viewModel.repository.getAllDiaryEntries(opId)
+                }
+                com.rhodes.privatechat.util.DebugLogger.log("Diary", "getAllDiaryEntries返回: count=${entries.size}, ids=${entries.map { it.id }}")
+                val totalCount = withContext(Dispatchers.IO) { viewModel.repository.getDiaryCount() }
+                com.rhodes.privatechat.util.DebugLogger.log("Diary", "全表diary数: total=$totalCount, matched=${entries.size}")
+                diaryEntries = entries
+                dataLoaded = true
+                if (entries.isNotEmpty()) {
+                    currentDateLabel = entries[0].date
+                    diaryContent = entries[0].content
+                    com.rhodes.privatechat.util.DebugLogger.log("Diary", "设置日记内容: id=${entries[0].id}, date=${entries[0].date}, content=${entries[0].content.take(30)}")
+                } else if (diaryContent != null) {
+                    com.rhodes.privatechat.util.DebugLogger.log("Diary", "DB无条目但diaryContent已有值, 保留: ${diaryContent?.take(20)}")
+                } else {
+                    diaryContent = null
+                    com.rhodes.privatechat.util.DebugLogger.log("Diary", "DB无条目且无保存值, 设为null")
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                com.rhodes.privatechat.util.DebugLogger.log("Diary", "加载被取消: $name")
+                dataLoaded = true
+            } catch (e: Exception) {
+                com.rhodes.privatechat.util.DebugLogger.log("Diary/ERROR", "加载日记异常: ${e.message}")
+                dataLoaded = true
+            }
+            com.rhodes.privatechat.util.DebugLogger.log("Diary", "加载结束: diaryContent=${diaryContent?.take(20) ?: "null"}, diaryEntries.size=${diaryEntries.size}")
+        }
+    }
+
+    // 用 snapshotFlow 观察 selectedName，200ms 稳定后再加载
+    LaunchedEffect(Unit) {
+        androidx.compose.runtime.snapshotFlow { selectedName }
+            .collect { name ->
+                if (name.isNotBlank()) {
+                    kotlinx.coroutines.delay(200)
+                    if (name == selectedName) {
+                        loadDiaryEntries(name)
+                    }
+                }
+            }
     }
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -179,19 +211,106 @@ fun DiaryScreen(
             }
 
             Column(modifier = Modifier.weight(1f).padding(12.dp)) {
+                // 标题行：←角色名→（左箭头=更早，右箭头=更新）
+                Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Card).padding(horizontal = 8.dp, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    val canPrev = currentDateIdx > 0 && diaryEntries.isNotEmpty()
+                    IconButton(
+                        onClick = {
+                            com.rhodes.privatechat.util.DebugLogger.log("Diary", "翻更早: idx=$currentDateIdx, entries=${diaryEntries.size}")
+                            if (currentDateIdx > 0) {
+                                val prev = diaryEntries.getOrNull(currentDateIdx - 1)
+                                if (prev != null) {
+                                    currentDateIdx--
+                                    diaryContent = prev.content; currentDateLabel = prev.date
+                                }
+                            }
+                        },
+                        enabled = canPrev,
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(Icons.Default.KeyboardArrowLeft, "更早", tint = if (canPrev) Primary else TextTertiary, modifier = Modifier.size(18.dp))
+                    }
+
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            val selOp = diaryOps.find { it.name == selectedName }
+                            val selEntity = selOp?.let { s -> operators.find { it.id == s.id || it.name == s.name } }
+                            OperatorAvatarImage(avatarUri = selEntity?.avatarUri ?: "", name = selectedName, modifier = Modifier.size(28.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(selectedName, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Primary)
+                        }
+                        Text("${if (diaryEntries.isNotEmpty()) currentDateLabel else ""} #${if (diaryEntries.isEmpty()) 0 else diaryEntries.size - currentDateIdx}/${diaryEntries.size}", fontSize = 11.sp, color = TextTertiary)
+                    }
+
+                    val canNext = currentDateIdx < diaryEntries.lastIndex && diaryEntries.isNotEmpty()
+                    IconButton(
+                        onClick = {
+                            com.rhodes.privatechat.util.DebugLogger.log("Diary", "翻更新: idx=$currentDateIdx, entries=${diaryEntries.size}")
+                            if (currentDateIdx < diaryEntries.lastIndex) {
+                                val next = diaryEntries.getOrNull(currentDateIdx + 1)
+                                if (next != null) {
+                                    currentDateIdx++
+                                    diaryContent = next.content; currentDateLabel = next.date
+                                }
+                            }
+                        },
+                        enabled = canNext,
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        Icon(Icons.Default.KeyboardArrowRight, "更新", tint = if (canNext) Primary else TextTertiary, modifier = Modifier.size(18.dp))
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+
                 if (diaryContent != null) {
                     Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).clip(RoundedCornerShape(12.dp)).background(Card).padding(16.dp)) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                val selOp = diaryOps.find { it.name == selectedName }
-                                val selEntity = selOp?.let { s -> operators.find { it.id == s.id || it.name == s.name } }
-                                OperatorAvatarImage(avatarUri = selEntity?.avatarUri ?: "", name = selectedName, modifier = Modifier.size(28.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text(selectedName, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Primary)
-                            }
+                        diaryContent?.let { content ->
+                            Text(content, fontSize = 14.sp, color = TextPrimary, lineHeight = 24.sp)
                         }
-                        Spacer(Modifier.height(10.dp))
-                        Text(diaryContent!!, fontSize = 14.sp, color = TextPrimary, lineHeight = 24.sp)
+                        Spacer(Modifier.height(16.dp))
+                        OutlinedButton(
+                            onClick = {
+                                val opId = diaryOps.find { it.name == selectedName }?.id
+                                if (opId == null) { com.rhodes.privatechat.util.DebugLogger.log("Diary", "重新生成失败: 找不到opId"); return@OutlinedButton }
+                                com.rhodes.privatechat.util.DebugLogger.log("Diary", "重新生成: opId=$opId, selectedName=$selectedName")
+                                isGenerating = true
+                                viewModel.generateDiary(opId) { text ->
+                                    com.rhodes.privatechat.util.DebugLogger.log("Diary", "重新生成回调触发: text=${text.take(30)}, isBlank=${text.isBlank()}")
+                                    scope.launch {
+                                        try {
+                                            if (text.isNotBlank()) {
+                                                diaryContent = text
+                                                com.rhodes.privatechat.util.DebugLogger.log("Diary", "重生成后 DB reload 开始")
+                                                val newEntries = withContext(Dispatchers.IO) { viewModel.repository.getAllDiaryEntries(opId) }
+                                                com.rhodes.privatechat.util.DebugLogger.log("Diary", "重生成后 DB reload: count=${newEntries.size}, ids=${newEntries.map { it.id }}")
+                                                diaryEntries = newEntries; currentDateIdx = 0
+                                                if (newEntries.isNotEmpty()) {
+                                                    currentDateLabel = newEntries[0].date
+                                                    if (newEntries[0].content != text) {
+                                                        com.rhodes.privatechat.util.DebugLogger.log("Diary/WARN", "!! diaryContent与DB内容不一致: text=${text.take(20)}, DB=${newEntries[0].content.take(20)}")
+                                                    }
+                                                }
+                                            } else {
+                                                android.widget.Toast.makeText(context, "AI生成失败，请检查网络和API Key后重试", android.widget.Toast.LENGTH_SHORT).show()
+                                            }
+                                        } catch (e: kotlinx.coroutines.CancellationException) {
+                                            // scope 取消，忽略
+                                        } catch (e: Exception) {
+                                            com.rhodes.privatechat.util.DebugLogger.log("Diary/ERROR", "重生成刷新异常: ${e.message}")
+                                        } finally {
+                                            isGenerating = false
+                                        }
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !isGenerating
+                        ) {
+                            Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("重新生成")
+                        }
                     }
                 } else if (!isGenerating) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -199,16 +318,39 @@ fun DiaryScreen(
                             Text("点击下方按钮偷看${selectedName}的日记", fontSize = 14.sp, color = TextTertiary)
                             Spacer(modifier = Modifier.height(16.dp))
                             Button(onClick = {
-                                val opId = diaryOps.find { it.name == selectedName }?.id ?: return@Button
+                                val opId = diaryOps.find { it.name == selectedName }?.id
+                                if (opId == null) { com.rhodes.privatechat.util.DebugLogger.log("Diary", "偷看失败: 找不到opId"); return@Button }
+                                com.rhodes.privatechat.util.DebugLogger.log("Diary", "偷看日记: opId=$opId, selectedName=$selectedName")
                                 isGenerating = true
                                 viewModel.generateDiary(opId) { text ->
+                                    com.rhodes.privatechat.util.DebugLogger.log("Diary", "偷看回调触发: text=${text.take(30)}, isBlank=${text.isBlank()}")
                                     if (text.isNotBlank()) {
                                         diaryContent = text
-                                        diaryMap[opId] = true
-                                    } else {
-                                        android.widget.Toast.makeText(context, "AI生成失败，请检查网络和API Key后重试", android.widget.Toast.LENGTH_SHORT).show()
+                                        com.rhodes.privatechat.util.DebugLogger.log("Diary", "偷看后立即显示 diaryContent")
                                     }
-                                    isGenerating = false
+                                    scope.launch {
+                                        try {
+                                            com.rhodes.privatechat.util.DebugLogger.log("Diary", "偷看后 DB reload 开始")
+                                            val newEntries = withContext(Dispatchers.IO) { viewModel.repository.getAllDiaryEntries(opId) }
+                                            com.rhodes.privatechat.util.DebugLogger.log("Diary", "偷看后 DB reload: count=${newEntries.size}, ids=${newEntries.map { it.id }}")
+                                            diaryEntries = newEntries; currentDateIdx = 0
+                                            if (newEntries.isNotEmpty()) {
+                                                currentDateLabel = newEntries[0].date
+                                                if (newEntries[0].content != text) {
+                                                    com.rhodes.privatechat.util.DebugLogger.log("Diary/WARN", "!! diaryContent与DB内容不一致: text=${text.take(20)}, DB=${newEntries[0].content.take(20)}")
+                                                }
+                                            }
+                                            if (text.isBlank()) {
+                                                android.widget.Toast.makeText(context, "AI生成失败，请检查网络和API Key后重试", android.widget.Toast.LENGTH_SHORT).show()
+                                            }
+                                        } catch (e: kotlinx.coroutines.CancellationException) {
+                                            // scope 取消，忽略
+                                        } catch (e: Exception) {
+                                            com.rhodes.privatechat.util.DebugLogger.log("Diary/ERROR", "偷看刷新异常: ${e.message}")
+                                        } finally {
+                                            isGenerating = false
+                                        }
+                                    }
                                 }
                             }, colors = ButtonDefaults.buttonColors(containerColor = Primary)) {
                                 Icon(Icons.AutoMirrored.Filled.MenuBook, null, modifier = Modifier.size(18.dp))

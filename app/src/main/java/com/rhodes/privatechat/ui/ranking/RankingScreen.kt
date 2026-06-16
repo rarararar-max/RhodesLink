@@ -56,6 +56,7 @@ fun RankingScreen(
     onOperatorClick: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val settings: com.rhodes.privatechat.shared.settings.SettingsRepository = org.koin.compose.koinInject()
     var tab by remember { mutableIntStateOf(0) }
     var ranking by remember { mutableStateOf<List<SenderCount>>(emptyList()) }
     var dailyRanking by remember { mutableStateOf<List<SenderCount>>(emptyList()) }
@@ -102,14 +103,15 @@ fun RankingScreen(
                 itemsIndexed(sorted) { i, entry ->
                     val color = operatorColors[i % operatorColors.size]
                     val rankingOp = remember(entry, operators) { operators.find { op -> op.id == entry.senderName || op.name == entry.senderName } }
-                    val rankingAvatar = rankingOp?.avatarUri
+                    val opId = rankingOp?.id ?: entry.senderName
+                    val dailyIntimacy = settings.getInt("intimacy_daily_$opId", 0)
                     Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 16.dp, vertical = 10.dp).clickable { onOperatorClick(entry.senderName) }, verticalAlignment = Alignment.CenterVertically) {
                         Text(rankText(i), fontSize = 14.sp, fontWeight = FontWeight.Bold, color = rankColor(i), modifier = Modifier.width(40.dp))
                         OperatorAvatarImage(avatarUri = rankingOp?.avatarUri ?: "", name = entry.senderName, modifier = Modifier.size(36.dp))
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(entry.senderName, fontSize = 14.sp, modifier = Modifier.weight(1f), color = TextPrimary)
                         Text("${entry.cnt}", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, modifier = Modifier.width(48.dp), textAlign = TextAlign.Center)
-                        Text("+0", fontSize = 13.sp, color = Color(0xFFFF9800), modifier = Modifier.width(40.dp), textAlign = TextAlign.Center)
+                        Text("+$dailyIntimacy", fontSize = 13.sp, color = Color(0xFFFF9800), modifier = Modifier.width(40.dp), textAlign = TextAlign.Center)
                     }
                     HorizontalDivider(color = BG)
                 }

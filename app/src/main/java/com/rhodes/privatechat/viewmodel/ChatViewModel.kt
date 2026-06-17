@@ -811,6 +811,14 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             "OPERATOR_GENDER" to (op?.gender?.ifBlank { "" } ?: ""),
             "CURRENT_LOCATION" to (op?.location ?: "宿舍"), "CURRENT_STATE" to (op?.activity ?: "休息"), "CURRENT_EMOTION" to (op?.emotion ?: "平静"),
             "LONG_TERM_IMPRESSION" to (longTerm?.content ?: "暂无"),
+            "USER_PREFS" to buildString {
+                longTerm?.preferences?.takeIf { it.isNotBlank() }?.let {
+                    append("已知偏好：${it.split(",").map { it.trim() }.joinToString("、")}\n")
+                }
+                longTerm?.taboos?.takeIf { it.isNotBlank() }?.let {
+                    append("已知禁忌：${it.split(",").map { it.trim() }.joinToString("、")}\n")
+                }
+            },
             "MEMORY_ANCHORS" to sharedUtils.pickAnchors(anchors, 5).joinToString("\n") { "- ${sharedUtils.anchorTimeLabel(it)} ${it.content}" }.ifBlank { "暂无" },
             "SHARED_MEMORIES" to sharedMemories.ifBlank { "无" },
             "DAILY_SUMMARY" to (repository.getLatestPrivateDaily(session.operatorId)?.content ?: repository.getLatestDaily()?.content ?: "无"),

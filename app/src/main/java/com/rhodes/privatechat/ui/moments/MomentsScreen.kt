@@ -55,7 +55,6 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
     val moments by viewModel.moments.collectAsState()
     val genStatus by viewModel.momentGenerateStatus.collectAsState()
     var showPost by rememberSaveable { mutableStateOf(false) }
-    var isGenerating by rememberSaveable { mutableStateOf(false) }
     var showReplyDialog by rememberSaveable { mutableStateOf(false) }
     var showCommentDialog by rememberSaveable { mutableStateOf(false) }
     var commentMomentId by rememberSaveable { mutableLongStateOf(0L) }
@@ -100,18 +99,8 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
             IconButton(onClick = { showPost = true }) { Icon(Icons.Default.Create, "发动态", tint = Primary) }
         }
         HorizontalDivider(color = Divider)
-        PullToRefreshOverscroll(
-            pullToRefresh = isGenerating,
-            listState = listState,
-            onRefresh = {
-                if (!isGenerating) {
-                    isGenerating = true
-                    viewModel.generateOneMoment { _, done -> if (done) isGenerating = false }
-                }
-            }
-        ) {
-            LazyColumn(state = listState) {
-                if (moments.isEmpty()) { item { Box(Modifier.fillMaxWidth().fillParentMaxHeight(), contentAlignment = Alignment.Center) { Text("暂无动态\n下拉刷新生成动态", fontSize = 14.sp, color = TextTertiary, textAlign = TextAlign.Center) } } }
+        LazyColumn(state = listState) {
+                if (moments.isEmpty()) { item { Box(Modifier.fillMaxWidth().fillParentMaxHeight(), contentAlignment = Alignment.Center) { Text("暂无动态\n点击右上角催发生成动态", fontSize = 14.sp, color = TextTertiary, textAlign = TextAlign.Center) } } }
                 items(moments, key = { it.id }) { moment ->
                     MomentCardWithInteraction(moment = moment, viewModel = viewModel,
                         onReply = { commentId, name ->
@@ -129,7 +118,6 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
                 }
                 item { Spacer(Modifier.height(16.dp)) }
             }
-        }
     }
     }
     if (showPost) PostDialog(operators = viewModel.operators.collectAsState().value, onDismiss = { showPost = false }, onPost = { content, mentioned -> viewModel.postUserMoment(content, mentioned); showPost = false })
@@ -301,95 +289,6 @@ private fun MomentCardWithInteraction(moment: MomentEntity, viewModel: MainViewM
             }
             showAtPicker = false
         }) { Text("确定", color = Primary) } })
-    }
-}
-
-@Composable
-private fun PullToRefreshOverscroll(
-    pullToRefresh: Boolean,
-    listState: androidx.compose.foundation.lazy.LazyListState? = null,
-    onRefresh: () -> Unit,
-    content: @Composable () -> Unit
-) {
-    val indicatorHeight = 80f
-    val pullThreshold = 120f
-    var offsetValue by remember { mutableStateOf(0f) }
-    var isOverscrolling by remember { mutableStateOf(false) }
-    val latestOnRefresh by rememberUpdatedState(onRefresh)
-    val latestPullToRefresh by rememberUpdatedState(pullToRefresh)
-    val showIndicator = offsetValue > 0f || pullToRefresh
-
-    LaunchedEffect(pullToRefresh) {
-        val target = if (pullToRefresh) indicatorHeight else 0f
-        animate(offsetValue, target) { value, _ -> offsetValue = value }
-    }
-
-    val connection = remember {
-        object : NestedScrollConnection {
-            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                // 滚动上升时：收回指示器
-                if (offsetValue > 0f && available.y < 0f) {
-                    val consumed = available.y.coerceAtLeast(-offsetValue)
-                    offsetValue += consumed
-                    if (offsetValue <= 0f) {
-                        offsetValue = 0f
-                        isOverscrolling = false
-                    }
-                    return Offset(0f, consumed)
-                }
-                // 列表在顶部且下拉时：在 onPreScroll 中拦截，防止 overscroll effect 吞掉事件
-                if (available.y > 0f && listState != null) {
-                    val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
-                    if (atTop || offsetValue > 0f) {
-                        isOverscrolling = true
-                        offsetValue = (offsetValue + available.y).coerceIn(0f, 300f)
-                        return Offset(0f, available.y)
-                    }
-                }
-                return Offset.Zero
-            }
-
-            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
-                if (available.y > 0f) {
-                    isOverscrolling = true
-                    offsetValue = (offsetValue + available.y).coerceIn(0f, 300f)
-                    return Offset(0f, available.y)
-                }
-                return Offset.Zero
-            }
-
-            override suspend fun onPreFling(available: Velocity): Velocity {
-                if (offsetValue >= pullThreshold) {
-                    offsetValue = indicatorHeight
-                    latestOnRefresh()
-                    return available
-                } else if (!latestPullToRefresh) {
-                    offsetValue = 0f
-                }
-                isOverscrolling = false
-                return Velocity.Zero
-            }
-        }
-    }
-
-    Box {
-        if (showIndicator) {
-            Box(
-                Modifier.fillMaxWidth().height(indicatorHeight.toInt().dp).background(Surface),
-                contentAlignment = Alignment.Center
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = Primary)
-                    Spacer(Modifier.width(8.dp))
-                    Text("正在生成动态...", fontSize = 13.sp, color = TextSecondary)
-                }
-            }
-        }
-        Box(
-            Modifier.offset(y = offsetValue.dp).nestedScroll(connection)
-        ) {
-            content()
-        }
     }
 }
 

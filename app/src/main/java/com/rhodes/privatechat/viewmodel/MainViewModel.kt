@@ -355,6 +355,14 @@ class MainViewModel(
             "CURRENT_STATE" to op.activity,
             "CURRENT_EMOTION" to op.emotion,
             "LONG_TERM_IMPRESSION" to (longTerm?.content ?: "暂无"),
+            "USER_PREFS" to buildString {
+                longTerm?.preferences?.takeIf { it.isNotBlank() }?.let {
+                    append("已知偏好：${it.split(",").map { it.trim() }.joinToString("、")}\n")
+                }
+                longTerm?.taboos?.takeIf { it.isNotBlank() }?.let {
+                    append("已知禁忌：${it.split(",").map { it.trim() }.joinToString("、")}\n")
+                }
+            },
             "MEMORY_ANCHORS" to pickAnchors(anchors, 5).joinToString("\n") { "- ${anchorTimeLabel(it)} ${it.content}" }.ifBlank { "暂无特别事件" },
             "SHARED_MEMORIES" to sharedMemories.ifBlank { "无" },
             "DAILY_SUMMARY" to (repository.getLatestDaily()?.content ?: "无"),
@@ -1468,6 +1476,93 @@ ${summaries}
             } catch (e: Exception) {
                 DebugLogger.log("Diary", "日记生成异常: ${e.message?.take(100)}")
                 onResult("")
+            }
+        }
+    }
+
+    // === AI 人设生成 ===
+    data class OperatorPromptResult(
+        val title: String = "",
+        val gender: String = "",
+        val description: String = "",
+        val privatePrompt: String = "",
+        val groupPrompt: String = ""
+    )
+
+    private fun parseOperatorPromptResult(raw: String): OperatorPromptResult {
+        val cleaned = sharedUtils.aiService.cleanJson(raw)
+        try {
+            val obj = kotlinx.serialization.json.Json.parseToJsonElement(cleaned).jsonObject
+            fun j(n: String) = obj[n]?.jsonPrimitive?.content?.trim() ?: ""
+            return OperatorPromptResult(title = j("title"), gender = j("gender"),
+                description = j("description"), privatePrompt = j("privatePrompt"), groupPrompt = j("groupPrompt"))
+        } catch (_: Exception) {}
+        fun extr(n: String) = Regex("\"$n\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"").find(cleaned)?.groupValues?.getOrNull(1)?.replace("\\\"", "\"")?.trim() ?: ""
+        val r = OperatorPromptResult(title = extr("title"), gender = extr("gender"),
+            description = extr("description"), privatePrompt = extr("privatePrompt"), groupPrompt = extr("groupPrompt"))
+        if (r.privatePrompt.isBlank() && raw.isNotBlank()) return r.copy(privatePrompt = raw.trim())
+        return r
+    }
+
+    fun generateOperatorPrompt(requirement: String, existingPrompt: String, onResult: (OperatorPromptResult) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val existingBlock = if (existingPrompt.isNotBlank()) "\n【现有的人设文本（请在此基础上升级优化，保留核心设定）】\n$existingPrompt\n" else ""
+                val prompt = """
+【任务】
+你是一位角色设定专家。根据用户的需求为角色设计完整的人设信息。
+生成的内容将用于 AI 角色扮演对话系统，直接影响角色在私聊和群聊中的表现质量。
+
+【用户需求】
+$requirement
+$existingBlock
+
+【输出要求 · 五个字段】
+
+1. title（身份/称号）：
+   简短有力，一句话点明角色定位。例如："退役骑士"、"天才研究员"、"街头艺人"
+
+2. gender（性别）：
+   男 / 女 / 其他
+
+3. description（一句话简介）：
+   20~50字，概括角色核心特点，用做角色列表中的摘要展示
+
+4. privatePrompt（私聊人设—核心字段）：
+   至少500汉字，直接影响私聊时 AI 的表现质量。不达到此字数请继续补充。
+   必须包含以下维度：
+   · 角色身份与背景：职业、来历、当前状态
+   · 性格特质：用具体的行为描述替代抽象标签。不说"性格温柔"，说"说话轻声细语，从不打断别人"
+   · 说话风格：语速快慢、常用语气词、语气倾向（直率/含蓄/幽默/冷峻）
+   · 行为习惯：标志性的小动作（如思考时敲桌子、紧张时摸耳垂）
+   · 与用户的关系基调：亲近/疏离/尊敬/调侃
+   · 情绪倾向：容易紧张/永远淡定/情绪外露/喜怒不形于色
+   用第二人称「你」来写，描述用户扮演该角色时需要注意什么。
+
+5. groupPrompt（群聊人设）：
+   不超过300汉字，侧重该角色在群聊中的社交风格：活跃还是旁观、容易成为话题中心还是存在感薄弱、对其他成员的态度。超出此字数请精简。
+
+【质量要求】
+- 人设要有"可演性"——读完后能想象出这个人说话的样子
+- 避免通用模板：不要写"性格开朗活泼"、"乐于助人"
+- 用具体、可感知的特征代替抽象形容词
+
+【JSON格式】
+{"title":"","gender":"","description":"","privatePrompt":"","groupPrompt":""}
+直接输出JSON对象，不加额外文字。
+""".trimIndent()
+                val text = withTimeout(30_000) { sharedUtils.chat(listOf(AiMessage("system", prompt))) }.trim()
+                val result = parseOperatorPromptResult(text)
+                if (result.privatePrompt.isNotBlank()) {
+                    DebugLogger.log("GenPrompt", "人设生成成功: title=${result.title}")
+                    onResult(result)
+                } else {
+                    DebugLogger.log("GenPrompt", "人设为空，降级返回原文: ${text.take(100)}")
+                    onResult(OperatorPromptResult(privatePrompt = text))
+                }
+            } catch (e: Exception) {
+                DebugLogger.log("GenPrompt/ERROR", "生成失败: ${e.message}")
+                onResult(OperatorPromptResult())
             }
         }
     }

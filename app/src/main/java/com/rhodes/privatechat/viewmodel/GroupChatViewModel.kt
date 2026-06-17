@@ -356,7 +356,7 @@ class GroupChatViewModel(
                 val activeNames = activeMembers.map { it.name }.toSet() + "我" + "系统"
                 val allHistory = repository.getMessagesSync(groupSessionId).let { msgs ->
                     val limited = if (historyLimit > 0) msgs.takeLast(historyLimit) else msgs
-                    limited.filter { msg -> msg.isMe || msg.type == "system" || msg.senderName in activeNames }
+                    limited.filter { msg -> msg.isMe || msg.type == "system" || msg.type == "ai_json" || msg.senderName in activeNames }
                 }.toMutableList()
                 // 去掉最后一条用户消息，避免与下文重复
                 if (!isAuto && allHistory.lastOrNull()?.isMe == true) {

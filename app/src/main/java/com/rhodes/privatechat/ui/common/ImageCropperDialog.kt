@@ -113,13 +113,26 @@ fun ImageCropperDialog(
                     val srcH = (cropH / scale).coerceIn(1f, bmp.height - srcTop)
                     if (srcW > 0 && srcH > 0) {
                         try {
-                            val cropped = Bitmap.createBitmap(bmp, srcLeft.toInt(), srcTop.toInt(), srcW.toInt(), srcH.toInt())
+                            val cropX = srcLeft.toInt().coerceIn(0, bmp.width)
+                            val cropY = srcTop.toInt().coerceIn(0, bmp.height)
+                            val cropW = srcW.toInt().coerceAtMost(bmp.width - cropX)
+                            val cropH = srcH.toInt().coerceAtMost(bmp.height - cropY)
+                            if (cropW <= 0 || cropH <= 0) {
+                                com.rhodes.privatechat.util.DebugLogger.log("Crop/WARN", "裁剪区域无效: $cropW x $cropH")
+                                showUseOriginal = true
+                                return@Button
+                            }
+                            val cropped = Bitmap.createBitmap(bmp, cropX, cropY, cropW, cropH)
                             bmp.recycle()
                             val destFile = File(context.cacheDir, "crop_${System.currentTimeMillis()}.jpg")
                             FileOutputStream(destFile).use { out -> cropped.compress(Bitmap.CompressFormat.JPEG, 90, out) }
                             cropped.recycle()
                             onConfirm(Uri.fromFile(destFile))
+                        } catch (_: OutOfMemoryError) {
+                            com.rhodes.privatechat.util.DebugLogger.log("Crop/ERROR", "裁剪内存不足")
+                            showUseOriginal = true
                         } catch (_: Exception) {
+                            com.rhodes.privatechat.util.DebugLogger.log("Crop/ERROR", "裁剪失败")
                             showUseOriginal = true
                         }
                     } else {

@@ -45,7 +45,7 @@ object PromptTemplates {
 
 【你对{{USER_NAME}}的了解】
 长期印象：{{LONG_TERM_IMPRESSION}}
-近期你注意到的事：
+{{USER_PREFS}}近期你注意到的事：
 {{MEMORY_ANCHORS}}
 {{SHARED_MEMORIES}}
 
@@ -179,7 +179,7 @@ object PromptTemplates {
 
 【你当前的记忆】
 长期印象：{{LONG_TERM_IMPRESSION}}
-近期你注意到的事：
+{{USER_PREFS}}近期你注意到的事：
 {{MEMORY_ANCHORS}}
 {{SHARED_MEMORIES}}
 
@@ -318,7 +318,7 @@ object PromptTemplates {
 
 【你对{{USER_NAME}}的了解】
 长期印象：{{LONG_TERM_IMPRESSION}}
-近期你注意到的事：
+{{USER_PREFS}}近期你注意到的事：
 {{MEMORY_ANCHORS}}
 {{SHARED_MEMORIES}}
 
@@ -469,8 +469,7 @@ object PromptTemplates {
 昨日群聊总结：{{DAILY_SUMMARY}}
 最近群聊摘要：{{SHORT_TERM_SUMMARY}}
 成员们对用户的长期印象：{{LONG_TERM_IMPRESSION}}
-
-【各成员与用户最近的情况】
+{{USER_PREFS}}【各成员与用户最近的情况】
 {{MEMBER_PRIVATE_CONTEXT}}
 
 【群成员档案 · 含群内角色定位】
@@ -566,8 +565,7 @@ object PromptTemplates {
 昨日群聊总结：{{DAILY_SUMMARY}}
 最近群聊摘要：{{SHORT_TERM_SUMMARY}}
 成员们对用户的长期印象：{{LONG_TERM_IMPRESSION}}
-
-【各成员与用户最近的情况】
+{{USER_PREFS}}【各成员与用户最近的情况】
 {{MEMBER_PRIVATE_CONTEXT}}
 
 【群成员档案 · 含群内角色定位】
@@ -634,7 +632,9 @@ object PromptTemplates {
 你是罗德岛干员群聊的自然对话生成器。当前群聊处于自动模式——干员们自行聊天，用户没有发言。
 
 【任务】
-生成一轮干员间的自主对话。话题从干员的近期经历、当前状态、彼此关系中自然产生。以JSON数组格式输出。
+继续群聊中的对话。阅读最近的消息记录，自然地延续当前的话题或开启新话题。
+注意对话的延续性——如果上一轮有人在说话或留下话茬，请优先接续而非重新开始。
+话题可以从干员的近期经历、当前状态、彼此关系中自然产生。以JSON数组格式输出。
 
 【输出格式 · 最高优先级】
 严格输出以下JSON数组，不添加任何其他文字：
@@ -697,12 +697,15 @@ object PromptTemplates {
 - 关系紧密的成员之间可有更多互动（吐槽、关心、调侃）
 - 对话有自然的开头和结尾，不需要刻意结束
 - 口语化，自然带语气词，像真人朋友日常闲聊
+- 优先延续上一轮的话题：有人提问就回答，有人吐槽就接梗，有话题中断再开新话题
+- 避免每条消息都像在"开启新话题"——自然聊天的常态是围绕一个话题说好几轮
 
 【发言规则】
 - 每人发言{{GROUP_SPEECH_MIN}}~{{GROUP_SPEECH_MAX}}次
 - 所有在群成员必须至少发言一次
 - 连续发言不限制，自然对话流
 - 按活跃度分配发言次数：≥0.8发2~3次，0.4~0.8发1~2次，<0.4发0~1次
+- 每次自动生成只推进少量对话（2~4条消息），不要一次生成过多让节奏拖沓
 
 【群成员约束】
 - 当前群成员名单：{{MEMBER_NAMES}}
@@ -755,8 +758,7 @@ object PromptTemplates {
 昨日群聊总结：{{DAILY_SUMMARY}}
 最近群聊摘要：{{SHORT_TERM_SUMMARY}}
 成员们对用户的长期印象：{{LONG_TERM_IMPRESSION}}
-
-【各成员与用户最近的情况】
+{{USER_PREFS}}【各成员与用户最近的情况】
 {{MEMBER_PRIVATE_CONTEXT}}
 
 【群成员档案 · 含群内角色定位】

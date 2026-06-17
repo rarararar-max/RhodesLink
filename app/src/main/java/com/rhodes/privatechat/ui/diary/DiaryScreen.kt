@@ -51,7 +51,10 @@ import com.rhodes.privatechat.viewmodel.MainViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Locale
+import java.util.TimeZone
 
 data class DiaryOp(val id: String, val name: String, val color: Color, val hasDiary: Boolean = false)
 
@@ -115,15 +118,22 @@ fun DiaryScreen(
                 com.rhodes.privatechat.util.DebugLogger.log("Diary", "全表diary数: total=$totalCount, matched=${entries.size}")
                 diaryEntries = entries
                 dataLoaded = true
-                if (entries.isNotEmpty()) {
-                    currentDateLabel = entries[0].date
-                    diaryContent = entries[0].content
-                    com.rhodes.privatechat.util.DebugLogger.log("Diary", "设置日记内容: id=${entries[0].id}, date=${entries[0].date}, content=${entries[0].content.take(30)}")
-                } else if (diaryContent != null) {
-                    com.rhodes.privatechat.util.DebugLogger.log("Diary", "DB无条目但diaryContent已有值, 保留: ${diaryContent?.take(20)}")
+                // 计算昨天的日期（北京时间），优先定位到昨天的日记
+                val cal = Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai"))
+                cal.add(Calendar.DAY_OF_MONTH, -1)
+                val yesterdayStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply {
+                    timeZone = TimeZone.getTimeZone("Asia/Shanghai")
+                }.format(cal.time)
+                val yesterdayIdx = entries.indexOfFirst { it.date == yesterdayStr }
+                if (yesterdayIdx >= 0) {
+                    currentDateIdx = yesterdayIdx
+                    diaryContent = entries[yesterdayIdx].content
+                    currentDateLabel = entries[yesterdayIdx].date
+                    com.rhodes.privatechat.util.DebugLogger.log("Diary", "定位到昨日日记: id=${entries[yesterdayIdx].id}, date=${entries[yesterdayIdx].date}")
                 } else {
+                    currentDateIdx = 0
                     diaryContent = null
-                    com.rhodes.privatechat.util.DebugLogger.log("Diary", "DB无条目且无保存值, 设为null")
+                    com.rhodes.privatechat.util.DebugLogger.log("Diary", "无昨日日记, 设为null, 有${entries.size}条过往日记可翻看")
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 com.rhodes.privatechat.util.DebugLogger.log("Diary", "加载被取消: $name")

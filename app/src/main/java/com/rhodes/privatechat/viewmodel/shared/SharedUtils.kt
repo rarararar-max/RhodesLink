@@ -6,8 +6,10 @@ import com.rhodes.privatechat.shared.model.MemoryAnchor
 import com.rhodes.privatechat.shared.model.RelationshipType
 import com.rhodes.privatechat.shared.model.AiMessage
 import com.rhodes.privatechat.shared.data.ChatRepository
+import com.rhodes.privatechat.shared.memory.AnchorSourcePolicy
 import com.rhodes.privatechat.shared.network.AIService
 import com.rhodes.privatechat.shared.settings.SettingsRepository
+import com.rhodes.privatechat.util.DebugLogger
 
 class SharedUtils(
     private val repository: ChatRepository,
@@ -41,12 +43,6 @@ class SharedUtils(
         val temp = settings.aiTemperature
         val prompt = messages.firstOrNull()?.content ?: ""
         logAiCall("→$logTag", prompt, "(requesting with retry...)", messages)
-        val rawResult = aiService.chat(
-            settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl, temperature = temp
-        )
-        if (category.isNotBlank() && (rawResult.inputTokens > 0 || rawResult.outputTokens > 0)) {
-            trackTokens(category, rawResult.inputTokens, rawResult.outputTokens)
-        }
         val result = aiService.chatWithRetry(
             settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl,
             temperature = temp, logTag = logTag
@@ -75,6 +71,41 @@ class SharedUtils(
         Log.d(aiTag, "╠══ RESPONSE ════════════════════════════════")
         response.lines().forEach { Log.d(aiTag, "║ $it") }
         Log.d(aiTag, "╚══════════════════════════════════════════════")
+    }
+
+    fun logMemoryContext(
+        surface: String,
+        title: String,
+        placeholders: Map<String, String>,
+        anchors: List<MemoryAnchor> = emptyList(),
+        extra: Map<String, String> = emptyMap()
+    ) {
+        if (!DEBUG) return
+        val sb = StringBuilder()
+        sb.append("surface=").append(surface).append(" title=").append(title).append('\n')
+        if (extra.isNotEmpty()) {
+            sb.append("extra:\n")
+            extra.forEach { (k, v) -> sb.append("- ").append(k).append("=").append(v).append('\n') }
+        }
+        sb.append("placeholders:\n")
+        placeholders.forEach { (key, value) ->
+            val lines = value.lines().count { it.isNotBlank() }
+            val state = if (value.isBlank() || value == "无" || value == "暂无") "empty" else "chars=${value.length}, lines=$lines"
+            sb.append("- ").append(key).append(": ").append(state).append('\n')
+        }
+        if (anchors.isNotEmpty()) {
+            sb.append("anchors:\n")
+            anchors.take(8).forEachIndexed { idx, anchor ->
+                sb.append(idx + 1)
+                    .append(". ").append(anchor.type.name)
+                    .append(" private=").append(anchor.isPrivate)
+                    .append(" ").append(anchorTimeLabel(anchor))
+                    .append(" ").append(anchor.content.take(120))
+                    .append('\n')
+            }
+            if (anchors.size > 8) sb.append("... +").append(anchors.size - 8).append(" more\n")
+        }
+        DebugLogger.log("Memory/Context", sb.toString().take(2500))
     }
 
     fun trackTokens(category: String, prompt: String, response: String) {
@@ -123,10 +154,41 @@ class SharedUtils(
 
     fun applyTemplate(template: String, replacements: Map<String, String>): String {
         var result = template
-        for ((key, value) in replacements) {
+        for ((key, value) in withLegacyPromptPlaceholders(replacements)) {
             result = result.replace("{{${key}}}", value)
         }
         return result
+    }
+
+    fun withLegacyPromptPlaceholders(replacements: Map<String, String>): Map<String, String> {
+        val map = replacements.toMutableMap()
+        val memoryInjection = listOf(
+            map["LONG_TERM_IMPRESSION"]?.let { "长期印象：$it" },
+            map["USER_PREFS"],
+            map["MEMORY_ANCHORS"]?.let { "近期关键记忆：\n$it" },
+            map["SOURCE_AWARE_MEMORIES"]?.let { "记忆来源：\n$it" },
+            map["SHARED_MEMORIES"]?.let { "关系共享记忆：\n$it" },
+            map["DAILY_SUMMARY"]?.let { "昨日摘要：$it" },
+            map["SHORT_TERM_SUMMARY"]?.let { "近期摘要：$it" },
+            map["GROUP_CONTEXT"]?.let { "群聊回顾：\n$it" },
+            map["NEARBY_OPERATORS"]?.let { "附近干员：\n$it" }
+        ).filterNotNull().filter { it.isNotBlank() && !it.endsWith("：无") && !it.endsWith("：暂无") }.joinToString("\n")
+        val groupInjection = listOf(
+            map["RELATION_HINTS"], map["GROUP_RELATION_HINTS"], map["MEMBER_PRIVATE_CONTEXT"],
+            map["GROUP_SUMMARY"], map["DAILY_SUMMARY"], map["LONG_TERM_IMPRESSION"],
+            map["SOURCE_AWARE_MEMORIES"], map["GROUP_UNCONSUMED_EVENTS"]
+        ).filterNotNull().filter { it.isNotBlank() }.joinToString("\n")
+        map.putIfAbsent("MEMORY_INJECTION", memoryInjection.ifBlank { "无" })
+        map.putIfAbsent("GROUP_INJECTION", groupInjection.ifBlank { "无" })
+        map.putIfAbsent("INJECTION", map["MEMORY_INJECTION"].orEmpty())
+        map.putIfAbsent("GROUP_RELATION_HINTS", map["RELATION_HINTS"].orEmpty())
+        map.putIfAbsent("RELATION_CONTEXT", map["RELATION_HINTS"] ?: map["SHARED_MEMORIES"] ?: "无")
+        map.putIfAbsent("RELATION_SHARED_MEMORIES", map["SHARED_MEMORIES"] ?: "无")
+        map.putIfAbsent("RELATION_RULES", "关系信息只作为互动背景，相关时自然体现，不要提到系统记录或关系表。")
+        map.putIfAbsent("OPERATOR_USER_RELATION", map["USER_RELATION"] ?: "未知")
+        map.putIfAbsent("MODE_RULES", "")
+        map.putIfAbsent("OUTPUT_FORMAT", "请按当前模板要求的JSON格式输出。")
+        return map
     }
 
     /** 移除模板中内容为空的段落及其节标题，减少无效token消耗 */
@@ -141,6 +203,29 @@ class SharedUtils(
         // 4. 清理多余连续空行
         result = result.replace(Regex("""\n{3,}"""), "\n\n")
         return result.trim()
+    }
+
+    fun trimContextBlock(text: String, maxChars: Int): String {
+        if (maxChars <= 0 || text.length <= maxChars) return text
+        val lines = text.lines().filter { it.isNotBlank() }
+        val picked = mutableListOf<String>()
+        var used = 0
+        for (line in lines) {
+            val next = line.take(maxChars)
+            if (used + next.length + 1 > maxChars) break
+            picked.add(next)
+            used += next.length + 1
+        }
+        return picked.joinToString("\n").ifBlank { text.take(maxChars) }
+    }
+
+    fun contextBlockLimit(weight: Int = 1): Int {
+        val base = when (settings.contextMode) {
+            "economy" -> 500
+            "full" -> 1400
+            else -> 900
+        }
+        return (base * weight).coerceAtLeast(200)
     }
 
     fun beijingSdf(pattern: String) = java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault())
@@ -165,6 +250,21 @@ class SharedUtils(
 
     // === 锚点工具 ===
 
+    fun formatAnchorContent(
+        source: String,
+        importance: String = "中",
+        actorName: String = "",
+        action: String = "",
+        content: String,
+        sourceName: String = ""
+    ): String {
+        val sourceLabel = if (sourceName.isBlank()) source else "$source:$sourceName"
+        val prefix = "[$sourceLabel][$importance]"
+        val actor = actorName.takeIf { it.isNotBlank() }?.let { "$it" } ?: ""
+        val verb = action.takeIf { it.isNotBlank() }?.let { "$it：" } ?: ""
+        return "$prefix $actor$verb${content.take(80)}".trim()
+    }
+
     fun anchorTimeLabel(anchor: MemoryAnchor): String {
         val diff = System.currentTimeMillis() - anchor.createdAt
         return when {
@@ -175,15 +275,99 @@ class SharedUtils(
         }
     }
 
-    fun pickAnchors(anchors: List<MemoryAnchor>, maxCount: Int = 5): List<MemoryAnchor> {
+    fun pickAnchors(anchors: List<MemoryAnchor>, maxCount: Int = 5, userContent: String = ""): List<MemoryAnchor> {
+        if (anchors.isEmpty()) return emptyList()
+        return MemoryRanker.pick(anchors, maxCount, MemorySurface.PRIVATE_CHAT, userContent)
+    }
+
+    fun pickAnchorsForSurface(anchors: List<MemoryAnchor>, maxCount: Int, surface: MemorySurface, userContent: String = ""): List<MemoryAnchor> {
+        return MemoryRanker.pick(anchors, maxCount, surface, userContent)
+    }
+
+    fun buildSourceAwareMemoryContext(
+        anchors: List<MemoryAnchor>,
+        maxCount: Int,
+        surface: MemorySurface,
+        userContent: String = ""
+    ): String {
+        if (!settings.sourceAwareMemoryEnabled || maxCount <= 0) return "无"
+        val picked = pickAnchorsForSurface(anchors, maxCount, surface, userContent)
+        if (picked.isEmpty()) return "无"
+        return picked.joinToString("\n") { AnchorSourcePolicy.toPromptLine(it) }
+    }
+
+    fun sourceAwareUsageRule(surface: MemorySurface): String {
+        if (!settings.sourceAwareMemoryEnabled) return ""
+        val base = "不要说“系统记录”“记忆锚点”“摘要显示”。需要时自然表现你是从哪里知道的。"
+        return when (surface) {
+            MemorySurface.PRIVATE_CHAT -> "$base 可以说“你上次跟我说过”“我看到你评论了”“群里之前聊到”。"
+            MemorySurface.GROUP_CHAT -> "$base 可以说“之前群里聊过”“我听谁提过”“动态下面有人说”。"
+            MemorySurface.MOMENT -> "$base 公开动态优先写自己的日常；来自私聊的信息只含蓄影响语气，不要像公告一样复述。"
+            MemorySurface.COMMENT -> "$base 评论区只需轻轻带过，不要长篇解释来源。"
+            MemorySurface.DIARY -> "$base 日记可以更直接写清楚自己从哪里知道这些事。"
+        }
+    }
+
+    suspend fun buildWorldEventContext(operatorId: String = "", operatorName: String = "", limit: Int = 5): String {
+        val events = if (operatorId.isNotBlank()) {
+            repository.getWorldEventsForOperator(operatorId, operatorName, limit)
+        } else {
+            repository.getRecentWorldEvents(limit)
+        }
+        if (events.isEmpty()) return "无"
+        return events.joinToString("\n") { event ->
+            val who = event.actorName.ifBlank { event.actorId.ifBlank { "罗德岛" } }
+            "- ${anchorTimeLabel(MemoryAnchor(sessionId = event.sourceId, operatorId = event.actorId, type = AnchorType.EVENT, content = event.content, createdAt = event.createdAt))} $who：${event.content.take(100)}"
+        }
+    }
+
+    suspend fun buildUnconsumedEventContextForOperator(
+        operatorId: String,
+        operatorName: String,
+        consumer: String,
+        limit: Int = 5,
+        markConsumed: Boolean = false
+    ): String {
+        val events = repository.getUnconsumedWorldEventsForOperator(operatorId, operatorName, consumer, limit)
+        if (events.isEmpty()) return "无"
+        if (markConsumed) events.forEach { repository.markWorldEventConsumed(it.id, consumer) }
+        return events.joinToString("\n") { event ->
+            val who = event.actorName.ifBlank { event.actorId.ifBlank { "罗德岛" } }
+            "- ${anchorTimeLabel(MemoryAnchor(sessionId = event.sourceId, operatorId = event.actorId, type = AnchorType.EVENT, content = event.content, createdAt = event.createdAt))} $who：${event.content.take(120)}"
+        }
+    }
+
+    suspend fun buildUnconsumedEventContextForGroup(
+        groupId: String,
+        memberIds: List<String>,
+        memberNames: List<String>,
+        limit: Int = 8,
+        markConsumed: Boolean = false
+    ): String {
+        val events = repository.getUnconsumedWorldEventsForGroup(groupId, memberIds, memberNames, limit)
+        if (events.isEmpty()) return "无"
+        if (markConsumed) events.forEach { repository.markWorldEventConsumed(it.id, "group:$groupId") }
+        return events.joinToString("\n") { event ->
+            val who = event.actorName.ifBlank { event.actorId.ifBlank { "罗德岛" } }
+            "- ${anchorTimeLabel(MemoryAnchor(sessionId = event.sourceId, operatorId = event.actorId, type = AnchorType.EVENT, content = event.content, createdAt = event.createdAt))} $who：${event.content.take(120)}"
+        }
+    }
+
+    @Suppress("unused")
+    private fun pickAnchorsLegacy(anchors: List<MemoryAnchor>, maxCount: Int = 5, userContent: String = ""): List<MemoryAnchor> {
         if (anchors.isEmpty()) return emptyList()
         val now = System.currentTimeMillis()
+        if (userContent.isNotBlank()) {
+            return anchors.sortedByDescending { anchorScore(it, userContent, now) }
+                .distinctBy { it.type to it.content.trim() }
+                .take(maxCount)
+        }
         val recent = anchors.filter { now - it.createdAt < 86_400_000 }
         val older = anchors.filter { now - it.createdAt >= 86_400_000 }
         val picked = mutableListOf<MemoryAnchor>()
         val priority = listOf(
-            AnchorType.PREFERENCE, AnchorType.TABOO, AnchorType.PLAN,
-            AnchorType.EVENT, AnchorType.EMOTION, AnchorType.RELATION
+            AnchorType.TABOO, AnchorType.PLAN, AnchorType.PREFERENCE,
+            AnchorType.RELATION, AnchorType.EMOTION, AnchorType.EVENT
         )
         val byType = recent.sortedByDescending { it.createdAt }.groupBy { it.type }
         for (t in priority) {
@@ -207,6 +391,29 @@ class SharedUtils(
             picked.removeAll(overLimit)
         }
         return picked.take(maxCount)
+    }
+
+    private fun anchorScore(anchor: MemoryAnchor, userContent: String, now: Long): Int {
+        val typeScore = when (anchor.type) {
+            AnchorType.TABOO -> 100
+            AnchorType.PLAN -> 85
+            AnchorType.PREFERENCE -> 75
+            AnchorType.RELATION -> 65
+            AnchorType.EMOTION -> 50
+            AnchorType.EVENT -> 45
+        }
+        val recentScore = when (now - anchor.createdAt) {
+            in Long.MIN_VALUE until 86_400_000L -> 30
+            in 86_400_000L until 3 * 86_400_000L -> 20
+            in 3 * 86_400_000L until 7 * 86_400_000L -> 10
+            else -> 0
+        }
+        val text = userContent.trim()
+        val content = anchor.content
+        val chars = text.filter { !it.isWhitespace() }.toSet()
+        val overlap = chars.count { content.contains(it) }.coerceAtMost(10) * 4
+        val direct = if (text.length >= 2 && content.contains(text.take(2))) 30 else 0
+        return typeScore + recentScore + overlap + direct
     }
 
     // === 关系工具 ===

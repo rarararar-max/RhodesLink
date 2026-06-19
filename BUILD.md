@@ -94,7 +94,7 @@ chmod +x gradlew
 
 - JDK 21
 - Android SDK 35
-- Gradle 9.4.1（通过 wrapper 自动下载）
+- Gradle 8.10.2（通过 wrapper 自动下载）
 
 ## 故障排除
 

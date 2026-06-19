@@ -6,7 +6,13 @@ CREATE TABLE IF NOT EXISTS memory_anchors (
     content TEXT NOT NULL,
     isPrivate INTEGER NOT NULL DEFAULT 0,
     createdAt INTEGER NOT NULL DEFAULT 0,
-    expiresAt INTEGER NOT NULL DEFAULT 0
+    expiresAt INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT '',
+    sourceName TEXT NOT NULL DEFAULT '',
+    sourceActor TEXT NOT NULL DEFAULT '',
+    sourceTarget TEXT NOT NULL DEFAULT '',
+    importance TEXT NOT NULL DEFAULT '',
+    knownFrom TEXT NOT NULL DEFAULT ''
 );
 
 getPublicAnchors:
@@ -19,8 +25,8 @@ getAnchorCount:
 SELECT COUNT(*) FROM memory_anchors;
 
 insertAnchor:
-INSERT OR REPLACE INTO memory_anchors(sessionId, operatorId, type, content, isPrivate, createdAt, expiresAt)
-VALUES (?, ?, ?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO memory_anchors(sessionId, operatorId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 deleteExpiredAnchors:
 DELETE FROM memory_anchors WHERE expiresAt < ?;

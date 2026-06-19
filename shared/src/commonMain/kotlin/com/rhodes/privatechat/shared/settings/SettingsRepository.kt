@@ -83,6 +83,160 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = settings.getInt("clean_days", 30)
         set(value) = settings.putInt("clean_days", value)
 
+    // === 记忆注入设置 ===
+    var memoryMode: String
+        get() = settings.getString("memory_mode", "standard")
+        set(value) = settings.putString("memory_mode", value)
+
+    var sourceAwareMemoryEnabled: Boolean
+        get() = settings.getBoolean("source_aware_memory_enabled", true)
+        set(value) = settings.putBoolean("source_aware_memory_enabled", value)
+
+    var memorySourceStyle: String
+        get() = settings.getString("memory_source_style", "natural")
+        set(value) = settings.putString("memory_source_style", value)
+
+    var unifiedMemoryEnabled: Boolean
+        get() = settings.getBoolean("unified_memory_enabled", true)
+        set(value) = settings.putBoolean("unified_memory_enabled", value)
+
+    var autoImpressionUpdateEnabled: Boolean
+        get() = settings.getBoolean("auto_impression_update_enabled", true)
+        set(value) = settings.putBoolean("auto_impression_update_enabled", value)
+
+    var momentPrivateMemoryUsage: String
+        get() = settings.getString("moment_private_memory_usage", "subtle")
+        set(value) = settings.putString("moment_private_memory_usage", value)
+
+    var privateAnchorCount: Int
+        get() = settings.getInt("private_anchor_count", 5).coerceIn(0, 20)
+        set(value) = settings.putInt("private_anchor_count", value.coerceIn(0, 20))
+
+    var privateSharedMemoryCount: Int
+        get() = settings.getInt("private_shared_memory_count", 3).coerceIn(0, 20)
+        set(value) = settings.putInt("private_shared_memory_count", value.coerceIn(0, 20))
+
+    var privateGroupContextCount: Int
+        get() = settings.getInt("private_group_context_count", 2).coerceIn(0, 10)
+        set(value) = settings.putInt("private_group_context_count", value.coerceIn(0, 10))
+
+    var groupMemberMemoryCount: Int
+        get() = settings.getInt("group_member_memory_count", 2).coerceIn(0, 10)
+        set(value) = settings.putInt("group_member_memory_count", value.coerceIn(0, 10))
+
+    var groupUserEventCount: Int
+        get() = settings.getInt("group_user_event_count", 3).coerceIn(0, 10)
+        set(value) = settings.putInt("group_user_event_count", value.coerceIn(0, 10))
+
+    var groupRelationshipHintCount: Int
+        get() = settings.getInt("group_relationship_hint_count", 10).coerceIn(0, 30)
+        set(value) = settings.putInt("group_relationship_hint_count", value.coerceIn(0, 30))
+
+    var momentAnchorCount: Int
+        get() = settings.getInt("moment_anchor_count", 3).coerceIn(0, 10)
+        set(value) = settings.putInt("moment_anchor_count", value.coerceIn(0, 10))
+
+    var momentRecentPostCount: Int
+        get() = settings.getInt("moment_recent_post_count", 3).coerceIn(0, 10)
+        set(value) = settings.putInt("moment_recent_post_count", value.coerceIn(0, 10))
+
+    var momentUserRelatedRate: Int
+        get() = settings.getInt("moment_user_related_rate", 20).coerceIn(0, 100)
+        set(value) = settings.putInt("moment_user_related_rate", value.coerceIn(0, 100))
+
+    var commentContextCount: Int
+        get() = settings.getInt("comment_context_count", 5).coerceIn(0, 20)
+        set(value) = settings.putInt("comment_context_count", value.coerceIn(0, 20))
+
+    var commentMemoryCount: Int
+        get() = settings.getInt("comment_memory_count", 2).coerceIn(0, 10)
+        set(value) = settings.putInt("comment_memory_count", value.coerceIn(0, 10))
+
+    var commentBystanderMin: Int
+        get() = settings.getInt("comment_bystander_min", 1).coerceIn(0, 10)
+        set(value) = settings.putInt("comment_bystander_min", value.coerceIn(0, 10))
+
+    var commentBystanderMax: Int
+        get() = settings.getInt("comment_bystander_max", 3).coerceIn(0, 10)
+        set(value) = settings.putInt("comment_bystander_max", value.coerceIn(0, 10))
+
+    var diaryAnchorCount: Int
+        get() = settings.getInt("diary_anchor_count", 5).coerceIn(0, 20)
+        set(value) = settings.putInt("diary_anchor_count", value.coerceIn(0, 20))
+
+    var diaryGroupSummaryCount: Int
+        get() = settings.getInt("diary_group_summary_count", 3).coerceIn(0, 10)
+        set(value) = settings.putInt("diary_group_summary_count", value.coerceIn(0, 10))
+
+    var diaryRelationEventCount: Int
+        get() = settings.getInt("diary_relation_event_count", 3).coerceIn(0, 10)
+        set(value) = settings.putInt("diary_relation_event_count", value.coerceIn(0, 10))
+
+    // === 世界运行设置 ===
+    var worldSchedulerEnabled: Boolean
+        get() = settings.getBoolean("world_scheduler_enabled", true)
+        set(value) = settings.putBoolean("world_scheduler_enabled", value)
+
+    var autoMomentEnabled: Boolean
+        get() = settings.getBoolean("auto_moment_enabled", true)
+        set(value) = settings.putBoolean("auto_moment_enabled", value)
+
+    var worldAutoGroupEnabled: Boolean
+        get() = settings.getBoolean("world_auto_group_enabled", true)
+        set(value) = settings.putBoolean("world_auto_group_enabled", value)
+
+    var worldProactiveChatEnabled: Boolean
+        get() = settings.getBoolean("world_proactive_chat_enabled", true)
+        set(value) = settings.putBoolean("world_proactive_chat_enabled", value)
+
+    var autoDiaryEnabled: Boolean
+        get() = settings.getBoolean("auto_diary_enabled", true)
+        set(value) = settings.putBoolean("auto_diary_enabled", value)
+
+    var dailyWorldEventLimit: Int
+        get() = settings.getInt("daily_world_event_limit", 30).coerceIn(0, 200)
+        set(value) = settings.putInt("daily_world_event_limit", value.coerceIn(0, 200))
+
+    var dailyDiaryOperatorLimit: Int
+        get() = settings.getInt("daily_diary_operator_limit", 3).coerceIn(0, 20)
+        set(value) = settings.putInt("daily_diary_operator_limit", value.coerceIn(0, 20))
+
+    var dailyProactiveLimit: Int
+        get() = settings.getInt("daily_proactive_limit", 3).coerceIn(0, 20)
+        set(value) = settings.putInt("daily_proactive_limit", value.coerceIn(0, 20))
+
+    var momentTriggerStrength: Int
+        get() = settings.getInt("moment_trigger_strength", 50).coerceIn(0, 100)
+        set(value) = settings.putInt("moment_trigger_strength", value.coerceIn(0, 100))
+
+    var groupTriggerStrength: Int
+        get() = settings.getInt("group_trigger_strength", 50).coerceIn(0, 100)
+        set(value) = settings.putInt("group_trigger_strength", value.coerceIn(0, 100))
+
+    var eventContextCount: Int
+        get() = settings.getInt("event_context_count", 5).coerceIn(0, 20)
+        set(value) = settings.putInt("event_context_count", value.coerceIn(0, 20))
+
+    var contextMode: String
+        get() = settings.getString("context_mode", "custom")
+        set(value) = settings.putString("context_mode", value)
+
+    var dailyAutoAiLimit: Int
+        get() = settings.getInt("daily_auto_ai_limit", 40).coerceIn(0, 500)
+        set(value) = settings.putInt("daily_auto_ai_limit", value.coerceIn(0, 500))
+
+    var tickAutoAiLimit: Int
+        get() = settings.getInt("tick_auto_ai_limit", 3).coerceIn(0, 50)
+        set(value) = settings.putInt("tick_auto_ai_limit", value.coerceIn(0, 50))
+
+    var commentToPrivateTriggerRate: Int
+        get() = settings.getInt("comment_to_private_trigger_rate", 30).coerceIn(0, 100)
+        set(value) = settings.putInt("comment_to_private_trigger_rate", value.coerceIn(0, 100))
+
+    var momentToGroupTriggerRate: Int
+        get() = settings.getInt("moment_to_group_trigger_rate", 40).coerceIn(0, 100)
+        set(value) = settings.putInt("moment_to_group_trigger_rate", value.coerceIn(0, 100))
+
     fun getLastMode(operatorId: String): String =
         getString("last_mode_$operatorId", "online")
 
@@ -160,6 +314,14 @@ class SettingsRepository(private val settings: ObservableSettings) {
     var groupChatMaxInterval: Int
         get() = settings.getInt("group_chat_max_interval", 180)
         set(value) = settings.putInt("group_chat_max_interval", value)
+
+    var groupAutoMaxRounds: Int
+        get() = settings.getInt("group_auto_max_rounds", 50).coerceAtLeast(1)
+        set(value) = settings.putInt("group_auto_max_rounds", value.coerceAtLeast(1))
+
+    var autoStatusRefresh: Boolean
+        get() = settings.getBoolean("auto_status_refresh", true)
+        set(value) = settings.putBoolean("auto_status_refresh", value)
 
     // === 好感度设置 ===
     var dailyIntimacyCap: Int
@@ -240,6 +402,10 @@ class SettingsRepository(private val settings: ObservableSettings) {
     var cleanDaysDispatches: Int
         get() = settings.getInt("clean_days_dispatches", 30)
         set(value) = settings.putInt("clean_days_dispatches", value)
+
+    var cleanDaysWorldEvents: Int
+        get() = settings.getInt("clean_days_world_events", 7)
+        set(value) = settings.putInt("clean_days_world_events", value)
 
     // === 催眠设置 ===
     var hypnosisCmd: String
@@ -339,6 +505,12 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     fun putGroupMode(groupId: String, value: String) =
         putString("group_mode_$groupId", value)
+
+    fun getSessionMessageCounter(sessionId: String): Int =
+        getInt("msg_counter_$sessionId", 0)
+
+    fun putSessionMessageCounter(sessionId: String, value: Int) =
+        putInt("msg_counter_$sessionId", value)
 
     fun getPromptTemplate(type: String, mode: String = ""): String {
         val key = if (mode.isNotBlank()) "prompt_${type}_${mode}" else "prompt_$type"
@@ -440,6 +612,52 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     fun remove(key: String) =
         settings.remove(key)
+
+    fun applyContextMode(mode: String) {
+        contextMode = mode
+        when (mode) {
+            "economy" -> {
+                dualModel = false
+                historyMessages = 12
+                privateAnchorCount = 3
+                privateSharedMemoryCount = 1
+                privateGroupContextCount = 1
+                groupMemberMemoryCount = 1
+                eventContextCount = 2
+                dailyMomentTarget = 1
+                autoDiaryEnabled = false
+                commentBystanderMax = 1
+                dailyAutoAiLimit = 20
+                tickAutoAiLimit = 2
+            }
+            "standard" -> {
+                historyMessages = 20
+                privateAnchorCount = 5
+                privateSharedMemoryCount = 3
+                privateGroupContextCount = 2
+                groupMemberMemoryCount = 2
+                eventContextCount = 5
+                dailyMomentTarget = 2
+                autoDiaryEnabled = true
+                commentBystanderMax = 3
+                dailyAutoAiLimit = 40
+                tickAutoAiLimit = 3
+            }
+            "full" -> {
+                historyMessages = 40
+                privateAnchorCount = 8
+                privateSharedMemoryCount = 5
+                privateGroupContextCount = 4
+                groupMemberMemoryCount = 4
+                eventContextCount = 8
+                dailyMomentTarget = 3
+                autoDiaryEnabled = true
+                commentBystanderMax = 4
+                dailyAutoAiLimit = 80
+                tickAutoAiLimit = 5
+            }
+        }
+    }
 
     fun clear() =
         settings.clear()

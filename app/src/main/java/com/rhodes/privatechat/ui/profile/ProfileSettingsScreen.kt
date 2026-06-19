@@ -3,6 +3,7 @@ package com.rhodes.privatechat.ui.profile
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -57,6 +58,8 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.shared.settings.SettingsRepository
+import com.rhodes.privatechat.ui.common.FullscreenTextField
+import com.rhodes.privatechat.util.copyToCache
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import org.koin.compose.koinInject
@@ -79,7 +82,10 @@ fun ProfileSettingsScreen(
     val context = LocalContext.current
     var avatarUri by remember { mutableStateOf(profile.avatarUri.ifBlank { null }) }
     var cropTarget by remember { mutableStateOf<android.net.Uri?>(null) }
-    val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> cropTarget = uri }
+    val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        cropTarget = uri?.let { copyToCache(context, it) }
+        if (uri != null && cropTarget == null) android.widget.Toast.makeText(context, "无法读取此图片，请尝试选择JPG/PNG图片", android.widget.Toast.LENGTH_SHORT).show()
+    }
     val prefSettings: SettingsRepository = koinInject()
     var avatarIndex by remember { mutableIntStateOf(prefSettings.getInt("user_avatar_index", 0)) }
 
@@ -108,7 +114,7 @@ fun ProfileSettingsScreen(
                     }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
-                OutlinedButton(onClick = { avatarPicker.launch("image/*") }) {
+                OutlinedButton(onClick = { avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
                     Icon(Icons.Default.PhotoCamera, null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("上传头像", fontSize = 12.sp)
@@ -128,7 +134,7 @@ fun ProfileSettingsScreen(
                 }
                 Spacer(modifier = Modifier.height(12.dp))
                 LabelField("个人简介") {
-                    OutlinedTextField(value = bio, onValueChange = { bio = it }, modifier = Modifier.fillMaxWidth().height(100.dp), shape = RoundedCornerShape(8.dp), colors = fieldColors())
+                    FullscreenTextField(title = "个人简介", value = bio, onValueChange = { bio = it }, minHeight = 100.dp, placeholder = "写下你的身份、背景、性格或和干员们的关系...")
                 }
             }
         }

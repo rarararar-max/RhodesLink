@@ -31,18 +31,21 @@ private val json = Json { ignoreUnknownKeys = true }
 // Chat
 // ──────────────────────────────────────────────
 
-data class ChatOperator(val operator: Operator) : Screen {
+data class ChatOperator(val operatorId: String) : Screen {
     @Composable
     override fun Content() {
         val navigator = LocalNavigator.currentOrThrow
         val viewModel: MainViewModel = koinViewModel()
+        val operators by viewModel.operators.collectAsState()
+        val operator = remember(operators, operatorId) { operators.find { it.id == operatorId } }
         var ready by remember { mutableStateOf(false) }
-        LaunchedEffect(operator) {
-            viewModel.chatViewModel.selectOperatorSync(operator)
-            ready = true
+        LaunchedEffect(operatorId, operator) {
+            if (operator != null) {
+                viewModel.chatViewModel.selectOperatorSync(operator)
+                ready = true
+            }
         }
-        DisposableEffect(Unit) { onDispose { viewModel.chatViewModel.clearSelection() } }
-        if (ready) {
+        if (ready && operator != null) {
             com.rhodes.privatechat.ui.chat.ChatScreen(
                 viewModel = viewModel,
                 operator = operator,
@@ -68,7 +71,7 @@ data class GroupChatRoute(val name: String, val groupId: String) : Screen {
             onOperatorClick = { operatorName ->
                 viewModel.clearCurrentGroup()
                 val op = viewModel.findOperatorByName(operatorName)
-                if (op != null) navigator.push(ChatOperator(op))
+                if (op != null) navigator.push(ChatOperator(op.id))
             }
         )
     }
@@ -129,7 +132,7 @@ data class OperatorDetailRoute(val opId: String) : Screen {
                 viewModel = viewModel,
                 operator = op,
                 onBack = { navigator.pop() },
-                onOperatorClick = { clickedOp -> navigator.push(ChatOperator(clickedOp)) }
+                onOperatorClick = { clickedOp -> navigator.push(ChatOperator(clickedOp.id)) }
             )
         }
     }
@@ -150,7 +153,7 @@ data object MomentsRoute : Screen {
             onBack = { navigator.pop() },
             onOperatorClick = { name ->
                 val op = viewModel.findOperatorByName(name)
-                if (op != null) navigator.push(ChatOperator(op))
+                if (op != null) navigator.push(ChatOperator(op.id))
             },
             onUnreadMessages = { navigator.push(UnreadMessagesRoute) },
             onMomentClick = { momentId, commentId, name -> navigator.push(MomentDetailRoute(momentId, commentId, name)) }
@@ -184,7 +187,7 @@ data class MomentDetailRoute(val momentId: Long, val replyToCommentId: Long = 0,
             onBack = { navigator.pop() },
             onOperatorClick = { name ->
                 val op = viewModel.findOperatorByName(name)
-                if (op != null) navigator.push(ChatOperator(op))
+                if (op != null) navigator.push(ChatOperator(op.id))
             }
         )
     }
@@ -208,7 +211,7 @@ data object RankingRoute : Screen {
             onBack = { navigator.pop() },
             onOperatorClick = { name ->
                 val op = viewModel.findOperatorByName(name)
-                if (op != null) navigator.push(ChatOperator(op))
+                if (op != null) navigator.push(ChatOperator(op.id))
             }
         )
     }
@@ -224,7 +227,7 @@ data object ImpressionsRoute : Screen {
             onBack = { navigator.pop() },
             onOperatorClick = { name ->
                 val op = viewModel.findOperatorByName(name)
-                if (op != null) navigator.push(ChatOperator(op))
+                if (op != null) navigator.push(ChatOperator(op.id))
             }
         )
     }
@@ -404,11 +407,35 @@ data object ModelSettingsRoute : Screen {
     }
 }
 
+data object AppearanceSettingsRoute : Screen {
+    @Composable
+    override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        com.rhodes.privatechat.ui.settings.AppearanceSettingsScreen(onBack = { navigator.pop() })
+    }
+}
+
 data object ChatSettingsRoute : Screen {
     @Composable
     override fun Content() {
         val navigator = LocalNavigator.currentOrThrow
         com.rhodes.privatechat.ui.chatsettings.ChatSettingsScreen(onBack = { navigator.pop() }, onPromptEditor = { navigator.push(PromptEditorRoute) })
+    }
+}
+
+data object WorldSettingsRoute : Screen {
+    @Composable
+    override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        com.rhodes.privatechat.ui.settings.WorldSettingsScreen(onBack = { navigator.pop() })
+    }
+}
+
+data object StorySettingsRoute : Screen {
+    @Composable
+    override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        com.rhodes.privatechat.ui.settings.StorySettingsScreen(onBack = { navigator.pop() })
     }
 }
 

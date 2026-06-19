@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Person
@@ -27,6 +28,8 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -57,6 +60,7 @@ fun SettingsScreen(
     onProfile: () -> Unit = {}, onModel: () -> Unit = {},
     onChatParams: () -> Unit = {}, onDataManage: () -> Unit = {},
     onPermissions: () -> Unit = {}, onCredits: () -> Unit = {},
+    onAppearance: () -> Unit = {}, onWorld: () -> Unit = {}, onStory: () -> Unit = {},
     onDebugLog: () -> Unit = {},
     userNickname: String = "博士", userGender: String = "", userAvatarUri: String = "", modifier: Modifier = Modifier
 ) {
@@ -89,8 +93,11 @@ fun SettingsScreen(
 
         Column(modifier = Modifier.padding(vertical = 8.dp)) {
             SettingItem(SettingEntry(Icons.Default.Person, "身份设置", "昵称、性别、简介、头像", iconColor = Blue400), onClick = onProfile)
+            SettingItem(SettingEntry(Icons.Default.DarkMode, "外观设置", "白天/黑夜模式、界面外观", iconColor = Color(0xFF607D8B)), onClick = onAppearance)
             SettingItem(SettingEntry(Icons.Default.SmartToy, "模型设置", "AI厂商、API Key、TTS", iconColor = Color(0xFFFF9800)), onClick = onModel)
-            SettingItem(SettingEntry(Icons.Default.Tune, "聊天参数设置", "字数、段数、记忆参数", iconColor = Color(0xFF00BCD4)), onClick = onChatParams)
+            SettingItem(SettingEntry(Icons.Default.Tune, "聊天与记忆", "回复格式、上下文、记忆注入", iconColor = Color(0xFF00BCD4)), onClick = onChatParams)
+            SettingItem(SettingEntry(Icons.Default.AutoAwesome, "世界与动态", "世界调度、动态、评论、主动私聊", iconColor = Color(0xFF4CAF50)), onClick = onWorld)
+            SettingItem(SettingEntry(Icons.AutoMirrored.Filled.MenuBook, "日记与派遣", "日记生成、派遣故事参数", iconColor = Color(0xFF795548)), onClick = onStory)
             SettingItem(SettingEntry(Icons.Default.AutoFixHigh, "数据管理", "统计信息与自动清理", iconColor = Color(0xFF8B5CF6)), onClick = onDataManage)
             SettingItem(SettingEntry(Icons.Default.Build, "权限管理", "干员主动消息与动态权限", iconColor = Color(0xFFFF9800)), onClick = onPermissions)
             SettingItem(SettingEntry(Icons.Default.Favorite, "感谢", "支持股东名单", iconColor = Primary), onClick = onCredits)

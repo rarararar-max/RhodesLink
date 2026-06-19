@@ -47,7 +47,18 @@ object PromptTemplates {
 长期印象：{{LONG_TERM_IMPRESSION}}
 {{USER_PREFS}}近期你注意到的事：
 {{MEMORY_ANCHORS}}
+【你知道这些事的来源】
+{{SOURCE_AWARE_MEMORIES}}
+{{SOURCE_AWARE_RULES}}
+【最近与你有关的罗德岛事件】
+{{UNCONSUMED_EVENTS}}
 {{SHARED_MEMORIES}}
+
+【记忆使用规则】
+- 只有当记忆与当前话题相关时才自然提及，不要每轮都复述记忆。
+- 不要说“根据摘要/根据记忆/系统记录显示”。
+- 偏好和禁忌优先影响你的行动和措辞，而不是生硬列出来。
+- 如果记忆与{{USER_NAME}}当前说法冲突，以当前说法为准，并自然更新理解。
 
 【回忆与摘要】
 你与{{USER_NAME}}昨天聊天的总结：
@@ -182,6 +193,11 @@ object PromptTemplates {
 {{USER_PREFS}}近期你注意到的事：
 {{MEMORY_ANCHORS}}
 {{SHARED_MEMORIES}}
+
+【记忆使用规则】
+- 记忆只作为角色反应背景，相关时自然体现，不要解释为“系统记忆”。
+- 不要每轮复述旧事；偏好、禁忌和计划优先影响你的行动选择。
+- 如果记忆与用户当前场景描述冲突，以当前场景为准。
 
 【回忆与摘要】
 昨天发生的事情：
@@ -321,6 +337,12 @@ object PromptTemplates {
 {{USER_PREFS}}近期你注意到的事：
 {{MEMORY_ANCHORS}}
 {{SHARED_MEMORIES}}
+
+【记忆使用规则】
+- 只有当记忆与当前话题相关时才自然提及，不要每轮都复述记忆。
+- 这是远程通讯，你不能看到{{USER_NAME}}当前表情、动作或所在环境。
+- 引用过去互动时，可以说“上次聊到”“你之前提过”，不要说“我看见你当时”。
+- 不要说“根据摘要/根据记忆/系统记录显示”。
 
 【回忆与摘要】
 你与{{USER_NAME}}昨天聊天的总结：
@@ -469,8 +491,21 @@ object PromptTemplates {
 昨日群聊总结：{{DAILY_SUMMARY}}
 最近群聊摘要：{{SHORT_TERM_SUMMARY}}
 成员们对用户的长期印象：{{LONG_TERM_IMPRESSION}}
+【本轮群聊触发事件】
+{{GROUP_TRIGGER_EVENT}}
+【群聊可接的话题】
+{{GROUP_UNCONSUMED_EVENTS}}
+【近期罗德岛事件】
+{{GROUP_RECENT_WORLD_EVENTS}}
+【成员知道的信息来源】
+{{SOURCE_AWARE_MEMORIES}}
+{{SOURCE_AWARE_RULES}}
 {{USER_PREFS}}【各成员与用户最近的情况】
 {{MEMBER_PRIVATE_CONTEXT}}
+
+【记忆使用规则】
+- 只能使用现场成员合理知道的公开记忆，不要暴露私聊隐私。
+- 相关时自然提及“上次聚在一起时”“听谁提起过”，不要说“系统记录”。
 
 【群成员档案 · 含群内角色定位】
 {{MEMBER_PROFILES}}
@@ -567,6 +602,10 @@ object PromptTemplates {
 成员们对用户的长期印象：{{LONG_TERM_IMPRESSION}}
 {{USER_PREFS}}【各成员与用户最近的情况】
 {{MEMBER_PRIVATE_CONTEXT}}
+
+【记忆使用规则】
+- 记忆只作为剧情连续性和角色反应背景，不要说明来自摘要或记录。
+- 不要主动暴露用户私聊隐私。
 
 【群成员档案 · 含群内角色定位】
 {{MEMBER_PROFILES}}
@@ -668,6 +707,11 @@ object PromptTemplates {
 昨日群聊总结：{{DAILY_SUMMARY}}
 最近群聊摘要：{{SHORT_TERM_SUMMARY}}
 
+【自动群聊记忆边界】
+- 用户没有主动发言时，不要主动暴露用户私聊隐私。
+- 优先延续公开群聊摘要、成员关系和公开事件。
+- 不要突然引出高度私密或负面情绪话题。
+
 【群成员档案 · 含群内角色定位】
 {{MEMBER_PROFILES}}
 
@@ -761,6 +805,11 @@ object PromptTemplates {
 {{USER_PREFS}}【各成员与用户最近的情况】
 {{MEMBER_PRIVATE_CONTEXT}}
 
+【记忆使用规则】
+- 只能使用公开群聊记忆、公开锚点和成员可合理知道的信息。
+- 这是线上文字群聊，可以说“之前群里聊过”“上次你在群里提到”。
+- 不要暴露私聊隐私，不要说“系统记录”。
+
 【群成员档案 · 含群内角色定位】
 {{MEMBER_PROFILES}}
 
@@ -833,6 +882,15 @@ object PromptTemplates {
 最近聊天摘要：{{RECENT_CHAT_SUMMARY}}
 昨天你和{{USER_NAME}}的互动：{{RECENT_DAILY_SUMMARY}}
 最近注意到的事：{{RECENT_MEMORIES}}
+今日状态：{{WORLD_TODAY_STATE}}
+近期罗德岛事件：
+{{RECENT_WORLD_EVENTS}}
+这条动态可能延续的事件：
+{{MOMENT_EVENT_SEED}}
+这条动态的触发原因：{{MOMENT_TRIGGER_REASON}}
+近期可作为灵感的来源：
+{{SOURCE_AWARE_MEMORIES}}
+{{SOURCE_AWARE_RULES}}
 
 【避免重复】
 你最近发布过：{{RECENT_POSTS}}
@@ -901,6 +959,22 @@ object PromptTemplates {
 
 【昨天你注意到的一些事】
 {{RECENT_MEMORIES}}
+
+【今天罗德岛发生的事】
+{{WORLD_DAY_EVENTS}}
+
+【今天可整理进日记的事件】
+{{DIARY_EVENT_DIGEST}}
+
+【你自己的状态变化】
+{{SELF_STATUS_CHANGES}}
+
+【你参与或看到的社交互动】
+{{SOCIAL_INTERACTIONS}}
+
+【你回想起的信息来源】
+{{SOURCE_AWARE_MEMORIES}}
+{{SOURCE_AWARE_RULES}}
 
 【关系网中与你相关的事件】
 {{RELATION_EVENTS}}

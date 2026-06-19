@@ -25,6 +25,22 @@ fun copyToInternalStorage(context: Context, uri: Uri): String {
     }
 }
 
+fun copyToCache(context: Context, uri: Uri): Uri? {
+    return try {
+        val dir = File(context.cacheDir, "picked_images")
+        if (!dir.exists()) dir.mkdirs()
+        val dest = File(dir, "picked_${System.currentTimeMillis()}_${uri.hashCode()}.img")
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            FileOutputStream(dest).use { output -> input.copyTo(output) }
+        } ?: return null
+        Uri.fromFile(dest)
+    } catch (_: OutOfMemoryError) {
+        null
+    } catch (_: Exception) {
+        null
+    }
+}
+
 /** 加载并缩放 bitmap 到合适尺寸 */
 fun decodeSampledBitmap(context: Context, uri: Uri, maxDim: Int = 1024): Bitmap? {
     return try {
@@ -39,5 +55,14 @@ fun decodeSampledBitmap(context: Context, uri: Uri, maxDim: Int = 1024): Bitmap?
         context.contentResolver.openInputStream(uri)?.use { input ->
             BitmapFactory.decodeStream(input, null, decodeOpts)
         }
-    } catch (_: Exception) { null }
+    } catch (_: OutOfMemoryError) { null } catch (_: Exception) { null }
+}
+
+fun scaleBitmapToMax(bitmap: Bitmap, maxDim: Int): Bitmap {
+    val maxSide = maxOf(bitmap.width, bitmap.height)
+    if (maxSide <= maxDim) return bitmap
+    val scale = maxDim.toFloat() / maxSide.toFloat()
+    val w = (bitmap.width * scale).toInt().coerceAtLeast(1)
+    val h = (bitmap.height * scale).toInt().coerceAtLeast(1)
+    return Bitmap.createScaledBitmap(bitmap, w, h, true)
 }

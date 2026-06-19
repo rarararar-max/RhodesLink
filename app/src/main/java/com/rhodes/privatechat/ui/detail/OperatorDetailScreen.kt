@@ -60,6 +60,7 @@ import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.data.db.entity.RelationshipEntity
 import com.rhodes.privatechat.data.db.entity.RelationshipType
 import com.rhodes.privatechat.data.repository.BfsNode
+import com.rhodes.privatechat.ui.relation.RelationshipUiMapper
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import kotlin.math.cos
@@ -246,25 +247,19 @@ private fun bfsLabel(parentName: String, childName: String, type: RelationshipTy
                     val clr = n.relType?.let { relColor(it) } ?: Color(0xFFBDBDBD)
                     map[n.operatorName] = GraphDisplayNode(n.operatorName, lbl, clr, n.depth, pn, false)
                 }
-                // 用户关系 — 所有干员的 userRelation 都加入图谱
-                val userRelationOps = operators.filter { it.userRelation.isNotBlank() && it.name != operatorName }
-                if (userRelation.isNotBlank() || userRelationOps.isNotEmpty()) {
+                // 用户关系只展示当前干员与用户的关系，避免把其他干员误挂到当前关系网。
+                if (userRelation.isNotBlank()) {
                     if ("用户" !in map) {
                         map["用户"] = GraphDisplayNode("用户", "", Color(0xFF8B5CF6), 1, operatorName, true)
                     }
-                    if (userRelation.isNotBlank()) {
-                        map["用户"] = map["用户"]!!.copy(label = "用户是你的【$userRelation】")
-                    }
-                    for (urOp in userRelationOps) {
-                        if (urOp.name !in map) {
-                            map[urOp.name] = GraphDisplayNode(urOp.name, "用户是你的【${urOp.userRelation}】", Color(0xFF8B5CF6), 2, "用户", false)
-                        }
-                    }
+                    map["用户"] = map["用户"]!!.copy(label = "用户是你的【$userRelation】")
                 }
                 map.values.toList()
             }
             if (displayNodes.isEmpty()) { Text("暂无关系网", fontSize = 13.sp, color = TextTertiary) }
             else {
+                RelationLegend()
+                Spacer(modifier = Modifier.height(8.dp))
                 var panOffset by remember { mutableStateOf(Offset.Zero) }
                 var zoomScale by remember { mutableFloatStateOf(1f) }
                 var boxWidth by remember { mutableFloatStateOf(1f) }
@@ -340,7 +335,7 @@ private fun bfsLabel(parentName: String, childName: String, type: RelationshipTy
                         val shortLabel = if (dn.label.contains("【")) {
                             dn.label.substringAfter("【").substringBefore("】").let { if (it.length > 6) it.take(6) + "…" else it }
                         } else dn.label.take(6)
-                        with(density) { Text(shortLabel, color = dn.color, fontSize = 22.sp,
+                        with(density) { Text(shortLabel, color = dn.color, fontSize = 11.sp,
                             modifier = Modifier.offset { IntOffset(midX.roundToInt(), midY.roundToInt()) }) }
                     }
                     // 节点圆圈
@@ -374,6 +369,25 @@ private fun bfsLabel(parentName: String, childName: String, type: RelationshipTy
     HorizontalDivider(color = BG, thickness = 8.dp)
 }
 
+@Composable private fun RelationLegend() {
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(listOf(
+            "家人" to ErrorRed,
+            "朋友" to Color(0xFF00BCD4),
+            "上下级" to Color(0xFFFFC107),
+            "师生" to Color(0xFF8B5CF6),
+            "对手" to Color(0xFFEF4444),
+            "用户" to Color(0xFF8B5CF6)
+        )) { item ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(item.second))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(item.first, fontSize = 11.sp, color = TextSecondary)
+            }
+        }
+    }
+}
+
 @Composable private fun SharedMemorySection(memories: String) {
     Column(modifier = Modifier.fillMaxWidth().background(Surface).padding(16.dp)) {
         Text("共享记忆", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
@@ -389,22 +403,7 @@ private fun bfsLabel(parentName: String, childName: String, type: RelationshipTy
 }
 
 private fun relColor(type: RelationshipType): Color {
-    val red = ErrorRed
-    if (type == RelationshipType.BIG_SISTER || type == RelationshipType.LITTLE_SISTER ||
-        type == RelationshipType.BIG_BROTHER || type == RelationshipType.LITTLE_BROTHER ||
-        type == RelationshipType.MOTHER || type == RelationshipType.FATHER ||
-        type == RelationshipType.DAUGHTER || type == RelationshipType.SON ||
-        type == RelationshipType.GUARDIAN ||
-        type == RelationshipType.FAMILY) return red
-    if (type == RelationshipType.CLOSE_FRIEND || type == RelationshipType.FRIEND) return Color(0xFF00BCD4)
-    if (type == RelationshipType.BOSS || type == RelationshipType.CAPTAIN) return Color(0xFFFFC107)
-    if (type == RelationshipType.SUBORDINATE || type == RelationshipType.MEMBER) return Color(0xFFFFB74D)
-    if (type == RelationshipType.COMRADE || type == RelationshipType.TEAMMATE) return Color(0xFF9E9E9E)
-    if (type == RelationshipType.MENTOR || type == RelationshipType.STUDENT) return Color(0xFF8B5CF6)
-    if (type == RelationshipType.RIVAL) return Color(0xFFEF4444)
-    if (type == RelationshipType.CRUSH) return Color(0xFFF48FB1)
-    if (type == RelationshipType.LOVER) return Color(0xFFE91E63)
-    return Color(0xFFBDBDBD)
+    return RelationshipUiMapper.color(type)
 }
 
 

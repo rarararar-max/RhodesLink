@@ -53,12 +53,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.data.db.entity.OperatorEntity
 import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.ui.theme.*
+import com.rhodes.privatechat.util.copyToCache
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import org.koin.compose.koinInject
@@ -83,7 +85,10 @@ fun GroupEditScreen(
     var autoSpeak by remember { mutableStateOf(settings.getGroupAuto(groupId)) }
     var avatarUri by remember { mutableStateOf("") }
     var cropTarget by remember { mutableStateOf<android.net.Uri?>(null) }
-    val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> cropTarget = uri }
+    val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        cropTarget = uri?.let { copyToCache(ctx, it) }
+        if (uri != null && cropTarget == null) android.widget.Toast.makeText(ctx, "无法读取此图片，请尝试选择JPG/PNG图片", android.widget.Toast.LENGTH_SHORT).show()
+    }
 
     // 加载已有群头像
     LaunchedEffect(groupId) {
@@ -124,7 +129,7 @@ fun GroupEditScreen(
                 OutlinedTextField(value = groupName, onValueChange = { groupName = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(8.dp), placeholder = { Text("输入群名称", color = TextSecondary) }, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Primary, unfocusedBorderColor = Divider))
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(modifier = Modifier.size(52.dp).clip(CircleShape).background(Primary).clickable { avatarPicker.launch("image/*") }, contentAlignment = Alignment.Center) {
+                    Box(modifier = Modifier.size(52.dp).clip(CircleShape).background(Primary).clickable { avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, contentAlignment = Alignment.Center) {
                         if (avatarUri.isNotBlank()) {
                             coil3.compose.AsyncImage(model = avatarUri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
                         } else {
@@ -132,7 +137,7 @@ fun GroupEditScreen(
                         }
                     }
                     Spacer(modifier = Modifier.width(12.dp))
-                    Text(if (avatarUri.isNotBlank()) "点击更换群头像" else "点击设置群头像", fontSize = 13.sp, color = TextSecondary, modifier = Modifier.clickable { avatarPicker.launch("image/*") })
+                    Text(if (avatarUri.isNotBlank()) "点击更换群头像" else "点击设置群头像", fontSize = 13.sp, color = TextSecondary, modifier = Modifier.clickable { avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) })
                 }
             }
 

@@ -109,7 +109,27 @@ data class SummaryResponse(
 data class AnchorItem(
     val type: String = "event",
     val content: String = "",
-    val isPrivate: Boolean = false
+    val isPrivate: Boolean = false,
+    val importance: String = "",
+    val sourceActor: String = "",
+    val sourceTarget: String = ""
+)
+
+@Serializable
+data class UnifiedMemoryResponse(
+    val summary: String = "",
+    val keywords: List<String> = emptyList(),
+    val anchors: List<AnchorItem> = emptyList(),
+    val impression_update: ImpressionUpdate = ImpressionUpdate()
+)
+
+@Serializable
+data class ImpressionUpdate(
+    val should_update: Boolean = false,
+    val impression: String = "",
+    val keywords: List<String> = emptyList(),
+    val preferences: List<String> = emptyList(),
+    val taboos: List<String> = emptyList()
 )
 
 @Serializable

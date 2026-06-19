@@ -58,6 +58,7 @@ fun DataManagementScreen(
             CleanupItem(Icons.Default.Forum, "聊天摘要", stats.messages, "clean_days_messages", 30),
             CleanupItem(Icons.AutoMirrored.Filled.MenuBook, "干员日记", stats.diaries, "clean_days_diaries", 30),
             CleanupItem(Icons.Default.Share, "动态记录", stats.moments, "clean_days_moments", 30),
+            CleanupItem(Icons.Default.AutoFixHigh, "世界事件", stats.worldEvents, "clean_days_world_events", 7),
             CleanupItem(Icons.AutoMirrored.Filled.SendToMobile, "派遣历史", stats.dispatches, "clean_days_dispatches", 30)
         )
     }
@@ -72,6 +73,20 @@ fun DataManagementScreen(
         HorizontalDivider(color = Divider)
 
         Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Card).padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)).background(PrimaryContainer), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Default.AutoDelete, null, tint = Primary, modifier = Modifier.size(18.dp))
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("来源感知记忆", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                        Text(if (settings.sourceAwareMemoryEnabled) "已开启，旧锚点会自动推断来源" else "已关闭，仅使用旧式记忆文本", fontSize = 12.sp, color = TextSecondary)
+                    }
+                    Text(if (settings.sourceAwareMemoryEnabled) "开启" else "关闭", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Primary)
+                }
+            }
+            Spacer(Modifier.height(8.dp))
             items.forEach { item ->
                 val current = settings.getInt(item.prefKey, item.defaultDays)
                 Spacer(Modifier.height(8.dp))
@@ -118,6 +133,16 @@ fun DataManagementScreen(
                 Icon(Icons.Default.Delete, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
                 Text("立即清理所有过期数据", fontWeight = FontWeight.SemiBold)
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = {
+                viewModel.deleteAllWorldEvents()
+                refreshKey++
+                android.widget.Toast.makeText(context, "已清空世界事件", android.widget.Toast.LENGTH_SHORT).show()
+            }, modifier = Modifier.fillMaxWidth().height(44.dp), shape = RoundedCornerShape(10.dp)) {
+                Icon(Icons.Default.Delete, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("清空世界事件", fontWeight = FontWeight.SemiBold)
             }
         }
     }

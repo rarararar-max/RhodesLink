@@ -247,13 +247,13 @@ private fun MomentCardWithInteraction(moment: MomentEntity, viewModel: MainViewM
 }
 
 @Composable private fun PostDialog(operators: List<com.rhodes.privatechat.data.db.entity.OperatorEntity>, onDismiss: () -> Unit, onPost: (String, List<String>) -> Unit) {
-    var text by remember { mutableStateOf("") }; var showAtPicker by remember { mutableStateOf(false) }; val names = remember(operators) { operators.filter { it.name != "系统" }.map { it.name } }
+    var text by remember { mutableStateOf("") }; var showAtPicker by remember { mutableStateOf(false) }; var selectedMentions by remember { mutableStateOf(setOf<String>()) }; val names = remember(operators) { operators.filter { it.name != "系统" }.map { it.name } }
     // 从文本中解析已被 @ 的干员
     val mentionedInText = remember(text) { names.filter { Regex("@${Regex.escape(it)}(\\s|\$|，|。|！|？)").containsMatchIn(text) } }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("发布动态", color = TextPrimary) }, text = {
         Column {
             OutlinedTextField(value = text, onValueChange = { text = it }, modifier = Modifier.fillMaxWidth().height(100.dp), placeholder = { Text("用 @+干员名 艾特干员，如：@能天使", color = TextTertiary) }, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Primary, unfocusedBorderColor = Divider))
-            Spacer(Modifier.height(8.dp)); Row(verticalAlignment = Alignment.CenterVertically) { Text("艾特好友：", fontSize = 12.sp, color = TextSecondary); Spacer(Modifier.weight(1f)); TextButton(onClick = { showAtPicker = true }) { Text("选择干员", fontSize = 13.sp, color = Primary) } }
+            Spacer(Modifier.height(8.dp)); Row(verticalAlignment = Alignment.CenterVertically) { Text("艾特好友：", fontSize = 12.sp, color = TextSecondary); Spacer(Modifier.weight(1f)); TextButton(onClick = { selectedMentions = mentionedInText.toSet(); showAtPicker = true }) { Text("选择干员", fontSize = 13.sp, color = Primary) } }
             if (mentionedInText.isNotEmpty()) {
                 Spacer(Modifier.height(4.dp))
                 Text("已艾特：${mentionedInText.joinToString("、") { "@$it" }}", fontSize = 11.sp, color = Primary)
@@ -267,7 +267,6 @@ private fun MomentCardWithInteraction(moment: MomentEntity, viewModel: MainViewM
     }) { Text("发布", color = if (text.isNotBlank()) Primary else TextTertiary) } }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消", color = TextSecondary) } })
     if (showAtPicker) {
         val allOps = operators
-        var selectedMentions by remember { mutableStateOf(setOf<String>()) }
         AlertDialog(onDismissRequest = { showAtPicker = false }, title = { Text("@谁？", color = TextPrimary) }, text = {
             Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
                 names.forEach { name ->
@@ -284,8 +283,11 @@ private fun MomentCardWithInteraction(moment: MomentEntity, viewModel: MainViewM
                 }
             }
         }, confirmButton = { TextButton(onClick = {
-            if (selectedMentions.isNotEmpty()) {
-                text = "${text}${selectedMentions.joinToString(" ") { "@$it" }} "
+            val existing = names.filter { text.contains("@$it") }.toSet()
+            val additions = selectedMentions - existing
+            if (additions.isNotEmpty()) {
+                val spacer = if (text.isBlank() || text.endsWith(" ") || text.endsWith("\n")) "" else " "
+                text = "${text}${spacer}${additions.joinToString(" ") { "@$it" }} "
             }
             showAtPicker = false
         }) { Text("确定", color = Primary) } })

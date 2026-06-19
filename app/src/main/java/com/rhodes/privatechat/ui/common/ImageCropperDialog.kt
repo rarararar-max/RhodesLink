@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.util.decodeSampledBitmap
+import com.rhodes.privatechat.util.scaleBitmapToMax
 import java.io.File
 import java.io.FileOutputStream
 
@@ -123,9 +124,10 @@ fun ImageCropperDialog(
                                 return@Button
                             }
                             val cropped = Bitmap.createBitmap(bmp, cropX, cropY, cropW, cropH)
-                            bmp.recycle()
+                            val output = scaleBitmapToMax(cropped, 1024)
                             val destFile = File(context.cacheDir, "crop_${System.currentTimeMillis()}.jpg")
-                            FileOutputStream(destFile).use { out -> cropped.compress(Bitmap.CompressFormat.JPEG, 90, out) }
+                            FileOutputStream(destFile).use { out -> output.compress(Bitmap.CompressFormat.JPEG, 90, out) }
+                            if (output !== cropped) output.recycle()
                             cropped.recycle()
                             onConfirm(Uri.fromFile(destFile))
                         } catch (_: OutOfMemoryError) {

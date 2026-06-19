@@ -117,7 +117,7 @@ class SessionRepository(private val wrapper: DatabaseWrapper) {
             ChatMessage(id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange.toInt(), timestamp, isMe != 0L)
         }.executeAsList().takeLast(5)
         if (recentMsgs.isEmpty()) return@withContext null
-        recentMsgs.joinToString("\n") { "${if (it.isMe) "博士" else it.senderName}：${it.content.take(80)}" }
+        recentMsgs.joinToString("\n") { "${if (it.isMe) "用户" else it.senderName}：${it.content.take(80)}" }
     }
 
     suspend fun getPrivateChatContext(operatorId: String): String? = withContext(Dispatchers.Default) {
@@ -135,7 +135,7 @@ class SessionRepository(private val wrapper: DatabaseWrapper) {
         val lines = mutableListOf<String>()
         if (impression != null) lines.add("印象：$impression")
         for (m in recentMsgs) {
-            val name = if (m.isMe) "博士" else m.senderName
+            val name = if (m.isMe) "用户" else m.senderName
             val text = if (m.type == "ai_json") {
                 try {
                     val obj = json.parseToJsonElement(m.content) as? kotlinx.serialization.json.JsonObject

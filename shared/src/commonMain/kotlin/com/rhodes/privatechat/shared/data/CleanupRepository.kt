@@ -15,5 +15,6 @@ class CleanupRepository(private val wrapper: DatabaseWrapper) {
         val now = Clock.System.now().toEpochMilliseconds()
         db.memoryAnchorsQueries.deleteExpiredAnchors(now)
         db.memoriesQueries.deleteExpired(now)
+        db.worldEventsQueries.deleteExpiredWorldEvents(now)
     }
 }

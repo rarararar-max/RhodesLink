@@ -14,6 +14,7 @@ import com.rhodes.privatechat.viewmodel.shared.OperatorStateUpdater
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.viewmodel.shared.SharedUtils
 import com.rhodes.privatechat.viewmodel.shared.UserProfile
+import com.rhodes.privatechat.viewmodel.shared.MemoryPolicy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -41,7 +42,7 @@ class DispatchViewModel(
     val isStarting: Boolean get() = startingLock.get()
     private var generatingDispatchId: String? = null
     private val finishingIds = java.util.Collections.synchronizedSet(mutableSetOf<String>())
-    private val generatingSegments = mutableSetOf<String>()
+    private val generatingSegments = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
     // 段落辅助函数（按固定标记分割，避免AI正文中的\n\n干扰）
     private fun parseSegmentCount(logChain: String): Int {
@@ -211,7 +212,7 @@ ${profiles}
                 val memberIds = updated.operatorIds.split(",").map { it.trim() }.filter { it.isNotBlank() }
                 val memberNames = memberIds.mapNotNull { id -> allOps.find { it.id == id || it.name == id }?.name }.take(3).joinToString("、")
                 for (opId in memberIds) {
-                    repository.saveAnchor(MemoryAnchor(sessionId = "anchor_${System.currentTimeMillis()}", operatorId = opId, type = AnchorType.EVENT, content = "${updated.taskType}任务完成，${memberNames}带回${items}，净收益${netProfit}龙门币", isPrivate = false, createdAt = System.currentTimeMillis(), expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L))
+                    repository.saveAnchor(MemoryAnchor(sessionId = "anchor_${System.currentTimeMillis()}", operatorId = opId, type = AnchorType.EVENT, content = "${updated.taskType}任务完成，${memberNames}带回${items}，净收益${netProfit}龙门币", isPrivate = false, createdAt = System.currentTimeMillis(), expiresAt = MemoryPolicy.anchorExpiresAt(settings, AnchorType.EVENT)))
                 }
             } finally {
                 finishingIds.remove(dispatchId)
@@ -278,18 +279,21 @@ ${profiles}
                     DebugLogger.log("Dispatch/AI", "结局JSON解析失败: ${rawResult.take(100)}")
                     null
                 }
-                val reward = (ending?.currency_reward ?: 0).coerceIn(0, budget * 10)
+                if (ending == null) {
+                    throw IllegalStateException("派遣结局JSON解析失败")
+                }
+                val reward = ending.currency_reward.coerceIn(0, budget * 10)
                 val netP = reward - budget
-                val newLog = dispatch.logChain + "\n\n【结局】" + (ending?.ending_content ?: rawResult.take(500))
-                val itemsJson = if (ending?.items != null && ending.items.isNotEmpty()) json.encodeToString(ending.items) else "[]"
+                val newLog = dispatch.logChain + "\n\n【结局】" + ending.ending_content
+                val itemsJson = if (ending.items.isNotEmpty()) json.encodeToString(ending.items) else "[]"
                 repository.insertDispatch(DispatchRecord(
                     id = dispatchId, taskType = taskType, durationHours = duration,
                     budget = budget, netProfit = netP, operatorIds = operatorIds.joinToString(","),
                     logChain = newLog, status = "active", startTime = dispatch.startTime,
                     totalSegments = dispatch.totalSegments, segmentInterval = dispatch.segmentInterval, items = itemsJson
                 ))
-                Log.i(TAG, "[generateDispatchEndSuspend] 成功 reward=$reward netProfit=$netP items=${ending?.items}")
-                DebugLogger.log("Dispatch/AI", "结局成功: reward=$reward, items=${ending?.items}")
+                Log.i(TAG, "[generateDispatchEndSuspend] 成功 reward=$reward netProfit=$netP items=${ending.items}")
+                DebugLogger.log("Dispatch/AI", "结局成功: reward=$reward, items=${ending.items}")
                 return Pair(netP, reward)
             } catch (e: Exception) {
                 DebugLogger.log("Dispatch/AI", "结局异常: attempt=${attempt + 1}, ${e.message?.take(100)}")

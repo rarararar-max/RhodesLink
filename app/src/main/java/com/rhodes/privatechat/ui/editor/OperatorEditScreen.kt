@@ -1,7 +1,5 @@
 package com.rhodes.privatechat.ui.editor
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -67,14 +65,17 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.data.db.entity.OperatorEntity
+import com.rhodes.privatechat.ui.common.FullscreenTextField
 import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.data.db.entity.RelationshipEntity
 import com.rhodes.privatechat.data.db.entity.RelationshipType
 import com.rhodes.privatechat.ui.theme.*
+import com.rhodes.privatechat.util.copyToCache
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import org.koin.compose.koinInject
@@ -195,11 +196,14 @@ fun OperatorEditScreen(
             Spacer(modifier = Modifier.height(12.dp))
             SectionCard {
                 SectionTitle("头像")
-                val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> cropTarget = uri }
+                val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+                    cropTarget = uri?.let { copyToCache(context, it) }
+                    if (uri != null && cropTarget == null) android.widget.Toast.makeText(context, "无法读取此图片，请尝试选择JPG/PNG图片", android.widget.Toast.LENGTH_SHORT).show()
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    OperatorAvatarImage(avatarUri = avatarUri, name = name, modifier = Modifier.size(80.dp).clickable { avatarPicker.launch("image/*") })
+                    OperatorAvatarImage(avatarUri = avatarUri, name = name, modifier = Modifier.size(80.dp).clickable { avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) })
                     Spacer(modifier = Modifier.width(16.dp))
-                    OutlinedButton(onClick = { avatarPicker.launch("image/*") }) {
+                    OutlinedButton(onClick = { avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
                         Icon(Icons.Default.PhotoCamera, null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
                         Text("上传头像")
@@ -226,13 +230,13 @@ fun OperatorEditScreen(
             Spacer(modifier = Modifier.height(12.dp))
             SectionCard {
                 SectionTitle("私聊人设")
-                PromptField(value = privatePrompt, onValueChange = { privatePrompt = it }, context = context, placeholder = "输入该干员的私聊性格描述...")
+                PromptField(title = "私聊人设", value = privatePrompt, onValueChange = { privatePrompt = it }, placeholder = "输入该干员的私聊性格描述...")
             }
 
             Spacer(modifier = Modifier.height(12.dp))
             SectionCard {
                 SectionTitle("群聊人设")
-                PromptField(value = groupPrompt, onValueChange = { groupPrompt = it }, context = context, placeholder = "输入该干员的群聊性格描述...")
+                PromptField(title = "群聊人设", value = groupPrompt, onValueChange = { groupPrompt = it }, placeholder = "输入该干员的群聊性格描述...")
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -523,38 +527,8 @@ private fun ToggleItem(label: String, checked: Boolean, onCheckedChange: (Boolea
 }
 
 @Composable
-private fun PromptField(value: String, onValueChange: (String) -> Unit, context: Context, placeholder: String) {
-    OutlinedTextField(
-        value = value, onValueChange = onValueChange,
-        modifier = Modifier.fillMaxWidth().height(120.dp),
-        placeholder = { Text(placeholder, fontSize = 13.sp, color = TextTertiary) },
-        shape = RoundedCornerShape(8.dp),
-        colors = fieldColors()
-    )
-    Spacer(modifier = Modifier.height(6.dp))
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        ClipboardButton("粘贴", onClick = {
-            val clip = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-            clip?.primaryClip?.getItemAt(0)?.text?.toString()?.let { onValueChange(it) }
-        })
-        ClipboardButton("复制", onClick = {
-            val clip = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-            clip?.setPrimaryClip(ClipData.newPlainText("prompt", value))
-        })
-    }
-}
-
-@Composable
-private fun ClipboardButton(text: String, onClick: () -> Unit) {
-    OutlinedButton(onClick = onClick, modifier = Modifier.height(30.dp),
-        colors = ButtonDefaults.outlinedButtonColors(contentColor = Blue400)) {
-        Icon(
-            if (text == "粘贴") Icons.Default.ContentPaste else Icons.Default.ContentCopy, null,
-            modifier = Modifier.size(14.dp)
-        )
-        Spacer(modifier = Modifier.width(4.dp))
-        Text(text, fontSize = 12.sp)
-    }
+private fun PromptField(title: String, value: String, onValueChange: (String) -> Unit, placeholder: String) {
+    FullscreenTextField(title = title, value = value, onValueChange = onValueChange, placeholder = placeholder, minHeight = 120.dp)
 }
 
 @Composable

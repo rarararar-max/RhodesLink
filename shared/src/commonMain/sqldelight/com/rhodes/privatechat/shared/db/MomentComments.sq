@@ -14,10 +14,10 @@ getComments:
 SELECT * FROM moment_comments WHERE momentId = ? ORDER BY createdAt ASC;
 
 getInboxComments:
-SELECT * FROM moment_comments WHERE createdAt > ? AND (momentId IN (SELECT id FROM moments WHERE operatorId = 'user') OR replyToName = ?) ORDER BY createdAt DESC;
+SELECT * FROM moment_comments WHERE operatorId != 'user' AND createdAt > ? AND (momentId IN (SELECT id FROM moments WHERE operatorId = 'user') OR replyToName = ?) ORDER BY createdAt DESC;
 
 getUnreadCommentCount:
-SELECT COUNT(*) FROM moment_comments WHERE isRead = 0 AND createdAt > ? AND (momentId IN (SELECT id FROM moments WHERE operatorId = 'user') OR replyToName = ?);
+SELECT COUNT(*) FROM moment_comments WHERE operatorId != 'user' AND isRead = 0 AND createdAt > ? AND (momentId IN (SELECT id FROM moments WHERE operatorId = 'user') OR replyToName = ?);
 
 getMaxCommentId:
 SELECT MAX(id) FROM moment_comments;

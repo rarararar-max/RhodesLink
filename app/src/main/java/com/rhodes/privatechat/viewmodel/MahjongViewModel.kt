@@ -8,6 +8,7 @@ import com.rhodes.privatechat.shared.model.MomentComment
 import com.rhodes.privatechat.shared.model.MomentLike
 import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.shared.settings.SettingsRepository
+import com.rhodes.privatechat.viewmodel.shared.MemoryPolicy
 import com.rhodes.privatechat.viewmodel.shared.SharedUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -51,7 +52,7 @@ class MahjongViewModel(
                     operatorId = op.id, type = AnchorType.EVENT,
                     content = content, isPrivate = false,
                     createdAt = System.currentTimeMillis(),
-                    expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L
+                    expiresAt = MemoryPolicy.anchorExpiresAt(settings, AnchorType.EVENT)
                 ))
             }
         }

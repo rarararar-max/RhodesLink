@@ -1,0 +1,6 @@
+ALTER TABLE memory_anchors ADD COLUMN source TEXT NOT NULL DEFAULT '';
+ALTER TABLE memory_anchors ADD COLUMN sourceName TEXT NOT NULL DEFAULT '';
+ALTER TABLE memory_anchors ADD COLUMN sourceActor TEXT NOT NULL DEFAULT '';
+ALTER TABLE memory_anchors ADD COLUMN sourceTarget TEXT NOT NULL DEFAULT '';
+ALTER TABLE memory_anchors ADD COLUMN importance TEXT NOT NULL DEFAULT '';
+ALTER TABLE memory_anchors ADD COLUMN knownFrom TEXT NOT NULL DEFAULT '';

@@ -114,7 +114,7 @@ private fun ChatTabContent(navigator: Navigator) {
                 navigator.push(GroupChatRoute(s.operatorName.ifBlank { "群聊" }, s.id))
             } else {
                 val op = viewModel.operators.value.find { it.id == s.operatorId }
-                if (op != null) navigator.push(ChatOperator(op))
+                if (op != null) navigator.push(ChatOperator(op.id))
             }
         },
         onPin = { viewModel.pinSession(it) },
@@ -128,7 +128,7 @@ private fun ContactsTabContent(navigator: Navigator) {
     val viewModel: MainViewModel = koinViewModel()
     com.rhodes.privatechat.ui.contacts.ContactsScreen(
         viewModel = viewModel,
-        onOperatorClick = { op -> navigator.push(ChatOperator(op)) },
+        onOperatorClick = { op -> navigator.push(ChatOperator(op.id)) },
         onNewOperator = { navigator.push(NewOperatorScreen) },
         onNewGroup = { navigator.push(NewGroupScreen) },
         onGroupClick = { name, id -> navigator.push(GroupChatRoute(name, id)) }
@@ -169,8 +169,11 @@ private fun SettingsTabContent(navigator: Navigator) {
         userGender = profile.gender,
         userAvatarUri = profile.avatarUri,
         onProfile = { navigator.push(ProfileSettingsRoute) },
+        onAppearance = { navigator.push(AppearanceSettingsRoute) },
         onModel = { navigator.push(ModelSettingsRoute) },
         onChatParams = { navigator.push(ChatSettingsRoute) },
+        onWorld = { navigator.push(WorldSettingsRoute) },
+        onStory = { navigator.push(StorySettingsRoute) },
         onDataManage = { navigator.push(DataManagementRoute) },
         onPermissions = { navigator.push(PermissionsRoute) },
         onCredits = { navigator.push(CreditsRoute) },

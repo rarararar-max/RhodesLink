@@ -76,6 +76,14 @@ class OperatorViewModel(
         scope.launch { callback(repository.getRelationships(operatorId)) }
     }
 
+    fun saveRelationship(rel: Relationship, reciprocal: Relationship? = null, onComplete: () -> Unit = {}) {
+        scope.launch {
+            repository.insertRelationship(rel)
+            reciprocal?.let { repository.insertRelationship(it) }
+            onComplete()
+        }
+    }
+
     fun loadRelationGraph(operatorId: String, callback: (List<BfsNode>) -> Unit) {
         scope.launch { callback(repository.bfsRelationGraph(operatorId)) }
     }

@@ -10,6 +10,7 @@ import com.rhodes.privatechat.shared.data.SenderCount
 import com.rhodes.privatechat.shared.model.Memory
 import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.shared.settings.SettingsRepository
+import com.rhodes.privatechat.util.DebugLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -19,9 +20,12 @@ class DataViewModel(
     private val settings: SettingsRepository,
     private val scope: CoroutineScope
 ) {
+    private var lastCleanupLogAt = 0L
+
     data class DataStats(
         val chatSessions: Int, val groups: Int, val diaries: Int, val anchors: Int,
-        val messages: Int, val operators: Int, val moments: Int = 0, val dispatches: Int = 0
+        val messages: Int, val operators: Int, val moments: Int = 0, val dispatches: Int = 0,
+        val worldEvents: Int = 0
     )
 
     suspend fun getDataStats(operatorsCount: Int, momentsCount: Int): DataStats = DataStats(
@@ -32,7 +36,8 @@ class DataViewModel(
         messages = repository.getMessageCount(),
         operators = operatorsCount,
         moments = momentsCount,
-        dispatches = repository.getHistoryDispatches().size
+        dispatches = repository.getHistoryDispatches().size,
+        worldEvents = repository.getWorldEventCount()
     )
 
     fun cleanupAllExpired() {
@@ -46,8 +51,14 @@ class DataViewModel(
             if (momentDays > 0) repository.deleteOldMoments(now - momentDays * 86400000L)
             val dispatchDays = settings.cleanDaysDispatches
             if (dispatchDays > 0) repository.deleteOldDispatches(now - dispatchDays * 86400000L)
+            val worldDays = settings.cleanDaysWorldEvents
+            if (worldDays > 0) repository.deleteExpiredWorldEvents(now - worldDays * 86400000L)
             val anchorDays = settings.cleanDaysAnchors
             if (anchorDays > 0) repository.deleteOldAnchors(now - anchorDays * 86400000L)
+            if (now - lastCleanupLogAt > 5_000L) {
+                DebugLogger.log("Data/Cleanup", "清理过期数据: messages=${msgDays}天, anchors=${anchorDays}天, diaries=${diaryDays}天, moments=${momentDays}天, dispatches=${dispatchDays}天")
+                lastCleanupLogAt = now
+            }
         }
     }
 
@@ -67,6 +78,10 @@ class DataViewModel(
     suspend fun getAllImpressions(): List<Memory> = repository.getAllLongTermImpressions()
 
     suspend fun deleteAllImpressions() = repository.deleteAllImpressions()
+
+    fun deleteAllWorldEvents() {
+        scope.launch { repository.deleteAllWorldEvents() }
+    }
 
     suspend fun exportAllOperators(context: android.content.Context, operators: List<com.rhodes.privatechat.shared.model.Operator>): java.io.File {
         val ops = operators.map { OperatorExport.fromEntity(it) }

@@ -30,6 +30,7 @@ class ChatRepository(wrapper: DatabaseWrapper) {
     val dispatches = DispatchRepository(wrapper)
     val mahjong = MahjongRepository(wrapper)
     val cleanup = CleanupRepository(wrapper)
+    val worldEvents = WorldEventRepository(wrapper)
 
     // --- Backward-compatible forwarding methods ---
     val allOperators: Flow<List<Operator>> get() = operators.allOperators
@@ -144,6 +145,19 @@ class ChatRepository(wrapper: DatabaseWrapper) {
     suspend fun deleteMahjongSave() = mahjong.deleteMahjongSave()
 
     suspend fun cleanupExpiredData() = cleanup.cleanupExpiredData()
+
+    suspend fun insertWorldEvent(event: WorldEvent) = worldEvents.insertWorldEvent(event)
+    suspend fun getRecentWorldEvents(limit: Int = 20) = worldEvents.getRecentWorldEvents(limit)
+    suspend fun getWorldEventsByType(type: String, limit: Int = 20) = worldEvents.getWorldEventsByType(type, limit)
+    suspend fun getWorldEventsForOperator(operatorId: String, operatorName: String, limit: Int = 20) = worldEvents.getWorldEventsForOperator(operatorId, operatorName, limit)
+    suspend fun getUnconsumedWorldEventsForOperator(operatorId: String, operatorName: String, consumer: String, limit: Int = 10) = worldEvents.getUnconsumedWorldEventsForOperator(operatorId, operatorName, consumer, limit)
+    suspend fun getUnconsumedWorldEventsForGroup(groupId: String, memberIds: List<String>, memberNames: List<String>, limit: Int = 10) = worldEvents.getUnconsumedWorldEventsForGroup(groupId, memberIds, memberNames, limit)
+    suspend fun getUnconsumedWorldEventsByType(type: String, consumer: String, limit: Int = 10) = worldEvents.getUnconsumedWorldEventsByType(type, consumer, limit)
+    suspend fun countWorldEventsByTypeSince(type: String, since: Long) = worldEvents.countWorldEventsByTypeSince(type, since)
+    suspend fun markWorldEventConsumed(eventId: Long, consumer: String) = worldEvents.markWorldEventConsumed(eventId, consumer)
+    suspend fun getWorldEventCount() = worldEvents.getWorldEventCount()
+    suspend fun deleteExpiredWorldEvents(cutoff: Long) = worldEvents.deleteExpiredWorldEvents(cutoff)
+    suspend fun deleteAllWorldEvents() = worldEvents.deleteAllWorldEvents()
 
     suspend fun syncOperatorAvatar(operatorId: String, avatarUri: String) {
         val session = sessions.getSessionByOperator(operatorId)

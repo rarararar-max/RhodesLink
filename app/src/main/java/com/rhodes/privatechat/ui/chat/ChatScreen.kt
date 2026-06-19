@@ -248,9 +248,12 @@ private fun PropShopDialog(
                         Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
                             TextButton(onClick = { showHypnotizeInput = false }) { Text("取消") }
                             TextButton(onClick = {
+                                val command = hypnotizeInput.trim()
+                                if (command.isBlank()) { Toast.makeText(context, "请输入催眠指令", Toast.LENGTH_SHORT).show(); return@TextButton }
                                 val err = viewModel.buyProp("催眠怀表", context)
                                 if (err != null) { Toast.makeText(context, err, Toast.LENGTH_SHORT).show(); return@TextButton }
-                                viewModel.setHypnosis(hypnotizeInput)
+                                viewModel.setHypnosis(command)
+                                Toast.makeText(context, "催眠怀表已生效，持续10轮", Toast.LENGTH_SHORT).show()
                                 showHypnotizeInput = false; hypnotizeInput = ""
                                 onDismiss()
                             }) { Text("确认", color = Primary) }

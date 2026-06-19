@@ -3,6 +3,8 @@ package com.rhodes.privatechat.viewmodel.shared
 import com.rhodes.privatechat.shared.model.AnchorType
 import com.rhodes.privatechat.shared.model.MemoryAnchor
 import com.rhodes.privatechat.shared.model.Operator
+import com.rhodes.privatechat.shared.model.WorldEvent
+import com.rhodes.privatechat.shared.model.WorldEventType
 import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 
@@ -24,6 +26,16 @@ class OperatorStateUpdater(
         val newAct = activity.ifBlank { op.activity }
         val newEmo = emotion.ifBlank { op.emotion }
         repository.updateOperator(op.copy(location = newLoc, activity = newAct, emotion = newEmo))
+        repository.insertWorldEvent(WorldEvent(
+            type = WorldEventType.STATUS_CHANGED,
+            actorId = operatorId,
+            actorName = op.name,
+            source = "status",
+            sourceId = operatorId,
+            content = "${op.name}现在在${newLoc}，正在${newAct}，情绪${newEmo}",
+            createdAt = System.currentTimeMillis(),
+            expiresAt = MemoryPolicy.anchorExpiresAt(settings, AnchorType.EVENT)
+        ))
         onStatusUpdated?.invoke(operatorId, newLoc, newAct, newEmo)
         if (newLoc != op.location && newLoc.isNotBlank()) {
             notifyNearbyObservers(listOf(operatorId))
@@ -44,7 +56,7 @@ class OperatorStateUpdater(
                         content = "${moved.name}来到了${moved.location}，正在${moved.activity}，情绪${moved.emotion}",
                         isPrivate = false,
                         createdAt = System.currentTimeMillis(),
-                        expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L
+                        expiresAt = MemoryPolicy.anchorExpiresAt(settings, AnchorType.EVENT)
                     )
                     repository.saveAnchor(anchor)
                 }

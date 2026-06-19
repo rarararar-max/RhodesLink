@@ -12,8 +12,10 @@ import com.rhodes.privatechat.shared.model.Memory
 import com.rhodes.privatechat.shared.model.MemoryType
 import com.rhodes.privatechat.shared.model.Operator
 import com.rhodes.privatechat.shared.data.ChatRepository
+import com.rhodes.privatechat.shared.memory.AnchorSourcePolicy
 import com.rhodes.privatechat.shared.model.AnalysisResult
 import com.rhodes.privatechat.shared.model.SuggestionResponse
+import com.rhodes.privatechat.shared.model.UnifiedMemoryResponse
 import com.rhodes.privatechat.shared.network.AIService
 import com.rhodes.privatechat.shared.model.AiMessage
 import com.rhodes.privatechat.util.DebugLogger
@@ -23,6 +25,8 @@ import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.viewmodel.shared.PromptTemplates
 import com.rhodes.privatechat.viewmodel.shared.SharedUtils
 import com.rhodes.privatechat.viewmodel.shared.UserProfile
+import com.rhodes.privatechat.viewmodel.shared.MemoryPolicy
+import com.rhodes.privatechat.viewmodel.shared.MemorySurface
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.Json
@@ -89,9 +93,6 @@ class ChatViewModel(
     val hypnosisRounds: StateFlow<Int> = _hypnosisRounds.asStateFlow()
 
     // Internal state
-    private var messageCounter: Int
-        get() = settings.messageCounter
-        set(v) { settings.messageCounter = v }
     private val shortTermThreshold: Int get() = settings.summaryThreshold
     private val chatAiMutexes = ConcurrentHashMap<String, Mutex>()
     private fun aiMutexFor(sessionId: String): Mutex = chatAiMutexes.computeIfAbsent(sessionId) { Mutex() }
@@ -130,53 +131,127 @@ class ChatViewModel(
             val retain = settings.summaryRetain.coerceAtLeast(1)
             val recent = msgs.takeLast(retain)
             val older = msgs.dropLast(retain)
-            if (older.isEmpty()) return
+            if (older.isEmpty()) {
+                DebugLogger.log("Memory/Summary", "跳过短期摘要: session=${session.id}, totalMsgs=${msgs.size}, retain=$retain, older=0")
+                return
+            }
+            val oldSummary = repository.getShortTermMemory(session.id)?.content?.takeIf { it.isNotBlank() } ?: "无"
             val text = older.joinToString("\n") { "${it.senderName}：${it.content.take(100)}" }
-            val prompt = """
+            DebugLogger.log("Memory/Summary", "开始短期摘要: session=${session.id}, operator=${session.operatorName}, totalMsgs=${msgs.size}, older=${older.size}, retain=$retain, oldSummary=${oldSummary != "无"}")
+            val prompt = if (settings.unifiedMemoryEnabled) """
+你是罗德岛的记录员。将对话压缩为摘要，提取记忆锚点，并判断是否需要更新长期印象。
+
+请融合“已有摘要”和“新增对话”。不要丢失用户明确表达的偏好、禁忌、承诺、计划、关系变化和重要事件。
+
+输出JSON：{"summary":"50~200字摘要","anchors":[{"type":"event|preference|plan|emotion|taboo|relation","content":"具体内容","importance":"strong|medium|weak","sourceActor":"谁说的","sourceTarget":"指向谁","isPrivate":false}],"impression_update":{"should_update":false,"impression":"","keywords":[],"preferences":[],"taboos":[]}}
+
+规则：
+- summary：近期发生了什么。
+- anchors：3~5个关键信息锚点，content 30字内。
+- impression_update：只有用户反复表达了稳定偏好、禁忌、互动模式或重要关系变化时才 should_update=true。
+- 不要从短测试字符、数字、拼音或乱码推断长期人格。
+- content 中禁止出现“好感度提升/下降”“affection”“系统数值”等系统机制词。
+
+已有摘要：
+${oldSummary}
+
+新增对话：
+${text}""" else """
 你是罗德岛的记录员。将对话压缩为摘要并提取记忆锚点。
 
-总结以下对话，生成摘要和记忆锚点。
+请融合“已有摘要”和“新增对话”，生成一份连续的新摘要和记忆锚点。不要丢失用户明确表达的偏好、禁忌、承诺、计划、关系变化和重要事件。
 
 输出JSON：{"summary":"50~200字摘要","anchors":[{"type":"event|preference|plan|emotion|taboo|relation","content":"具体内容","isPrivate":false}]}
 
 字段说明：
 - summary：重点关注用户喜好、习惯、重要事件、决定、承诺，以及对话情感氛围
 - anchors：3~5个关键信息锚点
-  - type：锚点类型。event=事件，preference=偏好，plan=约定，emotion=情感，taboo=禁忌，relation=干员间互动
+  - type：锚点类型。event=事件，preference=用户偏好，plan=用户约定，emotion=用户情绪或重要互动情绪，taboo=用户禁忌，relation=关系变化
   - content：具体内容，30字内
   - isPrivate：涉及用户负面情绪、私密情感、自我怀疑时设为true；正面评价、公开约定、普通事件设为false
 
+提取边界：
+- preference/taboo 只能记录用户的偏好和禁忌，不能记录干员自己的习惯、职业偏好或性格。
+- 干员自身状态、工作偏好、被打断后的反应，应归为 event/emotion，不要归为 preference/taboo。
+- content 中禁止出现“好感度提升/下降”“affection”“系统数值”等系统机制词。
+- 用户只是输入短测试字符、数字、拼音或乱码时，不要推断为稳定人格，只能作为普通事件或直接忽略。
+
 隐私标记规则：
 - 必须设为true：用户负面情绪、个人隐私、"别告诉别人"的内容
-- 可设为false：正面评价、公开约定、一般偏好、干员间公开互动
+- 可设为false：正面评价、公开约定、一般偏好、干员间公开互动、干员普通情绪反应
 
-对话内容：
+已有摘要：
+${oldSummary}
+
+新增对话：
 ${text}"""
             val rawResult = withTimeout(15_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Memory") }.trim()
             sharedUtils.trackTokens("memory", prompt, rawResult)
-            val parsed = sharedUtils.aiService.parseSummaryResponse(rawResult)
+            val unified = if (settings.unifiedMemoryEnabled) try {
+                json.decodeFromString<UnifiedMemoryResponse>(sharedUtils.aiService.cleanJson(rawResult))
+            } catch (_: Exception) { null } else null
+            val parsed = unified ?: sharedUtils.aiService.parseSummaryResponse(rawResult).let { legacy ->
+                UnifiedMemoryResponse(
+                    summary = legacy.summary,
+                    keywords = legacy.keywords,
+                    anchors = legacy.anchors
+                )
+            }
             if (parsed.summary.isNotBlank()) {
+                val now = System.currentTimeMillis()
+                DebugLogger.log("Memory/Summary", "短期摘要已生成: session=${session.id}, summaryLen=${parsed.summary.length}, anchors=${parsed.anchors.size}, preview=${parsed.summary.take(80)}")
                 repository.saveMemory(Memory(
                     sessionId = session.id, operatorId = session.operatorId,
                     type = MemoryType.SHORT_TERM, content = parsed.summary,
                     keywords = parsed.keywords.joinToString(","),
-                    expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L
+                    createdAt = now,
+                    expiresAt = MemoryPolicy.memoryExpiresAt(settings)
                 ))
                 if (parsed.anchors.isNotEmpty()) {
-                    val anchors = parsed.anchors.map { a ->
-                        MemoryAnchor(
-                            sessionId = session.id, operatorId = session.operatorId,
-                            type = try { AnchorType.valueOf(a.type.uppercase()) } catch (_: Exception) { AnchorType.EVENT },
-                            content = a.content, isPrivate = a.isPrivate,
-                            createdAt = System.currentTimeMillis(),
-                            expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L
+                    val anchors = parsed.anchors.mapNotNull { a ->
+                        val type = try { AnchorType.valueOf(a.type.uppercase()) } catch (_: Exception) { AnchorType.EVENT }
+                        val cleanedContent = sanitizeAnchorContent(a.content)
+                        if (cleanedContent.isBlank()) return@mapNotNull null
+                        val finalType = normalizeAnchorType(type, cleanedContent)
+                        AnchorSourcePolicy.buildAnchor(
+                            source = AnchorSourcePolicy.PRIVATE_CHAT,
+                            sourceName = "与${session.operatorName}的私聊",
+                            sourceActor = a.sourceActor.ifBlank { appState.userProfile.value.nickname },
+                            sourceTarget = a.sourceTarget.ifBlank { session.operatorName },
+                            operatorId = session.operatorId,
+                            type = finalType,
+                            content = cleanedContent,
+                            importance = a.importance.ifBlank { if (a.isPrivate) AnchorSourcePolicy.STRONG else AnchorSourcePolicy.MEDIUM },
+                            sessionId = session.id,
+                            isPrivate = a.isPrivate,
+                            createdAt = now,
+                            expiresAt = MemoryPolicy.anchorExpiresAt(settings, finalType)
                         )
+                    }
+                    anchors.forEach { a ->
+                        DebugLogger.log("Memory/Anchor", "摘要锚点: op=${a.operatorId}, type=${a.type}, private=${a.isPrivate}, content=${a.content.take(40)}")
                     }
                     repository.saveAnchors(anchors)
                 }
+                val impression = unified?.impression_update
+                if (settings.autoImpressionUpdateEnabled && impression != null && impression.should_update && impression.impression.isNotBlank()) {
+                    repository.saveMemory(Memory(
+                        sessionId = session.id,
+                        operatorId = session.operatorId,
+                        type = MemoryType.LONG_TERM,
+                        content = impression.impression,
+                        keywords = impression.keywords.joinToString(","),
+                        preferences = impression.preferences.joinToString(","),
+                        taboos = impression.taboos.joinToString(","),
+                        createdAt = now
+                    ))
+                    DebugLogger.log("Memory/Impression", "统一记忆已更新印象: op=${session.operatorId}, len=${impression.impression.length}")
+                }
                 repository.enforceMemoryRetain(session.id, settings.summaryRetain)
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            DebugLogger.log("Memory/Summary", "短期摘要生成失败: ${e.message?.take(120)}")
+        }
     }
 
     // === Public API ===
@@ -189,7 +264,6 @@ ${text}"""
             settings.putInt("hypnosis_round_${prevOp.id}", _hypnosisRounds.value)
         }
         _selectedOperator.value = operator
-        messageCounter = 0
         // 恢复新干员的催眠状态
         _hypnosisCommand.value = settings.getString("hypnosis_cmd_${operator.id}", "")
         _hypnosisRounds.value = settings.getInt("hypnosis_round_${operator.id}", 0)
@@ -215,7 +289,6 @@ ${text}"""
             settings.putInt("hypnosis_round_${prevOp.id}", _hypnosisRounds.value)
         }
         _selectedOperator.value = operator
-        messageCounter = 0
         _hypnosisCommand.value = settings.getString("hypnosis_cmd_${operator.id}", "")
         _hypnosisRounds.value = settings.getInt("hypnosis_round_${operator.id}", 0)
         settings.hypnosisCmd = _hypnosisCommand.value
@@ -235,7 +308,6 @@ ${text}"""
         _selectedOperator.value = null
         _currentSession.value = null
         _messages.value = emptyList()
-        messageCounter = 0
     }
 
     fun clearMessages() {
@@ -291,7 +363,8 @@ ${text}"""
         chatAiJobs[session.id]?.cancel()
         val job = viewModelScope.launch {
             analysisGuidance = ""
-            messageCounter++
+                val sessionCounter = settings.getSessionMessageCounter(session.id) + 1
+                settings.putSessionMessageCounter(session.id, sessionCounter)
             val msgId = repository.getNextMessageId()
             val mode = _currentMode.value
             var aiMsgId = 0L
@@ -391,7 +464,7 @@ ${recentDialogues}
                         DebugLogger.log("Chat/AI", "请求AI, session=${session.id}, mode=$mode, prompt长度=${apiMessages.size}")
                         val parsed = withTimeout(90_000) { sharedUtils.chatWithRetry(apiMessages) }
                         if (parsed.dialogue.isNotEmpty() || parsed.emotion.isNotEmpty()) {
-                            DebugLogger.log("Chat/AI", "AI响应成功, emotion=${parsed.emotion}, dialogue=${parsed.dialogue.take(30)}")
+                            DebugLogger.log("Chat/AI", "AI响应成功, emotion=${parsed.emotion}, dialogue=${replyPreview(parsed).take(40)}")
                             sharedUtils.trackTokens("private", apiMessages, parsed.toString())
                         } else {
                             DebugLogger.log("Chat/AI", "AI返回为空或降级，跳过token统计")
@@ -420,7 +493,11 @@ ${recentDialogues}
                         val dailyCount = settings.dailyLmbCount
                         if (dailyCount < 5000) { val balance = settings.lmb; settings.lmb = balance + 10; settings.dailyLmbCount = dailyCount + 1 }
                         decrementHypnosis()
-                        if (messageCounter >= shortTermThreshold) { generateShortTermSummary(session); generatePrivateDailySummary(session.operatorId); messageCounter = 0 }
+                        if (sessionCounter >= shortTermThreshold) {
+                            generateShortTermSummary(session)
+                            generatePrivateDailySummary(session.operatorId)
+                            settings.putSessionMessageCounter(session.id, 0)
+                        }
                         val impKey = "impression_${session.operatorId}"
                         val impCount = settings.getInt(impKey, 0) + 1
                         settings.putInt(impKey, impCount)
@@ -776,6 +853,34 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         else -> "发送失败：${e.message?.take(50) ?: "未知错误"}"
     }
 
+    private fun sanitizeAnchorContent(content: String): String {
+        return content
+            .replace("好感度提升", "")
+            .replace("好感度下降", "")
+            .replace("好感提升", "")
+            .replace("好感下降", "")
+            .replace("affection", "", ignoreCase = true)
+            .replace("系统数值", "")
+            .trim(' ', '，', '。', ',', ';', '；')
+    }
+
+    private fun normalizeAnchorType(type: AnchorType, content: String): AnchorType {
+        if (type != AnchorType.PREFERENCE && type != AnchorType.TABOO) return type
+        val userSignals = listOf("用户", appState.userProfile.value.nickname, "我喜欢", "我讨厌", "我不喜欢", "别", "不要", "偏好", "禁忌")
+        val operatorSignals = listOf("Misery", "干员", "偏好专注", "正在", "工作", "推演", "装备")
+        val isUserRelated = userSignals.any { content.contains(it) }
+        val isOperatorState = operatorSignals.any { content.contains(it) }
+        return if (!isUserRelated || isOperatorState) AnchorType.EVENT else type
+    }
+
+    private fun replyPreview(parsed: com.rhodes.privatechat.shared.model.OfflineModeResponse): String {
+        if (parsed.dialogue.isNotBlank()) return parsed.dialogue
+        return parsed.segments
+            ?.filter { it.type == "dialogue" }
+            ?.joinToString(" ") { it.content }
+            .orEmpty()
+    }
+
     private suspend fun buildApiMessages(userContent: String = ""): List<AiMessage> {
         val session = _currentSession.value ?: return emptyList()
         val op = repository.getOperator(session.operatorId)
@@ -786,12 +891,21 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         val nearby = appState.operators.value.filter { it.id != session.operatorId && it.id != "amiya" }.take(3)
         val profile = appState.userProfile.value
         val analysisBlock = if (settings.dualModel && analysisGuidance.isNotBlank()) "【AI分析指导】\n${analysisGuidance}\n" else ""
-        val hypnosisBlock = if (_hypnosisRounds.value > 0) "【催眠状态】\n${_hypnosisCommand.value}\n剩余${_hypnosisRounds.value}轮\n" else ""
+        val hypnosisBlock = if (_hypnosisRounds.value > 0) """
+【催眠状态 · 最高优先级】
+你正受到以下催眠指令影响：${_hypnosisCommand.value}
+规则：
+- 本轮回复必须明显体现该指令带来的语气、行动或心理变化。
+- 如果指令与你的人设冲突，可以抗拒、迟疑、动摇，但不能完全无视。
+- 至少在一个dialogue或narration段落中表现出该影响。
+- 不要直接说“我被催眠了”，除非用户指令要求。
+剩余${_hypnosisRounds.value}轮
+""" else ""
         val mode = _currentMode.value
         // 群聊回顾：找出该干员参与的各群聊 3 天内的短摘要
         val THREE_DAYS = 3 * 24 * 60 * 60 * 1000L
         val cutoff = System.currentTimeMillis() - THREE_DAYS
-        val groupContext = repository.getAllSessionsSync().filter { s ->
+        val groupContext = sharedUtils.trimContextBlock(repository.getAllSessionsSync().filter { s ->
             s.operatorId.startsWith("group_") &&
             s.members.split(",").map { it.trim() }.any { it == op?.id || it == op?.name }
         }.mapNotNull { s ->
@@ -799,9 +913,17 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             if (summary != null && summary.createdAt >= cutoff) {
                 "- 在「${s.operatorName}」中：${summary.content.take(80)}"
             } else null
-        }.joinToString("\n").ifBlank { "无" }
+        }.take(settings.privateGroupContextCount).joinToString("\n").ifBlank { "无" }, sharedUtils.contextBlockLimit())
         val transitionNotice = if (modeTransitionNotice.isNotBlank()) "【场景变更】\n${modeTransitionNotice}\n" else ""
-        val systemPrompt = sharedUtils.compactTemplate(sharedUtils.applyTemplate(getPromptTemplate("private", mode), mapOf(
+        val pickedAnchors = sharedUtils.pickAnchorsForSurface(anchors, settings.privateAnchorCount, MemorySurface.PRIVATE_CHAT, userContent)
+        val sourceAwareMemories = sharedUtils.buildSourceAwareMemoryContext(anchors, settings.privateAnchorCount, MemorySurface.PRIVATE_CHAT, userContent)
+        val unconsumedEvents = sharedUtils.buildUnconsumedEventContextForOperator(session.operatorId, op?.name ?: session.operatorName, "private:${session.operatorId}", settings.eventContextCount, markConsumed = true)
+        val sharedMemoryLines = sharedUtils.trimContextBlock(sharedMemories.lines().filter { it.isNotBlank() }.take(settings.privateSharedMemoryCount).joinToString("\n"), sharedUtils.contextBlockLimit())
+        DebugLogger.log(
+            "Memory/Inject",
+            "私聊记忆注入: op=${session.operatorId}, mode=$mode, short=${shortTerm != null}, long=${longTerm != null}, anchors=${pickedAnchors.size}, sharedLines=${sharedMemoryLines.lines().filter { it.isNotBlank() }.size}, groupContext=${groupContext != "无"}, daily=${repository.getLatestPrivateDaily(session.operatorId) != null || repository.getLatestDaily() != null}"
+        )
+        val replacements = mapOf(
             "CURRENT_TIME" to sharedUtils.beijingSdf("yyyy-MM-dd HH:mm").format(java.util.Date()),
             "USER_NAME" to profile.nickname, "USER_GENDER" to profile.gender.ifBlank { "未知" }, "USER_BIO" to profile.bio.ifBlank { "无" },
             "AI_ANALYSIS" to analysisBlock,             "HYPNOSIS" to hypnosisBlock,
@@ -819,8 +941,14 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
                     append("已知禁忌：${it.split(",").map { it.trim() }.joinToString("、")}\n")
                 }
             },
-            "MEMORY_ANCHORS" to sharedUtils.pickAnchors(anchors, 5).joinToString("\n") { "- ${sharedUtils.anchorTimeLabel(it)} ${it.content}" }.ifBlank { "暂无" },
-            "SHARED_MEMORIES" to sharedMemories.ifBlank { "无" },
+            "MEMORY_ANCHORS" to sharedUtils.trimContextBlock(pickedAnchors.joinToString("\n") { "- ${sharedUtils.anchorTimeLabel(it)} ${it.content}" }.ifBlank { "暂无" }, sharedUtils.contextBlockLimit()),
+            "SOURCE_AWARE_MEMORIES" to sharedUtils.trimContextBlock(sourceAwareMemories, sharedUtils.contextBlockLimit()),
+            "UNCONSUMED_EVENTS" to sharedUtils.trimContextBlock(unconsumedEvents, sharedUtils.contextBlockLimit()),
+            "RECENT_SOCIAL_EVENTS" to unconsumedEvents,
+            "EVENT_TRIGGERED_PRIVATE_CONTEXT" to unconsumedEvents,
+            "KNOWN_FROM_CONTEXT" to sourceAwareMemories,
+            "SOURCE_AWARE_RULES" to sharedUtils.sourceAwareUsageRule(MemorySurface.PRIVATE_CHAT),
+            "SHARED_MEMORIES" to sharedMemoryLines.ifBlank { "无" },
             "DAILY_SUMMARY" to (repository.getLatestPrivateDaily(session.operatorId)?.content ?: repository.getLatestDaily()?.content ?: "无"),
             "SHORT_TERM_SUMMARY" to (shortTerm?.content ?: "无"),
             "GROUP_CONTEXT" to groupContext,
@@ -832,7 +960,35 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             "DIA_MIN" to settings.diaMin.toString(), "DIA_MAX" to settings.diaMax.toString(),
             "SEG_MIN" to (settings.narSegMin + settings.diaSegMin).toString(),
             "SEG_MAX" to (settings.narSegMax + settings.diaSegMax).toString()
-        )))
+        )
+        sharedUtils.logMemoryContext(
+            surface = "private_chat",
+            title = "${op?.name ?: session.operatorName}/${session.id}",
+            placeholders = mapOf(
+                "LONG_TERM_IMPRESSION" to replacements["LONG_TERM_IMPRESSION"].orEmpty(),
+                "USER_PREFS" to replacements["USER_PREFS"].orEmpty(),
+                "MEMORY_ANCHORS" to replacements["MEMORY_ANCHORS"].orEmpty(),
+                "SOURCE_AWARE_MEMORIES" to replacements["SOURCE_AWARE_MEMORIES"].orEmpty(),
+                "UNCONSUMED_EVENTS" to replacements["UNCONSUMED_EVENTS"].orEmpty(),
+                "SHARED_MEMORIES" to replacements["SHARED_MEMORIES"].orEmpty(),
+                "DAILY_SUMMARY" to replacements["DAILY_SUMMARY"].orEmpty(),
+                "SHORT_TERM_SUMMARY" to replacements["SHORT_TERM_SUMMARY"].orEmpty(),
+                "GROUP_CONTEXT" to replacements["GROUP_CONTEXT"].orEmpty(),
+                "NEARBY_OPERATORS" to replacements["NEARBY_OPERATORS"].orEmpty(),
+                "AI_ANALYSIS" to replacements["AI_ANALYSIS"].orEmpty(),
+                "HYPNOSIS" to replacements["HYPNOSIS"].orEmpty(),
+                "TRANSITION_NOTICE" to replacements["TRANSITION_NOTICE"].orEmpty()
+            ),
+            anchors = pickedAnchors,
+            extra = mapOf(
+                "mode" to mode,
+                "user" to profile.nickname,
+                "privateAnchorCount" to settings.privateAnchorCount.toString(),
+                "privateSharedMemoryCount" to settings.privateSharedMemoryCount.toString(),
+                "privateGroupContextCount" to settings.privateGroupContextCount.toString()
+            )
+        )
+        val systemPrompt = sharedUtils.compactTemplate(sharedUtils.applyTemplate(getPromptTemplate("private", mode), replacements))
         val rawMsgs = repository.getMessagesSync(session.id).let { msgs ->
             val limit = settings.historyMessages
             if (limit > 0) msgs.takeLast(limit) else msgs
@@ -889,7 +1045,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             val prompt = "请总结${dateStr}的聊天记录，生成50-150字的每日摘要。直接输出纯文本。\n${text}"
             val content = withTimeout(15_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Memory") }.trim()
             sharedUtils.trackTokens("memory", prompt, content)
-            if (content.isNotBlank()) { repository.saveMemory(Memory(sessionId = "daily_${dateStr}", operatorId = "daily", type = MemoryType.DAILY, content = content, expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L)) }
+            if (content.isNotBlank()) { repository.saveMemory(Memory(sessionId = "daily_${dateStr}", operatorId = "daily", type = MemoryType.DAILY, content = content, createdAt = System.currentTimeMillis(), expiresAt = MemoryPolicy.memoryExpiresAt(settings))) }
         } catch (_: Exception) {}
     }
 
@@ -916,7 +1072,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
                     sessionId = session.id, operatorId = operatorId,
                     type = MemoryType.DAILY, content = content,
                     createdAt = System.currentTimeMillis(),
-                    expiresAt = System.currentTimeMillis() + settings.cleanDays * 86_400_000L
+                    expiresAt = MemoryPolicy.memoryExpiresAt(settings)
                 ))
             }
         } catch (_: Exception) {}
@@ -930,11 +1086,24 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             val oldImpression = repository.getLongTermImpression(session.operatorId)
             val oldImpressionText = oldImpression?.content ?: "无"
             val impThreshold = settings.impressionThreshold.coerceAtLeast(1)
-            val msgs = repository.getMessagesSync(session.id).filter { !it.isMe }.takeLast(impThreshold)
-            if (msgs.isEmpty()) return
-            val messagesText = msgs.joinToString("\n") { "${it.senderName}：${it.content.take(100)}" }
+            val msgs = repository.getMessagesSync(session.id).takeLast(impThreshold * 2)
+            if (msgs.isEmpty()) {
+                DebugLogger.log("Memory/Impression", "跳过印象更新: op=${session.operatorId}, sampleMsgs=0")
+                return
+            }
+            DebugLogger.log("Memory/Impression", "开始更新印象: op=${session.operatorId}, threshold=$impThreshold, sampleMsgs=${msgs.size}, old=${oldImpression != null}")
+            val messagesText = msgs.joinToString("\n") { "${if (it.isMe) profile.nickname else it.senderName}：${it.content.take(120)}" }
             val prompt = """
-基于以下${op.name}与${profile.nickname}的最近${msgs.size}条对话，总结${op.name}对${profile.nickname}的整体印象。
+基于以下${op.name}与${profile.nickname}的最近${msgs.size}条完整对话，更新${op.name}对${profile.nickname}的主观长期印象。
+
+要求：
+- 重点观察${profile.nickname}明确表达的偏好、禁忌、计划、情绪、边界和反复出现的行为模式。
+- 融合旧印象，不要只复述近期事件。
+- 如果近期表现只是短暂情绪，不要上升为永久性格。
+- 如果用户主要输入短句、数字、拼音、测试字符或乱码，不要过度心理分析；最多描述为“近期表达较简短/测试性输入较多”。
+- 长期特征必须来自多次明确表达或反复行为，不能从一两句含糊输入中编造人格标签。
+- 不要使用“符号化回应”“高强度思考”“最低限度联系”等过度诊断式标签，除非对话中有明确证据。
+- 这是${op.name}的主观看法，可以带有角色视角，但不要编造用户没有表达过的事实。
 
 之前的印象（如有则融合更新）：
 ${oldImpressionText}
@@ -957,6 +1126,7 @@ ${messagesText}
                 val preferences = obj["preferences"]?.jsonArray?.mapNotNull { it.jsonPrimitive?.content }?.joinToString(",") ?: ""
                 val taboos = obj["taboos"]?.jsonArray?.mapNotNull { it.jsonPrimitive?.content }?.joinToString(",") ?: ""
                 if (impression.isNotBlank()) {
+                    DebugLogger.log("Memory/Impression", "印象已保存: op=${session.operatorId}, len=${impression.length}, keywords=${keywords.take(40)}, prefs=${preferences.split(',').filter { it.isNotBlank() }.size}, taboos=${taboos.split(',').filter { it.isNotBlank() }.size}")
                     repository.saveMemory(Memory(sessionId = session.id, operatorId = session.operatorId, type = MemoryType.LONG_TERM, content = impression, keywords = keywords, preferences = preferences, taboos = taboos, createdAt = System.currentTimeMillis()))
                 }
             } catch (_: Exception) {
@@ -964,7 +1134,9 @@ ${messagesText}
                     DebugLogger.log("Chat/Impression", "印象JSON解析失败: ${rawResult.take(100)}")
                 }
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            DebugLogger.log("Chat/Impression", "长期印象生成失败: ${e.message?.take(120)}")
+        }
     }
 
 
@@ -976,7 +1148,8 @@ ${messagesText}
         Log.d(aiTag, "║ currentSession: ${_currentSession.value?.id}")
         Log.d(aiTag, "║ messages: ${_messages.value.size}")
         Log.d(aiTag, "║ currentMode: ${_currentMode.value}")
-        Log.d(aiTag, "║ messageCounter: $messageCounter / $shortTermThreshold")
+        val sessionId = _currentSession.value?.id ?: "?"
+        Log.d(aiTag, "║ messageCounter: ${settings.getSessionMessageCounter(sessionId)} / $shortTermThreshold")
         val opId = _selectedOperator.value?.id ?: "?"
         Log.d(aiTag, "║ impression_${opId}: ${settings.getInt("impression_$opId", 0)}")
         Log.d(aiTag, "╚══════════════════════════════════════")

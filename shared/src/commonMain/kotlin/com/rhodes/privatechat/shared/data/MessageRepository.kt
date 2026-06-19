@@ -7,6 +7,8 @@ import kotlinx.coroutines.Dispatchers
 import app.cash.sqldelight.coroutines.asFlow
 import app.cash.sqldelight.coroutines.mapToList
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.Json
@@ -15,6 +17,8 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
 
     private val db: RhodesDatabase get() = wrapper.database
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+    private val idMutex = Mutex()
+    private var nextMessageId: Long? = null
 
     // --- Messages ---
     fun getMessages(sessionId: String): Flow<List<ChatMessage>> =
@@ -54,8 +58,12 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
         db.chatSessionsQueries.updateLastMessage(preview, ts, sessionId)
     }
 
-    suspend fun getNextMessageId(): Long = withContext(Dispatchers.Default) {
-        (db.chatMessagesQueries.getMaxId().executeAsOne().MAX ?: 0) + 1
+    suspend fun getNextMessageId(): Long = idMutex.withLock {
+        withContext(Dispatchers.Default) {
+            val next = nextMessageId ?: ((db.chatMessagesQueries.getMaxId().executeAsOne().MAX ?: 0) + 1)
+            nextMessageId = next + 1
+            next
+        }
     }
 
     suspend fun deleteSessionMessages(sessionId: String) = withContext(Dispatchers.Default) {

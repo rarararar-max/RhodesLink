@@ -25,5 +25,11 @@ data class MemoryAnchor(
     val content: String,
     val isPrivate: Boolean = false,
     val createdAt: Long = 0L,
-    val expiresAt: Long = Long.MAX_VALUE
+    val expiresAt: Long = Long.MAX_VALUE,
+    val source: String = "",
+    val sourceName: String = "",
+    val sourceActor: String = "",
+    val sourceTarget: String = "",
+    val importance: String = "",
+    val knownFrom: String = ""
 )

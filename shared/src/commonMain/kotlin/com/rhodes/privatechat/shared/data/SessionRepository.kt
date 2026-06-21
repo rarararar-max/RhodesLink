@@ -71,6 +71,7 @@ class SessionRepository(private val wrapper: DatabaseWrapper) {
     }
 
     suspend fun markAllRead() = withContext(Dispatchers.Default) { db.chatSessionsQueries.markAllRead() }
+    suspend fun incrementUnread(sessionId: String, delta: Int = 1) = withContext(Dispatchers.Default) { db.chatSessionsQueries.incrementUnread(delta.toLong(), sessionId) }
     suspend fun getSessionCount(): Int = withContext(Dispatchers.Default) { db.chatSessionsQueries.getSessionCount().executeAsOne().toInt() }
     suspend fun getGroupCount(): Int = withContext(Dispatchers.Default) { db.chatSessionsQueries.getGroupCount().executeAsOne().toInt() }
 

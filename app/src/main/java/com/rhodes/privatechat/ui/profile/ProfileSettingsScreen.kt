@@ -34,18 +34,21 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -62,6 +65,7 @@ import com.rhodes.privatechat.ui.common.FullscreenTextField
 import com.rhodes.privatechat.util.copyToCache
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.viewmodel.MainViewModel
+import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
 private val presetAvatars = listOf(
@@ -80,6 +84,7 @@ fun ProfileSettingsScreen(
     var gender by remember { mutableStateOf(profile.gender) }
     var bio by remember { mutableStateOf(profile.bio) }
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var avatarUri by remember { mutableStateOf(profile.avatarUri.ifBlank { null }) }
     var cropTarget by remember { mutableStateOf<android.net.Uri?>(null) }
     val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -88,19 +93,26 @@ fun ProfileSettingsScreen(
     }
     val prefSettings: SettingsRepository = koinInject()
     var avatarIndex by remember { mutableIntStateOf(prefSettings.getInt("user_avatar_index", 0)) }
+    var showUnsavedDialog by remember { mutableStateOf(false) }
+    val hasChanges = nickname != profile.nickname || gender != profile.gender || bio != profile.bio || (avatarUri ?: "") != profile.avatarUri || avatarIndex != prefSettings.getInt("user_avatar_index", 0)
 
     val saveProfile: () -> Unit = {
         viewModel.saveUserProfile(nickname, gender, bio, avatarUri ?: "")
         prefSettings.putInt("user_avatar_index", avatarIndex)
     }
 
-    BackHandler(onBack = { saveProfile(); onBack() })
+    fun requestBack() {
+        if (hasChanges) showUnsavedDialog = true else onBack()
+    }
+
+    BackHandler(onBack = { requestBack() })
 
     Box(modifier = modifier.fillMaxSize()) {
     Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding().imePadding()) {
         Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { saveProfile(); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
-            Text("身份设置", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+            IconButton(onClick = { requestBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
+            Text("身份设置", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, modifier = Modifier.weight(1f))
+            TextButton(onClick = { saveProfile(); onBack() }) { Text("保存", color = Primary, fontWeight = FontWeight.SemiBold) }
         }
         HorizontalDivider(color = Divider)
 
@@ -143,8 +155,22 @@ fun ProfileSettingsScreen(
     cropTarget?.let { uri ->
         com.rhodes.privatechat.ui.common.ImageCropperDialog(
             imageUri = uri, aspectX = 1f, aspectY = 1f,
-            onConfirm = { cropped -> avatarUri = com.rhodes.privatechat.util.copyToInternalStorage(context, cropped); cropTarget = null },
+            onConfirm = { cropped -> scope.launch { avatarUri = com.rhodes.privatechat.util.copyToInternalStorageAsync(context, cropped); cropTarget = null } },
             onCancel = { cropTarget = null }
+        )
+    }
+    if (showUnsavedDialog) {
+        AlertDialog(
+            onDismissRequest = { showUnsavedDialog = false },
+            title = { Text("有未保存的修改", color = TextPrimary) },
+            text = { Text("你已经修改了身份设置。要保存后离开，还是放弃这些修改？", color = TextSecondary) },
+            confirmButton = { TextButton(onClick = { saveProfile(); showUnsavedDialog = false; onBack() }) { Text("保存修改", color = Primary) } },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { showUnsavedDialog = false; onBack() }) { Text("放弃修改", color = ErrorRed) }
+                    TextButton(onClick = { showUnsavedDialog = false }) { Text("继续编辑", color = TextSecondary) }
+                }
+            }
         )
     }
 }

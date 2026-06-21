@@ -31,6 +31,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -121,11 +122,12 @@ fun OperatorDetailScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
 }
 
 @Composable private fun IntimacySection(intimacy: Int) {
-    val level = when { intimacy >= 80 -> "亲密"; intimacy >= 60 -> "友好"; intimacy >= 40 -> "熟悉"; intimacy >= 20 -> "认识"; else -> "初识" }
+    val safeIntimacy = intimacy.coerceIn(0, 1000)
+    val level = when { safeIntimacy >= 800 -> "亲密"; safeIntimacy >= 600 -> "友好"; safeIntimacy >= 400 -> "熟悉"; safeIntimacy >= 200 -> "认识"; else -> "初识" }
     Column(modifier = Modifier.fillMaxWidth().background(Surface).padding(16.dp)) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("好感度 · $level", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary); Text("$intimacy / 1000", fontSize = 12.sp, color = Primary, fontWeight = FontWeight.SemiBold) }
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { Text("好感度 · $level", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary); Text("$safeIntimacy / 1000", fontSize = 12.sp, color = Primary, fontWeight = FontWeight.SemiBold) }
         Spacer(modifier = Modifier.height(8.dp))
-        LinearProgressIndicator(progress = { intimacy / 1000f }, modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)), color = Primary, trackColor = Gray100)
+        LinearProgressIndicator(progress = { (safeIntimacy / 1000f).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)), color = Primary, trackColor = Gray100)
     }
     HorizontalDivider(color = BG, thickness = 8.dp)
 }
@@ -229,8 +231,11 @@ private fun bfsLabel(parentName: String, childName: String, type: RelationshipTy
     Column(modifier = Modifier.fillMaxWidth().background(Surface).padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("关系网", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+            Spacer(Modifier.width(6.dp))
+            RelationHelpButton()
             Spacer(modifier = Modifier.weight(1f))
         }
+        Text("关系可以是单向的；亲密度越高，越容易通过关系听说到对方的公开事件。", fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp)
         Spacer(modifier = Modifier.height(8.dp))
         if (isLoading) { Text("加载中...", color = TextSecondary) }
         else if (graphNodes.isEmpty() && userRelation.isBlank()) { Text("暂无关系网", fontSize = 13.sp, color = TextTertiary) }
@@ -367,6 +372,33 @@ private fun bfsLabel(parentName: String, childName: String, type: RelationshipTy
         }
     }
     HorizontalDivider(color = BG, thickness = 8.dp)
+}
+
+@Composable private fun RelationHelpButton() {
+    var show by remember { mutableStateOf(false) }
+    Text(
+        "?",
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Bold,
+        color = Primary,
+        modifier = Modifier.clip(CircleShape).background(Primary.copy(alpha = 0.12f)).clickable { show = true }.padding(horizontal = 6.dp, vertical = 2.dp)
+    )
+    if (show) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { show = false },
+            title = { Text("关系网说明", color = TextPrimary, fontWeight = FontWeight.SemiBold) },
+            text = {
+                Text(
+                    "关系网展示与当前干员相关的关系。关系会影响群聊里的称呼和互动、日记素材，以及公开记忆能否通过关系传递。\n\n注意：关系可以是单向的。A 把 B 当朋友，不代表 B 也一定把 A 当朋友。\n\n只会传递公开记忆，私聊中的私密内容不会直接外传。",
+                    fontSize = 13.sp,
+                    color = TextSecondary,
+                    lineHeight = 20.sp
+                )
+            },
+            confirmButton = { TextButton(onClick = { show = false }) { Text("知道了", color = Primary) } },
+            containerColor = Card
+        )
+    }
 }
 
 @Composable private fun RelationLegend() {

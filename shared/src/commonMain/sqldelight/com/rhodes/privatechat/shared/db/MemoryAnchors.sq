@@ -21,6 +21,9 @@ SELECT * FROM memory_anchors WHERE operatorId = ? AND isPrivate = 0 AND expiresA
 getAllAnchors:
 SELECT * FROM memory_anchors WHERE operatorId = ? AND expiresAt > ? ORDER BY createdAt DESC;
 
+getDuplicateCandidates:
+SELECT * FROM memory_anchors WHERE operatorId = ? AND type = ? AND isPrivate = ? AND source = ? AND sourceName = ? AND expiresAt > ? ORDER BY createdAt DESC;
+
 getAnchorCount:
 SELECT COUNT(*) FROM memory_anchors;
 
@@ -33,6 +36,12 @@ DELETE FROM memory_anchors WHERE expiresAt < ?;
 
 deleteOldAnchors:
 DELETE FROM memory_anchors WHERE createdAt < ?;
+
+deleteAnchorsBySession:
+DELETE FROM memory_anchors WHERE sessionId = ?;
+
+deleteAnchorsByOperator:
+DELETE FROM memory_anchors WHERE operatorId = ?;
 
 enforceAnchorRetain:
 DELETE FROM memory_anchors WHERE operatorId = ? AND id NOT IN (

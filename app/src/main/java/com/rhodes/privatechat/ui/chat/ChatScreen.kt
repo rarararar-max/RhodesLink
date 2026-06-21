@@ -76,7 +76,6 @@ fun ChatScreen(
     viewModel: MainViewModel, onBack: () -> Unit,
     operator: Operator,
     onEditOperator: () -> Unit = {}, onViewStatus: () -> Unit = {},
-    onExportChat: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val settings: SettingsRepository = koinInject()
@@ -114,7 +113,6 @@ fun ChatScreen(
         }
     }
     var showBgReset by rememberSaveable { mutableStateOf(false) }
-    var showExport by rememberSaveable { mutableStateOf(false) }
     var showClearConfirm by rememberSaveable { mutableStateOf(false) }
     val showModePicker = remember { mutableStateOf(false) }
     var showPropShop by rememberSaveable { mutableStateOf(false) }
@@ -195,18 +193,13 @@ fun ChatScreen(
         confirmButton = { TextButton(onClick = { viewModel.clearMessages(); showClearConfirm = false }) { Text("确认清除", color = ErrorRed) } },
         dismissButton = { TextButton(onClick = { showClearConfirm = false }) { Text("取消", color = TextSecondary) } }
     )
-    if (showExport) {
-        AlertDialog(onDismissRequest = { showExport = false }, title = {}, text = {
-            ChatExportDialog(operatorName = op.name, messages = rawMessages, userProfile = viewModel.userProfile.value, operatorAvatarUri = op.avatarUri, onDismiss = { showExport = false })
-        }, confirmButton = {})
-    }
     if (showPropShop) {
         PropShopDialog(viewModel = viewModel, context = context, scope = scope, onDismiss = { showPropShop = false })
     }
     cropTarget?.let { uri ->
         com.rhodes.privatechat.ui.common.ImageCropperDialog(
             imageUri = uri, aspectX = 9f, aspectY = 16f,
-            onConfirm = { cropped -> val s = com.rhodes.privatechat.util.copyToInternalStorage(context, cropped); bgUri = s; settings.putString("bg_${op.id}", s); cropTarget = null },
+            onConfirm = { cropped -> scope.launch { val s = com.rhodes.privatechat.util.copyToInternalStorageAsync(context, cropped); bgUri = s; settings.putString("bg_${op.id}", s); cropTarget = null } },
             onCancel = { cropTarget = null }
         )
     }
@@ -301,7 +294,10 @@ private fun PropShopDialog(
                                     val profile = viewModel.getUserProfile()
                                     val persona = op?.privatePrompt?.ifBlank { op?.description } ?: ""
                                     val recentChats = viewModel.messages.value.takeLast(6).joinToString("\n") { msg ->
-                                        "${if (msg.isMe) profile.nickname else msg.senderName}：${msg.content.take(80)}"
+                                        val content = if (msg.type == "ai_json") {
+                                            msg.content.replace(Regex("""[{}\[\]\"]"""), " ").take(120)
+                                        } else msg.content.take(120)
+                                        "${if (msg.isMe) profile.nickname else msg.senderName}：$content"
                                     }
                                     val innerPrompt = """
 【角色】
@@ -343,7 +339,10 @@ ${recentChats.ifBlank { "暂无" }}
                                         AiMessage("system", innerPrompt)
                                     ), "InnerThoughts")
                                     // 内心独白只在弹窗显示，不插入聊天记录
-                                } catch (_: Exception) { innerThoughts = "读取失败，请重试" }
+                                } catch (_: Exception) {
+                                    settings.addLmb(PROP_PRICE)
+                                    innerThoughts = "读取失败，本次费用已退回。"
+                                }
                                 loading = false
                             }
                         }.padding(vertical = 8.dp), horizontalArrangement = Arrangement.Center) {

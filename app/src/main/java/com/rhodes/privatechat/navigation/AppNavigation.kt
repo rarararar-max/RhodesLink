@@ -138,25 +138,29 @@ private fun ContactsTabContent(navigator: Navigator) {
 @Composable
 private fun FeaturesTabContent(navigator: Navigator) {
     val viewModel: MainViewModel = koinViewModel()
-    var momentBadge by remember { mutableIntStateOf(viewModel.getMomentBadge()) }
-    var commentBadge by remember { mutableIntStateOf(viewModel.getUnreadCommentCount()) }
+    var momentBadge by remember { mutableIntStateOf(0) }
+    var commentBadge by remember { mutableIntStateOf(0) }
+    var diaryBadge by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) {
         while (true) {
-            momentBadge = viewModel.getMomentBadge()
-            commentBadge = viewModel.getUnreadCommentCount()
+            momentBadge = viewModel.getMomentBadgeSuspend()
+            commentBadge = viewModel.getUnreadCommentCountSuspend()
+            diaryBadge = viewModel.getUnreadDiaryCount()
             delay(10_000)
         }
     }
     com.rhodes.privatechat.ui.features.FeaturesScreen(
         momentBadge = momentBadge,
         commentBadge = commentBadge,
+        diaryBadge = diaryBadge,
         onMoments = { viewModel.markMomentsSeen(); navigator.push(MomentsRoute) },
         onDiary = { navigator.push(DiaryRoute) },
+        onWorldLog = { navigator.push(WorldLogRoute) },
         onRanking = { navigator.push(RankingRoute) },
         onImpressions = { navigator.push(ImpressionsRoute) },
         onDispatch = { navigator.push(DispatchRoute) },
         onTokenStats = { navigator.push(TokenStatsRoute) },
-        onMahjong = { navigator.push(MahjongSelectRoute) }
+        onGameRoom = { navigator.push(GameRoomRoute) }
     )
 }
 

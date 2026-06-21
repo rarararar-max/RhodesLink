@@ -4,11 +4,12 @@ import com.rhodes.privatechat.shared.db.DatabaseWrapper
 import com.rhodes.privatechat.shared.db.RhodesDatabase
 import com.rhodes.privatechat.shared.memory.AnchorSourcePolicy
 import com.rhodes.privatechat.shared.model.*
+import com.rhodes.privatechat.shared.settings.SettingsRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 
-class AnchorRepository(private val wrapper: DatabaseWrapper) {
+class AnchorRepository(private val wrapper: DatabaseWrapper, private val settings: SettingsRepository? = null) {
 
     private val db: RhodesDatabase get() = wrapper.database
 
@@ -27,17 +28,16 @@ class AnchorRepository(private val wrapper: DatabaseWrapper) {
 
     private fun isDuplicate(anchor: MemoryAnchor): Boolean {
         val now = Clock.System.now().toEpochMilliseconds()
-        val existing = db.memoryAnchorsQueries.getAllAnchors(anchor.operatorId, now) { id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom ->
+        val existing = db.memoryAnchorsQueries.getDuplicateCandidates(anchor.operatorId, anchor.type.name, if (anchor.isPrivate) 1L else 0L, anchor.source, anchor.sourceName, now) { id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom ->
             mapAnchor(id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom)
         }.executeAsList()
         val normalized = normalize(anchor.content)
-        return existing.any {
-            it.type == anchor.type && it.isPrivate == anchor.isPrivate && normalize(it.content) == normalized
-        }
+        return existing.any { normalize(it.content) == normalized }
     }
 
     private fun normalize(value: String): String = value
         .lowercase()
+        .replace(Regex("""\[[^\]]+]"""), "")
         .replace(" ", "")
         .replace("，", ",")
         .replace("。", "")
@@ -46,9 +46,15 @@ class AnchorRepository(private val wrapper: DatabaseWrapper) {
 
     suspend fun getPublicAnchors(operatorId: String): List<MemoryAnchor> = withContext(Dispatchers.Default) {
         val now = Clock.System.now().toEpochMilliseconds()
-        db.memoryAnchorsQueries.getPublicAnchors(operatorId, now) { id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom ->
-            mapAnchor(id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom)
-        }.executeAsList()
+        if (settings?.distinguishPrivateMemory == false) {
+            db.memoryAnchorsQueries.getAllAnchors(operatorId, now) { id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom ->
+                mapAnchor(id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom)
+            }.executeAsList()
+        } else {
+            db.memoryAnchorsQueries.getPublicAnchors(operatorId, now) { id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom ->
+                mapAnchor(id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom)
+            }.executeAsList()
+        }
     }
 
     suspend fun getAnchors(operatorId: String): List<MemoryAnchor> = withContext(Dispatchers.Default) {
@@ -92,6 +98,8 @@ class AnchorRepository(private val wrapper: DatabaseWrapper) {
 
     suspend fun getAnchorCount(): Int = withContext(Dispatchers.Default) { db.memoryAnchorsQueries.getAnchorCount().executeAsOne().toInt() }
     suspend fun deleteOldAnchors(cutoff: Long) = withContext(Dispatchers.Default) { db.memoryAnchorsQueries.deleteOldAnchors(cutoff) }
+    suspend fun deleteAnchorsBySession(sessionId: String) = withContext(Dispatchers.Default) { db.memoryAnchorsQueries.deleteAnchorsBySession(sessionId) }
+    suspend fun deleteAnchorsByOperator(operatorId: String) = withContext(Dispatchers.Default) { db.memoryAnchorsQueries.deleteAnchorsByOperator(operatorId) }
 
     suspend fun enforceAnchorRetain(operatorId: String, keepCount: Int = 200) = withContext(Dispatchers.Default) {
         db.memoryAnchorsQueries.enforceAnchorRetain(operatorId, operatorId, keepCount.toLong())

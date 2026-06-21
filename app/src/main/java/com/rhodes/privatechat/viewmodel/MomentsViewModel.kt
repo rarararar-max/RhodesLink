@@ -12,7 +12,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -62,23 +61,10 @@ class MomentsViewModel(
     fun getMomentBadge(): Int {
         val lastSeenMoment = settings.lastSeenMomentId
         val latest = appState.moments.value.firstOrNull()?.id ?: 0
-        val momentBadge = if (latest > lastSeenMoment) (appState.moments.value.count { it.id > lastSeenMoment && !it.isUserPost }) else 0
-        val commentBadge = getUnreadCommentCount()
-        return momentBadge + commentBadge
+        return if (latest > lastSeenMoment) (appState.moments.value.count { it.id > lastSeenMoment && !it.isUserPost }) else 0
     }
 
-    fun getUnreadCommentCount(): Int {
-        val profile = getUserProfile()
-        val cutoff = System.currentTimeMillis() - 30L * 86400000L
-        return try {
-            runBlocking(Dispatchers.IO) {
-                repository.getUnreadCommentCount(cutoff, profile.nickname)
-            }
-        } catch (e: Exception) {
-            if (DEBUG) Log.e("AI调试输出", "getUnreadCommentCount error: ${e.message}")
-            0
-        }
-    }
+    suspend fun getMomentBadgeSuspend(): Int = getMomentBadge() + getUnreadCommentCountSuspend()
 
     suspend fun getUnreadCommentCountSuspend(): Int {
         val profile = getUserProfile()
@@ -108,6 +94,10 @@ class MomentsViewModel(
 
     fun markCommentRead(commentId: Long) {
         scope.launch { repository.markCommentRead(commentId) }
+    }
+
+    fun markMomentCommentsRead(momentId: Long) {
+        scope.launch { repository.markMomentCommentsReadForUser(momentId, getUserProfile().nickname) }
     }
 
     fun markAllCommentsRead() {

@@ -157,7 +157,7 @@ class SharedUtils(
         for ((key, value) in withLegacyPromptPlaceholders(replacements)) {
             result = result.replace("{{${key}}}", value)
         }
-        return result
+        return result.replace(Regex("""\{\{[A-Z0-9_]+\}\}"""), "")
     }
 
     fun withLegacyPromptPlaceholders(replacements: Map<String, String>): Map<String, String> {
@@ -188,6 +188,42 @@ class SharedUtils(
         map.putIfAbsent("OPERATOR_USER_RELATION", map["USER_RELATION"] ?: "未知")
         map.putIfAbsent("MODE_RULES", "")
         map.putIfAbsent("OUTPUT_FORMAT", "请按当前模板要求的JSON格式输出。")
+        map.putIfAbsent("MIND_READ", "")
+        map.putIfAbsent("HYPNOSIS", "")
+        map.putIfAbsent("AI_ANALYSIS", "")
+        map.putIfAbsent("TRANSITION_NOTICE", "")
+        map.putIfAbsent("PROACTIVE_TRIGGER_TYPE", "none")
+        map.putIfAbsent("PROACTIVE_TRIGGER_CONTEXT", "无")
+        map.putIfAbsent("USER_CONTENT", "")
+        map.putIfAbsent("SOURCE_AWARE_RULES", "")
+        map.putIfAbsent("UNCONSUMED_EVENTS", "无")
+        map.putIfAbsent("RECENT_SOCIAL_EVENTS", "无")
+        map.putIfAbsent("EVENT_TRIGGERED_PRIVATE_CONTEXT", "无")
+        map.putIfAbsent("KNOWN_FROM_CONTEXT", "无")
+        map.putIfAbsent("GROUP_TRIGGER_EVENT", "群聊自然延续")
+        map.putIfAbsent("GROUP_RECENT_WORLD_EVENTS", "无")
+        map.putIfAbsent("GROUP_UNCONSUMED_EVENTS", "无")
+        map.putIfAbsent("GROUP_TOPIC_SEED", "无")
+        map.putIfAbsent("GROUP_MODE_FORMAT", "")
+        map.putIfAbsent("USER_OBSERVING", "")
+        map.putIfAbsent("AUTO_REASON", "manual")
+        map.putIfAbsent("AUTO_REASON_TEXT", "用户主动发言。")
+        map.putIfAbsent("MOMENT_EVENT_SEED", "无")
+        map.putIfAbsent("MOMENT_TRIGGER_REASON", "普通日常分享")
+        map.putIfAbsent("MOMENT_TRIGGER_TYPE", "manual")
+        map.putIfAbsent("RECENT_WORLD_EVENTS", "无")
+        map.putIfAbsent("RECENT_POSTS", "无")
+        map.putIfAbsent("RECENT_DAILY_SUMMARY", "无")
+        map.putIfAbsent("WORLD_TODAY_STATE", "无")
+        map.putIfAbsent("PRIVATE_DAILY_SUMMARY", "无")
+        map.putIfAbsent("PRIVATE_SUMMARY", "无")
+        map.putIfAbsent("GROUP_SUMMARIES", "无")
+        map.putIfAbsent("RECENT_MEMORIES", "无")
+        map.putIfAbsent("WORLD_DAY_EVENTS", "无")
+        map.putIfAbsent("DIARY_EVENT_DIGEST", "无")
+        map.putIfAbsent("SELF_STATUS_CHANGES", "无")
+        map.putIfAbsent("SOCIAL_INTERACTIONS", "无")
+        map.putIfAbsent("RELATION_EVENTS", "无")
         return map
     }
 

@@ -2,6 +2,8 @@ package com.rhodes.privatechat.settings
 
 import android.content.Context
 import android.content.SharedPreferences
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 /**
  * One-time migration from old Prefs SharedPreferences files to the unified rhodes_settings store.
@@ -10,10 +12,14 @@ import android.content.SharedPreferences
 object SettingsMigration {
     private const val TARGET_SP = "rhodes_settings"
     private const val MIGRATION_DONE_KEY = "prefs_migration_done_v1"
+    private const val MIGRATION_FIX_V2_KEY = "prefs_migration_fix_v2"
 
     fun migrateIfNeeded(context: Context) {
         val target = context.getSharedPreferences(TARGET_SP, Context.MODE_PRIVATE)
-        if (target.getBoolean(MIGRATION_DONE_KEY, false)) return
+        if (target.getBoolean(MIGRATION_DONE_KEY, false)) {
+            runFixV2IfNeeded(context, target)
+            return
+        }
 
         val editor = target.edit()
 
@@ -62,7 +68,7 @@ object SettingsMigration {
         if (userPrefs.contains("avatar_uri")) editor.putString("user_avatar_uri", userPrefs.getString("avatar_uri", ""))
 
         // 4. session_hidden -> rhodes_settings
-        migrateStringSetKeys(context, "session_hidden", editor, listOf("hidden_ids"))
+        migrateStringSetKeysAsJson(context, "session_hidden", editor, listOf("hidden_ids"))
 
         // 5. token_stats -> rhodes_settings
         migrateDynamicKeys(context, "token_stats", editor)
@@ -74,9 +80,8 @@ object SettingsMigration {
         migrateFile(context, "dispatch", editor, listOf(
             "lmb_refresh_date", "reward_date"
         ))
-        migrateIntKeys(context, "dispatch", editor, listOf(
-            "lmb", "lmb_daily_count"
-        ))
+        migrateIntKeys(context, "dispatch", editor, listOf("lmb"))
+        migrateIntKey(context, "dispatch", editor, "lmb_daily_count", "daily_lmb_count")
 
         // 8. op_lmb -> rhodes_settings
         migrateDynamicKeys(context, "op_lmb", editor)
@@ -87,7 +92,7 @@ object SettingsMigration {
         ))
 
         // 10. mahjong_history -> rhodes_settings
-        migrateFile(context, "mahjong_history", editor, listOf("games"))
+        migrateStringKey(context, "mahjong_history", editor, "games", "mahjong_history_json")
 
         // 11. prompt_templates -> rhodes_settings
         migrateDynamicKeys(context, "prompt_templates", editor)
@@ -115,6 +120,33 @@ object SettingsMigration {
         ))
         fixupCorruptedBooleans(context, editor, listOf("dual_model", "dispatch_fast_mode", "dark_mode"))
         editor.putBoolean(MIGRATION_DONE_KEY, true)
+        editor.putBoolean(MIGRATION_FIX_V2_KEY, true)
+        editor.apply()
+    }
+
+    private fun runFixV2IfNeeded(context: Context, target: SharedPreferences) {
+        if (target.getBoolean(MIGRATION_FIX_V2_KEY, false)) return
+        val editor = target.edit()
+
+        val hidden = target.all["hidden_ids"]
+        if (hidden is Set<*>) {
+            @Suppress("UNCHECKED_CAST")
+            editor.putString("hidden_ids", Json.encodeToString(hidden.filterIsInstance<String>().toSet()))
+        } else {
+            migrateStringSetKeysAsJson(context, "session_hidden", editor, listOf("hidden_ids"))
+        }
+
+        if (!target.contains("daily_lmb_count")) {
+            if (target.contains("lmb_daily_count")) editor.putInt("daily_lmb_count", target.getInt("lmb_daily_count", 0))
+            else migrateIntKey(context, "dispatch", editor, "lmb_daily_count", "daily_lmb_count")
+        }
+
+        if (!target.contains("mahjong_history_json")) {
+            if (target.contains("games")) target.getString("games", null)?.let { editor.putString("mahjong_history_json", it) }
+            else migrateStringKey(context, "mahjong_history", editor, "games", "mahjong_history_json")
+        }
+
+        editor.putBoolean(MIGRATION_FIX_V2_KEY, true)
         editor.apply()
     }
 
@@ -158,6 +190,16 @@ object SettingsMigration {
         }
     }
 
+    private fun migrateIntKey(context: Context, spName: String, editor: SharedPreferences.Editor, sourceKey: String, targetKey: String) {
+        val source = context.getSharedPreferences(spName, Context.MODE_PRIVATE)
+        if (source.contains(sourceKey)) editor.putInt(targetKey, source.getInt(sourceKey, 0))
+    }
+
+    private fun migrateStringKey(context: Context, spName: String, editor: SharedPreferences.Editor, sourceKey: String, targetKey: String) {
+        val source = context.getSharedPreferences(spName, Context.MODE_PRIVATE)
+        if (source.contains(sourceKey)) source.getString(sourceKey, null)?.let { editor.putString(targetKey, it) }
+    }
+
     private fun migrateBooleanKeys(context: Context, spName: String, editor: SharedPreferences.Editor, keys: List<String>) {
         val source = context.getSharedPreferences(spName, Context.MODE_PRIVATE)
         for (key in keys) {
@@ -182,6 +224,16 @@ object SettingsMigration {
             if (source.contains(key)) {
                 val set = source.getStringSet(key, null)
                 if (set != null) editor.putStringSet(key, set)
+            }
+        }
+    }
+
+    private fun migrateStringSetKeysAsJson(context: Context, spName: String, editor: SharedPreferences.Editor, keys: List<String>) {
+        val source = context.getSharedPreferences(spName, Context.MODE_PRIVATE)
+        for (key in keys) {
+            if (source.contains(key)) {
+                val set = source.getStringSet(key, null)
+                if (set != null) editor.putString(key, Json.encodeToString(set))
             }
         }
     }

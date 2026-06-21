@@ -20,7 +20,11 @@ import com.rhodes.privatechat.shared.model.MemoryAnchor
 import com.rhodes.privatechat.shared.model.Memory
 import com.rhodes.privatechat.shared.model.MemoryType
 import com.rhodes.privatechat.shared.model.ImpressionResponse
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonArray
@@ -48,6 +52,7 @@ import com.rhodes.privatechat.shared.model.AnalysisResult
 import com.rhodes.privatechat.shared.model.AiMessage
 import com.rhodes.privatechat.shared.model.OfflineModeResponse
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
@@ -64,10 +69,16 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
+import java.util.concurrent.ConcurrentHashMap
 
 private val json = Json { ignoreUnknownKeys = true }
 
 data class MomentGenerateStatus(val running: Boolean = false, val msg: String = "")
+@Serializable
+data class WorldLogEntry(val time: Long, val title: String, val detail: String = "", val type: String = "world")
+
+private enum class MomentTriggerType { MANUAL, AUTO, EVENT }
+private const val MAX_WORLD_CHAIN_DEPTH = 3
 
 class MainViewModel(
     application: Application,
@@ -107,11 +118,34 @@ class MainViewModel(
         onUnhideSession = { unhideSession(it) },
         onRefreshOperatorStatus = { refreshAllOperatorStatus(force = true) }
     )
-    private val sessionMessageCounter = mutableMapOf<String, Int>()
+    private val sessionMessageCounter = ConcurrentHashMap<String, Int>()
     val momentsViewModel = MomentsViewModel(repository, settings, appState, viewModelScope) { getUserProfile() }
     val dispatchViewModel = DispatchViewModel(repository, settings, sharedUtils, operatorStateUpdater, appState, viewModelScope, { refreshAllOperatorStatus(force = true) }) { getUserProfile() }
-    val groupChatViewModel = GroupChatViewModel(repository, settings, sharedUtils, appState, { chatViewModel.markSessionRead(it) }, { unhideSession(it) }, { getUserProfile() }, { t, m -> chatViewModel.getPromptTemplate(t, m) }, { s, msgs -> chatViewModel.generateShortTermSummary(s, msgs) }, sessionMessageCounter)
-    private val worldScheduler = WorldScheduler(repository, settings, appState, viewModelScope, { generateOneMoment() }, { refreshAutoGroupChats() }, { opId -> generateDiary(opId, auto = true) { } }, { event -> triggerProactivePrivateFromEvent(event) })
+    val groupChatViewModel = GroupChatViewModel(
+        repository,
+        settings,
+        sharedUtils,
+        appState,
+        { chatViewModel.markSessionRead(it) },
+        { unhideSession(it) },
+        { getUserProfile() },
+        { t, m -> chatViewModel.getPromptTemplate(t, m) },
+        sessionMessageCounter,
+        { reason -> tryConsumeAutoAiBudget(reason) },
+        { event, parent -> derivedWorldEvent(event, parent) }
+    )
+    private val worldScheduler = WorldScheduler(
+        repository,
+        settings,
+        appState,
+        viewModelScope,
+        { parent -> generateOneMomentForWorld(parent) },
+        { parent -> triggerEventGroupChats(parent) },
+        { opId -> generateDiarySync(opId, auto = true) },
+        { event -> triggerProactivePrivateFromEvent(event) },
+        { reason -> canUseWorldTrigger(reason) },
+        { reason -> consumeWorldTrigger(reason) }
+    )
 
     private val _momentGenerateStatus: MutableStateFlow<MomentGenerateStatus> get() = _globalMomentStatus
     val momentGenerateStatus: StateFlow<MomentGenerateStatus> = _momentGenerateStatus.asStateFlow()
@@ -162,7 +196,7 @@ class MainViewModel(
     private val updateMutex = Mutex()
     private var lastDbUpdate = 0L
     private var analysisGuidance = ""
-    private val lastProactiveMsgTime = mutableMapOf<String, Long>()
+    private val lastProactiveMsgTime = ConcurrentHashMap<String, Long>()
     private var modeTransitionNotice = ""
     private var currentAutoAiTickCount = 0
 
@@ -200,7 +234,12 @@ class MainViewModel(
     
     fun cleanupExpiredSessionCounters() {
         val activeIds = _sessions.value.map { it.id }.toSet()
-        sessionMessageCounter.keys.removeAll { it !in activeIds }
+        sessionMessageCounter.keys.removeIf { it !in activeIds }
+    }
+
+    override fun onCleared() {
+        groupChatViewModel.clear()
+        super.onCleared()
     }
 
     init {
@@ -236,7 +275,6 @@ class MainViewModel(
                 settings.putBoolean("initial_hidden_done", true)
             }
             cleanupExpired()
-            settings.dispatchFastMode = false
             autoGenerateTodayMoments()
         }
         startAutoStatusRefresh()
@@ -277,24 +315,95 @@ class MainViewModel(
 
     fun deleteMahjongSave() = mahjongViewModel.deleteMahjongSave()
 
+    fun generateMahjongTableTalk(
+        player: com.rhodes.privatechat.game.mahjong.PlayerState,
+        event: String,
+        tile: com.rhodes.privatechat.game.mahjong.Tile?,
+        roundLabel: String,
+        wallLeft: Int,
+        shanten: Int,
+        fallback: String,
+        participants: List<String> = emptyList(),
+        recentChat: List<String> = emptyList(),
+        callback: (String) -> Unit
+    ) = mahjongViewModel.generateMahjongTableTalk(player, event, tile, roundLabel, wallLeft, shanten, fallback, participants, recentChat, callback)
+
+    fun generateMahjongSettlementLine(
+        player: com.rhodes.privatechat.game.mahjong.PlayerState?,
+        name: String,
+        isWinner: Boolean,
+        isDraw: Boolean,
+        rank: Int,
+        netGain: Int,
+        summary: String,
+        fallback: String,
+        callback: (String) -> Unit
+    ) = mahjongViewModel.generateMahjongSettlementLine(player, name, isWinner, isDraw, rank, netGain, summary, fallback, callback)
+
     fun createMahjongAnchor(content: String) = mahjongViewModel.createMahjongAnchor(content)
 
     fun postMahjongMoment(content: String) = mahjongViewModel.postMahjongMoment(content)
+
+    fun settleMahjongGame(
+        participantNames: List<String>,
+        winnerName: String,
+        loserName: String,
+        winType: String,
+        summary: String,
+        userNetGain: Int,
+        assistantName: String
+    ) = mahjongViewModel.settleMahjongGame(participantNames, winnerName, loserName, winType, summary, userNetGain, assistantName)
+
+    fun generatePokerTalk(
+        speaker: String,
+        gameName: String,
+        event: String,
+        tableInfo: String,
+        recentTalk: List<String>,
+        fallback: String,
+        callback: (String) -> Unit
+    ) {
+        viewModelScope.launch {
+            val prompt = """
+你正在扮演$speaker，和博士以及其他干员在游戏室打$gameName。
+你就是牌桌上的本人，不是旁白。
+
+【当前事件】$event
+【桌面情况】$tableInfo
+【最近发言】
+${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
+
+只输出一句你说出口的话，不要姓名前缀，不要JSON，不要解释。
+要像牌桌上随口吐槽、得意、嘴硬或提醒。博士就在场，不要说博士不在。
+12到36个中文字符。
+""".trimIndent()
+            val text = try {
+                if (settings.apiKey.isBlank()) fallback else sharedUtils.chat(listOf(AiMessage("system", prompt)), "Poker", "poker").trim().lines().firstOrNull { it.isNotBlank() }?.trim(' ', '"', '“', '”', '：', ':')?.take(48).orEmpty().ifBlank { fallback }
+            } catch (_: Exception) { fallback }
+            callback(text)
+        }
+    }
 
     private fun startAutoStatusRefresh() {
         viewModelScope.launch {
             while (true) {
                 kotlinx.coroutines.delay(15 * 60 * 1000L) // 每15分钟
                 currentAutoAiTickCount = 0
-                if (settings.autoStatusRefresh) refreshAllOperatorStatus()
-                checkAndTriggerProactiveMessages()
-                worldScheduler.tick()
+                settings.putInt("world_trigger_tick_count", 0)
+                if (settings.autoAiEnabled) {
+                    if (settings.autoStatusRefresh) refreshAllOperatorStatus()
+                    autoGenerateTodayMoments()
+                    checkAndTriggerProactiveMessages()
+                    worldScheduler.tick()
+                }
             }
         }
     }
 
     /** 干员主动私聊：筛选候选 → 随机选 0-2 人 → 错峰发送 */
     private suspend fun checkAndTriggerProactiveMessages() {
+        if (!settings.autoAiEnabled) return
+        if (!settings.idleProactiveChatEnabled) return
         val now = System.currentTimeMillis()
         val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
         val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
@@ -331,23 +440,28 @@ class MainViewModel(
                     val lastUserMsgTime = repository.getLastUserMessageTime(session.id)
                     if (lastUserMsgTime != null && System.currentTimeMillis() - lastUserMsgTime < 5 * 60 * 1000) return@launch
                 }
+                if (!settings.autoAiEnabled || !settings.idleProactiveChatEnabled) return@launch
                 sendProactiveMessage(op)
             }
         }
     }
 
     private suspend fun triggerProactivePrivateFromEvent(event: WorldEvent): Boolean {
+        if (!settings.autoAiEnabled) return false
         if (!settings.worldProactiveChatEnabled) return false
-        if (!tryConsumeAutoAiBudget("proactive_private")) return false
         val op = _operators.value.find { it.id == event.actorId || it.name == event.actorName } ?: return false
         if (!settings.getOperatorMsgPermission(op.id)) return false
         val now = System.currentTimeMillis()
         val lastSent = lastProactiveMsgTime[op.id] ?: 0L
         if (now - lastSent < 30 * 60 * 1000L) return false
+        if (!tryConsumeAutoAiBudget("proactive_private")) return false
         return sendProactiveMessage(op, event.content)
     }
 
     private suspend fun sendProactiveMessage(op: Operator, eventContext: String = ""): Boolean {
+        if (!settings.autoAiEnabled) return false
+        if (eventContext.isBlank() && !settings.idleProactiveChatEnabled) return false
+        if (eventContext.isNotBlank() && !settings.worldProactiveChatEnabled) return false
         if (getApiKey().isBlank()) return false
         val profile = getUserProfile()
         val now = beijingSdf("yyyy-MM-dd HH:mm").format(java.util.Date())
@@ -370,6 +484,8 @@ class MainViewModel(
             "USER_GENDER" to profile.gender.ifBlank { "未知" },
             "USER_BIO" to profile.bio.ifBlank { "无" },
             "USER_CONTENT" to "(用户没有说话)",
+            "PROACTIVE_TRIGGER_TYPE" to (if (eventContext.isBlank()) "idle" else "event"),
+            "PROACTIVE_TRIGGER_CONTEXT" to eventContext,
             "AI_ANALYSIS" to analysisBlock,
             "HYPNOSIS" to "",
             "MIND_READ" to "",
@@ -414,9 +530,8 @@ class MainViewModel(
         )
         val prompt = applyTemplate(getPromptTemplate("private", "online"), replacements)
         try {
-            val sb = StringBuilder()
-            withTimeout(60_000) { sb.append(chat(listOf(AiMessage("system", prompt)))) }
-            val raw = sharedUtils.aiService.cleanJson(sb.toString().trim())
+            val parsed = withTimeout(60_000) { sharedUtils.chatWithRetry(listOf(AiMessage("system", prompt)), "ProactivePrivate") }
+            val raw = json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed)
             if (raw.isNotBlank()) {
                 val msgId = repository.getNextMessageId()
                 repository.sendMessage(session.id, ChatMessage(
@@ -432,17 +547,19 @@ class MainViewModel(
                 ))
                 unhideSession(session.id)
                 lastProactiveMsgTime[op.id] = System.currentTimeMillis()
-                val parsed = sharedUtils.aiService.parseOfflineResponse(raw)
                 if (parsed.emotion.isNotBlank() || parsed.location.isNotBlank() || parsed.state.isNotBlank()) {
                     updateOperatorStatus(op.id, parsed.location, parsed.state, parsed.emotion)
                 }
                 return true
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) { }
         return false
     }
 
     private suspend fun refreshAllOperatorStatus(force: Boolean = false) {
+        if (!force && !settings.autoAiEnabled) return
         if (!force && !settings.autoStatusRefresh) return
         val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
         val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
@@ -458,55 +575,21 @@ class MainViewModel(
             return
         }
 
-        // 6时段权重
-        val periodWeights: Map<String, Int> = when {
-            hour in 5..7 -> mapOf("训练场" to 40, "宿舍" to 30, "食堂" to 15, "舰桥" to 5, "机库" to 5, "医疗部" to 5)
-            hour in 8..11 -> mapOf("训练场" to 40, "舰桥" to 20, "机库" to 15, "医疗部" to 10, "食堂" to 10, "宿舍" to 5)
-            hour in 12..13 -> mapOf("食堂" to 40, "宿舍" to 20, "活动室" to 10, "医疗部" to 10, "舰桥" to 10, "训练场" to 10)
-            hour in 14..17 -> mapOf("训练场" to 35, "舰桥" to 20, "机库" to 15, "医疗部" to 15, "食堂" to 10, "宿舍" to 5)
-            else -> mapOf("活动室" to 30, "食堂" to 25, "宿舍" to 15, "舰桥" to 10, "训练场" to 10, "医疗部" to 10)
-        }
-
-        // 活动池
-        val activities = mapOf(
-            "宿舍" to listOf("整理装备", "写日记", "发呆", "做俯卧撑", "听广播", "保养武器", "午睡"),
-            "训练场" to listOf("负重跑", "格斗练习", "靶场射击", "战术推演", "指导新人", "体能测试", "模拟对战"),
-            "医疗部" to listOf("例行体检", "配药", "照顾病患", "研究病例", "打扫诊室", "整理档案"),
-            "食堂" to listOf("吃饭", "帮厨", "清洗餐具", "研究新菜谱", "搬运食材", "泡咖啡"),
-            "舰桥" to listOf("监测航线", "值班瞭望", "写报告", "调试通讯", "护送访客", "开会"),
-            "机库" to listOf("检修车辆", "改装装备", "清点物资", "搬运货物", "焊接练习", "保养无人机"),
-            "活动室" to listOf("下棋", "打牌", "弹吉他", "看录像", "聊天", "做手工", "打台球")
-        )
-
-        // 情绪权重
-        val emotionWeights = listOf(
-            "平静" to 40, "疲惫" to 15, "专注" to 10, "愉快" to 10,
-            "有些低落" to 10, "小兴奋" to 5, "生气" to 5, "焦虑" to 5
-        )
+        val locations = settings.parseStatusPool(settings.statusLocationPool, settings.defaultStatusLocations)
+        val activities = settings.parseStatusPool(settings.statusActivityPool, settings.defaultStatusActivities)
+        val emotions = settings.parseStatusPool(settings.statusEmotionPool, settings.defaultStatusEmotions)
 
         var locCount = mutableMapOf<String, Int>()
 
         for (op in allOps) {
-            // 加权随机选位置
-            val totalW = periodWeights.values.sum()
-            var r = (Math.random() * totalW).toInt()
-            var loc = "宿舍"
-            for ((l, w) in periodWeights) { r -= w; if (r < 0) { loc = l; break } }
+            var loc = locations.random()
             val cnt = locCount.getOrDefault(loc, 0)
-            if (cnt >= 10) loc = "宿舍"
+            if (cnt >= 10) loc = locations.firstOrNull() ?: "宿舍"
             locCount[loc] = cnt + 1
 
-            val acts = activities[loc] ?: listOf("休息")
-            val activity = acts.random()
+            val activity = activities.random()
 
-            // 加权随机选情绪（30%概率刷新）
-            val emotion = if (Math.random() < 0.3) {
-                val etw = emotionWeights.sumOf { it.second }
-                var er = (Math.random() * etw).toInt()
-                var emo = "平静"
-                for ((e, w) in emotionWeights) { er -= w; if (er < 0) { emo = e; break } }
-                emo
-            } else op.emotion
+            val emotion = if (Math.random() < 0.3) emotions.random() else op.emotion
 
             repository.updateOperator(op.copy(location = loc, activity = activity, emotion = emotion))
         }
@@ -523,6 +606,8 @@ class MainViewModel(
     }
 
     private suspend fun autoGenerateTodayMoments() {
+        if (!settings.autoAiEnabled) return
+        if (!settings.dailyAutoMomentEnabled) return
         android.util.Log.d("MomentGen", "** [DBG] ** 自动生成开始")
         // 清理旧版残留的过量动态（保留 7 天内的）
         val allNow = repository.getAllMomentsSync()
@@ -604,9 +689,7 @@ class MainViewModel(
     fun setMode(mode: String) = chatViewModel.setMode(mode)
 
     fun buyProp(propName: String, context: android.content.Context): String? {
-        val balance = settings.lmb
-        if (balance < PROP_PRICE) return "余额不足"
-        settings.lmb = balance - PROP_PRICE
+        if (!settings.trySpendLmb(PROP_PRICE)) return "余额不足"
         return null
     }
 
@@ -938,6 +1021,10 @@ ${summaries}
     private fun intPref(key: String, default: Int): Int = settings.getInt(key, default)
 
     private fun tryConsumeAutoAiBudget(reason: String): Boolean {
+        if (!settings.autoAiEnabled) {
+            DebugLogger.log("World/Budget", "后台自动AI总开关已关闭: $reason")
+            return false
+        }
         val dailyLimit = settings.dailyAutoAiLimit
         if (dailyLimit <= 0) {
             DebugLogger.log("World/Budget", "自动AI已关闭: $reason")
@@ -958,6 +1045,57 @@ ${summaries}
         settings.putInt(key, usedToday + 1)
         currentAutoAiTickCount += 1
         return true
+    }
+
+    private fun canUseWorldTrigger(reason: String): Boolean {
+        if (!settings.autoAiEnabled || !settings.worldSchedulerEnabled) return false
+        val today = beijingSdf("yyyyMMdd").format(java.util.Date())
+        val dailyKey = "world_trigger_count_$today"
+        val usedToday = settings.getInt(dailyKey, 0)
+        val dailyLimit = settings.dailyWorldTriggerLimit
+        if (dailyLimit <= 0 || usedToday >= dailyLimit) {
+            DebugLogger.log("World/Budget", "达到每日世界触发上限: $usedToday/$dailyLimit reason=$reason")
+            return false
+        }
+        val tickKey = "world_trigger_tick_count"
+        val usedTick = settings.getInt(tickKey, 0)
+        val tickLimit = settings.tickWorldTriggerLimit
+        if (tickLimit > 0 && usedTick >= tickLimit) {
+            DebugLogger.log("World/Budget", "达到单轮世界触发上限: $usedTick/$tickLimit reason=$reason")
+            return false
+        }
+        return true
+    }
+
+    private fun consumeWorldTrigger(reason: String) {
+        if (!settings.autoAiEnabled || !settings.worldSchedulerEnabled) return
+        val today = beijingSdf("yyyyMMdd").format(java.util.Date())
+        val dailyKey = "world_trigger_count_$today"
+        val usedToday = settings.getInt(dailyKey, 0)
+        val tickKey = "world_trigger_tick_count"
+        val usedTick = settings.getInt(tickKey, 0)
+        settings.putInt(dailyKey, usedToday + 1)
+        settings.putInt(tickKey, usedTick + 1)
+        DebugLogger.log("World/Budget", "世界触发计数+1: reason=$reason daily=${usedToday + 1} tick=${usedTick + 1}")
+    }
+
+    private fun tryConsumeWorldTrigger(reason: String): Boolean {
+        if (!canUseWorldTrigger(reason)) return false
+        consumeWorldTrigger(reason)
+        return true
+    }
+
+    private fun canContinueWorldChain(parent: WorldEvent?): Boolean =
+        parent == null || parent.chainDepth < MAX_WORLD_CHAIN_DEPTH
+
+    private fun derivedWorldEvent(event: WorldEvent, parent: WorldEvent?): WorldEvent {
+        if (parent == null) return event.copy(originType = event.originType.ifBlank { event.type })
+        val root = if (parent.rootEventId > 0L) parent.rootEventId else parent.id
+        return event.copy(
+            originType = parent.originType.ifBlank { parent.type },
+            chainDepth = parent.chainDepth + 1,
+            rootEventId = root
+        )
     }
 
     private fun trackTokens(category: String, prompt: String, response: String) =
@@ -1055,6 +1193,10 @@ ${summaries}
     fun stopAutoGroupChat(groupId: String) = groupChatViewModel.stopAutoGroupChat(groupId)
     fun stopAllAutoGroupChats() = groupChatViewModel.stopAllAutoGroupChats()
     fun refreshAutoGroupChats() = groupChatViewModel.refreshAutoGroupChats()
+    fun triggerEventGroupChats(parentEvent: WorldEvent? = null): Boolean {
+        if (!canContinueWorldChain(parentEvent)) return false
+        return groupChatViewModel.triggerEventGroupChats(parentEvent)
+    }
 
     fun cancelDispatch(dispatchId: String) = dispatchViewModel.cancelDispatch(dispatchId)
 
@@ -1105,7 +1247,7 @@ ${summaries}
     fun loadHypnosis() = chatViewModel.loadHypnosis()
 
     fun sendGroupMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online", autoSpeak: Boolean = false, isAuto: Boolean = false, onMessageSent: () -> Unit = {}) =
-        groupChatViewModel.sendGroupMessage(groupSessionId, groupName, text, mode, autoSpeak, isAuto, onMessageSent)
+        groupChatViewModel.sendGroupMessage(groupSessionId, groupName, text, mode, autoSpeak = autoSpeak, isAuto = isAuto, onMessageSent = onMessageSent)
     suspend fun generateAllMoments(target: Int = 1, dateKey: String = "", force: Boolean = false, onProgress: (String) -> Unit = {}) {
         val isAuto = dateKey.isNotBlank()
         val today = dateKey.ifBlank { beijingSdf("yyyyMMdd").format(java.util.Date()) }
@@ -1123,7 +1265,7 @@ ${summaries}
                 val allowDyn = settings.getOperatorDynPermission(op.id)
                 if (!allowDyn && !force) continue
                 val startIdx = if (isAuto) {
-                    val d = settings.getMomentCount(op.id, today)
+                    val d = getTodayMomentCount(op.id, today)
                     if (d >= target) continue
                     d
                 } else 0
@@ -1160,23 +1302,27 @@ ${summaries}
                             System.currentTimeMillis()
                         }
                         val mmtTpl = getPromptTemplate("moment")
+                        val userMentionRoll = (Math.random() * 100).toInt()
+                        val mentionUser = userMentionRoll < settings.momentUserRelatedRate
                         val mmtReplacements = mapOf(
                             "OPERATOR_NAME" to op.name, "OPERATOR_PERSONA" to op.privatePrompt.ifBlank { op.description },
-                            "TIME_OF_DAY" to timeOfDay, "LONG_TERM_IMPRESSION" to impression,
-                            "RECENT_CHAT_SUMMARY" to chatSummary, "RECENT_MEMORIES" to memories,
+                            "TIME_OF_DAY" to timeOfDay, "LONG_TERM_IMPRESSION" to if (mentionUser) impression else "无",
+                            "RECENT_CHAT_SUMMARY" to if (mentionUser) chatSummary else "无",
+                            "RECENT_MEMORIES" to memories,
                             "SOURCE_AWARE_MEMORIES" to sourceAwareMemories,
                             "RECENT_WORLD_EVENTS" to worldEvents,
                             "UNCONSUMED_EVENTS" to unconsumedEvents,
                             "MOMENT_EVENT_SEED" to unconsumedEvents,
+                            "MOMENT_TRIGGER_TYPE" to (if (isAuto) "daily" else "manual"),
                             "WORLD_TODAY_STATE" to "${op.name}现在在${op.location}，正在${op.activity}，情绪${op.emotion}",
                             "MOMENT_TRIGGER_REASON" to worldEvents.lines().firstOrNull { it.isNotBlank() }?.removePrefix("- ").orEmpty().ifBlank { "普通日常分享" },
                             "KNOWN_FROM_CONTEXT" to sourceAwareMemories,
                             "SOURCE_AWARE_RULES" to sharedUtils.sourceAwareUsageRule(MemorySurface.MOMENT),
                             "RECENT_POSTS" to recentPosts,
-                            "RECENT_DAILY_SUMMARY" to (repository.getLatestPrivateDaily(op.id)?.content ?: "无"),
+                            "RECENT_DAILY_SUMMARY" to if (mentionUser) (repository.getLatestPrivateDaily(op.id)?.content ?: "无") else "无",
                             "CURRENT_DATE" to beijingSdf("yyyy年MM月dd日").format(fakeTs),
-                            "USER_NAME" to profile.nickname,
-                            "USER_GENDER" to profile.gender.ifBlank { "" },
+                            "USER_NAME" to if (mentionUser) profile.nickname else "博士",
+                            "USER_GENDER" to if (mentionUser) profile.gender.ifBlank { "" } else "",
                             "MOMENT_MIN_CHARS" to settings.momentMinChars.toString(),
                             "MOMENT_MAX_CHARS" to settings.momentMaxChars.toString()
                         )
@@ -1206,6 +1352,8 @@ ${summaries}
                                 momentResult = ""
                                 momentResult = withTimeout(15_000) { chat(listOf(AiMessage("system", prompt)), "Moment") }
                                 if (momentResult.isNotBlank()) return@repeat
+                            } catch (e: CancellationException) {
+                                throw e
                             } catch (_: Exception) { if (attempt < 2) delay((1000L * (attempt + 1))) }
                         }
                         trackTokens("moment", prompt, momentResult)
@@ -1214,6 +1362,7 @@ ${summaries}
                             if (isAuto) settings.putMomentCount(op.id, today, generated + 1)
                             val moment = Moment(operatorId = op.id, operatorName = op.name, content = content, createdAt = fakeTs)
                             val momentId = repository.insertMoment(moment)
+                            addWorldLog("${op.name}发布了一条动态", content.take(80), "moment")
                             repository.insertWorldEvent(WorldEvent(
                                 type = WorldEventType.MOMENT_POSTED,
                                 actorId = op.id,
@@ -1284,7 +1433,7 @@ ${summaries}
                                             }
                                         } catch (_: Exception) {}
                                     }
-                                    repository.updateCommentCount(momentId, actualComments)
+                                    refreshMomentCommentCount(momentId)
                                 } catch (_: Exception) {}
                             }
                         }
@@ -1304,21 +1453,39 @@ ${summaries}
     fun generateOneMoment(onProgress: (String, Boolean) -> Unit = { _, _ -> }) {
         viewModelScope.launch {
             try {
-                if (!tryConsumeAutoAiBudget("one_moment")) { onProgress("自动AI调用达到预算上限", true); return@launch }
-                val today = beijingSdf("yyyyMMdd").format(java.util.Date())
-                val eligible = _operators.value.filter { settings.getOperatorDynPermission(it.id) && settings.getMomentCount(it.id, today) < settings.dailyMomentTarget }
+                val eligible = _operators.value.filter { settings.getOperatorDynPermission(it.id) }
                 if (eligible.isEmpty()) { onProgress("", true); return@launch }
                 val op = eligible.random()
                 onProgress("发布中...", false)
-                val momentId = generateOneForOpSync(op)
+                val momentId = generateOneForOpSync(op, MomentTriggerType.MANUAL)
                 if (momentId != null) {
-                    generateLikesAndComments(momentId, op)
+                    generateLikesAndComments(momentId, op, consumeBudget = false)
                     refreshMomentsNow()
                 }
             } finally {
                 onProgress("", true)
             }
         }
+    }
+
+    private suspend fun generateOneMomentForWorld(parentEvent: WorldEvent?): Boolean {
+        if (!canContinueWorldChain(parentEvent)) return false
+        if (!settings.autoAiEnabled || !settings.autoMomentEnabled) return false
+        if (!tryConsumeAutoAiBudget("event_moment")) return false
+        val today = beijingSdf("yyyyMMdd").format(java.util.Date())
+        val eligible = _operators.value.filter { settings.getOperatorDynPermission(it.id) && getTodayMomentCount(it.id, today) < settings.dailyMomentTarget }
+        if (eligible.isEmpty()) return false
+        val op = eligible.random()
+        val momentId = generateOneForOpSync(op, MomentTriggerType.EVENT, parentEvent)
+        if (momentId != null) {
+            val childEvent = parentEvent?.let {
+                WorldEvent(id = 0, type = WorldEventType.MOMENT_POSTED, content = "", originType = it.originType.ifBlank { it.type }, chainDepth = it.chainDepth + 1, rootEventId = if (it.rootEventId > 0L) it.rootEventId else it.id)
+            }
+            generateLikesAndComments(momentId, op, consumeBudget = true, parentEvent = childEvent)
+            refreshMomentsNow()
+            return true
+        }
+        return false
     }
 
     private fun cleanAiOutput(raw: String): String {
@@ -1331,7 +1498,7 @@ ${summaries}
     }
 
     /** 为指定干员同步生成 1 条动态（不含点赞评论），返回 momentId */
-    private suspend fun generateOneForOpSync(op: Operator): Long? {
+    private suspend fun generateOneForOpSync(op: Operator, triggerType: MomentTriggerType = MomentTriggerType.MANUAL, parentEvent: WorldEvent? = null): Long? {
         return try {
             val profile = getUserProfile()
             val impression = repository.getLongTermImpression(op.id)?.content ?: "无"
@@ -1346,23 +1513,28 @@ ${summaries}
             val timeOfDay = getTimeOfDay(cal.get(java.util.Calendar.HOUR_OF_DAY))
             val fakeTs = System.currentTimeMillis()
             val mmtTpl = getPromptTemplate("moment")
+            val userMentionRoll = (Math.random() * 100).toInt()
+            val mentionUser = userMentionRoll < settings.momentUserRelatedRate
+            DebugLogger.log("Moment", "用户提及决策: rate=${settings.momentUserRelatedRate}, roll=$userMentionRoll, mention=$mentionUser")
             val mmtReplacements = mapOf(
                 "OPERATOR_NAME" to op.name, "OPERATOR_PERSONA" to op.privatePrompt.ifBlank { op.description },
-                "TIME_OF_DAY" to timeOfDay, "LONG_TERM_IMPRESSION" to impression,
-                "RECENT_CHAT_SUMMARY" to chatSummary, "RECENT_MEMORIES" to memories,
+                "TIME_OF_DAY" to timeOfDay, "LONG_TERM_IMPRESSION" to if (mentionUser) impression else "无",
+                "RECENT_CHAT_SUMMARY" to if (mentionUser) chatSummary else "无",
+                "RECENT_MEMORIES" to memories,
                 "SOURCE_AWARE_MEMORIES" to sourceAwareMemories,
                 "RECENT_WORLD_EVENTS" to worldEvents,
                 "UNCONSUMED_EVENTS" to unconsumedEvents,
                 "MOMENT_EVENT_SEED" to unconsumedEvents,
+                "MOMENT_TRIGGER_TYPE" to triggerType.name.lowercase(),
                 "WORLD_TODAY_STATE" to "${op.name}现在在${op.location}，正在${op.activity}，情绪${op.emotion}",
                 "MOMENT_TRIGGER_REASON" to worldEvents.lines().firstOrNull { it.isNotBlank() }?.removePrefix("- ").orEmpty().ifBlank { "普通日常分享" },
                 "KNOWN_FROM_CONTEXT" to sourceAwareMemories,
                 "SOURCE_AWARE_RULES" to sharedUtils.sourceAwareUsageRule(MemorySurface.MOMENT),
                 "RECENT_POSTS" to recentPosts,
-                "RECENT_DAILY_SUMMARY" to (repository.getLatestPrivateDaily(op.id)?.content ?: "无"),
+                "RECENT_DAILY_SUMMARY" to if (mentionUser) (repository.getLatestPrivateDaily(op.id)?.content ?: "无") else "无",
                 "CURRENT_DATE" to beijingSdf("yyyy年MM月dd日").format(fakeTs),
-                "USER_NAME" to profile.nickname,
-                "USER_GENDER" to profile.gender.ifBlank { "" },
+                "USER_NAME" to if (mentionUser) profile.nickname else "博士",
+                "USER_GENDER" to if (mentionUser) profile.gender.ifBlank { "" } else "",
                 "MOMENT_MIN_CHARS" to settings.momentMinChars.toString(),
                 "MOMENT_MAX_CHARS" to settings.momentMaxChars.toString()
             )
@@ -1391,6 +1563,8 @@ ${summaries}
                     momentResult = ""
                     momentResult = withTimeout(15_000) { chat(listOf(AiMessage("system", prompt)), "Moment") }
                     if (momentResult.isNotBlank()) return@repeat
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (_: Exception) { if (attempt < 2) delay((1000L * (attempt + 1))) }
             }
             trackTokens("moment", prompt, momentResult)
@@ -1398,7 +1572,12 @@ ${summaries}
             if (content.isNotBlank()) {
                 val moment = Moment(operatorId = op.id, operatorName = op.name, content = content, createdAt = fakeTs)
                 val momentId = repository.insertMoment(moment)
-                repository.insertWorldEvent(WorldEvent(
+                addWorldLog("${op.name}发布了一条动态", content.take(80), "moment")
+                if (triggerType != MomentTriggerType.MANUAL) {
+                    val today = beijingSdf("yyyyMMdd").format(java.util.Date(fakeTs))
+                    settings.putMomentCount(op.id, today, settings.getMomentCount(op.id, today) + 1)
+                }
+                repository.insertWorldEvent(derivedWorldEvent(WorldEvent(
                     type = WorldEventType.MOMENT_POSTED,
                     actorId = op.id,
                     actorName = op.name,
@@ -1407,7 +1586,7 @@ ${summaries}
                     content = "${op.name}发布动态：${content.take(120)}",
                     createdAt = fakeTs,
                     expiresAt = MemoryPolicy.memoryExpiresAt(settings)
-                ))
+                ), parentEvent))
                 repository.saveAnchor(AnchorSourcePolicy.buildAnchor(
                     source = AnchorSourcePolicy.MOMENT,
                     sourceName = "自己的动态",
@@ -1426,11 +1605,13 @@ ${summaries}
                 }
                 momentId
             } else null
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) { null }
     }
 
     /** 异步生成点赞和评论（不阻塞调用方） */
-    private fun generateLikesAndComments(momentId: Long, op: Operator) {
+    private fun generateLikesAndComments(momentId: Long, op: Operator, consumeBudget: Boolean = false, parentEvent: WorldEvent? = null) {
         appScope.launch {
             try {
                 val profile = getUserProfile()
@@ -1445,6 +1626,7 @@ ${summaries}
                 val cmtTpl = getPromptTemplate("moment_comment")
                 var actualComments = 0
                 commenters.forEach { commenter ->
+                    if (consumeBudget && !tryConsumeAutoAiBudget("moment_comment")) return@forEach
                     try {
                         val cmtReplacements = mapOf(
                             "COMMENTER_NAME" to commenter.name, "COMMENTER_PERSONA" to (commenter.groupPrompt.ifBlank { commenter.description }),
@@ -1456,7 +1638,7 @@ ${summaries}
                         trackTokens("moment", cp, cc)
                         if (cc.isNotBlank()) {
                             repository.insertComment(MomentComment(momentId = momentId, operatorId = commenter.id, operatorName = commenter.name, content = cc, createdAt = System.currentTimeMillis()))
-                            repository.insertWorldEvent(WorldEvent(
+                            repository.insertWorldEvent(derivedWorldEvent(WorldEvent(
                                 type = WorldEventType.COMMENT_POSTED,
                                 actorId = commenter.id,
                                 actorName = commenter.name,
@@ -1467,15 +1649,19 @@ ${summaries}
                                 content = "${commenter.name}评论${op.name}的动态：${cc.take(120)}",
                                 createdAt = System.currentTimeMillis(),
                                 expiresAt = MemoryPolicy.memoryExpiresAt(settings)
-                            ))
+                            ), parentEvent))
                             actualComments++
                         }
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         DebugLogger.log("Moment", "评论生成失败: ${e.message?.take(100)}")
                     }
                 }
-                repository.updateCommentCount(momentId, actualComments)
+                refreshMomentCommentCount(momentId)
                 DebugLogger.log("Moment", "生成评论完成: momentId=$momentId, count=$actualComments")
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 DebugLogger.log("Moment", "生成点赞评论异常: ${e.message?.take(100)}")
             }
@@ -1500,7 +1686,9 @@ ${summaries}
                     parentCommentId
             } else 0L
             repository.insertComment(MomentComment(momentId = momentId, operatorId = operatorId, operatorName = operatorName, content = cleanContent, parentCommentId = rootParentId, replyToName = replyToName, createdAt = System.currentTimeMillis(), isRead = operatorId == "user"))
-            repository.insertWorldEvent(WorldEvent(
+            addWorldLog("${operatorName}评论了一条动态", cleanContent.take(80), "comment")
+            refreshMomentCommentCount(momentId)
+            val commentEvent = WorldEvent(
                 type = WorldEventType.COMMENT_POSTED,
                 actorId = operatorId,
                 actorName = operatorName,
@@ -1511,7 +1699,9 @@ ${summaries}
                 content = "${operatorName}评论：${cleanContent.take(120)}",
                 createdAt = System.currentTimeMillis(),
                 expiresAt = MemoryPolicy.memoryExpiresAt(settings)
-            ))
+            )
+            val commentEventId = repository.insertWorldEvent(derivedWorldEvent(commentEvent, null))
+            val insertedCommentEvent = commentEvent.copy(id = commentEventId, originType = commentEvent.type, rootEventId = commentEventId)
             DebugLogger.log("Moment/DB", "评论已写入DB, momentId=$momentId")
             // 创建评论锚点（仅动态发布者 + 被回复者，不扩散到全干员）
             if (operatorId == "user") {
@@ -1532,14 +1722,14 @@ ${summaries}
                             type = AnchorType.EVENT,
                             content = "$targetName：${content.take(40)}",
                             importance = AnchorSourcePolicy.STRONG,
-                            sessionId = "anchor_${System.currentTimeMillis()}",
+                            sessionId = "moment_${momentId}",
                             createdAt = System.currentTimeMillis(),
                             expiresAt = MemoryPolicy.anchorExpiresAt(settings, AnchorType.EVENT)
                         ))
                     }
                 }
-                if (moment != null && (0..99).random() < settings.commentToPrivateTriggerRate) {
-                    repository.insertWorldEvent(WorldEvent(
+                if (moment != null && settings.autoAiEnabled && settings.worldSchedulerEnabled && settings.worldProactiveChatEnabled && (0..99).random() < settings.commentToPrivateTriggerRate) {
+                    repository.insertWorldEvent(derivedWorldEvent(WorldEvent(
                         type = WorldEventType.PRIVATE_TRIGGER,
                         actorId = moment.operatorId,
                         actorName = moment.operatorName,
@@ -1550,10 +1740,12 @@ ${summaries}
                         content = "${moment.operatorName}注意到${getUserProfile().nickname}在动态下评论：${cleanContent.take(80)}",
                         createdAt = System.currentTimeMillis(),
                         expiresAt = MemoryPolicy.memoryExpiresAt(settings)
-                    ))
+                    ), insertedCommentEvent))
                 }
-                if ((0..99).random() < settings.momentToGroupTriggerRate) {
-                    refreshAutoGroupChats()
+                if (settings.autoAiEnabled && settings.worldSchedulerEnabled && settings.worldAutoGroupEnabled && (0..99).random() < settings.momentToGroupTriggerRate) {
+                    if (canUseWorldTrigger("comment_event_group") && triggerEventGroupChats(insertedCommentEvent)) {
+                        consumeWorldTrigger("comment_event_group")
+                    }
                 }
             }
 
@@ -1580,6 +1772,7 @@ ${summaries}
 
             val bystanderCount = pickBystanderReplyCount()
             val bystanders = _operators.value
+                .filter { settings.getOperatorDynPermission(it.id) }
                 .map { it.name }
                 .filter { it !in alreadyReplied && it != "我" && it != userName }
                 .shuffled()
@@ -1600,10 +1793,29 @@ ${summaries}
         return (min..max).random()
     }
 
+    private suspend fun refreshMomentCommentCount(momentId: Long) {
+        val count = repository.getCommentCount(momentId)
+        repository.updateCommentCount(momentId, count)
+    }
+
+    private fun todayStartMillis(): Long {
+        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
+        cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+        cal.set(java.util.Calendar.MINUTE, 0)
+        cal.set(java.util.Calendar.SECOND, 0)
+        cal.set(java.util.Calendar.MILLISECOND, 0)
+        return cal.timeInMillis
+    }
+
+    private suspend fun getTodayMomentCount(operatorId: String, dateKey: String = beijingSdf("yyyyMMdd").format(java.util.Date())): Int {
+        return maxOf(settings.getMomentCount(operatorId, dateKey), repository.countMomentsByOperatorSince(operatorId, todayStartMillis()))
+    }
+
     private fun triggerSingleAiReply(momentId: Long, speakerName: String, userContent: String, parentCommentId: Long, userName: String, customPrompt: String? = null) {
         viewModelScope.launch {
             try {
                 val realOp = _operators.value.find { it.name == speakerName || it.id == speakerName }
+                if (realOp != null && !settings.getOperatorDynPermission(realOp.id)) return@launch
                 val recentComments = try {
                     withTimeout(500) { repository.getComments(momentId).first() }
                         .takeLast(settings.commentContextCount)
@@ -1642,6 +1854,7 @@ ${summaries}
                 if (reply.isNotBlank()) {
                     val realId = realOp?.id ?: speakerName
                     repository.insertComment(MomentComment(momentId = momentId, operatorId = realId, operatorName = speakerName, content = reply, parentCommentId = parentCommentId, replyToName = userName, createdAt = System.currentTimeMillis()))
+                    refreshMomentCommentCount(momentId)
                     repository.insertWorldEvent(WorldEvent(
                         type = WorldEventType.COMMENT_POSTED,
                         actorId = realId,
@@ -1668,6 +1881,7 @@ ${summaries}
             val userName = profile.nickname
             val moment = Moment(operatorId = "user", operatorName = userName, content = content, isUserPost = true, mentionedOperatorIds = mentionedOps.joinToString(","), createdAt = System.currentTimeMillis())
             val momentId = repository.insertMoment(moment)
+            addWorldLog("${userName}发布了一条动态", content.take(80), "moment")
             repository.insertWorldEvent(WorldEvent(
                 type = WorldEventType.MOMENT_POSTED,
                 actorId = "user",
@@ -1682,7 +1896,7 @@ ${summaries}
             refreshMomentsNow()
             // 创建动态锚点：被@的干员必定记住，再补随机围观干员。
             val mentionedIds = mentionedOps.mapNotNull { name -> _operators.value.find { it.name == name || it.id == name }?.id }
-            val randomObservers = _operators.value.filter { it.id != "user" && it.id !in mentionedIds }.shuffled().take(settings.groupUserEventCount).map { it.id }
+            val randomObservers = _operators.value.filter { it.id != "user" && it.id !in mentionedIds }.shuffled().take(settings.momentUserPostObserverCount).map { it.id }
             val anchorOps = mentionedIds + randomObservers
             for (opId in anchorOps.distinct()) {
                 val opName = _operators.value.find { it.id == opId }?.name ?: opId
@@ -1695,7 +1909,7 @@ ${summaries}
                     type = AnchorType.EVENT,
                     content = if (opId in mentionedIds) "在动态中提到了${opName}：${content.take(60)}" else "发布动态：${content.take(60)}",
                     importance = if (opId in mentionedIds) AnchorSourcePolicy.STRONG else AnchorSourcePolicy.WEAK,
-                    sessionId = "anchor_${System.currentTimeMillis()}",
+                    sessionId = "moment_${momentId}",
                     createdAt = System.currentTimeMillis(),
                     expiresAt = MemoryPolicy.anchorExpiresAt(settings, AnchorType.EVENT)
                 ))
@@ -1718,12 +1932,13 @@ ${summaries}
 
     // === Moments delegation ===
     fun getMomentBadge(): Int = momentsViewModel.getMomentBadge()
-    fun getUnreadCommentCount(): Int = momentsViewModel.getUnreadCommentCount()
+    suspend fun getMomentBadgeSuspend(): Int = momentsViewModel.getMomentBadgeSuspend()
     suspend fun getUnreadCommentCountSuspend(): Int = momentsViewModel.getUnreadCommentCountSuspend()
     fun markMomentsSeen() = momentsViewModel.markMomentsSeen()
     fun loadInboxComments(callback: (List<MomentComment>) -> Unit) = momentsViewModel.loadInboxComments(callback)
     fun markAllCommentsRead() = momentsViewModel.markAllCommentsRead()
     fun markCommentRead(commentId: Long) = momentsViewModel.markCommentRead(commentId)
+    fun markMomentCommentsRead(momentId: Long) = momentsViewModel.markMomentCommentsRead(momentId)
 
     // === Data delegation ===
     suspend fun getDataStats(): DataViewModel.DataStats = dataViewModel.getDataStats(_operators.value.size, _moments.value.size)
@@ -1743,15 +1958,15 @@ ${summaries}
                 var generated = 0
                 val candidates = _operators.value.filter {
                     settings.getOperatorDynPermission(it.id)
-                }.shuffled().take(5)
+                }.shuffled()
                 DebugLogger.log("Moment", "催发候选干员: ${candidates.size}人")
                 android.util.Log.d("MainVM", "** [DBG] ** forceGenerateMoments: candidates=${candidates.size} VM=${System.identityHashCode(this)}")
                 for (op in candidates) {
                     _momentGenerateStatus.value = MomentGenerateStatus(running = true, msg = "${op.name}发布中...")
-                    val momentId = generateOneForOpSync(op)
+                    val momentId = generateOneForOpSync(op, MomentTriggerType.MANUAL)
                     if (momentId != null) {
                         generated++
-                        generateLikesAndComments(momentId, op)
+                        generateLikesAndComments(momentId, op, consumeBudget = false)
                         refreshMomentsNow()
                     }
                 }
@@ -1777,8 +1992,52 @@ ${summaries}
     fun generateDiary(operatorId: String, auto: Boolean = false, onResult: (String) -> Unit) {
         DebugLogger.log("Diary", "偷看日记: operatorId=$operatorId")
         viewModelScope.launch {
-            if (auto && !tryConsumeAutoAiBudget("diary")) { onResult(""); return@launch }
-            val op = repository.getOperator(operatorId) ?: run { DebugLogger.log("Diary", "干员不存在: $operatorId"); onResult(""); return@launch }
+            val text = generateDiaryText(operatorId, auto)
+            if (!auto && text.isNotBlank()) settings.putDiaryReadAt(operatorId, System.currentTimeMillis())
+            onResult(text)
+        }
+    }
+
+    suspend fun getUnreadDiaryCount(): Int {
+        return repository.getAllOperatorsSync().count { op ->
+            val latest = repository.getAllDiaryEntries(op.id).maxOfOrNull { it.createdAt } ?: 0L
+            latest > settings.getDiaryReadAt(op.id)
+        }
+    }
+
+    suspend fun getUnreadDiaryOperatorIds(): Set<String> {
+        return repository.getAllOperatorsSync().mapNotNull { op ->
+            val latest = repository.getAllDiaryEntries(op.id).maxOfOrNull { it.createdAt } ?: 0L
+            if (latest > settings.getDiaryReadAt(op.id)) op.id else null
+        }.toSet()
+    }
+
+    fun markDiaryRead(operatorId: String, latestCreatedAt: Long = System.currentTimeMillis()) {
+        settings.putDiaryReadAt(operatorId, latestCreatedAt)
+    }
+
+    fun getWorldLogs(): List<WorldLogEntry> {
+        return try {
+            Json.decodeFromString<List<WorldLogEntry>>(settings.worldLogJson).sortedByDescending { it.time }
+        } catch (_: Exception) { emptyList() }
+    }
+
+    fun addWorldLog(title: String, detail: String = "", type: String = "world") {
+        val logs = getWorldLogs().toMutableList()
+        logs.add(0, WorldLogEntry(System.currentTimeMillis(), title, detail, type))
+        settings.worldLogJson = Json.encodeToString(logs.sortedByDescending { it.time }.take(200))
+    }
+
+    private suspend fun generateDiarySync(operatorId: String, auto: Boolean = false): Boolean {
+        return generateDiaryText(operatorId, auto).isNotBlank()
+    }
+
+    private suspend fun generateDiaryText(operatorId: String, auto: Boolean = false): String {
+        if (auto && !tryConsumeAutoAiBudget("diary")) return ""
+        val op = repository.getOperator(operatorId) ?: run {
+            DebugLogger.log("Diary", "干员不存在: $operatorId")
+            return ""
+        }
             val profile = getUserProfile()
             try {
                 DebugLogger.log("Diary", "开始生成日记: ${op.name}")
@@ -1855,7 +2114,9 @@ ${summaries}
                 val text = withTimeout(25_000) { sharedUtils.chat(listOf(AiMessage("system", prompt))) }.trim()
                 sharedUtils.trackTokens("diary", prompt, text)
                 if (text.isNotBlank()) {
-                    repository.insertDiary(Diary(operatorId = operatorId, operatorName = op.name, content = text, date = yesterdayStr, createdAt = System.currentTimeMillis()))
+                    val now = System.currentTimeMillis()
+                    repository.insertDiary(Diary(operatorId = operatorId, operatorName = op.name, content = text, date = yesterdayStr, createdAt = now))
+                    addWorldLog("${op.name}写下了昨日记事", "日记已生成，进入干员日记可查看。", "diary")
                     repository.insertWorldEvent(WorldEvent(
                         type = WorldEventType.DIARY_WRITTEN,
                         actorId = operatorId,
@@ -1863,7 +2124,7 @@ ${summaries}
                         source = "diary",
                         sourceId = yesterdayStr,
                         content = "${op.name}写下了${yesterdayStr}的日记：${text.take(120)}",
-                        createdAt = System.currentTimeMillis(),
+                        createdAt = now,
                         expiresAt = MemoryPolicy.memoryExpiresAt(settings)
                     ))
                     repository.saveAnchor(AnchorSourcePolicy.buildAnchor(
@@ -1873,7 +2134,7 @@ ${summaries}
                         sourceTarget = op.name,
                         operatorId = operatorId,
                         type = AnchorType.EVENT,
-                        content = "写下日记，整理了${profile.nickname}和昨天的事",
+                        content = "日记记录：${text.take(70)}",
                         importance = AnchorSourcePolicy.STRONG,
                         sessionId = "diary_${System.currentTimeMillis()}",
                         createdAt = System.currentTimeMillis(),
@@ -1883,13 +2144,14 @@ ${summaries}
                         sharedUtils.buildUnconsumedEventContextForOperator(operatorId, op.name, "diary:$operatorId", settings.eventContextCount, markConsumed = true)
                     }
                     DebugLogger.log("Diary", "日记生成成功: ${text.take(50)}")
-                    onResult(text)
-                } else { DebugLogger.log("Diary", "日记生成为空"); onResult("") }
+                    return text
+                } else { DebugLogger.log("Diary", "日记生成为空"); return "" }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 DebugLogger.log("Diary", "日记生成异常: ${e.message?.take(100)}")
-                onResult("")
+                return ""
             }
-        }
     }
 
     // === AI 人设生成 ===
@@ -1972,6 +2234,8 @@ $existingBlock
                     DebugLogger.log("GenPrompt", "人设为空，降级返回原文: ${text.take(100)}")
                     onResult(OperatorPromptResult(privatePrompt = text))
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 DebugLogger.log("GenPrompt/ERROR", "生成失败: ${e.message}")
                 onResult(OperatorPromptResult())

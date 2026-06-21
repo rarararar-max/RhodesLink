@@ -140,10 +140,10 @@ fun DispatchProgressScreen(
         Log.i(TAG, "[ProgressScreen] 初始段落数=${initialSegments.size}")
 
         // 定时检查 DB 中新增的段落 + 按时间解锁
-        var totalWaitMin = 0
+        val waitStartedAt = System.currentTimeMillis()
         while (true) {
             // 总超时（120 分钟）
-            if (totalWaitMin > 120) { done = true; errorMsg = "派遣超时"; break }
+            if (System.currentTimeMillis() - waitStartedAt > 120L * 60_000L) { done = true; errorMsg = "派遣超时"; break }
             // 从 DB 拉取最新数据
             val currentRec = viewModel.repository.getDispatch(dispatchId)
             if (currentRec == null) { delay(3000); continue }
@@ -181,7 +181,7 @@ fun DispatchProgressScreen(
                 Log.i(TAG, "[ProgressScreen] 所有段落已解锁，执行finishDispatch")
                 viewModel.finishDispatch(dispatchId)
             }
-            delay(3000); totalWaitMin++
+            delay(3000)
         }
     }
 
@@ -253,9 +253,16 @@ fun DispatchProgressScreen(
                 Text("完成", fontWeight = FontWeight.SemiBold)
             }
         } else {
-            Button(onClick = { showCancel = true }, modifier = Modifier.fillMaxWidth().padding(16.dp).height(44.dp), shape = RoundedCornerShape(10.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = ErrorRed)) {
-                Icon(Icons.Default.Cancel, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("中断派遣", fontWeight = FontWeight.SemiBold)
+            Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                Button(onClick = onBack, modifier = Modifier.fillMaxWidth().height(44.dp), shape = RoundedCornerShape(10.dp), colors = ButtonDefaults.buttonColors(containerColor = Primary)) {
+                    Text("返回，稍后查看", fontWeight = FontWeight.SemiBold)
+                }
+                Spacer(Modifier.height(8.dp))
+                Text("离开页面不会中断派遣，可在派遣页继续查看进度。", fontSize = 12.sp, color = TextSecondary)
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = { showCancel = true }, modifier = Modifier.fillMaxWidth().height(40.dp), shape = RoundedCornerShape(10.dp)) {
+                    Icon(Icons.Default.Cancel, null, tint = ErrorRed, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(6.dp)); Text("中断派遣", color = ErrorRed, fontWeight = FontWeight.SemiBold)
+                }
             }
         }
     }

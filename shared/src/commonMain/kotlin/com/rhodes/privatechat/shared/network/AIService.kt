@@ -24,6 +24,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import io.ktor.utils.io.readUTF8Line
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -76,9 +77,6 @@ class AIService(private val client: HttpClient = createHttpClient()) {
     fun cleanJson(raw: String): String {
         var s = raw.trim()
             .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
-            .replace("，", ",").replace("：", ":")
-            .replace("；", ";").replace("（", "(").replace("）", ")")
-            .replace("‘", "’").replace("’", "’")
             .replace("　", " ")
             .replace(Regex("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F]"), "")
         try {
@@ -212,8 +210,7 @@ class AIService(private val client: HttpClient = createHttpClient()) {
 
     /**
      * 带重试的非流式聊天请求 + JSON解析。
-     * 解析失败时重新发送请求，最多重试 [maxRetries] 次。
-     * 全部失败后将原始文本作为 dialogue 降级返回，并记录日志。
+     * API 请求失败才重试；拿到响应后只重试本地解析，避免因格式问题重复消耗请求。
      */
     suspend fun chatWithRetry(
         apiKey: String,
@@ -226,25 +223,39 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         logTag: String = "Chat"
     ): OfflineModeResponse {
         var lastRaw = ""
+        var requestError: Exception? = null
         for (attempt in 1..maxRetries) {
             try {
                 val result = chat(apiKey, messages, providerId, modelName, customUrl, temperature)
                 lastRaw = result.content
-                val cleaned = cleanJson(lastRaw)
-                val parsed = json.decodeFromString<OfflineModeResponse>(cleaned)
-                // 检查是否有实际内容（防止AI输出{}）
-                if (parsed.segments.isNullOrEmpty() && parsed.dialogue.isBlank()) {
-                    throw Exception("AI返回为空内容")
-                }
-                return parsed
+                break
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                println("WARN: [$logTag] JSON解析失败 (attempt $attempt/$maxRetries): ${e.message}")
+                requestError = e
+                println("WARN: [$logTag] API请求失败 (attempt $attempt/$maxRetries): ${e.message}")
                 if (attempt < maxRetries) {
                     kotlinx.coroutines.delay(500L * attempt)
                 }
             }
         }
-        println("ERROR: [$logTag] ${maxRetries}次重试均失败，降级为原始文本。原始内容: ${lastRaw.take(200)}")
+
+        if (lastRaw.isBlank()) throw requestError ?: Exception("AI请求失败")
+
+        repeat(maxRetries) { index ->
+            try {
+                val cleaned = cleanJson(lastRaw)
+                val parsed = json.decodeFromString<OfflineModeResponse>(cleaned)
+                if (parsed.segments.isNullOrEmpty() && parsed.dialogue.isBlank()) throw Exception("AI返回为空内容")
+                return parsed
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                println("WARN: [$logTag] JSON解析失败 (attempt ${index + 1}/$maxRetries): ${e.message}")
+            }
+        }
+
+        println("ERROR: [$logTag] 本地解析失败，降级为原始文本。原始内容: ${lastRaw.take(200)}")
         return OfflineModeResponse(dialogue = lastRaw)
     }
 

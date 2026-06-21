@@ -45,6 +45,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -63,6 +64,7 @@ import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.util.copyToCache
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.viewmodel.MainViewModel
+import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
 data class MemberState(val op: OperatorEntity, val muted: Boolean = false)
@@ -81,9 +83,17 @@ fun GroupEditScreen(
     var rules by remember { mutableStateOf("") }
     var showPicker by remember { mutableStateOf(false) }
     var showDismissConfirm by remember { mutableStateOf(false) }
+    var showUnsavedConfirm by remember { mutableStateOf(false) }
     val ctx = LocalContext.current
-    var autoSpeak by remember { mutableStateOf(settings.getGroupAuto(groupId)) }
+    val scope = rememberCoroutineScope()
+    var idleAutoChat by remember { mutableStateOf(settings.getGroupAuto(groupId)) }
+    var eventAutoChat by remember { mutableStateOf(settings.getGroupEventAuto(groupId)) }
     var avatarUri by remember { mutableStateOf("") }
+    var initialGroupName by remember { mutableStateOf("") }
+    var initialRules by remember { mutableStateOf("") }
+    var initialAvatarUri by remember { mutableStateOf("") }
+    var initialMemberIds by remember { mutableStateOf<List<String>>(emptyList()) }
+    var initialMutedIds by remember { mutableStateOf<List<String>>(emptyList()) }
     var cropTarget by remember { mutableStateOf<android.net.Uri?>(null) }
     val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         cropTarget = uri?.let { copyToCache(ctx, it) }
@@ -100,21 +110,41 @@ fun GroupEditScreen(
                 members.clear()
                 mems.forEach { m -> members.add(MemberState(m, muted = m.id in mutedIds || m.name in mutedIds)) }
                 rules = rls
+                initialGroupName = name
+                initialRules = rls
+                initialAvatarUri = avatarUri
+                initialMemberIds = mems.map { it.id }
+                initialMutedIds = members.filter { it.muted }.map { it.op.id }
             }
         }
     }
 
+    val hasUnsavedChanges = groupName != initialGroupName ||
+        rules != initialRules ||
+        avatarUri != initialAvatarUri ||
+        idleAutoChat != settings.getGroupAuto(groupId) ||
+        eventAutoChat != settings.getGroupEventAuto(groupId) ||
+        members.map { it.op.id } != initialMemberIds ||
+        members.filter { it.muted }.map { it.op.id } != initialMutedIds
+    val requestBack = { if (hasUnsavedChanges) showUnsavedConfirm = true else onBack() }
+
     Box(modifier = modifier.fillMaxSize()) {
     Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
         Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
+            IconButton(onClick = requestBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Spacer(modifier = Modifier.weight(1f))
             Text("群聊编辑", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
             Spacer(modifier = Modifier.weight(1f))
             TextButton(onClick = {
+                val trimmedName = groupName.trim()
+                if (trimmedName.isBlank()) {
+                    android.widget.Toast.makeText(ctx, "请输入群名称", android.widget.Toast.LENGTH_SHORT).show()
+                    return@TextButton
+                }
                 val resolvedId = if (groupId.isBlank()) "group_${java.util.UUID.randomUUID()}" else groupId
-                viewModel.saveGroup(resolvedId, groupName, members.map { it.op.id }, rules, avatarUri, members.filter { it.muted }.map { it.op.id }) {
-                    viewModel.setAutoGroupChatEnabled(resolvedId, autoSpeak)
+                viewModel.saveGroup(resolvedId, trimmedName, members.map { it.op.id }, rules, avatarUri, members.filter { it.muted }.map { it.op.id }) {
+                    viewModel.setAutoGroupChatEnabled(resolvedId, idleAutoChat)
+                    settings.putGroupEventAuto(resolvedId, eventAutoChat)
                     onBack()
                 }
             }) {
@@ -147,10 +177,22 @@ fun GroupEditScreen(
             }
 
             Spacer(modifier = Modifier.height(12.dp))
-            Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Card).padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("群聊自动聊天", fontSize = 14.sp, color = TextPrimary)
-                Switch(checked = autoSpeak, onCheckedChange = { autoSpeak = it }, colors = SwitchDefaults.colors(checkedThumbColor = Primary, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
+            Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Card).padding(16.dp)) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("空闲自动聊天", fontSize = 14.sp, color = TextPrimary)
+                        Text("开启后，群会按随机时间间隔一直自己聊。", fontSize = 11.sp, color = TextSecondary)
+                    }
+                    Switch(checked = idleAutoChat, onCheckedChange = { idleAutoChat = it }, colors = SwitchDefaults.colors(checkedThumbColor = Primary, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("大世界事件唤起", fontSize = 14.sp, color = TextPrimary)
+                        Text("开启后，有动态、评论等事件时才围绕话题聊几轮。", fontSize = 11.sp, color = TextSecondary)
+                    }
+                    Switch(checked = eventAutoChat, onCheckedChange = { eventAutoChat = it }, colors = SwitchDefaults.colors(checkedThumbColor = Primary, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
+                }
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -221,10 +263,20 @@ fun GroupEditScreen(
         )
     }
 
+    if (showUnsavedConfirm) {
+        AlertDialog(
+            onDismissRequest = { showUnsavedConfirm = false },
+            title = { Text("放弃修改？", color = TextPrimary) },
+            text = { Text("当前群聊编辑内容尚未保存，返回后会丢失。", color = TextSecondary) },
+            confirmButton = { TextButton(onClick = { showUnsavedConfirm = false; onBack() }) { Text("放弃", color = ErrorRed) } },
+            dismissButton = { TextButton(onClick = { showUnsavedConfirm = false }) { Text("继续编辑", color = TextSecondary) } }
+        )
+    }
+
     cropTarget?.let { uri ->
         com.rhodes.privatechat.ui.common.ImageCropperDialog(
             imageUri = uri, aspectX = 1f, aspectY = 1f,
-            onConfirm = { cropped -> avatarUri = com.rhodes.privatechat.util.copyToInternalStorage(ctx, cropped); cropTarget = null },
+            onConfirm = { cropped -> scope.launch { avatarUri = com.rhodes.privatechat.util.copyToInternalStorageAsync(ctx, cropped); cropTarget = null } },
             onCancel = { cropTarget = null }
         )
     }

@@ -15,7 +15,10 @@ data class WorldEvent(
     val content: String,
     val createdAt: Long = 0L,
     val expiresAt: Long = Long.MAX_VALUE,
-    val consumedBy: String = ""
+    val consumedBy: String = "",
+    val originType: String = "",
+    val chainDepth: Int = 0,
+    val rootEventId: Long = 0L
 )
 
 object WorldEventType {

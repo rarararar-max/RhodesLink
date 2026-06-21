@@ -1,0 +1,9 @@
+DELETE FROM diaries
+WHERE id NOT IN (
+    SELECT MAX(id)
+    FROM diaries
+    GROUP BY operatorId, date
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_diaries_operator_date
+ON diaries(operatorId, date);

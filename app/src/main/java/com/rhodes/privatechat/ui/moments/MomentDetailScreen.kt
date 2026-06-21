@@ -47,7 +47,7 @@ fun MomentDetailScreen(
     modifier: Modifier = Modifier
 ) {
     val moments by viewModel.moments.collectAsState()
-    val moment = remember(moments) { moments.find { it.id == momentId } }
+    val moment = remember(moments, momentId) { moments.find { it.id == momentId } }
     val likes by viewModel.getLikes(momentId).collectAsState(initial = emptyList())
     val comments by viewModel.getCommentsForMoment(momentId).collectAsState(initial = emptyList())
     var inputText by remember { mutableStateOf("") }
@@ -60,6 +60,10 @@ fun MomentDetailScreen(
         if (replyToCommentId > 0 && replyToName.isNotBlank()) {
             replyTarget = Triple(replyToCommentId, replyToName, "")
         }
+    }
+
+    LaunchedEffect(momentId, userName) {
+        viewModel.markMomentCommentsRead(momentId)
     }
 
     if (moment == null) {

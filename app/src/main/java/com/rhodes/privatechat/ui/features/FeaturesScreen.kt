@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -19,11 +20,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Assignment
 import androidx.compose.material.icons.filled.AutoFixHigh
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.filled.SendToMobile
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -51,13 +54,15 @@ data class FeatureEntry(
 fun FeaturesScreen(
     momentBadge: Int = 0,
     commentBadge: Int = 0,
+    diaryBadge: Int = 0,
     onMoments: () -> Unit = {},
     onDiary: () -> Unit = {},
+    onWorldLog: () -> Unit = {},
     onRanking: () -> Unit = {},
     onImpressions: () -> Unit = {},
     onDispatch: () -> Unit = {},
     onTokenStats: () -> Unit = {},
-    onMahjong: () -> Unit = {},
+    onGameRoom: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier.fillMaxSize()) {
@@ -70,21 +75,22 @@ fun FeaturesScreen(
         }
         HorizontalDivider(color = Divider)
 
-        Column(modifier = Modifier.verticalScroll(rememberScrollState()).padding(vertical = 8.dp)) {
+        Column(modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(top = 8.dp, bottom = 24.dp).navigationBarsPadding()) {
             FeatureButton(FeatureEntry(Icons.Default.Share, "动态广场", "查看所有干员发布的动态", badge = momentBadge, iconColor = Primary), commentBadge = commentBadge, onClick = onMoments)
-            FeatureButton(FeatureEntry(Icons.AutoMirrored.Filled.MenuBook, "干员日记", "查看干员们的内心独白", iconColor = Primary), onClick = onDiary)
+            FeatureButton(FeatureEntry(Icons.AutoMirrored.Filled.MenuBook, "干员日记", "查看干员们的内心独白", badge = diaryBadge, iconColor = Primary), diaryBadge = diaryBadge, onClick = onDiary)
+            FeatureButton(FeatureEntry(Icons.Default.Public, "世界运行日志", "查看今天自动发生了什么", iconColor = Primary), onClick = onWorldLog)
             FeatureButton(FeatureEntry(Icons.Default.EmojiEvents, "聊天排行榜", "昨日聊天数据排名", iconColor = Primary), onClick = onRanking)
             FeatureButton(FeatureEntry(Icons.AutoMirrored.Filled.Assignment, "大家的印象", "干员对你的长期印象总结", iconColor = Primary), onClick = onImpressions)
             FeatureButton(FeatureEntry(Icons.AutoMirrored.Filled.SendToMobile, "干员派遣", "组建小队执行任务", iconColor = Primary), onClick = onDispatch)
             FeatureButton(FeatureEntry(Icons.Default.BarChart, "消费统计", "Token消耗分析", iconColor = Primary), onClick = onTokenStats)
-
+            FeatureButton(FeatureEntry(Icons.Default.Casino, "游戏室", "麻将、斗地主、跑得快", iconColor = Color(0xFFFF8F00)), onClick = onGameRoom)
         }
     }
     }
 }
 
 @Composable
-private fun FeatureButton(feature: FeatureEntry, commentBadge: Int = 0, onClick: () -> Unit) {
+private fun FeatureButton(feature: FeatureEntry, commentBadge: Int = 0, diaryBadge: Int = 0, onClick: () -> Unit) {
     Column(
         modifier = Modifier.fillMaxWidth().background(Surface).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 14.dp)
     ) {
@@ -112,9 +118,10 @@ private fun FeatureButton(feature: FeatureEntry, commentBadge: Int = 0, onClick:
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(feature.title, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
-                    if (feature.badge > 0 || commentBadge > 0) {
+                    if (feature.badge > 0 || commentBadge > 0 || diaryBadge > 0) {
                         Spacer(modifier = Modifier.width(8.dp))
                         val badgeText = when {
+                            diaryBadge > 0 -> "${diaryBadge}篇新日记"
                             feature.badge > 0 && commentBadge > 0 -> "${feature.badge}条未读动态  ${commentBadge}条新回复"
                             feature.badge > 0 -> "${feature.badge}条未读动态"
                             else -> "${commentBadge}条新回复"

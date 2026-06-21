@@ -40,12 +40,14 @@ import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import org.koin.compose.koinInject
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () -> Unit, onEditGroup: (String) -> Unit, groupId: String = "", modifier: Modifier = Modifier, onOperatorClick: (String) -> Unit = {}) {
     val settings: SettingsRepository = koinInject()
     val listState = rememberLazyListState()
     val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
     var bgUri by remember { mutableStateOf<String?>(settings.getString("gbg_$groupId", "")) }
     var cropTarget by remember { mutableStateOf<Uri?>(null) }
     val bgPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> cropTarget = uri }
@@ -201,7 +203,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
     cropTarget?.let { uri ->
         com.rhodes.privatechat.ui.common.ImageCropperDialog(
             imageUri = uri, aspectX = 9f, aspectY = 16f,
-            onConfirm = { cropped -> val s = com.rhodes.privatechat.util.copyToInternalStorage(ctx, cropped); bgUri = s; settings.putString("gbg_$groupId", s); cropTarget = null },
+            onConfirm = { cropped -> scope.launch { val s = com.rhodes.privatechat.util.copyToInternalStorageAsync(ctx, cropped); bgUri = s; settings.putString("gbg_$groupId", s); cropTarget = null } },
             onCancel = { cropTarget = null }
         )
     }

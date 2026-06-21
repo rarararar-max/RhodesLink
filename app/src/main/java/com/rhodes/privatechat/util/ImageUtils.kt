@@ -5,6 +5,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.net.Uri
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 
@@ -23,6 +25,10 @@ fun copyToInternalStorage(context: Context, uri: Uri): String {
     } catch (_: Exception) {
         return uri.toString()
     }
+}
+
+suspend fun copyToInternalStorageAsync(context: Context, uri: Uri): String = withContext(Dispatchers.IO) {
+    copyToInternalStorage(context, uri)
 }
 
 fun copyToCache(context: Context, uri: Uri): Uri? {

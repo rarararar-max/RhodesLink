@@ -14,9 +14,12 @@ import cafe.adriel.voyager.navigator.currentOrThrow
 import com.rhodes.privatechat.game.mahjong.GameSerializer
 import com.rhodes.privatechat.game.mahjong.GameState
 import com.rhodes.privatechat.game.mahjong.GameStateCreateParams
+import com.rhodes.privatechat.game.mahjong.Engine
 import com.rhodes.privatechat.game.mahjong.MahjongHistoryEntry
+import com.rhodes.privatechat.game.mahjong.MatchMode
 import com.rhodes.privatechat.game.mahjong.SettlementResult
-import com.rhodes.privatechat.shared.model.Operator
+import com.rhodes.privatechat.ui.gameroom.PokerMode
+import com.rhodes.privatechat.ui.gameroom.PokerOpponent
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import kotlinx.serialization.json.Json
@@ -26,6 +29,60 @@ import org.koin.compose.koinInject
 import org.koin.compose.viewmodel.koinViewModel
 
 private val json = Json { ignoreUnknownKeys = true }
+
+// ──────────────────────────────────────────────
+// Game Room
+// ──────────────────────────────────────────────
+
+data object GameRoomRoute : Screen {
+    @Composable
+    override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        com.rhodes.privatechat.ui.gameroom.GameRoomScreen(
+            onBack = { navigator.pop() },
+            onMahjong = { navigator.push(MahjongSelectRoute) },
+            onLandlord = { navigator.push(PokerSelectRoute(PokerMode.LANDLORD)) },
+            onRunFast = { navigator.push(PokerSelectRoute(PokerMode.RUN_FAST)) }
+        )
+    }
+}
+
+data class PokerSelectRoute(val mode: PokerMode) : Screen {
+    @Composable
+    override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        val viewModel: MainViewModel = koinViewModel()
+        val operators by viewModel.operators.collectAsState()
+        com.rhodes.privatechat.ui.gameroom.PokerSelectScreen(
+            mode = mode,
+            operators = operators,
+            onBack = { navigator.pop() },
+            onStart = { opponents -> navigator.push(PokerGameRoute(mode, opponents)) }
+        )
+    }
+}
+
+data class PokerGameRoute(val mode: PokerMode, val opponents: List<PokerOpponent>) : Screen {
+    @Composable
+    override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        val settings: SettingsRepository = koinInject()
+        val viewModel: MainViewModel = koinViewModel()
+        val profile = viewModel.getUserProfile()
+        com.rhodes.privatechat.ui.gameroom.SimplePokerGameScreen(
+            mode = mode,
+            opponents = opponents,
+            userName = profile.nickname,
+            userAvatarUri = profile.avatarUri,
+            balance = settings.lmb,
+            onBack = { navigator.pop() },
+            onSettle = { gain -> settings.addLmb(gain) },
+            onGenerateTalk = { speaker, gameName, event, tableInfo, recentTalk, fallback, callback ->
+                viewModel.generatePokerTalk(speaker, gameName, event, tableInfo, recentTalk, fallback, callback)
+            }
+        )
+    }
+}
 
 // ──────────────────────────────────────────────
 // Chat
@@ -201,6 +258,14 @@ data object DiaryRoute : Screen {
     }
 }
 
+data object WorldLogRoute : Screen {
+    @Composable
+    override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        com.rhodes.privatechat.ui.world.WorldLogScreen(viewModel = koinViewModel(), onBack = { navigator.pop() })
+    }
+}
+
 data object RankingRoute : Screen {
     @Composable
     override fun Content() {
@@ -282,23 +347,44 @@ data object MahjongSelectRoute : Screen {
         val settings: SettingsRepository = koinInject()
         val userLmb = settings.lmb
         val operators by viewModel.operators.collectAsState()
+        var savedGame by remember { mutableStateOf<GameState?>(null) }
+        LaunchedEffect(Unit) {
+            viewModel.loadMahjongSave { save ->
+                if (save != null) {
+                    try { savedGame = GameSerializer.deserialize(save.saveJson) } catch (_: Exception) {}
+                }
+            }
+        }
         com.rhodes.privatechat.ui.mahjong.SelectScreen(
             operators = operators,
             userLmb = userLmb,
             userAvatarUri = viewModel.getUserProfile().avatarUri,
             userName = viewModel.getUserProfile().nickname,
             onBack = { navigator.pop() },
-            onStart = { game ->
-                settings.lmb = settings.lmb - 100
+            savedGame = savedGame,
+            onResume = { game ->
                 val replayData = GameStateCreateParams(
                     opIds = game.players.filter { !it.isHuman }.map { it.opId },
                     opNames = game.players.filter { !it.isHuman }.map { it.name },
                     styles = game.players.filter { !it.isHuman }.map { Triple(it.attack, it.defense, it.meldPref) },
                     userId = game.players.find { it.isHuman }!!.opId,
                     userName = game.players.find { it.isHuman }!!.name,
-                    assistantId = game.assistantOpId
+                    assistantId = game.assistantOpId,
+                    matchMode = game.matchMode
                 )
-                navigator.replaceAll(MahjongGameRoute(game, replayData))
+                navigator.replace(MahjongGameRoute(game, replayData))
+            },
+            onStart = { game ->
+                val replayData = GameStateCreateParams(
+                    opIds = game.players.filter { !it.isHuman }.map { it.opId },
+                    opNames = game.players.filter { !it.isHuman }.map { it.name },
+                    styles = game.players.filter { !it.isHuman }.map { Triple(it.attack, it.defense, it.meldPref) },
+                    userId = game.players.find { it.isHuman }!!.opId,
+                    userName = game.players.find { it.isHuman }!!.name,
+                    assistantId = game.assistantOpId,
+                    matchMode = game.matchMode
+                )
+                navigator.replace(MahjongGameRoute(game, replayData))
             }
         )
     }
@@ -313,23 +399,27 @@ data class MahjongGameRoute(
         val navigator = LocalNavigator.currentOrThrow
         val viewModel: MainViewModel = koinViewModel()
         val asstOp = viewModel.operators.value.find { it.id == gameState.assistantOpId }
+        val profile = viewModel.getUserProfile()
+        val avatarMap = viewModel.operators.value.associate { it.id to it.avatarUri } + ("user" to profile.avatarUri)
         com.rhodes.privatechat.ui.mahjong.GameScreen(
             game = gameState,
-            onBack = { navigator.popUntilRoot() },
+            onBack = { navigator.pop() },
             onSettlement = { result ->
-                val names = gameState.players.filter { !it.isHuman }.joinToString("、") { it.name }
-                navigator.replace(MahjongSettlementRoute(result, names, replayData, gameState))
+                navigator.replace(MahjongSettlementRoute(result, replayData, gameState))
             },
             assistantName = asstOp?.name ?: "",
             assistantAvatarUri = asstOp?.avatarUri ?: "",
-            onSave = { g -> viewModel.saveMahjongGame(GameSerializer.serialize(g), "japanese_riichi") }
+            avatarMap = avatarMap,
+            onSave = { g -> viewModel.saveMahjongGame(GameSerializer.serialize(g), g.matchMode.name) },
+            onGenerateTalk = { player, event, tile, roundLabel, wallLeft, shanten, fallback, participants, recentChat, callback ->
+                viewModel.generateMahjongTableTalk(player, event, tile, roundLabel, wallLeft, shanten, fallback, participants, recentChat, callback)
+            }
         )
     }
 }
 
 data class MahjongSettlementRoute(
     val result: SettlementResult,
-    val names: String,
     val replayData: GameStateCreateParams,
     val gameState: GameState
 ) : Screen {
@@ -338,24 +428,33 @@ data class MahjongSettlementRoute(
         val navigator = LocalNavigator.currentOrThrow
         val viewModel: MainViewModel = koinViewModel()
         val settings: SettingsRepository = koinInject()
+        val isFinalSettlement = result.matchMode == MatchMode.QUICK || result.currentRound >= result.maxRounds
+        val profile = viewModel.getUserProfile()
 
         LaunchedEffect(Unit) {
-            settings.lmb = settings.lmb + result.userNetGain
+            if (!isFinalSettlement) return@LaunchedEffect
+            // 1. 统一更新龙门币：用户
+            settings.addLmb(result.userNetGain)
+            // 2. 统一更新龙门币：对手（用 Operator.lmb 字段）
             result.rankings.forEach { r ->
-                val op = viewModel.operators.value.find { it.id == r.name || it.name == r.name }
+                val op = viewModel.operators.value.find { it.name == r.name }
                 if (op != null && op.id != "user") {
-                    val cur = settings.getInt(op.id, op.lmb)
-                    settings.putInt(op.id, cur + r.netGain)
+                    viewModel.repository.operators.updateOperator(op.copy(lmb = (op.lmb + r.netGain).coerceAtLeast(0)))
                 }
             }
-            val gainText = if (result.userNetGain >= 0) "净赢${result.userNetGain}" else "净输${-result.userNetGain}"
-            val highName = result.rankings.firstOrNull()?.name ?: ""
-            val winType = if (highName != "" && result.rankings.first().netGain > 0) {
-                if (kotlin.random.Random.nextBoolean()) "自摸" else "荣和"
-            } else ""
-            viewModel.createMahjongAnchor("在活动室打了一局麻将，${highName}${if(winType.isNotEmpty())"$winType"else"流局"}，${gainText}龙门币")
 
-            // 保存对局历史
+            // 3. 调用 ViewModel 统一处理锚点/世界事件/关系/动态
+            viewModel.settleMahjongGame(
+                participantNames = result.participants,
+                winnerName = result.winnerName,
+                loserName = result.loserName,
+                winType = result.winType,
+                summary = result.summary,
+                userNetGain = result.userNetGain,
+                assistantName = result.assistantName
+            )
+
+            // 4. 保存对局历史
             try {
                 val jsonStr = settings.mahjongHistoryJson.ifBlank { "[]" }
                 val list = json.decodeFromString<List<MahjongHistoryEntry>>(jsonStr).toMutableList()
@@ -366,23 +465,64 @@ data class MahjongSettlementRoute(
                     userRank = result.rankings.find { it.name == hu?.name }?.rank ?: 4,
                     userNetGain = result.userNetGain,
                     userPoints = result.rankings.find { it.name == hu?.name }?.finalPoints ?: 25000,
-                    winType = if (result.rankings.firstOrNull()?.name == hu?.name) { if (gameState.lastDiscard != null) "荣和" else "自摸" } else "",
-                    winnerName = result.rankings.firstOrNull()?.name ?: ""
+                    winType = result.winType,
+                    winnerName = result.winnerName
                 ))
                 settings.mahjongHistoryJson = json.encodeToString(list.take(100))
             } catch (_: Exception) {}
+
+            // 5. 清理存档
+            viewModel.deleteMahjongSave()
         }
+
+        val avatarMap = viewModel.operators.value.associate { it.id to it.avatarUri } + ("user" to profile.avatarUri)
 
         com.rhodes.privatechat.ui.mahjong.SettlementScreen(
             result = result,
-            onBack = { navigator.popUntilRoot() },
+            onBack = { navigator.pop() },
+            avatarMap = avatarMap,
+            players = gameState.players,
+            isFinalSettlement = isFinalSettlement,
+            onGenerateLine = { player, name, isWinner, isDraw, rank, netGain, summary, fallback, callback ->
+                viewModel.generateMahjongSettlementLine(player, name, isWinner, isDraw, rank, netGain, summary, fallback, callback)
+            },
             onPlayAgain = {
                 val newGame = GameState.create(
                     replayData.opIds, replayData.opNames, replayData.styles,
-                    replayData.userId, replayData.userName, replayData.assistantId
+                    replayData.userId, replayData.userName, replayData.assistantId,
+                    replayData.matchMode
                 )
                 navigator.replace(MahjongGameRoute(newGame, replayData))
-            }
+            },
+            onNextRound = if (result.matchMode != MatchMode.QUICK && result.currentRound < result.maxRounds) {
+                {
+                    val nextRound = result.currentRound + 1
+                    val dealer = gameState.players.getOrNull(gameState.dealerIdx)
+                    val dealerWon = result.winnerName.isNotBlank() && dealer?.name == result.winnerName
+                    val dealerTenpaiDraw = result.winnerName.isBlank() && dealer?.let { Engine.isTenpaiState(it.hand) } == true
+                    val nextDealerIdx = if (dealerWon || dealerTenpaiDraw) gameState.dealerIdx else (gameState.dealerIdx + 1) % gameState.players.size
+                    val cumulative = result.cumulativePoints
+                    val nextGame = GameState.create(
+                        replayData.opIds, replayData.opNames, replayData.styles,
+                        replayData.userId, replayData.userName, replayData.assistantId,
+                        replayData.matchMode
+                    )
+                    nextGame.round = nextRound
+                    nextGame.dealerIdx = nextDealerIdx
+                    nextGame.currentTurn = nextDealerIdx
+                    if (dealerWon || dealerTenpaiDraw || result.winnerName.isBlank()) {
+                        nextGame.honba = gameState.honba + 1
+                    } else {
+                        nextGame.honba = 0
+                    }
+                    nextGame.riichiSticks = 0
+                    nextGame.players.forEach { p ->
+                        val prev = cumulative[p.name]
+                        if (prev != null) p.points = prev
+                    }
+                    navigator.replace(MahjongGameRoute(nextGame, replayData))
+                }
+            } else null
         )
     }
 }

@@ -2,6 +2,7 @@ package com.rhodes.privatechat.shared.data
 
 import com.rhodes.privatechat.shared.db.DatabaseWrapper
 import com.rhodes.privatechat.shared.model.*
+import com.rhodes.privatechat.shared.settings.SettingsRepository
 import kotlinx.coroutines.flow.Flow
 
 data class BfsNode(
@@ -18,12 +19,12 @@ data class SenderCount(
     val cnt: Long
 )
 
-class ChatRepository(wrapper: DatabaseWrapper) {
+class ChatRepository(wrapper: DatabaseWrapper, settings: SettingsRepository? = null) {
     val operators = OperatorRepository(wrapper)
     val sessions = SessionRepository(wrapper)
     val messages = MessageRepository(wrapper)
     val memories = MemoryRepository(wrapper)
-    val anchors = AnchorRepository(wrapper)
+    val anchors = AnchorRepository(wrapper, settings)
     val relationships = RelationshipRepository(wrapper)
     val moments = MomentRepository(wrapper)
     val diaries = DiaryRepository(wrapper)
@@ -50,6 +51,7 @@ class ChatRepository(wrapper: DatabaseWrapper) {
     suspend fun deleteSession(id: String) = sessions.deleteSession(id)
     suspend fun updateSessionMode(sessionId: String, mode: String) = sessions.updateSessionMode(sessionId, mode)
     suspend fun markAllRead() = sessions.markAllRead()
+    suspend fun incrementUnread(sessionId: String, delta: Int = 1) = sessions.incrementUnread(sessionId, delta)
     suspend fun getSessionCount() = sessions.getSessionCount()
     suspend fun getGroupCount() = sessions.getGroupCount()
     suspend fun updateLastMessage(sessionId: String, lastMessage: String, lastTime: Long) = sessions.updateLastMessage(sessionId, lastMessage, lastTime)
@@ -60,7 +62,9 @@ class ChatRepository(wrapper: DatabaseWrapper) {
     suspend fun getPrivateChatContext(operatorId: String) = sessions.getPrivateChatContext(operatorId)
 
     fun getMessages(sessionId: String) = messages.getMessages(sessionId)
+    fun getRecentMessages(sessionId: String, limit: Long = 200) = messages.getRecentMessages(sessionId, limit)
     suspend fun getMessagesSync(sessionId: String) = messages.getMessagesSync(sessionId)
+    suspend fun getRecentMessagesSync(sessionId: String, limit: Long = 200) = messages.getRecentMessagesSync(sessionId, limit)
     suspend fun updateMessageContent(id: Long, content: String) = messages.updateMessageContent(id, content)
     suspend fun sendMessage(sessionId: String, message: ChatMessage) = messages.sendMessage(sessionId, message)
     suspend fun getNextMessageId() = messages.getNextMessageId()
@@ -81,6 +85,8 @@ class ChatRepository(wrapper: DatabaseWrapper) {
     suspend fun getLatestPrivateDaily(operatorId: String) = memories.getLatestPrivateDaily(operatorId)
     suspend fun enforceMemoryRetain(sessionId: String, keepCount: Int) = memories.enforceMemoryRetain(sessionId, keepCount)
     suspend fun deleteAllImpressions() = memories.deleteAllImpressions()
+    suspend fun deleteMemoriesBySession(sessionId: String) = memories.deleteMemoriesBySession(sessionId)
+    suspend fun deleteMemoriesByOperator(operatorId: String) = memories.deleteMemoriesByOperator(operatorId)
 
     suspend fun saveAnchor(anchor: MemoryAnchor) = anchors.saveAnchor(anchor)
     suspend fun saveAnchors(anchors: List<MemoryAnchor>) = this.anchors.saveAnchors(anchors)
@@ -88,6 +94,8 @@ class ChatRepository(wrapper: DatabaseWrapper) {
     suspend fun getAnchors(operatorId: String) = anchors.getAnchors(operatorId)
     suspend fun getAnchorCount() = anchors.getAnchorCount()
     suspend fun deleteOldAnchors(cutoff: Long) = anchors.deleteOldAnchors(cutoff)
+    suspend fun deleteAnchorsBySession(sessionId: String) = anchors.deleteAnchorsBySession(sessionId)
+    suspend fun deleteAnchorsByOperator(operatorId: String) = anchors.deleteAnchorsByOperator(operatorId)
     suspend fun enforceAnchorRetain(operatorId: String, keepCount: Int = 200) = anchors.enforceAnchorRetain(operatorId, keepCount)
 
     suspend fun migrateOldRelationships() = relationships.migrateOldRelationships()
@@ -110,16 +118,19 @@ class ChatRepository(wrapper: DatabaseWrapper) {
     suspend fun getMaxCommentId() = moments.getMaxCommentId()
     suspend fun getCommentById(commentId: Long) = moments.getCommentById(commentId)
     suspend fun markCommentRead(id: Long) = moments.markCommentRead(id)
+    suspend fun markMomentCommentsReadForUser(momentId: Long, userName: String) = moments.markMomentCommentsReadForUser(momentId, userName)
     suspend fun markAllCommentsRead(userName: String) = moments.markAllCommentsRead(userName)
     suspend fun deleteOldUserComments(cutoff: Long, userName: String) = moments.deleteOldUserComments(cutoff, userName)
     suspend fun updateLikeCount(momentId: Long, count: Int) = moments.updateLikeCount(momentId, count)
     suspend fun updateCommentCount(momentId: Long, count: Int) = moments.updateCommentCount(momentId, count)
+    suspend fun getCommentCount(momentId: Long) = moments.getCommentCount(momentId)
     suspend fun getLikeCount(momentId: Long) = moments.getLikeCount(momentId)
     suspend fun getLike(momentId: Long, operatorId: String) = moments.getLike(momentId, operatorId)
     suspend fun getMomentsPaged(limit: Int, offset: Int) = moments.getMomentsPaged(limit, offset)
     suspend fun getInboxComments(cutoff: Long, userName: String) = moments.getInboxComments(cutoff, userName)
     suspend fun getUnreadCommentCount(cutoff: Long, userName: String) = moments.getUnreadCommentCount(cutoff, userName)
     suspend fun getMomentsByOperator(operatorId: String) = moments.getMomentsByOperator(operatorId)
+    suspend fun countMomentsByOperatorSince(operatorId: String, since: Long) = moments.countMomentsByOperatorSince(operatorId, since)
     suspend fun deleteLike(momentId: Long, operatorId: String) = moments.deleteLike(momentId, operatorId)
     suspend fun getMoment(id: Long) = moments.getMoment(id)
     suspend fun deleteOldMoments(cutoff: Long) = moments.deleteOldMoments(cutoff)
@@ -146,7 +157,7 @@ class ChatRepository(wrapper: DatabaseWrapper) {
 
     suspend fun cleanupExpiredData() = cleanup.cleanupExpiredData()
 
-    suspend fun insertWorldEvent(event: WorldEvent) = worldEvents.insertWorldEvent(event)
+    suspend fun insertWorldEvent(event: WorldEvent): Long = worldEvents.insertWorldEvent(event)
     suspend fun getRecentWorldEvents(limit: Int = 20) = worldEvents.getRecentWorldEvents(limit)
     suspend fun getWorldEventsByType(type: String, limit: Int = 20) = worldEvents.getWorldEventsByType(type, limit)
     suspend fun getWorldEventsForOperator(operatorId: String, operatorName: String, limit: Int = 20) = worldEvents.getWorldEventsForOperator(operatorId, operatorName, limit)
@@ -154,6 +165,7 @@ class ChatRepository(wrapper: DatabaseWrapper) {
     suspend fun getUnconsumedWorldEventsForGroup(groupId: String, memberIds: List<String>, memberNames: List<String>, limit: Int = 10) = worldEvents.getUnconsumedWorldEventsForGroup(groupId, memberIds, memberNames, limit)
     suspend fun getUnconsumedWorldEventsByType(type: String, consumer: String, limit: Int = 10) = worldEvents.getUnconsumedWorldEventsByType(type, consumer, limit)
     suspend fun countWorldEventsByTypeSince(type: String, since: Long) = worldEvents.countWorldEventsByTypeSince(type, since)
+    suspend fun countChainedWorldEventsByTypeSince(type: String, since: Long) = worldEvents.countChainedWorldEventsByTypeSince(type, since)
     suspend fun markWorldEventConsumed(eventId: Long, consumer: String) = worldEvents.markWorldEventConsumed(eventId, consumer)
     suspend fun getWorldEventCount() = worldEvents.getWorldEventCount()
     suspend fun deleteExpiredWorldEvents(cutoff: Long) = worldEvents.deleteExpiredWorldEvents(cutoff)

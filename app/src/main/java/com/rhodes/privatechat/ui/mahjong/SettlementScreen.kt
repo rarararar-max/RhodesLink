@@ -3,12 +3,15 @@ package com.rhodes.privatechat.ui.mahjong
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -17,40 +20,86 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.rhodes.privatechat.game.mahjong.AiChat
+import com.rhodes.privatechat.game.mahjong.PlayerState
 import com.rhodes.privatechat.game.mahjong.SettlementResult
+import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.ui.theme.*
 
 @Composable
 fun SettlementScreen(
     result: SettlementResult,
     onBack: () -> Unit,
-    onPlayAgain: (() -> Unit)? = null
+    onPlayAgain: (() -> Unit)? = null,
+    onNextRound: (() -> Unit)? = null,
+    avatarMap: Map<String, String> = emptyMap(),
+    players: List<PlayerState> = emptyList(),
+    isFinalSettlement: Boolean = true,
+    onGenerateLine: ((PlayerState?, String, Boolean, Boolean, Int, Int, String, String, (String) -> Unit) -> Unit)? = null
 ) {
+    val settlementLines = remember(result) {
+        result.rankings.associate { r ->
+            val player = players.find { it.opId == r.opId || it.name == r.name }
+            val isWinner = result.winnerName == r.name || r.rank == 1
+            val line = if (player?.isHuman == true) "" else AiChat.settlementLine(player, r.name, isWinner, result.winType == "流局", r.rank, r.netGain).substringAfter("：")
+            (r.opId.ifBlank { r.name }) to line
+        }
+    }
     Box(Modifier.fillMaxSize()) {
-    Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
+    Column(modifier = Modifier.fillMaxSize().background(Color(0xFF1B3A2D)).systemBarsPadding()) {
         Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Text("牌局结算", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
         }
         HorizontalDivider(color = Divider)
 
-        Column(modifier = Modifier.weight(1f).padding(16.dp), verticalArrangement = Arrangement.Center) {
-            Text("牌局结束！", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = TextPrimary, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(bottom = 24.dp))
+        Column(modifier = Modifier.weight(1f).padding(16.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.Center) {
+            Text("活动室牌局结束", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Color.White, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            if (result.matchMode != com.rhodes.privatechat.game.mahjong.MatchMode.QUICK) {
+                Spacer(Modifier.height(4.dp))
+                Text("第${result.currentRound}/${result.maxRounds}局", fontSize = 13.sp, color = Color.White.copy(alpha = 0.6f), textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            }
+            Spacer(Modifier.height(8.dp))
+            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha = 0.08f)).padding(14.dp)) {
+                Text(result.summary.ifBlank { "本局已经结算。" }, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFFFFD54F), lineHeight = 20.sp)
+                Spacer(Modifier.height(6.dp))
+                val detail = buildString {
+                    append("结果：${result.winType}")
+                    if (result.winnerName.isNotBlank()) append(" · 赢家：${result.winnerName}")
+                    if (result.loserName.isNotBlank()) append(" · 放铳：${result.loserName}")
+                }
+                Text(detail, fontSize = 12.sp, color = Color.White.copy(alpha = 0.75f))
+            }
+            Spacer(Modifier.height(16.dp))
 
             result.rankings.forEach { r ->
                 val medal = when (r.rank) { 1 -> "🥇"; 2 -> "🥈"; 3 -> "🥉"; else -> "  " }
                 val gainColor = if (r.netGain >= 0) Primary else ErrorRed
                 val gainPrefix = if (r.netGain >= 0) "+" else ""
-                Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(if (r.rank == 1) Primary.copy(alpha = 0.08f) else Card).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                val player = players.find { it.opId == r.opId || it.name == r.name }
+                val shouldSpeak = player?.isHuman != true
+                val isWinner = result.winnerName == r.name || r.rank == 1
+                val line = settlementLines[r.opId.ifBlank { r.name }].orEmpty()
+                Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(if (r.rank == 1) Color(0xFFFFD54F).copy(alpha = 0.14f) else Color.White.copy(alpha = 0.08f)).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(medal, fontSize = 20.sp)
                     Spacer(Modifier.width(8.dp))
+                    val rAvatar = avatarMap[r.opId]
+                    if (rAvatar != null) {
+                        OperatorAvatarImage(avatarUri = rAvatar, name = r.name, modifier = Modifier.size(36.dp).clip(CircleShape))
+                    } else {
+                        Box(Modifier.size(36.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) {
+                            Text(r.name.take(1), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        }
+                    }
+                    Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(r.name, fontSize = 16.sp, fontWeight = if (r.rank <= 2) FontWeight.SemiBold else FontWeight.Normal, color = TextPrimary)
-                        if (r.yakus.isNotEmpty()) Text(r.yakus.joinToString("·") + " ${r.han}番", fontSize = 11.sp, color = Primary)
+                        Text(r.name, fontSize = 16.sp, fontWeight = if (r.rank <= 2) FontWeight.SemiBold else FontWeight.Normal, color = Color.White)
+                        if (r.yakus.isNotEmpty()) Text("牌型：" + r.yakus.joinToString("·"), fontSize = 11.sp, color = Color(0xFFFFD54F))
+                        if (shouldSpeak && line.isNotBlank()) Text(line, fontSize = 11.sp, color = Color.White.copy(alpha = 0.68f), lineHeight = 15.sp)
                     }
                     Column(horizontalAlignment = Alignment.End) {
-                        Text("${r.finalPoints}点", fontSize = 14.sp, color = TextSecondary)
-                        Text("${gainPrefix}${r.netGain}龙门币", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = gainColor)
+                        Text("筹码${r.finalPoints}", fontSize = 14.sp, color = Color.White.copy(alpha = 0.66f))
+                        Text("${gainPrefix}${r.netGain}${if (isFinalSettlement) "龙门币" else "暂计"}", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = gainColor)
                     }
                 }
                 Spacer(Modifier.height(8.dp))
@@ -58,29 +107,22 @@ fun SettlementScreen(
 
             Spacer(Modifier.height(16.dp))
 
-            // AI结算发言（简化为固定文本，后续接入AI）
-            val userResult = result.rankings.find { it.name == result.rankings.firstOrNull { r -> result.userNetGain != 0 }?.name }
-            if (result.userNetGain != 0) {
-                Text("你的净收益：${if (result.userNetGain > 0) "+" else ""}${result.userNetGain}龙门币",
-                    fontSize = 18.sp, fontWeight = FontWeight.Bold, color = if (result.userNetGain >= 0) Primary else ErrorRed,
-                    textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
-            }
-            if (result.chatLog.isNotEmpty()) {
-                Spacer(Modifier.height(12.dp))
-                Text("💬 聊天记录", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-                Spacer(Modifier.height(4.dp))
-                Box(Modifier.fillMaxWidth().height(120.dp).clip(RoundedCornerShape(8.dp)).background(Card).padding(8.dp).verticalScroll(rememberScrollState())) {
-                    result.chatLog.takeLast(30).forEach { line ->
-                        val isAssistant = line.contains("⭐") || line.startsWith("[助手]") || line.startsWith("[助理]")
-                        val cl = if (isAssistant) Color(0xFFFF8F00) else TextSecondary
-                        Text(line, fontSize = 10.sp, color = cl, modifier = Modifier.padding(vertical = 1.dp))
-                    }
-                }
-            }
+            val userGainLabel = if (isFinalSettlement) "你的净收益" else "当前累计暂计"
+            val userGainUnit = if (isFinalSettlement) "龙门币" else "，最终局后入账"
+            Text("${userGainLabel}：${if (result.userNetGain >= 0) "+" else ""}${result.userNetGain}${userGainUnit}",
+                fontSize = 18.sp, fontWeight = FontWeight.Bold, color = if (result.userNetGain >= 0) Primary else ErrorRed,
+                textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
         }
 
         Button(onClick = onBack, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), colors = ButtonDefaults.buttonColors(containerColor = Primary)) {
             Text("返回", fontWeight = FontWeight.SemiBold)
+        }
+        val hasNextRound = result.matchMode != com.rhodes.privatechat.game.mahjong.MatchMode.QUICK && result.currentRound < result.maxRounds
+        if (hasNextRound && onNextRound != null) {
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = onNextRound, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))) {
+                Text("下一局（第${result.currentRound + 1}/${result.maxRounds}局）", fontWeight = FontWeight.SemiBold)
+            }
         }
         if (onPlayAgain != null) {
             Spacer(Modifier.height(8.dp))

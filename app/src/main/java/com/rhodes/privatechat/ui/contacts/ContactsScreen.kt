@@ -60,7 +60,8 @@ fun ContactsScreen(viewModel: MainViewModel, onOperatorClick: (OperatorEntity) -
     val allSessions by viewModel.allSessions.collectAsState()
     val groups = allSessions.filter { it.operatorId.startsWith("group_") }
     var searchText by remember { mutableStateOf("") }
-    val filtered = if (searchText.isBlank()) operators else operators.filter { it.name.contains(searchText, ignoreCase = true) }
+    val filteredGroups = if (searchText.isBlank()) groups else groups.filter { it.operatorName.contains(searchText, ignoreCase = true) }
+    val filtered = if (searchText.isBlank()) operators else operators.filter { it.name.contains(searchText, ignoreCase = true) || it.title.contains(searchText, ignoreCase = true) }
 
     Box(modifier = modifier.fillMaxSize()) {
     Column(modifier = Modifier.fillMaxSize().background(BG).statusBarsPadding()) {
@@ -72,13 +73,13 @@ fun ContactsScreen(viewModel: MainViewModel, onOperatorClick: (OperatorEntity) -
         }
         SearchBar(text = searchText, onTextChange = { searchText = it })
         LazyColumn {
-            item { SectionHeader("群聊", groups.size) }
-            if (groups.isEmpty()) {
-                item { Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { Text("暂无群聊", fontSize = 13.sp, color = TextTertiary) } }
+            item { SectionHeader("群聊", filteredGroups.size) }
+            if (filteredGroups.isEmpty()) {
+                item { Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) { Text(if (searchText.isBlank()) "暂无群聊" else "没有匹配的群聊", fontSize = 13.sp, color = TextTertiary) } }
             } else {
-                items(groups, key = { it.id }) { g -> GroupItem(g) { onGroupClick(g.operatorName, g.id) } }
+                items(filteredGroups, key = { it.id }) { g -> GroupItem(g) { onGroupClick(g.operatorName, g.id) } }
             }
-            item { Spacer(modifier = Modifier.height(8.dp)); SectionHeader("干员", operators.size) }
+            item { Spacer(modifier = Modifier.height(8.dp)); SectionHeader("干员", filtered.size) }
             items(filtered, key = { it.id }) { op -> OperatorItem(op) { onOperatorClick(op) } }
             item { Spacer(modifier = Modifier.height(16.dp)) }
         }
@@ -88,7 +89,7 @@ fun ContactsScreen(viewModel: MainViewModel, onOperatorClick: (OperatorEntity) -
 
 @Composable private fun SearchBar(text: String, onTextChange: (String) -> Unit) {
     Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(value = text, onValueChange = onTextChange, modifier = Modifier.fillMaxWidth(), placeholder = { Text("搜索干员...", fontSize = 14.sp, color = TextTertiary) }, leadingIcon = { Icon(Icons.Default.Search, null, tint = TextTertiary, modifier = Modifier.size(18.dp)) }, trailingIcon = { if (text.isNotBlank()) IconButton(onClick = { onTextChange("") }, modifier = Modifier.size(18.dp)) { Icon(Icons.Default.Clear, "清除", tint = TextTertiary, modifier = Modifier.size(14.dp)) } }, shape = RoundedCornerShape(12.dp), singleLine = true, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Divider, unfocusedBorderColor = Divider), keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search), keyboardActions = KeyboardActions(onSearch = { }))
+        OutlinedTextField(value = text, onValueChange = onTextChange, modifier = Modifier.fillMaxWidth(), placeholder = { Text("搜索干员或群聊...", fontSize = 14.sp, color = TextTertiary) }, leadingIcon = { Icon(Icons.Default.Search, null, tint = TextTertiary, modifier = Modifier.size(18.dp)) }, trailingIcon = { if (text.isNotBlank()) IconButton(onClick = { onTextChange("") }, modifier = Modifier.size(18.dp)) { Icon(Icons.Default.Clear, "清除", tint = TextTertiary, modifier = Modifier.size(14.dp)) } }, shape = RoundedCornerShape(12.dp), singleLine = true, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Divider, unfocusedBorderColor = Divider), keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search), keyboardActions = KeyboardActions(onSearch = { }))
     }
     HorizontalDivider(color = Divider)
 }

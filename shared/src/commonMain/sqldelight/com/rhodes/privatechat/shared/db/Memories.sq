@@ -42,5 +42,11 @@ DELETE FROM memories WHERE expiresAt < ?;
 deleteMemory:
 DELETE FROM memories WHERE id = ?;
 
+deleteMemoriesBySession:
+DELETE FROM memories WHERE sessionId = ?;
+
+deleteMemoriesByOperator:
+DELETE FROM memories WHERE operatorId = ?;
+
 deleteAllLongTerm:
 DELETE FROM memories WHERE type = 'LONG_TERM';

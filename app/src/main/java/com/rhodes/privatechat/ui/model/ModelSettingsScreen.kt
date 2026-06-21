@@ -37,38 +37,75 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
 
     val providerIds = providers.keys.toList()
     val providerNames = providerIds.map { providers[it]!!.name }
+    val savedProvider = settings.provider.takeIf { it in providers } ?: "deepseek"
 
-    var selectedProvider by remember { mutableIntStateOf(providerIds.indexOf(settings.provider)) }
+    var selectedProvider by remember { mutableIntStateOf(providerIds.indexOf(savedProvider).coerceAtLeast(0)) }
     val currentProviderId = providerIds[selectedProvider]
     val currentConfig = providers[currentProviderId]!!
 
     val savedModel = settings.modelName
-    var selectedModelIdx by remember { mutableIntStateOf(currentConfig.models.indexOf(savedModel).coerceAtLeast(0)) }
+    var selectedModelIdx by remember {
+        val savedIndex = currentConfig.models.indexOf(savedModel)
+        mutableIntStateOf(if (savedIndex >= 0) savedIndex else currentConfig.models.size)
+    }
     var customModelName by remember { mutableStateOf(savedModel) }
     var customUrl by remember { mutableStateOf(settings.customUrl) }
     var apiKey by remember { mutableStateOf(settings.apiKey) }
     var showKey by remember { mutableStateOf(false) }
+    var errorText by remember { mutableStateOf("") }
+    var showUnsavedDialog by remember { mutableStateOf(false) }
 
     val isCustom = currentProviderId == "custom"
     val modelOptions = if (isCustom) listOf("自填") else currentConfig.models + "自填"
+    val currentModelName = if (isCustom || selectedModelIdx >= currentConfig.models.size) customModelName.trim() else currentConfig.models[selectedModelIdx].trim()
+    val hasChanges = currentProviderId != settings.provider || currentModelName != settings.modelName || customUrl.trim() != settings.customUrl || apiKey.trim() != settings.apiKey
 
-    val saveSettings: () -> Unit = {
-        settings.provider = currentProviderId
-        settings.modelName = if (isCustom || selectedModelIdx >= currentConfig.models.size) customModelName else currentConfig.models[selectedModelIdx]
-        settings.customUrl = customUrl
-        settings.apiKey = apiKey
+    fun validateSettings(): String? {
+        val modelName = if (isCustom || selectedModelIdx >= currentConfig.models.size) {
+            customModelName.trim()
+        } else {
+            currentConfig.models[selectedModelIdx].trim()
+        }
+        if (apiKey.trim().isBlank()) return "请填写 API 密钥"
+        if (modelName.isBlank() || modelName == "自填") return "请填写模型名"
+        if (isCustom) {
+            val url = customUrl.trim()
+            if (url.isBlank()) return "请填写 API 地址"
+            if (!url.startsWith("http://") && !url.startsWith("https://")) return "API 地址需以 http:// 或 https:// 开头"
+        }
+        return null
     }
 
-    BackHandler(onBack = { saveSettings(); onBack() })
+    val saveSettings: () -> Boolean = {
+        val validationError = validateSettings()
+        if (validationError != null) {
+            errorText = validationError
+            false
+        } else {
+            val modelName = currentModelName
+            settings.provider = currentProviderId
+            settings.modelName = modelName
+            settings.customUrl = customUrl.trim()
+            settings.apiKey = apiKey.trim()
+            errorText = ""
+            true
+        }
+    }
+
+    fun requestBack() {
+        if (hasChanges) showUnsavedDialog = true else onBack()
+    }
+
+    BackHandler(onBack = { requestBack() })
 
     Box(modifier = modifier.fillMaxSize()) {
     Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
         Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { saveSettings(); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
+            IconButton(onClick = { requestBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Spacer(Modifier.weight(1f))
             Text("模型设置", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
             Spacer(Modifier.weight(1f))
-            TextButton(onClick = { saveSettings(); onBack() }) {
+            TextButton(onClick = { if (saveSettings()) onBack() }) {
                 Icon(Icons.Default.Check, null, tint = Primary, modifier = Modifier.size(20.dp))
                 Text("保存", color = Primary, fontWeight = FontWeight.SemiBold)
             }
@@ -77,23 +114,23 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
 
         Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
             // Vendor
-            DropDown("厂商", providerNames, selectedProvider) { i -> selectedProvider = i; selectedModelIdx = 0 }
+            DropDown("厂商", providerNames, selectedProvider) { i -> selectedProvider = i; selectedModelIdx = 0; errorText = "" }
             Spacer(Modifier.height(12.dp))
 
             // Model
-            if (!isCustom) DropDown("模型", modelOptions, selectedModelIdx) { selectedModelIdx = it }
+            if (!isCustom) DropDown("模型", modelOptions, selectedModelIdx.coerceIn(modelOptions.indices)) { selectedModelIdx = it; errorText = "" }
             Spacer(Modifier.height(12.dp))
 
             // Custom model name
             if (isCustom || selectedModelIdx >= currentConfig.models.size) {
-                LabeledField("自定义模型名") { OutlinedTextField(value = customModelName, onValueChange = { customModelName = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(8.dp), colors = fieldColors()) }
+                LabeledField("自定义模型名") { OutlinedTextField(value = customModelName, onValueChange = { customModelName = it; errorText = "" }, modifier = Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(8.dp), colors = fieldColors()) }
                 Spacer(Modifier.height(12.dp))
             }
 
             // Custom URL
             if (isCustom) {
                 LabeledField("API 地址") {
-                    Row { OutlinedTextField(value = customUrl, onValueChange = { customUrl = it }, modifier = Modifier.weight(1f), singleLine = true, shape = RoundedCornerShape(8.dp), colors = fieldColors()); Spacer(Modifier.width(4.dp)); PasteBtn(ctx) { customUrl = it } }
+                    Row { OutlinedTextField(value = customUrl, onValueChange = { customUrl = it; errorText = "" }, modifier = Modifier.weight(1f), singleLine = true, shape = RoundedCornerShape(8.dp), colors = fieldColors()); Spacer(Modifier.width(4.dp)); PasteBtn(ctx) { customUrl = it; errorText = "" } }
                 }
                 Spacer(Modifier.height(12.dp))
             }
@@ -101,14 +138,31 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             // API Key
             LabeledField("API 密钥") {
                 Row {
-                    OutlinedTextField(value = apiKey, onValueChange = { apiKey = it }, modifier = Modifier.weight(1f), singleLine = true, visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(), shape = RoundedCornerShape(8.dp), colors = fieldColors())
-                    Spacer(Modifier.width(4.dp)); PasteBtn(ctx) { apiKey = it }
+                    OutlinedTextField(value = apiKey, onValueChange = { apiKey = it; errorText = "" }, modifier = Modifier.weight(1f), singleLine = true, visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(), shape = RoundedCornerShape(8.dp), colors = fieldColors())
+                    Spacer(Modifier.width(4.dp)); PasteBtn(ctx) { apiKey = it; errorText = "" }
                 }
                 TextButton(onClick = { showKey = !showKey }) { Text(if (showKey) "隐藏" else "显示", fontSize = 11.sp, color = Primary) }
+            }
+            if (errorText.isNotBlank()) {
+                Text(errorText, fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
             }
             Spacer(Modifier.height(12.dp))
         }
     }
+    }
+    if (showUnsavedDialog) {
+        AlertDialog(
+            onDismissRequest = { showUnsavedDialog = false },
+            title = { Text("有未保存的修改", color = TextPrimary) },
+            text = { Text("你已经修改了模型设置。要保存后离开，还是放弃这些修改？", color = TextSecondary) },
+            confirmButton = { TextButton(onClick = { if (saveSettings()) { showUnsavedDialog = false; onBack() } }) { Text("保存修改", color = Primary) } },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { showUnsavedDialog = false; onBack() }) { Text("放弃修改", color = ErrorRed) }
+                    TextButton(onClick = { showUnsavedDialog = false }) { Text("继续编辑", color = TextSecondary) }
+                }
+            }
+        )
     }
 }
 

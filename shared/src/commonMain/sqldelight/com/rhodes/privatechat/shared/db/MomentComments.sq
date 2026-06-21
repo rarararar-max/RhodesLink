@@ -32,6 +32,15 @@ UPDATE moment_comments SET isRead = 1 WHERE id = ?;
 markAllCommentsRead:
 UPDATE moment_comments SET isRead = 1 WHERE id > 0 AND (momentId IN (SELECT id FROM moments WHERE operatorId = 'user') OR replyToName = ?);
 
+markMomentCommentsReadForUser:
+UPDATE moment_comments SET isRead = 1
+WHERE momentId = ?
+AND operatorId != 'user'
+AND (momentId IN (SELECT id FROM moments WHERE operatorId = 'user') OR replyToName = ?);
+
+getCommentCount:
+SELECT COUNT(*) FROM moment_comments WHERE momentId = ?;
+
 deleteOldUserComments:
 DELETE FROM moment_comments WHERE createdAt < ? AND (replyToName = ? OR momentId IN (SELECT id FROM moments WHERE operatorId = 'user'));
 

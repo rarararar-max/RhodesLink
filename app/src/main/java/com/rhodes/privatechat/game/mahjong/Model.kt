@@ -25,7 +25,7 @@ data class Tile(val suit: Suit, val number: Int) : Comparable<Tile> {
         )
         fun fullWall(): MutableList<Tile> = MutableList(4) { allTiles() }.flatten().toMutableList()
         fun suitName(suit: Suit, number: Int): String = when (suit) {
-            Suit.MAN -> "${number}万"; Suit.PIN -> "${number}筒"; Suit.SOU -> "${number}索"
+            Suit.MAN -> "${number}万"; Suit.PIN -> "${number}筒"; Suit.SOU -> "${number}条"
             Suit.WIND -> when (number) { 1 -> "东"; 2 -> "南"; 3 -> "西"; 4 -> "北"; else -> "?" }
             Suit.DRAGON -> when (number) { 1 -> "白"; 2 -> "发"; 3 -> "中"; else -> "?" }
         }
@@ -67,9 +67,12 @@ data class PlayerState(
 )
 
 @Serializable
+enum class MatchMode { QUICK, EAST, HALF }
+
+@Serializable
 data class GameState(
     val players: MutableList<PlayerState> = mutableListOf(),
-    val ruleType: String = "riichi",
+    val ruleType: String = "basic_cn",
     val roundWind: Seat = Seat.EAST,
     var round: Int = 1, var honba: Int = 0, var riichiSticks: Int = 0,
     var dealerIdx: Int = 0, var currentTurn: Int = 0,
@@ -80,20 +83,31 @@ data class GameState(
     var lastDiscard: Tile? = null,
     var lastDiscardSeat: Seat? = null,
     var winnerSeat: Seat? = null,
-    var drawnIdx: Int = -1,  // 刚摸的牌在手牌中的索引（-1=未摸牌）
-    var ippatsuPlayerIdx: Int = -1  // 一发窗口中玩家索引，-1=无
+    var drawnIdx: Int = -1,
+    var ippatsuPlayerIdx: Int = -1,
+    var matchMode: MatchMode = MatchMode.QUICK,
+    var maxRounds: Int = 1,
+    var chatLog: MutableList<String> = mutableListOf(),
+    var matchStatus: String = "playing"
 ) {
     fun currentPlayer() = players[currentTurn]
     fun dealer() = players[dealerIdx]
     fun isDealer(seat: Seat) = players[dealerIdx].seat == seat
     fun humanPlayer() = players.find { it.isHuman }
+    fun assistantPlayer() = players.find { it.opId == assistantOpId }
+    fun roundLabel(): String = when (matchMode) {
+        MatchMode.QUICK -> "快速局"
+        MatchMode.EAST -> "东风战·东${round}"
+        MatchMode.HALF -> if (round <= 4) "半庄·东${round}" else "半庄·南${round - 4}"
+    }
 
     companion object {
         fun create(
             opIds: List<String>, opNames: List<String>,
             styles: List<Triple<Float, Float, String>>,
             userId: String, userName: String,
-            assistantId: String
+            assistantId: String,
+            matchMode: MatchMode = MatchMode.QUICK
         ): GameState {
             val seats = listOf(Seat.EAST, Seat.SOUTH, Seat.WEST, Seat.NORTH)
             val players = mutableListOf<PlayerState>()
@@ -103,10 +117,12 @@ data class GameState(
                 attack = styles[i].first, defense = styles[i].second, meldPref = styles[i].third
             ))
             players.add(PlayerState(opId = userId, name = userName, seat = seats[3], isHuman = true))
+            val maxR = when (matchMode) { MatchMode.QUICK -> 1; MatchMode.EAST -> 4; MatchMode.HALF -> 8 }
             return GameState(players = players,
                 dealerIdx = di, currentTurn = di,
                 wall = Tile.fullWall().apply { shuffle() },
-                assistantOpId = assistantId)
+                assistantOpId = assistantId,
+                matchMode = matchMode, maxRounds = maxR)
         }
     }
 }
@@ -115,10 +131,22 @@ data class GameState(
 data class SettlementResult(
     val rankings: List<PlayerResult>, val userNetGain: Int,
     val exchangeRate: Int = 100, val basePoints: Int = 25000,
-    val chatLog: List<String> = emptyList()
+    val chatLog: List<String> = emptyList(),
+    val winType: String = "流局",
+    val winnerName: String = "",
+    val loserName: String = "",
+    val summary: String = "",
+    val participants: List<String> = emptyList(),
+    val assistantName: String = "",
+    val currentRound: Int = 1,
+    val maxRounds: Int = 1,
+    val matchMode: MatchMode = MatchMode.QUICK,
+    val cumulativePoints: Map<String, Int> = emptyMap()
 )
+
 @Serializable
 data class PlayerResult(
+    val opId: String = "",
     val name: String, val finalPoints: Int, val netGain: Int, val rank: Int,
     val yakus: List<String> = emptyList(), val han: Int = 0
 )
@@ -127,7 +155,8 @@ data class PlayerResult(
 data class GameStateCreateParams(
     val opIds: List<String>, val opNames: List<String>,
     val styles: List<Triple<Float, Float, String>>,
-    val userId: String, val userName: String, val assistantId: String
+    val userId: String, val userName: String, val assistantId: String,
+    val matchMode: MatchMode = MatchMode.QUICK
 )
 
 @Serializable

@@ -2,6 +2,8 @@ package com.rhodes.privatechat.ui.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -91,20 +93,27 @@ fun SettingsScreen(
         }
         HorizontalDivider(color = Divider)
 
-        Column(modifier = Modifier.padding(vertical = 8.dp)) {
+        Column(modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(vertical = 8.dp)) {
+            SettingsGroupTitle("个人与模型")
             SettingItem(SettingEntry(Icons.Default.Person, "身份设置", "昵称、性别、简介、头像", iconColor = Blue400), onClick = onProfile)
-            SettingItem(SettingEntry(Icons.Default.DarkMode, "外观设置", "白天/黑夜模式、界面外观", iconColor = Color(0xFF607D8B)), onClick = onAppearance)
             SettingItem(SettingEntry(Icons.Default.SmartToy, "模型设置", "AI厂商、API Key、TTS", iconColor = Color(0xFFFF9800)), onClick = onModel)
-            SettingItem(SettingEntry(Icons.Default.Tune, "聊天与记忆", "回复格式、上下文、记忆注入", iconColor = Color(0xFF00BCD4)), onClick = onChatParams)
-            SettingItem(SettingEntry(Icons.Default.AutoAwesome, "世界与动态", "世界调度、动态、评论、主动私聊", iconColor = Color(0xFF4CAF50)), onClick = onWorld)
-            SettingItem(SettingEntry(Icons.AutoMirrored.Filled.MenuBook, "日记与派遣", "日记生成、派遣故事参数", iconColor = Color(0xFF795548)), onClick = onStory)
+            SettingsGroupTitle("AI 行为")
+            SettingItem(SettingEntry(Icons.Default.Tune, "聊天表现", "回复长短、上下文记忆、角色说话风格", iconColor = Color(0xFF00BCD4)), onClick = onChatParams)
+            SettingItem(SettingEntry(Icons.Default.AutoAwesome, "自动世界", "自动动态、主动私聊、事件联动、群聊唤起", iconColor = Color(0xFF4CAF50)), onClick = onWorld)
+            SettingItem(SettingEntry(Icons.AutoMirrored.Filled.MenuBook, "日记与派遣", "干员日记、派遣故事长度、自动生成规则", iconColor = Color(0xFF795548)), onClick = onStory)
+            SettingItem(SettingEntry(Icons.Default.Build, "权限管理", "干员主动消息、动态和群聊权限", iconColor = Color(0xFFFF9800)), onClick = onPermissions)
+            SettingsGroupTitle("数据与调试")
             SettingItem(SettingEntry(Icons.Default.AutoFixHigh, "数据管理", "统计信息与自动清理", iconColor = Color(0xFF8B5CF6)), onClick = onDataManage)
-            SettingItem(SettingEntry(Icons.Default.Build, "权限管理", "干员主动消息与动态权限", iconColor = Color(0xFFFF9800)), onClick = onPermissions)
             SettingItem(SettingEntry(Icons.Default.Favorite, "感谢", "支持股东名单", iconColor = Primary), onClick = onCredits)
-            SettingItem(SettingEntry(Icons.Default.BugReport, "调试日志", "查看详细运行日志", iconColor = Color(0xFF607D8B)), onClick = onDebugLog)
+            SettingItem(SettingEntry(Icons.Default.DarkMode, "外观设置", "白天/黑夜模式、界面外观", iconColor = Color(0xFF607D8B)), onClick = onAppearance)
         }
     }
     }
+}
+
+@Composable
+private fun SettingsGroupTitle(title: String) {
+    Text(title, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextTertiary, modifier = Modifier.fillMaxWidth().background(BG).padding(horizontal = 16.dp, vertical = 8.dp))
 }
 
 @Composable

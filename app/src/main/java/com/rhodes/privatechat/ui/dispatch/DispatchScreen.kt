@@ -99,11 +99,13 @@ fun DispatchScreen(
     val operators by viewModel.operators.collectAsState()
     var balance by remember { mutableIntStateOf(settings.lmb) }
     LaunchedEffect(Unit) { while (true) { balance = settings.lmb; delay(5000) } }
-    var activeDispatch by remember { mutableStateOf<DispatchRecordEntity?>(null) }
+    var activeDispatches by remember { mutableStateOf<List<DispatchRecordEntity>>(emptyList()) }
 
     LaunchedEffect(Unit) {
-        val active = viewModel.repository.getActiveDispatches()
-        activeDispatch = active.firstOrNull()
+        while (true) {
+            activeDispatches = viewModel.repository.getActiveDispatches().sortedBy { it.startTime }.take(2)
+            delay(3000)
+        }
     }
 
     var selectedTask by remember { mutableIntStateOf(0) }
@@ -115,8 +117,12 @@ fun DispatchScreen(
     var showPicker by remember { mutableStateOf(false) }
 
     val budget = budgetText.toIntOrNull() ?: 0
+    val taskName = if (selectedTask == tasksWithCustom.size - 1) customTask.trim() else tasks[selectedTask]
+    val taskReady = taskName.isNotBlank()
+    val activeOperatorIds = activeDispatches.flatMap { it.operatorIds.split(",") }.map { it.trim() }.filter { it.isNotBlank() }.toSet()
     val teamAllExist = team.all { m -> operators.any { it.id == m.id } }
-    val canStart = team.size == 5 && teamAllExist && budget >= 100 && budget <= balance && activeDispatch == null && !viewModel.dispatchViewModel.isStarting
+    val teamAvailable = team.none { it.id in activeOperatorIds || it.name in activeOperatorIds }
+    val canStart = taskReady && team.size == 5 && teamAllExist && teamAvailable && budget >= 100 && budget <= balance && activeDispatches.size < 2 && !viewModel.dispatchViewModel.isStarting
 
     Box(modifier = modifier.fillMaxSize()) {
     Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
@@ -133,13 +139,13 @@ fun DispatchScreen(
         }
         HorizontalDivider(color = Divider)
         // Active dispatch banner (after header, before content)
-        if (activeDispatch != null) {
-            Row(modifier = Modifier.fillMaxWidth().background(PrimaryContainer).clickable { onStart(activeDispatch!!.id) }.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        activeDispatches.forEachIndexed { index, activeDispatch ->
+            Row(modifier = Modifier.fillMaxWidth().background(PrimaryContainer).clickable { onStart(activeDispatch.id) }.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.AutoMirrored.Filled.SendToMobile, null, tint = Primary, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("小队1 · ${activeDispatch!!.taskType}", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Primary)
-                    Text("点击查看进度", fontSize = 11.sp, color = TextSecondary)
+                    Text("小队${index + 1} · ${activeDispatch.taskType}", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Primary)
+                    Text(if (activeDispatch.status == "generating") "正在生成开局" else "点击查看进度", fontSize = 11.sp, color = TextSecondary)
                 }
                 Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = Primary)
             }
@@ -151,6 +157,10 @@ fun DispatchScreen(
             }
         } else {
             Column(modifier = Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
+            SectionCard("派遣规则") {
+                Text("需要 5 名未派遣干员。预算会先扣除，任务完成后按故事结算奖励；中断时可能没有收益。最多同时派遣 2 支小队。", fontSize = 12.sp, color = TextSecondary, lineHeight = 18.sp)
+            }
+            Spacer(modifier = Modifier.height(12.dp))
             // 1. 任务选择
             SectionCard("任务类型") {
                 tasksWithCustom.forEachIndexed { i, t ->
@@ -167,6 +177,7 @@ fun DispatchScreen(
                         modifier = Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(8.dp),
                         placeholder = { Text("输入自定义任务...", color = TextTertiary) },
                         colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Primary, unfocusedBorderColor = Divider))
+                    if (customTask.isBlank()) Text("请输入自定义任务名称", fontSize = 12.sp, color = ErrorRed, modifier = Modifier.padding(top = 4.dp))
                 }
             }
             Spacer(modifier = Modifier.height(12.dp))
@@ -180,6 +191,8 @@ fun DispatchScreen(
                         }
                     }
                 }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("时间越长，故事段落更多，结算更晚。", fontSize = 12.sp, color = TextSecondary)
             }
             Spacer(modifier = Modifier.height(12.dp))
 
@@ -217,6 +230,8 @@ fun DispatchScreen(
                 }
                 if (budget > balance) Text("余额不足", fontSize = 12.sp, color = ErrorRed, modifier = Modifier.padding(top = 4.dp))
                 else if (budget < 100) Text("最少投入100龙门币", fontSize = 12.sp, color = ErrorRed, modifier = Modifier.padding(top = 4.dp))
+                Text("预算越高，故事中更容易出现充足准备和更高收益上限，但不保证稳赚。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 4.dp))
+                if (!teamAvailable) Text("小队中有干员正在派遣中", fontSize = 12.sp, color = ErrorRed, modifier = Modifier.padding(top = 4.dp))
             }
             Spacer(modifier = Modifier.height(20.dp))
 
@@ -228,16 +243,17 @@ fun DispatchScreen(
                 }
                 Button(onClick = {
                     if (viewModel.dispatchViewModel.isStarting) return@Button
-                    if (activeDispatch != null) return@Button
+                    if (activeDispatches.size >= 2) return@Button
                     if (canStart) {
                         val id = UUID.randomUUID().toString()
-                        viewModel.startDispatch(id, if (selectedTask == tasksWithCustom.size - 1) customTask else tasks[selectedTask], durations[selectedDuration], budget, team.map { it.id }) { onStart(id) }
+                        viewModel.startDispatch(id, taskName, durations[selectedDuration], budget, team.map { it.id }) { onStart(id) }
                     }
                 }, modifier = Modifier.weight(1f).height(44.dp), shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = if (canStart) Primary else Divider)) {
                     Text(when {
-                        activeDispatch != null -> "已有小队正在派遣"
+                        activeDispatches.size >= 2 -> "两个小队均在派遣中"
                         viewModel.dispatchViewModel.isStarting -> "正在启动..."
+                        activeDispatches.size == 1 -> "派遣第二小队"
                         else -> "开始派遣"
                     }, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 }
@@ -249,7 +265,7 @@ fun DispatchScreen(
     }
 
     if (showPicker) {
-        OperatorPickerDialog(operators = operators, currentTeam = team,
+        OperatorPickerDialog(operators = operators, currentTeam = team, disabledOperatorIds = activeOperatorIds,
             onDismiss = { showPicker = false },
             onConfirm = { selected ->
                 team.clear(); team.addAll(selected.take(5))
@@ -262,6 +278,7 @@ fun DispatchScreen(
 private fun OperatorPickerDialog(
     operators: List<OperatorEntity>,
     currentTeam: List<OperatorEntity>,
+    disabledOperatorIds: Set<String>,
     onDismiss: () -> Unit,
     onConfirm: (List<OperatorEntity>) -> Unit
 ) {
@@ -270,19 +287,21 @@ private fun OperatorPickerDialog(
         Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
             operators.forEach { op ->
                 val checked = selected.any { it.id == op.id }
+                val disabled = !checked && (op.id in disabledOperatorIds || op.name in disabledOperatorIds)
                 Row(modifier = Modifier.fillMaxWidth().clickable {
+                    if (disabled) return@clickable
                     if (checked) selected.removeAll { it.id == op.id }
                     else if (selected.size < 5) selected.add(op)
                 }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     OperatorAvatarImage(avatarUri = op.avatarUri, name = op.name, modifier = Modifier.size(32.dp))
                     Spacer(modifier = Modifier.width(10.dp))
-                    Text(op.name, fontSize = 14.sp, color = TextPrimary, modifier = Modifier.weight(1f))
+                    Text(if (disabled) "${op.name}（派遣中）" else op.name, fontSize = 14.sp, color = if (disabled) TextTertiary else TextPrimary, modifier = Modifier.weight(1f))
                     if (checked) Icon(Icons.Default.Check, null, tint = Primary, modifier = Modifier.size(20.dp))
                 }
             }
         }
     }, confirmButton = {
-        TextButton(onClick = { onConfirm(selected.toList()) }) { Text("确认", color = if (selected.size == 5) Primary else TextTertiary) }
+        TextButton(onClick = { onConfirm(selected.toList()) }, enabled = selected.size == 5) { Text(if (selected.size == 5) "确认" else "还需选择 ${5 - selected.size} 人", color = if (selected.size == 5) Primary else TextTertiary) }
     }, dismissButton = {
         TextButton(onClick = onDismiss) { Text("取消", color = TextSecondary) }
     })

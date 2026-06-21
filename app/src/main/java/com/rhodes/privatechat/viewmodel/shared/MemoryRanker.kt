@@ -16,7 +16,7 @@ object MemoryRanker {
         if (maxCount <= 0 || anchors.isEmpty()) return emptyList()
         val now = System.currentTimeMillis()
         return anchors
-            .filter { it.content.isNotBlank() && !isWeakContent(it.content) }
+            .filter { it.content.isNotBlank() && !isWeakContent(it) }
             .distinctBy { it.type to normalize(it.content) }
             .sortedWith(compareByDescending<MemoryAnchor> { score(it, surface, userContent, now) }.thenByDescending { it.createdAt })
             .take(maxCount)
@@ -74,17 +74,22 @@ object MemoryRanker {
     private fun relevance(content: String, userContent: String): Int {
         val text = userContent.trim()
         if (text.isBlank()) return 0
-        val chars = text.filter { !it.isWhitespace() }.toSet()
+        val chars = text.filter { !it.isWhitespace() && !commonChineseChars.contains(it) }.toSet()
         val overlap = chars.count { content.contains(it) }.coerceAtMost(10) * 5
         val direct = if (text.length >= 2 && content.contains(text.take(2))) 35 else 0
         return overlap + direct
     }
 
-    private fun isWeakContent(content: String): Boolean {
-        val text = content.trim().removePrefix("[弱]").trim(' ', '。', '！', '，', ',', '.', '!')
+    private fun isWeakContent(anchor: MemoryAnchor): Boolean {
+        val text = anchor.content.trim().removePrefix("[弱]").trim(' ', '。', '！', '，', ',', '.', '!')
         val weak = setOf("哈哈", "嗯", "哦", "啊", "好吧", "行吧", "+1", "同意")
+        if (anchor.type == AnchorType.PREFERENCE || anchor.type == AnchorType.TABOO || anchor.type == AnchorType.PLAN) {
+            return text in weak
+        }
         return text.length < 6 || text in weak
     }
+
+    private val commonChineseChars = setOf('的', '了', '是', '我', '你', '他', '她', '它', '们', '在', '有', '和', '就', '不', '都', '也', '很', '还', '说', '要', '这', '那', '吗', '啊', '呢')
 
     private fun normalize(value: String): String = value
         .lowercase()

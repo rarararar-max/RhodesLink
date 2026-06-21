@@ -53,6 +53,8 @@ class ChatRepository(
     suspend fun saveAnchor(anchor: MemoryAnchor) = shared.saveAnchor(anchor)
 
     suspend fun saveAnchors(anchors: List<MemoryAnchor>) = shared.saveAnchors(anchors)
+    suspend fun deleteMemoriesBySession(sessionId: String) = shared.deleteMemoriesBySession(sessionId)
+    suspend fun deleteAnchorsBySession(sessionId: String) = shared.deleteAnchorsBySession(sessionId)
 
     suspend fun getPublicAnchors(operatorId: String): List<MemoryAnchor> = shared.getPublicAnchors(operatorId)
 
@@ -129,6 +131,7 @@ class ChatRepository(
     suspend fun getSessionCount(): Int = shared.getSessionCount()
 
     suspend fun getSession(id: String): ChatSession? = shared.getSession(id)
+    suspend fun incrementUnread(sessionId: String, delta: Int = 1) = shared.incrementUnread(sessionId, delta)
 
     suspend fun getGroupCount(): Int = shared.getGroupCount()
 

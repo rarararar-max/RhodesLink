@@ -7,29 +7,76 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import kotlinx.coroutines.flow.map
+import kotlin.math.max
 
 @OptIn(com.russhwolf.settings.ExperimentalSettingsApi::class)
 class SettingsRepository(private val settings: ObservableSettings) {
 
     private val flowSettings = settings.toFlowSettings()
+    private val draftLock = Any()
+    private var draftActive: Boolean = false
+    private val draftValues = mutableMapOf<String, Any?>()
+
+    fun beginDraft() = synchronized(draftLock) {
+        draftActive = true
+        draftValues.clear()
+    }
+
+    fun hasDraftChanges(): Boolean = synchronized(draftLock) { draftActive && draftValues.isNotEmpty() }
+
+    fun saveDraft() = synchronized(draftLock) {
+        if (!draftActive) return
+        draftValues.forEach { (key, value) ->
+            when (value) {
+                is String -> settings.putString(key, value)
+                is Int -> settings.putInt(key, value)
+                is Boolean -> settings.putBoolean(key, value)
+                is Long -> settings.putLong(key, value)
+                null -> settings.remove(key)
+            }
+        }
+        draftValues.clear()
+        draftActive = false
+    }
+
+    fun discardDraft() = synchronized(draftLock) {
+        draftValues.clear()
+        draftActive = false
+    }
+
+    private fun draftString(key: String, default: String): String = synchronized(draftLock) {
+        if (draftActive && draftValues.containsKey(key)) draftValues[key] as? String ?: default else settings.getString(key, default)
+    }
+
+    private fun draftInt(key: String, default: Int): Int = synchronized(draftLock) {
+        if (draftActive && draftValues.containsKey(key)) draftValues[key] as? Int ?: default else settings.getInt(key, default)
+    }
+
+    private fun draftBoolean(key: String, default: Boolean): Boolean = synchronized(draftLock) {
+        if (draftActive && draftValues.containsKey(key)) draftValues[key] as? Boolean ?: default else settings.getBoolean(key, default)
+    }
+
+    private fun draftLong(key: String, default: Long): Long = synchronized(draftLock) {
+        if (draftActive && draftValues.containsKey(key)) draftValues[key] as? Long ?: default else settings.getLong(key, default)
+    }
 
     // === 模型设置 ===
     var provider: String
-        get() = settings.getString("provider", "deepseek")
-        set(value) = settings.putString("provider", value)
+        get() = getString("provider", "deepseek")
+        set(value) = putString("provider", value)
 
     var modelName: String
-        get() = settings.getString("model_name", "deepseek-chat")
-        set(value) = settings.putString("model_name", value)
+        get() = getString("model_name", "deepseek-chat")
+        set(value) = putString("model_name", value)
 
     var customUrl: String
-        get() = settings.getString("custom_url", "")
-        set(value) = settings.putString("custom_url", value)
+        get() = getString("custom_url", "")
+        set(value) = putString("custom_url", value)
 
     // === API 设置 ===
     var apiKey: String
-        get() = settings.getString("api_key", "")
-        set(value) = settings.putString("api_key", value)
+        get() = getString("api_key", "")
+        set(value) = putString("api_key", value)
 
     val apiKeyFlow: Flow<String> = flowSettings.getStringFlow("api_key", "")
 
@@ -43,8 +90,8 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     // === 聊天设置 ===
     var dualModel: Boolean
-        get() = settings.getBoolean("dual_model", false)
-        set(value) = settings.putBoolean("dual_model", value)
+        get() = getBoolean("dual_model", false)
+        set(value) = putBoolean("dual_model", value)
 
     var messageCounter: Int
         get() = settings.getInt("msg_counter", 0)
@@ -55,33 +102,33 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = settings.putInt("impression_msg_counter", value)
 
     var summaryThreshold: Int
-        get() = settings.getInt("summary_threshold", 20).coerceAtLeast(3)
-        set(value) = settings.putInt("summary_threshold", value)
+        get() = getInt("summary_threshold", 20).coerceIn(3, 200)
+        set(value) = putInt("summary_threshold", value.coerceIn(3, 200))
 
     var summaryRetain: Int
-        get() = settings.getInt("summary_retain", 5)
-        set(value) = settings.putInt("summary_retain", value)
+        get() = settings.getInt("summary_retain", 5).coerceIn(1, 50)
+        set(value) = settings.putInt("summary_retain", value.coerceIn(1, 50))
 
     var impressionThreshold: Int
-        get() = settings.getInt("impression_threshold", 50)
-        set(value) = settings.putInt("impression_threshold", value)
+        get() = settings.getInt("impression_threshold", 50).coerceIn(5, 500)
+        set(value) = settings.putInt("impression_threshold", value.coerceIn(5, 500))
 
     var historyMessages: Int
-        get() = settings.getInt("history_messages", 20)
-        set(value) = settings.putInt("history_messages", value)
+        get() = getInt("history_messages", 20).coerceIn(0, 200)
+        set(value) = putInt("history_messages", value.coerceIn(0, 200))
 
     var maxContextTokens: Int
-        get() = settings.getInt("max_context_tokens", 32000)
-        set(value) = settings.putInt("max_context_tokens", value)
+        get() = getInt("max_context_tokens", 32000).coerceIn(1000, 200000)
+        set(value) = putInt("max_context_tokens", value.coerceIn(1000, 200000))
 
     // === 聊天配置 ===
     var aiTemperature: Double
-        get() = settings.getInt("ai_temperature", 80).toDouble() / 100.0
-        set(value) = settings.putInt("ai_temperature", (value * 100).toInt())
+        get() = getInt("ai_temperature", 80).coerceIn(0, 200).toDouble() / 100.0
+        set(value) = putInt("ai_temperature", (value.coerceIn(0.0, 2.0) * 100).toInt())
 
     var cleanDays: Int
-        get() = settings.getInt("clean_days", 30)
-        set(value) = settings.putInt("clean_days", value)
+        get() = settings.getInt("clean_days", 30).coerceIn(0, 3650)
+        set(value) = settings.putInt("clean_days", value.coerceIn(0, 3650))
 
     // === 记忆注入设置 ===
     var memoryMode: String
@@ -89,8 +136,12 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = settings.putString("memory_mode", value)
 
     var sourceAwareMemoryEnabled: Boolean
-        get() = settings.getBoolean("source_aware_memory_enabled", true)
-        set(value) = settings.putBoolean("source_aware_memory_enabled", value)
+        get() = getBoolean("source_aware_memory_enabled", true)
+        set(value) = putBoolean("source_aware_memory_enabled", value)
+
+    var distinguishPrivateMemory: Boolean
+        get() = getBoolean("distinguish_private_memory", true)
+        set(value) = putBoolean("distinguish_private_memory", value)
 
     var memorySourceStyle: String
         get() = settings.getString("memory_source_style", "natural")
@@ -127,6 +178,10 @@ class SettingsRepository(private val settings: ObservableSettings) {
     var groupUserEventCount: Int
         get() = settings.getInt("group_user_event_count", 3).coerceIn(0, 10)
         set(value) = settings.putInt("group_user_event_count", value.coerceIn(0, 10))
+
+    var momentUserPostObserverCount: Int
+        get() = settings.getInt("moment_user_post_observer_count", groupUserEventCount).coerceIn(0, 10)
+        set(value) = settings.putInt("moment_user_post_observer_count", value.coerceIn(0, 10))
 
     var groupRelationshipHintCount: Int
         get() = settings.getInt("group_relationship_hint_count", 10).coerceIn(0, 30)
@@ -173,29 +228,49 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = settings.putInt("diary_relation_event_count", value.coerceIn(0, 10))
 
     // === 世界运行设置 ===
+    var autoAiEnabled: Boolean
+        get() = getBoolean("auto_ai_enabled", true)
+        set(value) = putBoolean("auto_ai_enabled", value)
+
     var worldSchedulerEnabled: Boolean
-        get() = settings.getBoolean("world_scheduler_enabled", true)
-        set(value) = settings.putBoolean("world_scheduler_enabled", value)
+        get() = getBoolean("world_scheduler_enabled", true)
+        set(value) = putBoolean("world_scheduler_enabled", value)
+
+    var dailyAutoMomentEnabled: Boolean
+        get() = getBoolean("daily_auto_moment_enabled", true)
+        set(value) = putBoolean("daily_auto_moment_enabled", value)
+
+    var idleProactiveChatEnabled: Boolean
+        get() = getBoolean("idle_proactive_chat_enabled", true)
+        set(value) = putBoolean("idle_proactive_chat_enabled", value)
 
     var autoMomentEnabled: Boolean
-        get() = settings.getBoolean("auto_moment_enabled", true)
-        set(value) = settings.putBoolean("auto_moment_enabled", value)
+        get() = getBoolean("auto_moment_enabled", true)
+        set(value) = putBoolean("auto_moment_enabled", value)
 
     var worldAutoGroupEnabled: Boolean
-        get() = settings.getBoolean("world_auto_group_enabled", true)
-        set(value) = settings.putBoolean("world_auto_group_enabled", value)
+        get() = getBoolean("world_auto_group_enabled", true)
+        set(value) = putBoolean("world_auto_group_enabled", value)
 
     var worldProactiveChatEnabled: Boolean
-        get() = settings.getBoolean("world_proactive_chat_enabled", true)
-        set(value) = settings.putBoolean("world_proactive_chat_enabled", value)
+        get() = getBoolean("world_proactive_chat_enabled", true)
+        set(value) = putBoolean("world_proactive_chat_enabled", value)
 
     var autoDiaryEnabled: Boolean
-        get() = settings.getBoolean("auto_diary_enabled", true)
-        set(value) = settings.putBoolean("auto_diary_enabled", value)
+        get() = getBoolean("auto_diary_enabled", true)
+        set(value) = putBoolean("auto_diary_enabled", value)
 
     var dailyWorldEventLimit: Int
         get() = settings.getInt("daily_world_event_limit", 30).coerceIn(0, 200)
         set(value) = settings.putInt("daily_world_event_limit", value.coerceIn(0, 200))
+
+    var dailyWorldTriggerLimit: Int
+        get() = settings.getInt("daily_world_trigger_limit", 20).coerceIn(0, 200)
+        set(value) = settings.putInt("daily_world_trigger_limit", value.coerceIn(0, 200))
+
+    var tickWorldTriggerLimit: Int
+        get() = settings.getInt("tick_world_trigger_limit", 2).coerceIn(0, 20)
+        set(value) = settings.putInt("tick_world_trigger_limit", value.coerceIn(0, 20))
 
     var dailyDiaryOperatorLimit: Int
         get() = settings.getInt("daily_diary_operator_limit", 3).coerceIn(0, 20)
@@ -213,13 +288,25 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = settings.getInt("group_trigger_strength", 50).coerceIn(0, 100)
         set(value) = settings.putInt("group_trigger_strength", value.coerceIn(0, 100))
 
+    var eventGroupRounds: Int
+        get() = settings.getInt("event_group_rounds", 2).coerceIn(1, 10)
+        set(value) = settings.putInt("event_group_rounds", value.coerceIn(1, 10))
+
+    var eventGroupCooldownMinutes: Int
+        get() = settings.getInt("event_group_cooldown_minutes", 45).coerceIn(1, 720)
+        set(value) = settings.putInt("event_group_cooldown_minutes", value.coerceIn(1, 720))
+
+    var eventMaxGroupsPerTrigger: Int
+        get() = settings.getInt("event_max_groups_per_trigger", 1).coerceIn(1, 10)
+        set(value) = settings.putInt("event_max_groups_per_trigger", value.coerceIn(1, 10))
+
     var eventContextCount: Int
         get() = settings.getInt("event_context_count", 5).coerceIn(0, 20)
         set(value) = settings.putInt("event_context_count", value.coerceIn(0, 20))
 
     var contextMode: String
-        get() = settings.getString("context_mode", "custom")
-        set(value) = settings.putString("context_mode", value)
+        get() = getString("context_mode", "custom")
+        set(value) = putString("context_mode", value)
 
     var dailyAutoAiLimit: Int
         get() = settings.getInt("daily_auto_ai_limit", 40).coerceIn(0, 500)
@@ -245,83 +332,109 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     // === 旁白设置 ===
     var narSegMin: Int
-        get() = settings.getInt("nar_seg_min", 1)
-        set(value) = settings.putInt("nar_seg_min", value)
+        get() = settings.getInt("nar_seg_min", 1).coerceIn(0, settings.getInt("nar_seg_max", 3).coerceIn(0, 20))
+        set(value) = settings.putInt("nar_seg_min", value.coerceIn(0, settings.getInt("nar_seg_max", 3).coerceIn(0, 20)))
 
     var narSegMax: Int
-        get() = settings.getInt("nar_seg_max", 3)
-        set(value) = settings.putInt("nar_seg_max", value)
+        get() = settings.getInt("nar_seg_max", 3).coerceIn(settings.getInt("nar_seg_min", 1).coerceIn(0, 20), 20)
+        set(value) = settings.putInt("nar_seg_max", value.coerceIn(settings.getInt("nar_seg_min", 1).coerceIn(0, 20), 20))
 
     var narMin: Int
-        get() = settings.getInt("nar_min", 50)
-        set(value) = settings.putInt("nar_min", value)
+        get() = settings.getInt("nar_min", 50).coerceIn(0, settings.getInt("nar_max", 300).coerceIn(0, 2000))
+        set(value) = settings.putInt("nar_min", value.coerceIn(0, settings.getInt("nar_max", 300).coerceIn(0, 2000)))
 
     var narMax: Int
-        get() = settings.getInt("nar_max", 300)
-        set(value) = settings.putInt("nar_max", value)
+        get() = settings.getInt("nar_max", 300).coerceIn(settings.getInt("nar_min", 50).coerceIn(0, 2000), 2000)
+        set(value) = settings.putInt("nar_max", value.coerceIn(settings.getInt("nar_min", 50).coerceIn(0, 2000), 2000))
 
     var diaSegMin: Int
-        get() = settings.getInt("dia_seg_min", 1)
-        set(value) = settings.putInt("dia_seg_min", value)
+        get() = settings.getInt("dia_seg_min", 1).coerceIn(0, settings.getInt("dia_seg_max", 3).coerceIn(0, 20))
+        set(value) = settings.putInt("dia_seg_min", value.coerceIn(0, settings.getInt("dia_seg_max", 3).coerceIn(0, 20)))
 
     var diaSegMax: Int
-        get() = settings.getInt("dia_seg_max", 3)
-        set(value) = settings.putInt("dia_seg_max", value)
+        get() = settings.getInt("dia_seg_max", 3).coerceIn(settings.getInt("dia_seg_min", 1).coerceIn(0, 20), 20)
+        set(value) = settings.putInt("dia_seg_max", value.coerceIn(settings.getInt("dia_seg_min", 1).coerceIn(0, 20), 20))
 
     var diaMin: Int
-        get() = settings.getInt("dia_min", 10)
-        set(value) = settings.putInt("dia_min", value)
+        get() = settings.getInt("dia_min", 10).coerceIn(0, settings.getInt("dia_max", 300).coerceIn(0, 2000))
+        set(value) = settings.putInt("dia_min", value.coerceIn(0, settings.getInt("dia_max", 300).coerceIn(0, 2000)))
 
     var diaMax: Int
-        get() = settings.getInt("dia_max", 300)
-        set(value) = settings.putInt("dia_max", value)
+        get() = settings.getInt("dia_max", 300).coerceIn(settings.getInt("dia_min", 10).coerceIn(0, 2000), 2000)
+        set(value) = settings.putInt("dia_max", value.coerceIn(settings.getInt("dia_min", 10).coerceIn(0, 2000), 2000))
 
     // === 派遣设置 ===
     var dispatchFastMode: Boolean
-        get() = settings.getBoolean("dispatch_fast_mode", false)
-        set(value) = settings.putBoolean("dispatch_fast_mode", value)
+        get() = getBoolean("dispatch_fast_mode", false)
+        set(value) = putBoolean("dispatch_fast_mode", value)
 
     var dispatchMinChars: Int
-        get() = settings.getInt("dispatch_min_chars", 50)
-        set(value) = settings.putInt("dispatch_min_chars", value)
+        get() = settings.getInt("dispatch_min_chars", 50).coerceIn(20, settings.getInt("dispatch_max_chars", 300).coerceIn(20, 2000))
+        set(value) = settings.putInt("dispatch_min_chars", value.coerceIn(20, settings.getInt("dispatch_max_chars", 300).coerceIn(20, 2000)))
 
     var dispatchMaxChars: Int
-        get() = settings.getInt("dispatch_max_chars", 300)
-        set(value) = settings.putInt("dispatch_max_chars", value)
+        get() = settings.getInt("dispatch_max_chars", 300).coerceIn(settings.getInt("dispatch_min_chars", 50).coerceIn(20, 2000), 2000)
+        set(value) = settings.putInt("dispatch_max_chars", value.coerceIn(settings.getInt("dispatch_min_chars", 50).coerceIn(20, 2000), 2000))
 
     // === 动态/日记设置 ===
     var momentMinChars: Int
-        get() = settings.getInt("moment_min_chars", 50)
-        set(value) = settings.putInt("moment_min_chars", value)
+        get() = settings.getInt("moment_min_chars", 50).coerceIn(5, settings.getInt("moment_max_chars", 200).coerceIn(5, 2000))
+        set(value) = settings.putInt("moment_min_chars", value.coerceIn(5, settings.getInt("moment_max_chars", 200).coerceIn(5, 2000)))
 
     var momentMaxChars: Int
-        get() = settings.getInt("moment_max_chars", 200)
-        set(value) = settings.putInt("moment_max_chars", value)
+        get() = settings.getInt("moment_max_chars", 200).coerceIn(settings.getInt("moment_min_chars", 50).coerceIn(5, 2000), 2000)
+        set(value) = settings.putInt("moment_max_chars", value.coerceIn(settings.getInt("moment_min_chars", 50).coerceIn(5, 2000), 2000))
 
     var diaryMinChars: Int
-        get() = settings.getInt("diary_min_chars", 50)
-        set(value) = settings.putInt("diary_min_chars", value)
+        get() = settings.getInt("diary_min_chars", 50).coerceIn(20, settings.getInt("diary_max_chars", 300).coerceIn(20, 3000))
+        set(value) = settings.putInt("diary_min_chars", value.coerceIn(20, settings.getInt("diary_max_chars", 300).coerceIn(20, 3000)))
 
     var diaryMaxChars: Int
-        get() = settings.getInt("diary_max_chars", 300)
-        set(value) = settings.putInt("diary_max_chars", value)
+        get() = settings.getInt("diary_max_chars", 300).coerceIn(settings.getInt("diary_min_chars", 50).coerceIn(20, 3000), 3000)
+        set(value) = settings.putInt("diary_max_chars", value.coerceIn(settings.getInt("diary_min_chars", 50).coerceIn(20, 3000), 3000))
 
     // === 群聊设置 ===
     var groupChatMinInterval: Int
-        get() = settings.getInt("group_chat_min_interval", 60)
-        set(value) = settings.putInt("group_chat_min_interval", value)
+        get() = settings.getInt("group_chat_min_interval", 60).coerceIn(5, settings.getInt("group_chat_max_interval", 180).coerceIn(5, 86400))
+        set(value) = settings.putInt("group_chat_min_interval", value.coerceIn(5, settings.getInt("group_chat_max_interval", 180).coerceIn(5, 86400)))
 
     var groupChatMaxInterval: Int
-        get() = settings.getInt("group_chat_max_interval", 180)
-        set(value) = settings.putInt("group_chat_max_interval", value)
+        get() = settings.getInt("group_chat_max_interval", 180).coerceIn(settings.getInt("group_chat_min_interval", 60).coerceIn(5, 86400), 86400)
+        set(value) = settings.putInt("group_chat_max_interval", value.coerceIn(settings.getInt("group_chat_min_interval", 60).coerceIn(5, 86400), 86400))
 
     var groupAutoMaxRounds: Int
-        get() = settings.getInt("group_auto_max_rounds", 50).coerceAtLeast(1)
-        set(value) = settings.putInt("group_auto_max_rounds", value.coerceAtLeast(1))
+        get() = settings.getInt("group_auto_max_rounds", 20).coerceIn(1, 500)
+        set(value) = settings.putInt("group_auto_max_rounds", value.coerceIn(1, 500))
 
     var autoStatusRefresh: Boolean
         get() = settings.getBoolean("auto_status_refresh", true)
         set(value) = settings.putBoolean("auto_status_refresh", value)
+
+    val defaultStatusLocations: String
+        get() = "宿舍\n训练室\n食堂\n医疗部\n甲板\n办公室\n花园\n走廊\n图书室"
+
+    val defaultStatusActivities: String
+        get() = "休息\n训练\n吃饭\n工作\n散步\n聊天\n发呆\n阅读\n整理装备"
+
+    val defaultStatusEmotions: String
+        get() = "平静\n开心\n疲惫\n专注\n放松\n兴奋\n低落"
+
+    var statusLocationPool: String
+        get() = getString("status_location_pool", defaultStatusLocations)
+        set(value) = putString("status_location_pool", value)
+
+    var statusActivityPool: String
+        get() = getString("status_activity_pool", defaultStatusActivities)
+        set(value) = putString("status_activity_pool", value)
+
+    var statusEmotionPool: String
+        get() = getString("status_emotion_pool", defaultStatusEmotions)
+        set(value) = putString("status_emotion_pool", value)
+
+    fun parseStatusPool(value: String, defaultValue: String): List<String> =
+        value.lines().map { it.trim() }.filter { it.isNotBlank() }.ifEmpty {
+            defaultValue.lines().map { it.trim() }.filter { it.isNotBlank() }
+        }
 
     // === 好感度设置 ===
     var dailyIntimacyCap: Int
@@ -341,6 +454,37 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = settings.getInt("lmb", 1000)
         set(value) = settings.putInt("lmb", value)
 
+    @Synchronized
+    fun addLmb(delta: Int): Int {
+        val next = max(0, settings.getInt("lmb", 1000) + delta)
+        settings.putInt("lmb", next)
+        return next
+    }
+
+    @Synchronized
+    fun trySpendLmb(amount: Int): Boolean {
+        val current = settings.getInt("lmb", 1000)
+        if (current < amount) return false
+        settings.putInt("lmb", current - amount)
+        return true
+    }
+
+    @Synchronized
+    fun grantDailyLmb(date: String, amount: Int, dailyLimit: Int = 5000): Boolean {
+        val safeAmount = amount.coerceAtLeast(0)
+        if (safeAmount == 0) return false
+        val safeDailyLimit = dailyLimit.coerceAtLeast(0)
+        if (settings.getString("reward_date", "") != date) {
+            settings.putString("reward_date", date)
+            settings.putInt("daily_lmb_count", 0)
+        }
+        val count = settings.getInt("daily_lmb_count", 0)
+        if (count + safeAmount > safeDailyLimit) return false
+        settings.putInt("lmb", settings.getInt("lmb", 1000) + safeAmount)
+        settings.putInt("daily_lmb_count", count + safeAmount)
+        return true
+    }
+
     val lmbFlow: Flow<Int> = flowSettings.getIntFlow("lmb", 1000)
 
     var lmbRefreshDate: String
@@ -348,8 +492,8 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = settings.putString("lmb_refresh_date", value)
 
     var dailyLmbCount: Int
-        get() = settings.getInt("daily_lmb_count", 0)
-        set(value) = settings.putInt("daily_lmb_count", value)
+        get() = settings.getInt("daily_lmb_count", 0).coerceAtLeast(0)
+        set(value) = settings.putInt("daily_lmb_count", value.coerceAtLeast(0))
 
     var rewardDate: String
         get() = settings.getString("reward_date", "")
@@ -357,8 +501,8 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     // === 动态设置 ===
     var dailyMomentTarget: Int
-        get() = settings.getInt("daily_moment_target", 2)
-        set(value) = settings.putInt("daily_moment_target", value)
+        get() = settings.getInt("daily_moment_target", 2).coerceIn(0, 100)
+        set(value) = settings.putInt("daily_moment_target", value.coerceIn(0, 100))
 
     // === 用户资料 ===
     var userName: String
@@ -384,28 +528,28 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     // === 清理设置 ===
     var cleanDaysMessages: Int
-        get() = settings.getInt("clean_days_messages", 30)
-        set(value) = settings.putInt("clean_days_messages", value)
+        get() = settings.getInt("clean_days_messages", 30).coerceIn(0, 3650)
+        set(value) = settings.putInt("clean_days_messages", value.coerceIn(0, 3650))
 
     var cleanDaysAnchors: Int
-        get() = settings.getInt("clean_days_anchors", 7)
-        set(value) = settings.putInt("clean_days_anchors", value)
+        get() = settings.getInt("clean_days_anchors", 7).coerceIn(0, 3650)
+        set(value) = settings.putInt("clean_days_anchors", value.coerceIn(0, 3650))
 
     var cleanDaysDiaries: Int
-        get() = settings.getInt("clean_days_diaries", 30)
-        set(value) = settings.putInt("clean_days_diaries", value)
+        get() = settings.getInt("clean_days_diaries", 30).coerceIn(0, 3650)
+        set(value) = settings.putInt("clean_days_diaries", value.coerceIn(0, 3650))
 
     var cleanDaysMoments: Int
-        get() = settings.getInt("clean_days_moments", 7)
-        set(value) = settings.putInt("clean_days_moments", value)
+        get() = settings.getInt("clean_days_moments", 7).coerceIn(0, 3650)
+        set(value) = settings.putInt("clean_days_moments", value.coerceIn(0, 3650))
 
     var cleanDaysDispatches: Int
-        get() = settings.getInt("clean_days_dispatches", 30)
-        set(value) = settings.putInt("clean_days_dispatches", value)
+        get() = settings.getInt("clean_days_dispatches", 30).coerceIn(0, 3650)
+        set(value) = settings.putInt("clean_days_dispatches", value.coerceIn(0, 3650))
 
     var cleanDaysWorldEvents: Int
-        get() = settings.getInt("clean_days_world_events", 7)
-        set(value) = settings.putInt("clean_days_world_events", value)
+        get() = settings.getInt("clean_days_world_events", 7).coerceIn(0, 3650)
+        set(value) = settings.putInt("clean_days_world_events", value.coerceIn(0, 3650))
 
     // === 催眠设置 ===
     var hypnosisCmd: String
@@ -413,8 +557,8 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = settings.putString("hypnosis_cmd", value)
 
     var hypnosisRound: Int
-        get() = settings.getInt("hypnosis_round", 0)
-        set(value) = settings.putInt("hypnosis_round", value)
+        get() = settings.getInt("hypnosis_round", 0).coerceIn(0, 100)
+        set(value) = settings.putInt("hypnosis_round", value.coerceIn(0, 100))
 
     // === 每日总结 ===
     var dailySummaryDate: String
@@ -435,50 +579,60 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = getLong("last_seen_comment_id", 0)
         set(value) = putLong("last_seen_comment_id", value)
 
+    fun getDiaryReadAt(operatorId: String): Long =
+        getLong("diary_read_at_$operatorId", 0L)
+
+    fun putDiaryReadAt(operatorId: String, value: Long) =
+        putLong("diary_read_at_$operatorId", value)
+
     // === 麻将历史 ===
     var mahjongHistoryJson: String
         get() = getString("mahjong_history_json", "")
         set(value) = putString("mahjong_history_json", value)
 
+    var worldLogJson: String
+        get() = getString("world_log_json", "[]")
+        set(value) = putString("world_log_json", value)
+
     var groupMsgMin: Int
-        get() = getInt("group_msg_min", 10)
-        set(value) = putInt("group_msg_min", value)
+        get() = getInt("group_msg_min", 10).coerceIn(1, getInt("group_msg_max", 100).coerceIn(1, 2000))
+        set(value) = putInt("group_msg_min", value.coerceIn(1, getInt("group_msg_max", 100).coerceIn(1, 2000)))
 
     var groupMsgMax: Int
-        get() = getInt("group_msg_max", 100)
-        set(value) = putInt("group_msg_max", value)
+        get() = getInt("group_msg_max", 100).coerceIn(getInt("group_msg_min", 10).coerceIn(1, 2000), 2000)
+        set(value) = putInt("group_msg_max", value.coerceIn(getInt("group_msg_min", 10).coerceIn(1, 2000), 2000))
 
     var groupSpeechMin: Int
-        get() = getInt("group_speech_min", 1)
-        set(value) = putInt("group_speech_min", value)
+        get() = getInt("group_speech_min", 1).coerceIn(1, getInt("group_speech_max", 2).coerceIn(1, 20))
+        set(value) = putInt("group_speech_min", value.coerceIn(1, getInt("group_speech_max", 2).coerceIn(1, 20)))
 
     var groupSpeechMax: Int
-        get() = getInt("group_speech_max", 2)
-        set(value) = putInt("group_speech_max", value)
+        get() = getInt("group_speech_max", 2).coerceIn(getInt("group_speech_min", 1).coerceIn(1, 20), 20)
+        set(value) = putInt("group_speech_max", value.coerceIn(getInt("group_speech_min", 1).coerceIn(1, 20), 20))
 
     var groupNarSegMin: Int
-        get() = getInt("group_nar_seg_min", 1)
-        set(value) = putInt("group_nar_seg_min", value)
+        get() = getInt("group_nar_seg_min", 1).coerceIn(0, getInt("group_nar_seg_max", 3).coerceIn(0, 20))
+        set(value) = putInt("group_nar_seg_min", value.coerceIn(0, getInt("group_nar_seg_max", 3).coerceIn(0, 20)))
 
     var groupNarSegMax: Int
-        get() = getInt("group_nar_seg_max", 3)
-        set(value) = putInt("group_nar_seg_max", value)
+        get() = getInt("group_nar_seg_max", 3).coerceIn(getInt("group_nar_seg_min", 1).coerceIn(0, 20), 20)
+        set(value) = putInt("group_nar_seg_max", value.coerceIn(getInt("group_nar_seg_min", 1).coerceIn(0, 20), 20))
 
     var groupNarMin: Int
-        get() = getInt("group_nar_min", 20)
-        set(value) = putInt("group_nar_min", value)
+        get() = getInt("group_nar_min", 20).coerceIn(0, getInt("group_nar_max", 100).coerceIn(0, 2000))
+        set(value) = putInt("group_nar_min", value.coerceIn(0, getInt("group_nar_max", 100).coerceIn(0, 2000)))
 
     var groupNarMax: Int
-        get() = getInt("group_nar_max", 100)
-        set(value) = putInt("group_nar_max", value)
+        get() = getInt("group_nar_max", 100).coerceIn(getInt("group_nar_min", 20).coerceIn(0, 2000), 2000)
+        set(value) = putInt("group_nar_max", value.coerceIn(getInt("group_nar_min", 20).coerceIn(0, 2000), 2000))
 
     var commentMinChars: Int
-        get() = getInt("comment_min_chars", 10)
-        set(value) = putInt("comment_min_chars", value)
+        get() = getInt("comment_min_chars", 10).coerceIn(1, getInt("comment_max_chars", 40).coerceIn(1, 1000))
+        set(value) = putInt("comment_min_chars", value.coerceIn(1, getInt("comment_max_chars", 40).coerceIn(1, 1000)))
 
     var commentMaxChars: Int
-        get() = getInt("comment_max_chars", 40)
-        set(value) = putInt("comment_max_chars", value)
+        get() = getInt("comment_max_chars", 40).coerceIn(getInt("comment_min_chars", 10).coerceIn(1, 1000), 1000)
+        set(value) = putInt("comment_max_chars", value.coerceIn(getInt("comment_min_chars", 10).coerceIn(1, 1000), 1000))
 
     // === 动态键方法（per-operator, per-group）===
 
@@ -499,6 +653,12 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     fun putGroupAuto(groupId: String, value: Boolean) =
         putBoolean("group_auto_$groupId", value)
+
+    fun getGroupEventAuto(groupId: String): Boolean =
+        getBoolean("group_event_auto_$groupId", false)
+
+    fun putGroupEventAuto(groupId: String, value: Boolean) =
+        putBoolean("group_event_auto_$groupId", value)
 
     fun getGroupMode(groupId: String): String =
         getString("group_mode_$groupId", "online")
@@ -578,28 +738,32 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     // === 通用方法 ===
     fun getString(key: String, default: String = ""): String =
-        settings.getString(key, default)
+        draftString(key, default)
 
-    fun putString(key: String, value: String) =
-        settings.putString(key, value)
+    fun putString(key: String, value: String) = synchronized(draftLock) {
+        if (draftActive) draftValues[key] = value else settings.putString(key, value)
+    }
 
     fun getInt(key: String, default: Int = 0): Int =
-        settings.getInt(key, default)
+        draftInt(key, default)
 
-    fun putInt(key: String, value: Int) =
-        settings.putInt(key, value)
+    fun putInt(key: String, value: Int) = synchronized(draftLock) {
+        if (draftActive) draftValues[key] = value else settings.putInt(key, value)
+    }
 
     fun getBoolean(key: String, default: Boolean = false): Boolean =
-        settings.getBoolean(key, default)
+        draftBoolean(key, default)
 
-    fun putBoolean(key: String, value: Boolean) =
-        settings.putBoolean(key, value)
+    fun putBoolean(key: String, value: Boolean) = synchronized(draftLock) {
+        if (draftActive) draftValues[key] = value else settings.putBoolean(key, value)
+    }
 
     fun getLong(key: String, default: Long = 0L): Long =
-        settings.getLong(key, default)
+        draftLong(key, default)
 
-    fun putLong(key: String, value: Long) =
-        settings.putLong(key, value)
+    fun putLong(key: String, value: Long) = synchronized(draftLock) {
+        if (draftActive) draftValues[key] = value else settings.putLong(key, value)
+    }
 
     fun getStringSet(key: String, default: Set<String> = emptySet()): Set<String> {
         val json = settings.getString(key, "")
@@ -610,8 +774,9 @@ class SettingsRepository(private val settings: ObservableSettings) {
     fun putStringSet(key: String, value: Set<String>) =
         settings.putString(key, Json.encodeToString(value))
 
-    fun remove(key: String) =
-        settings.remove(key)
+    fun remove(key: String) = synchronized(draftLock) {
+        if (draftActive) draftValues[key] = null else settings.remove(key)
+    }
 
     fun applyContextMode(mode: String) {
         contextMode = mode
@@ -619,42 +784,42 @@ class SettingsRepository(private val settings: ObservableSettings) {
             "economy" -> {
                 dualModel = false
                 historyMessages = 12
-                privateAnchorCount = 3
-                privateSharedMemoryCount = 1
-                privateGroupContextCount = 1
-                groupMemberMemoryCount = 1
-                eventContextCount = 2
-                dailyMomentTarget = 1
+                putInt("private_anchor_count", 3)
+                putInt("private_shared_memory_count", 1)
+                putInt("private_group_context_count", 1)
+                putInt("group_member_memory_count", 1)
+                putInt("event_context_count", 2)
+                putInt("daily_moment_target", 1)
                 autoDiaryEnabled = false
-                commentBystanderMax = 1
-                dailyAutoAiLimit = 20
-                tickAutoAiLimit = 2
+                putInt("comment_bystander_max", 1)
+                putInt("daily_auto_ai_limit", 20)
+                putInt("tick_auto_ai_limit", 2)
             }
             "standard" -> {
                 historyMessages = 20
-                privateAnchorCount = 5
-                privateSharedMemoryCount = 3
-                privateGroupContextCount = 2
-                groupMemberMemoryCount = 2
-                eventContextCount = 5
-                dailyMomentTarget = 2
+                putInt("private_anchor_count", 5)
+                putInt("private_shared_memory_count", 3)
+                putInt("private_group_context_count", 2)
+                putInt("group_member_memory_count", 2)
+                putInt("event_context_count", 5)
+                putInt("daily_moment_target", 2)
                 autoDiaryEnabled = true
-                commentBystanderMax = 3
-                dailyAutoAiLimit = 40
-                tickAutoAiLimit = 3
+                putInt("comment_bystander_max", 3)
+                putInt("daily_auto_ai_limit", 40)
+                putInt("tick_auto_ai_limit", 3)
             }
             "full" -> {
                 historyMessages = 40
-                privateAnchorCount = 8
-                privateSharedMemoryCount = 5
-                privateGroupContextCount = 4
-                groupMemberMemoryCount = 4
-                eventContextCount = 8
-                dailyMomentTarget = 3
+                putInt("private_anchor_count", 8)
+                putInt("private_shared_memory_count", 5)
+                putInt("private_group_context_count", 4)
+                putInt("group_member_memory_count", 4)
+                putInt("event_context_count", 8)
+                putInt("daily_moment_target", 3)
                 autoDiaryEnabled = true
-                commentBystanderMax = 4
-                dailyAutoAiLimit = 80
-                tickAutoAiLimit = 5
+                putInt("comment_bystander_max", 4)
+                putInt("daily_auto_ai_limit", 80)
+                putInt("tick_auto_ai_limit", 5)
             }
         }
     }

@@ -6,6 +6,7 @@ import com.rhodes.privatechat.shared.model.WorldEventType
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.util.DebugLogger
 import com.rhodes.privatechat.viewmodel.shared.AppStateHolder
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -14,12 +15,15 @@ class WorldScheduler(
     private val settings: SettingsRepository,
     private val appState: AppStateHolder,
     private val scope: CoroutineScope,
-    private val generateOneMoment: () -> Unit,
-    private val refreshAutoGroups: () -> Unit,
-    private val generateDiary: (String) -> Unit,
-    private val triggerProactivePrivate: suspend (WorldEvent) -> Boolean = { false }
+    private val generateOneMoment: suspend (WorldEvent?) -> Boolean,
+    private val triggerEventGroups: (WorldEvent?) -> Boolean,
+    private val generateDiary: suspend (String) -> Boolean,
+    private val triggerProactivePrivate: suspend (WorldEvent) -> Boolean = { false },
+    private val canUseWorldTrigger: (String) -> Boolean = { true },
+    private val consumeWorldTrigger: (String) -> Unit = { }
 ) {
     fun tick() {
+        if (!settings.autoAiEnabled) return
         if (!settings.worldSchedulerEnabled) return
         scope.launch {
             try {
@@ -28,6 +32,8 @@ class WorldScheduler(
                 maybeRefreshAutoGroups()
                 maybeTriggerProactivePrivateEvents()
                 maybeGenerateDailyDiaries()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 DebugLogger.log("World/Scheduler", "调度失败: ${e.message?.take(100)}")
             }
@@ -42,7 +48,7 @@ class WorldScheduler(
     private suspend fun maybeTriggerMoment() {
         if (!settings.autoMomentEnabled || settings.dailyMomentTarget <= 0) return
         val todayStart = todayStartMillis()
-        val todayCount = repository.countWorldEventsByTypeSince(WorldEventType.MOMENT_POSTED, todayStart)
+        val todayCount = repository.countChainedWorldEventsByTypeSince(WorldEventType.MOMENT_POSTED, todayStart)
         if (todayCount >= settings.dailyWorldEventLimit) return
         val recent = repository.getUnconsumedWorldEventsByType(WorldEventType.COMMENT_POSTED, "world:moment", 5) +
             repository.getUnconsumedWorldEventsByType(WorldEventType.GROUP_TOPIC, "world:moment", 5) +
@@ -50,28 +56,46 @@ class WorldScheduler(
         val hasSeed = recent.any { it.type == WorldEventType.COMMENT_POSTED || it.type == WorldEventType.GROUP_TOPIC || it.type == WorldEventType.STATUS_CHANGED }
         val chance = settings.momentTriggerStrength.coerceIn(0, 100)
         if (hasSeed && (0..99).random() < chance) {
-            DebugLogger.log("World/Scheduler", "触发动态: seed=${recent.firstOrNull()?.type ?: "none"}")
-            generateOneMoment()
-            recent.take(settings.eventContextCount).forEach { repository.markWorldEventConsumed(it.id, "world:moment") }
+            val seed = recent.firstOrNull()
+            if (seed != null && seed.chainDepth >= 3) return
+            if (!canUseWorldTrigger("event_moment")) return
+            DebugLogger.log("World/Scheduler", "触发动态: seed=${seed?.type ?: "none"}")
+            if (generateOneMoment(seed)) {
+                consumeWorldTrigger("event_moment")
+                recent.take(settings.eventContextCount).forEach { repository.markWorldEventConsumed(it.id, "world:moment") }
+            }
         }
     }
 
     private suspend fun maybeRefreshAutoGroups() {
         if (!settings.worldAutoGroupEnabled) return
-        val hasTopic = repository.getRecentWorldEvents(8).any { it.type == WorldEventType.MOMENT_POSTED || it.type == WorldEventType.COMMENT_POSTED }
-        if (hasTopic && (0..99).random() < settings.groupTriggerStrength.coerceIn(0, 100)) {
-            DebugLogger.log("World/Scheduler", "刷新自动群聊: recentTopics=true groups=${appState.sessions.value.count { it.operatorId.startsWith("group_") }}")
-            refreshAutoGroups()
+        val seed = repository.getRecentWorldEvents(8).firstOrNull { it.type == WorldEventType.MOMENT_POSTED || it.type == WorldEventType.COMMENT_POSTED }
+        if (seed != null && (0..99).random() < settings.groupTriggerStrength.coerceIn(0, 100)) {
+            if (seed.chainDepth >= 3) return
+            if (!canUseWorldTrigger("event_group")) return
+            DebugLogger.log("World/Scheduler", "事件唤起群聊: recentTopics=true groups=${appState.sessions.value.count { it.operatorId.startsWith("group_") }}")
+            if (triggerEventGroups(seed)) consumeWorldTrigger("event_group")
         }
     }
 
     private suspend fun maybeTriggerProactivePrivateEvents() {
         if (!settings.worldProactiveChatEnabled || settings.dailyProactiveLimit <= 0) return
+        val today = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.getDefault()).apply {
+            timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")
+        }.format(java.util.Date())
+        val sentKey = "world_private_trigger_sent_$today"
+        var sentToday = settings.getInt(sentKey, 0)
+        if (sentToday >= settings.dailyProactiveLimit) return
         val triggers = repository.getWorldEventsByType(WorldEventType.PRIVATE_TRIGGER, settings.dailyProactiveLimit)
             .filter { isToday(it.createdAt) && !it.consumedBy.contains("world:private") }
         triggers.forEach { event ->
+            if (sentToday >= settings.dailyProactiveLimit) return@forEach
+            if (!canUseWorldTrigger("event_private")) return@forEach
             val sent = triggerProactivePrivate(event)
             if (sent) {
+                consumeWorldTrigger("event_private")
+                sentToday += 1
+                settings.putInt(sentKey, sentToday)
                 repository.markWorldEventConsumed(event.id, "world:private")
                 DebugLogger.log("World/Scheduler", "主动私聊事件已发送: ${event.content.take(80)}")
             } else {
@@ -86,14 +110,17 @@ class WorldScheduler(
             timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")
         }.format(java.util.Date())
         if (settings.getString("world_diary_date", "") == today) return
-        settings.putString("world_diary_date", today)
-        appState.operators.value
+        scope.launch {
+            var success = false
+            appState.operators.value
             .sortedByDescending { it.activityLevel }
             .take(settings.dailyDiaryOperatorLimit)
             .forEach { op ->
                 DebugLogger.log("World/Scheduler", "自动日记: ${op.name}")
-                generateDiary(op.id)
+                if (generateDiary(op.id)) success = true
             }
+            if (success) settings.putString("world_diary_date", today)
+        }
     }
 
     private fun isToday(time: Long): Boolean {

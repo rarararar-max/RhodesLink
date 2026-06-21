@@ -57,6 +57,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -78,6 +79,7 @@ import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.util.copyToCache
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.viewmodel.MainViewModel
+import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
 @Composable
@@ -88,6 +90,7 @@ fun OperatorEditScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val operators by viewModel.operators.collectAsState()
     val isNew = operator == null
     var cropTarget by remember { mutableStateOf<android.net.Uri?>(null) }
@@ -105,8 +108,10 @@ fun OperatorEditScreen(
     var description by remember { mutableStateOf(operator?.description ?: "") }
     var userRelation by remember { mutableStateOf(operator?.userRelation ?: "") }
     var relationships by remember { mutableStateOf<List<RelationshipEntity>>(emptyList()) }
+    var initialRelationships by remember { mutableStateOf<List<RelationshipEntity>>(emptyList()) }
     var showAddPicker by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showUnsavedConfirm by remember { mutableStateOf(false) }
     var showPromptInput by remember { mutableStateOf(false) }
     var showPromptResult by remember { mutableStateOf(false) }
     var promptResult by remember { mutableStateOf<com.rhodes.privatechat.viewmodel.MainViewModel.OperatorPromptResult?>(null) }
@@ -116,7 +121,10 @@ fun OperatorEditScreen(
     // 加载已有关系
     LaunchedEffect(operator) {
         if (operator != null) {
-            viewModel.loadRelationships(operator.id) { relationships = it }
+            viewModel.loadRelationships(operator.id) {
+                relationships = it
+                initialRelationships = it
+            }
         }
     }
 
@@ -134,12 +142,25 @@ fun OperatorEditScreen(
             onComplete = { onBack() }
         )
     }
+    val hasUnsavedChanges = name != (operator?.name ?: "新干员") ||
+        title != (operator?.title ?: "") ||
+        gender != (operator?.gender ?: "") ||
+        activity != (operator?.activityLevel ?: 0.5f) ||
+        autoPost != settings.getOperatorDynPermission(operator?.id ?: "") ||
+        allowChat != settings.getOperatorMsgPermission(operator?.id ?: "") ||
+        avatarUri != (operator?.avatarUri ?: "") ||
+        privatePrompt != (operator?.privatePrompt ?: "") ||
+        groupPrompt != (operator?.groupPrompt ?: "") ||
+        description != (operator?.description ?: "") ||
+        userRelation != (operator?.userRelation ?: "") ||
+        relationships != initialRelationships
+    val requestBack = { if (hasUnsavedChanges) showUnsavedConfirm = true else onBack() }
 
     Box(modifier = modifier.fillMaxSize()) {
     Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
         TopBar(
             title = if (isNew) "新建干员" else operator!!.name,
-            onBack = onBack,
+            onBack = requestBack,
             onSave = onSave
         )
 
@@ -261,6 +282,7 @@ fun OperatorEditScreen(
                         Text("添加关系")
                     }
                 }
+                RelationshipHelpCard()
                 if (relationships.isEmpty()) {
                     Text("暂无关系，点击上方添加", fontSize = 13.sp, color = TextTertiary, modifier = Modifier.padding(vertical = 8.dp))
                 }
@@ -303,6 +325,17 @@ fun OperatorEditScreen(
         )
     }
 
+    if (showUnsavedConfirm) {
+        AlertDialog(
+            onDismissRequest = { showUnsavedConfirm = false },
+            title = { Text("放弃修改？", color = TextPrimary) },
+            text = { Text("当前编辑内容尚未保存，返回后会丢失。", color = TextSecondary) },
+            confirmButton = { TextButton(onClick = { showUnsavedConfirm = false; onBack() }) { Text("放弃", color = ErrorRed) } },
+            dismissButton = { TextButton(onClick = { showUnsavedConfirm = false }) { Text("继续编辑", color = TextSecondary) } },
+            containerColor = Card
+        )
+    }
+
     if (showAddPicker) {
         OperatorPickerDialog(
             operators = operators.filter { op -> operator == null || op.id != operator.id },
@@ -322,7 +355,7 @@ fun OperatorEditScreen(
     cropTarget?.let { uri ->
         com.rhodes.privatechat.ui.common.ImageCropperDialog(
             imageUri = uri, aspectX = 1f, aspectY = 1f,
-            onConfirm = { cropped -> avatarUri = com.rhodes.privatechat.util.copyToInternalStorage(context, cropped); cropTarget = null },
+            onConfirm = { cropped -> scope.launch { avatarUri = com.rhodes.privatechat.util.copyToInternalStorageAsync(context, cropped); cropTarget = null } },
             onCancel = { cropTarget = null }
         )
     }
@@ -460,6 +493,51 @@ fun OperatorEditScreen(
 }
 
 @Composable
+private fun RelationshipHelpCard() {
+    Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Primary.copy(alpha = 0.08f)).padding(12.dp)) {
+        Text("关系是当前干员眼中的关系", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "例如在能天使页面添加“德克萨斯：挚友”，表示能天使把德克萨斯视为挚友。德克萨斯是否也这样看待能天使，需要到德克萨斯页面单独设置。",
+            fontSize = 11.sp,
+            color = TextSecondary,
+            lineHeight = 16.sp
+        )
+        Spacer(Modifier.height(4.dp))
+        Text("关系会影响群聊互动、日记内容，以及通过关系听说到的公开记忆。私聊中的私密内容不会直接外传。", fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp)
+    }
+    Spacer(Modifier.height(10.dp))
+}
+
+@Composable
+private fun IntimacyHelpButton() {
+    var show by remember { mutableStateOf(false) }
+    Text(
+        "?",
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Bold,
+        color = Primary,
+        modifier = Modifier.clip(CircleShape).background(Primary.copy(alpha = 0.12f)).clickable { show = true }.padding(horizontal = 6.dp, vertical = 2.dp)
+    )
+    if (show) {
+        AlertDialog(
+            onDismissRequest = { show = false },
+            title = { Text("亲密度有什么用", color = TextPrimary, fontWeight = FontWeight.SemiBold) },
+            text = {
+                Text(
+                    "亲密度表示两个干员之间的熟悉和信任程度。\n\n0-19：只是认识，基本不共享消息\n20-39：偶尔听说公开事件\n40-59：会知道一些计划和关系事件\n60-79：比较熟，会共享较多公开经历\n80+：非常亲近，可能知道情绪、偏好等更细的信息\n\n只会传递公开记忆，私聊中的私密内容不会直接通过关系网传播。",
+                    fontSize = 13.sp,
+                    color = TextSecondary,
+                    lineHeight = 20.sp
+                )
+            },
+            confirmButton = { TextButton(onClick = { show = false }) { Text("知道了", color = Primary) } },
+            containerColor = Card
+        )
+    }
+}
+
+@Composable
 private fun TopBar(title: String, onBack: () -> Unit, onSave: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp),
@@ -550,11 +628,14 @@ private fun RelationshipEditItem(
             }
         }
         Spacer(modifier = Modifier.height(8.dp))
-        Text("${opName}是${rel.relatedOperatorName}的", fontSize = 12.sp, color = TextPrimary, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 4.dp))
+        Text("当前视角：${opName}是${rel.relatedOperatorName}的", fontSize = 12.sp, color = TextPrimary, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 4.dp))
         TypePicker(selected = rel.type, onSelect = { onUpdate(rel.copy(type = it)) })
         Spacer(modifier = Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("亲密度", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.width(48.dp))
+            Spacer(Modifier.width(4.dp))
+            IntimacyHelpButton()
+            Spacer(Modifier.width(6.dp))
             Slider(value = rel.intimacy.toFloat(), onValueChange = { onUpdate(rel.copy(intimacy = it.toInt())) },
                 valueRange = 0f..100f, modifier = Modifier.weight(1f),
                 colors = androidx.compose.material3.SliderDefaults.colors(thumbColor = Blue400, activeTrackColor = Blue400))
@@ -583,6 +664,8 @@ private fun TypePicker(selected: RelationshipType, onSelect: (RelationshipType) 
             title = { Text("选择关系类型", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary) },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text("请选择“当前干员是对方的什么”。例如在 A 的页面选择“姐姐”，表示“A 是 B 的姐姐”。如果希望 B 也知道这层关系，需要到 B 的页面再设置“妹妹”。", fontSize = 12.sp, color = TextSecondary, lineHeight = 18.sp)
+                    Spacer(Modifier.height(8.dp))
                     RelationshipType.values().forEach { type ->
                         Row(
                             modifier = Modifier.fillMaxWidth()

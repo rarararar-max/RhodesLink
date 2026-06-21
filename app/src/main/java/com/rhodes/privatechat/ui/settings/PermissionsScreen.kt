@@ -7,7 +7,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -39,13 +39,12 @@ fun PermissionsScreen(
     val tabs = listOf("干员", "群聊")
     var tabIndex by remember { mutableIntStateOf(0) }
 
-    Box(modifier = modifier.fillMaxSize()) {
-    Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
-        Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
-            Text("权限管理", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-        }
-        HorizontalDivider(color = Divider)
+    SaveableSettingsScaffold(
+        title = "权限管理",
+        onBack = onBack,
+        modifier = modifier.fillMaxSize().background(BG).systemBarsPadding(),
+        icon = { Icon(Icons.Default.Build, null, tint = Primary) }
+    ) {
 
         TabRow(selectedTabIndex = tabIndex, containerColor = Surface, contentColor = Blue400) {
             tabs.forEachIndexed { i, title ->
@@ -58,7 +57,6 @@ fun PermissionsScreen(
             1 -> GroupPermTab(groups = groups, viewModel = viewModel)
         }
     }
-    }
 }
 
 @Composable
@@ -66,12 +64,12 @@ private fun OperatorPermTab(operators: List<com.rhodes.privatechat.data.db.entit
     val settings: SettingsRepository = koinInject()
 
     Column {
-        Text("批量设置干员的主动消息和自动动态权限", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        Text("批量设置角色主动私聊和动态参与权限。动态权限会影响每日自动动态、事件触发动态、自动评论/围观回复。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
 
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("干员", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, modifier = Modifier.weight(1f))
-            Text("主动消息", fontSize = 11.sp, color = TextSecondary, modifier = Modifier.width(56.dp))
-            Text("自动动态", fontSize = 11.sp, color = TextSecondary, modifier = Modifier.width(56.dp))
+            Text("主动私聊", fontSize = 11.sp, color = TextSecondary, modifier = Modifier.width(56.dp))
+            Text("动态权限", fontSize = 11.sp, color = TextSecondary, modifier = Modifier.width(56.dp))
         }
 
         LazyColumn {
@@ -94,29 +92,42 @@ private fun OperatorPermTab(operators: List<com.rhodes.privatechat.data.db.entit
 @Composable
 private fun GroupPermTab(groups: List<com.rhodes.privatechat.data.db.entity.ChatSessionEntity>, viewModel: MainViewModel) {
     val settings: SettingsRepository = koinInject()
+    var eventEnabledCount by remember(groups) { mutableIntStateOf(groups.count { settings.getGroupEventAuto(it.id) }) }
 
     Column {
-        Text("控制各群聊是否开启自动聊天（发送消息后自动触发干员闲聊）", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        Text("空闲自动聊天会按时间一直聊；大世界事件唤起只在动态、评论等事件发生后聊几轮。当前允许事件唤起的群：${eventEnabledCount} 个。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
 
         if (groups.isEmpty()) {
             Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
                 Text("暂无群聊", fontSize = 14.sp, color = TextTertiary)
             }
         } else {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("群聊", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, modifier = Modifier.weight(1f))
+                Text("空闲自动", fontSize = 11.sp, color = TextSecondary, modifier = Modifier.width(64.dp))
+                Text("事件唤起", fontSize = 11.sp, color = TextSecondary, modifier = Modifier.width(64.dp))
+            }
             LazyColumn {
                 items(groups, key = { it.id }) { g ->
-                    var autoSpeak by remember(g.id) { mutableStateOf(settings.getGroupAuto(g.id)) }
+                    var idleAuto by remember(g.id) { mutableStateOf(settings.getGroupAuto(g.id)) }
+                    var eventAuto by remember(g.id) { mutableStateOf(settings.getGroupEventAuto(g.id)) }
                     Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                         OperatorAvatarImage(avatarUri = g.avatarUri, name = g.operatorName, modifier = Modifier.size(36.dp))
                         Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
                             Text(g.operatorName, fontSize = 14.sp, color = TextPrimary)
-                            Text("自动聊天", fontSize = 11.sp, color = TextSecondary)
+                            Text("空闲自动 / 事件唤起", fontSize = 11.sp, color = TextSecondary)
                         }
-                        Switch(checked = autoSpeak, onCheckedChange = { b ->
-                            autoSpeak = b
-                            viewModel.setAutoGroupChatEnabled(g.id, b)
+                        Switch(checked = idleAuto, onCheckedChange = { b ->
+                            idleAuto = b
+                            settings.putGroupAuto(g.id, b)
                         }, colors = SwitchDefaults.colors(checkedThumbColor = Primary, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
+                        Spacer(Modifier.width(6.dp))
+                        Switch(checked = eventAuto, onCheckedChange = { b ->
+                            if (eventAuto != b) eventEnabledCount += if (b) 1 else -1
+                            eventAuto = b
+                            settings.putGroupEventAuto(g.id, b)
+                        }, colors = SwitchDefaults.colors(checkedThumbColor = AccentOrange, checkedTrackColor = AccentOrange.copy(alpha = 0.2f), uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
                     }
                     HorizontalDivider(color = Divider)
                 }

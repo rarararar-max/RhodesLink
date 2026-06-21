@@ -3,15 +3,13 @@ package com.rhodes.privatechat.game.mahjong
 import android.util.Log
 import kotlin.random.Random
 
-/** 发言气泡 */
 data class SpeechBubble(
     val speakerName: String,
     val text: String,
     val expireTime: Long = System.currentTimeMillis() + 3000,
-    val priority: Int = 0  // 0=低, 1=中, 2=高
+    val priority: Int = 0
 )
 
-/** 发言请求（发送给 AI） */
 data class SpeechRequest(
     val speakerName: String,
     val persona: String,
@@ -26,7 +24,6 @@ object AiSpeech {
     private const val TAG = "麻将"
     var aiCaller: ((SpeechRequest) -> Unit)? = null
 
-    // 预设句子库（超时兜底）
     private val fallbackLines = mapOf(
         "出牌嘀咕" to listOf("嗯…打这个吧", "这张应该安全", "就这个了", "没什么好犹豫的"),
         "碰牌" to listOf("这个我要了！", "碰！", "等的就是这张"),
@@ -40,6 +37,9 @@ object AiSpeech {
         "闲聊" to listOf("说起来今天食堂的菜还不错", "博士昨天是不是又熬夜了？", "最近训练有点累了"),
         "建议打牌" to listOf("要不打这张试试？", "感觉打左边那张好一点", "我觉得留着万字比较好"),
         "建议不确定" to listOf("我也看不出来该打什么…", "博士你自己看着办", "这手牌有点难处理"),
+        "开局" to listOf("今天来几局？", "活动室的桌子终于空了", "让我看看博士的牌运"),
+        "胜利感想" to listOf("承让承让~", "今天运气不错", "下次要更认真哦"),
+        "失败感想" to listOf("下次一定赢回来", "只是运气问题啦", "呜…居然输了"),
     )
 
     fun getFallback(action: String): String {

@@ -60,10 +60,12 @@ class MomentRepository(private val wrapper: DatabaseWrapper) {
     }
 
     suspend fun markCommentRead(id: Long) = withContext(Dispatchers.Default) { db.momentCommentsQueries.markCommentRead(id) }
+    suspend fun markMomentCommentsReadForUser(momentId: Long, userName: String) = withContext(Dispatchers.Default) { db.momentCommentsQueries.markMomentCommentsReadForUser(momentId, userName) }
     suspend fun markAllCommentsRead(userName: String) = withContext(Dispatchers.Default) { db.momentCommentsQueries.markAllCommentsRead(userName) }
     suspend fun deleteOldUserComments(cutoff: Long, userName: String) = withContext(Dispatchers.Default) { db.momentCommentsQueries.deleteOldUserComments(cutoff, userName) }
     suspend fun updateLikeCount(momentId: Long, count: Int) = withContext(Dispatchers.Default) { db.momentsQueries.updateLikeCount(count.toLong(), momentId) }
     suspend fun updateCommentCount(momentId: Long, count: Int) = withContext(Dispatchers.Default) { db.momentsQueries.updateCommentCount(count.toLong(), momentId) }
+    suspend fun getCommentCount(momentId: Long): Int = withContext(Dispatchers.Default) { db.momentCommentsQueries.getCommentCount(momentId).executeAsOne().toInt() }
     suspend fun getLikeCount(momentId: Long): Int = withContext(Dispatchers.Default) { db.momentLikesQueries.getLikeCount(momentId).executeAsOne().toInt() }
 
     suspend fun getLike(momentId: Long, operatorId: String): MomentLike? = withContext(Dispatchers.Default) {
@@ -92,6 +94,10 @@ class MomentRepository(private val wrapper: DatabaseWrapper) {
         db.momentsQueries.getMomentsByOperator(operatorId) { id, opId, opName, content, isUserPost, mentionedIds, likeCount, commentCount, createdAt ->
             Moment(id, opId, opName, content, isUserPost != 0L, mentionedIds, likeCount.toInt(), commentCount.toInt(), createdAt)
         }.executeAsList()
+    }
+
+    suspend fun countMomentsByOperatorSince(operatorId: String, since: Long): Int = withContext(Dispatchers.Default) {
+        db.momentsQueries.countMomentsByOperatorSince(operatorId, since).executeAsOne().toInt()
     }
 
     suspend fun deleteLike(momentId: Long, operatorId: String) = withContext(Dispatchers.Default) { db.momentLikesQueries.deleteLike(momentId, operatorId) }

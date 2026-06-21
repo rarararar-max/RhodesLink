@@ -7,6 +7,9 @@ CREATE TABLE IF NOT EXISTS diaries (
     createdAt INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_diaries_operator_date
+ON diaries(operatorId, date);
+
 getDiariesByOperator:
 SELECT * FROM diaries WHERE operatorId = ? ORDER BY date DESC;
 

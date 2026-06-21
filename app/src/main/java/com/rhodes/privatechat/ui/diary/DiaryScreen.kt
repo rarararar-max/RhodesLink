@@ -16,9 +16,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.MenuBook
-import androidx.compose.material.icons.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
@@ -56,7 +56,7 @@ import java.util.Calendar
 import java.util.Locale
 import java.util.TimeZone
 
-data class DiaryOp(val id: String, val name: String, val color: Color, val hasDiary: Boolean = false)
+data class DiaryOp(val id: String, val name: String, val color: Color, val hasDiary: Boolean = false, val unread: Boolean = false)
 
 private val colorPalette = listOf(
     Color(0xFF5B8DEF), Color(0xFF4DB6AC), Color(0xFFFF7043), Color(0xFF607D8B),
@@ -72,10 +72,12 @@ fun DiaryScreen(
     modifier: Modifier = Modifier
 ) {
     val operators by viewModel.operators.collectAsState()
-    val diaryOps: List<DiaryOp> = remember(operators) {
+    var unreadIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    LaunchedEffect(operators) { unreadIds = viewModel.getUnreadDiaryOperatorIds() }
+    val diaryOps: List<DiaryOp> = remember(operators, unreadIds) {
         operators.mapIndexed { i, op ->
-            DiaryOp(op.id, op.name, colorPalette[i % colorPalette.size])
-        }
+            DiaryOp(op.id, op.name, colorPalette[i % colorPalette.size], unread = op.id in unreadIds)
+        }.sortedWith(compareByDescending<DiaryOp> { it.unread }.thenBy { it.name })
     }
     val context = LocalContext.current
     var searchText by remember { mutableStateOf("") }
@@ -117,6 +119,10 @@ fun DiaryScreen(
                 val totalCount = withContext(Dispatchers.IO) { viewModel.repository.getDiaryCount() }
                 com.rhodes.privatechat.util.DebugLogger.log("Diary", "全表diary数: total=$totalCount, matched=${entries.size}")
                 diaryEntries = entries
+                entries.maxOfOrNull { it.createdAt }?.let { latest ->
+                    viewModel.markDiaryRead(opId, latest)
+                    unreadIds = unreadIds - opId
+                }
                 dataLoaded = true
                 // 计算昨天的日期（北京时间），优先定位到昨天的日记
                 val cal = Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai"))
@@ -210,7 +216,10 @@ fun DiaryScreen(
                             items(filteredOps) { op ->
                             val opEntity = operators.find { it.id == op.id || it.name == op.name }
                             Column(modifier = Modifier.fillMaxWidth().background(if (op.name == selectedName) Primary.copy(alpha = 0.1f) else Color.Transparent).clickable { selectedName = op.name }.padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                OperatorAvatarImage(avatarUri = opEntity?.avatarUri ?: "", name = op.name, modifier = Modifier.size(40.dp))
+                                Box {
+                                    OperatorAvatarImage(avatarUri = opEntity?.avatarUri ?: "", name = op.name, modifier = Modifier.size(40.dp))
+                                    if (op.unread) Box(Modifier.size(10.dp).clip(CircleShape).background(ErrorRed).align(Alignment.TopEnd))
+                                }
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(op.name, fontSize = 10.sp, color = if (op.name == selectedName) Primary else TextSecondary)
                             }
@@ -238,7 +247,7 @@ fun DiaryScreen(
                         enabled = canPrev,
                         modifier = Modifier.size(28.dp)
                     ) {
-                        Icon(Icons.Default.KeyboardArrowLeft, "更早", tint = if (canPrev) Primary else TextTertiary, modifier = Modifier.size(18.dp))
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "上一篇", tint = if (canPrev) Primary else TextTertiary, modifier = Modifier.size(18.dp))
                     }
 
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -249,7 +258,7 @@ fun DiaryScreen(
                             Spacer(Modifier.width(6.dp))
                             Text(selectedName, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Primary)
                         }
-                        Text("${if (diaryEntries.isNotEmpty()) currentDateLabel else ""} #${if (diaryEntries.isEmpty()) 0 else diaryEntries.size - currentDateIdx}/${diaryEntries.size}", fontSize = 11.sp, color = TextTertiary)
+                        Text(if (diaryEntries.isNotEmpty()) "$currentDateLabel · 第 ${currentDateIdx + 1}/${diaryEntries.size} 篇" else "暂无日记", fontSize = 11.sp, color = TextTertiary)
                     }
 
                     val canNext = currentDateIdx < diaryEntries.lastIndex && diaryEntries.isNotEmpty()
@@ -267,7 +276,7 @@ fun DiaryScreen(
                         enabled = canNext,
                         modifier = Modifier.size(28.dp)
                     ) {
-                        Icon(Icons.Default.KeyboardArrowRight, "更新", tint = if (canNext) Primary else TextTertiary, modifier = Modifier.size(18.dp))
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "下一篇", tint = if (canNext) Primary else TextTertiary, modifier = Modifier.size(18.dp))
                     }
                 }
 
@@ -319,13 +328,15 @@ fun DiaryScreen(
                         ) {
                             Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text("重新生成")
+                            Text("重新生成这篇日记")
                         }
                     }
                 } else if (!isGenerating) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("点击下方按钮偷看${selectedName}的日记", fontSize = 14.sp, color = TextTertiary)
+                            Text("还没有找到${selectedName}的日记", fontSize = 14.sp, color = TextTertiary)
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text("可以让 AI 根据近期聊天、动态、群聊和关系事件补写一篇。", fontSize = 12.sp, color = TextSecondary, lineHeight = 18.sp)
                             Spacer(modifier = Modifier.height(16.dp))
                             Button(onClick = {
                                 val opId = diaryOps.find { it.name == selectedName }?.id
@@ -365,13 +376,17 @@ fun DiaryScreen(
                             }, colors = ButtonDefaults.buttonColors(containerColor = Primary)) {
                                 Icon(Icons.AutoMirrored.Filled.MenuBook, null, modifier = Modifier.size(18.dp))
                                 Spacer(Modifier.width(6.dp))
-                                Text("偷看日记", fontWeight = FontWeight.SemiBold)
+                                Text("查看日记", fontWeight = FontWeight.SemiBold)
                             }
                         }
                     }
                 } else {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("偷看日记中...", fontSize = 16.sp, color = Primary)
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("正在生成${selectedName}的日记...", fontSize = 16.sp, color = Primary)
+                            Spacer(Modifier.height(6.dp))
+                            Text("会参考近期聊天、动态、群聊和关系事件", fontSize = 12.sp, color = TextSecondary)
+                        }
                     }
                 }
             }

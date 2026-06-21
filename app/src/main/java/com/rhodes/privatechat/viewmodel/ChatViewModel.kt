@@ -96,7 +96,7 @@ class ChatViewModel(
     private val shortTermThreshold: Int get() = settings.summaryThreshold
     private val chatAiMutexes = ConcurrentHashMap<String, Mutex>()
     private fun aiMutexFor(sessionId: String): Mutex = chatAiMutexes.computeIfAbsent(sessionId) { Mutex() }
-    private var analysisGuidance = ""
+    private val analysisGuidanceBySession = ConcurrentHashMap<String, String>()
     private var modeTransitionNotice = ""
     private var messagesJob: Job? = null
     private val chatAiJobs = ConcurrentHashMap<String, Job>()
@@ -139,41 +139,55 @@ class ChatViewModel(
             val text = older.joinToString("\n") { "${it.senderName}：${it.content.take(100)}" }
             DebugLogger.log("Memory/Summary", "开始短期摘要: session=${session.id}, operator=${session.operatorName}, totalMsgs=${msgs.size}, older=${older.size}, retain=$retain, oldSummary=${oldSummary != "无"}")
             val prompt = if (settings.unifiedMemoryEnabled) """
-你是罗德岛的记录员。将对话压缩为摘要，提取记忆锚点，并判断是否需要更新长期印象。
+你是罗德岛的随行记录员，负责把角色真正会记住的事整理成可长期使用的记忆。
 
-请融合“已有摘要”和“新增对话”。不要丢失用户明确表达的偏好、禁忌、承诺、计划、关系变化和重要事件。
+请融合“已有摘要”和“新增对话”，生成一份连续摘要、若干高价值记忆锚点，并判断是否需要更新长期印象。目标是让${session.operatorName}下次聊天时能自然想起具体事情，而不是背诵流水账。
 
 输出JSON：{"summary":"50~200字摘要","anchors":[{"type":"event|preference|plan|emotion|taboo|relation","content":"具体内容","importance":"strong|medium|weak","sourceActor":"谁说的","sourceTarget":"指向谁","isPrivate":false}],"impression_update":{"should_update":false,"impression":"","keywords":[],"preferences":[],"taboos":[]}}
 
-规则：
-- summary：近期发生了什么。
-- anchors：3~5个关键信息锚点，content 30字内。
-- impression_update：只有用户反复表达了稳定偏好、禁忌、互动模式或重要关系变化时才 should_update=true。
+摘要规则：
+- summary：50~200字，保留“谁说了什么、用户明确表达了什么、双方关系/情绪有什么变化、下次可以接上的话茬”。不要写成聊天记录列表。
+- 如果已有摘要和新增对话冲突，以新增对话为准，改写旧理解，不要并列保留矛盾信息。
+
+锚点规则：
+- anchors：0~5个。有明确记忆价值才提取；寒暄、附和、短测试、乱码、单纯语气词不要硬凑。
+- content：30字内，必须具体到“用户喜欢什么/约定了什么/发生了什么/谁对谁态度变化”，避免“聊得很开心”这种空泛句。
+- type：event=具体事件，preference=用户偏好，plan=约定/待办，emotion=重要情绪，taboo=禁忌/边界，relation=关系变化。
+- preference/taboo 只能记录用户明确表达的偏好和边界，不能把干员自己的习惯、职业、人设当作用户偏好。
+- isPrivate=true：用户负面情绪、隐私、自我怀疑、亲密/暧昧内容、明确“不想让别人知道”的内容；普通日常、公开约定、轻松正向互动可为false。
+- importance：strong=会影响后续互动的重要偏好/禁忌/承诺/关系变化；medium=近期可接话题；weak=普通小事。
+
+长期印象规则：
+- impression_update：只有用户多次表达或本轮出现明确强信号时才 should_update=true。
+- impression 要像${session.operatorName}的主观看法，融合旧印象，不只复述本轮事件。
 - 不要从短测试字符、数字、拼音或乱码推断长期人格。
-- content 中禁止出现“好感度提升/下降”“affection”“系统数值”等系统机制词。
+
+禁止：
+- content 和 summary 中禁止出现“好感度提升/下降”“affection”“系统数值”“锚点”“摘要”等系统机制词。
 
 已有摘要：
 ${oldSummary}
 
 新增对话：
 ${text}""" else """
-你是罗德岛的记录员。将对话压缩为摘要并提取记忆锚点。
+你是罗德岛的随行记录员，负责把角色真正会记住的事整理成可长期使用的记忆。
 
-请融合“已有摘要”和“新增对话”，生成一份连续的新摘要和记忆锚点。不要丢失用户明确表达的偏好、禁忌、承诺、计划、关系变化和重要事件。
+请融合“已有摘要”和“新增对话”，生成一份连续的新摘要和高价值记忆锚点。目标是让${session.operatorName}下次聊天时能自然想起具体事情，而不是背诵流水账。
 
 输出JSON：{"summary":"50~200字摘要","anchors":[{"type":"event|preference|plan|emotion|taboo|relation","content":"具体内容","isPrivate":false}]}
 
 字段说明：
-- summary：重点关注用户喜好、习惯、重要事件、决定、承诺，以及对话情感氛围
-- anchors：3~5个关键信息锚点
+- summary：50~200字，重点保留“谁说了什么、用户明确表达了什么、双方关系/情绪有什么变化、下次可以接上的话茬”。如果旧摘要与新对话冲突，以新对话为准改写旧理解。
+- anchors：0~5个关键信息锚点。有明确记忆价值才提取；寒暄、附和、短测试、乱码、单纯语气词不要硬凑。
   - type：锚点类型。event=事件，preference=用户偏好，plan=用户约定，emotion=用户情绪或重要互动情绪，taboo=用户禁忌，relation=关系变化
-  - content：具体内容，30字内
+  - content：具体内容，30字内，必须具体到“用户喜欢什么/约定了什么/发生了什么/谁对谁态度变化”，避免“聊得很开心”这种空泛句
   - isPrivate：涉及用户负面情绪、私密情感、自我怀疑时设为true；正面评价、公开约定、普通事件设为false
 
 提取边界：
 - preference/taboo 只能记录用户的偏好和禁忌，不能记录干员自己的习惯、职业偏好或性格。
 - 干员自身状态、工作偏好、被打断后的反应，应归为 event/emotion，不要归为 preference/taboo。
 - content 中禁止出现“好感度提升/下降”“affection”“系统数值”等系统机制词。
+- content 和 summary 中禁止出现“锚点”“摘要”“系统记录”等机制词。
 - 用户只是输入短测试字符、数字、拼音或乱码时，不要推断为稳定人格，只能作为普通事件或直接忽略。
 
 隐私标记规则：
@@ -277,7 +291,7 @@ ${text}"""
             markSessionRead(session.id)
             messagesJob?.cancel()
             messagesJob = viewModelScope.launch {
-                repository.getMessages(session.id).collect { msgs -> _messages.value = msgs }
+                repository.getRecentMessages(session.id).collect { msgs -> _messages.value = msgs }
             }
         }
     }
@@ -300,7 +314,7 @@ ${text}"""
         markSessionRead(session.id)
         messagesJob?.cancel()
         messagesJob = viewModelScope.launch {
-            repository.getMessages(session.id).collect { msgs -> _messages.value = msgs }
+            repository.getRecentMessages(session.id).collect { msgs -> _messages.value = msgs }
         }
     }
 
@@ -314,6 +328,8 @@ ${text}"""
         val session = _currentSession.value ?: return
         viewModelScope.launch {
             repository.deleteSessionMessages(session.id)
+            repository.deleteMemoriesBySession(session.id)
+            repository.deleteAnchorsBySession(session.id)
             _messages.value = emptyList()
         }
     }
@@ -362,7 +378,7 @@ ${text}"""
         // 取消该会话上一条正在处理的 AI
         chatAiJobs[session.id]?.cancel()
         val job = viewModelScope.launch {
-            analysisGuidance = ""
+            analysisGuidanceBySession[session.id] = ""
                 val sessionCounter = settings.getSessionMessageCounter(session.id) + 1
                 settings.putSessionMessageCounter(session.id, sessionCounter)
             val msgId = repository.getNextMessageId()
@@ -383,7 +399,7 @@ ${text}"""
                 mutexLocked = true
 
                 if (settings.dualModel) {
-                    analysisGuidance = ""
+                    analysisGuidanceBySession[session.id] = ""
                     try {
                         val profile = appState.userProfile.value
                         val recentDialogues = _messages.value.takeLast(6).joinToString("\n") { m -> "${if (m.isMe) "用户" else "你"}：${m.content}" }
@@ -450,17 +466,18 @@ ${recentDialogues}
                         val result = sharedUtils.aiService.cleanJson(analysisResult)
                         val analysis: AnalysisResult? = try { json.decodeFromString<AnalysisResult>(result) } catch (_: Exception) { null }
                         if (analysis != null) {
-                            analysisGuidance = "【用户意图分析】${analysis.intent_analysis}\n【用户情绪】${analysis.user_emotion}\n【核心需求】${analysis.user_need}\n【建议干员情绪】${analysis.suggested_emotion}\n【回复策略】${analysis.reply_guidance}\n【好感度修正】${analysis.affection_mod}"
+                            analysisGuidanceBySession[session.id] = "【用户意图分析】${analysis.intent_analysis}\n【用户情绪】${analysis.user_emotion}\n【核心需求】${analysis.user_need}\n【建议干员情绪】${analysis.suggested_emotion}\n【回复策略】${analysis.reply_guidance}\n【好感度修正】${analysis.affection_mod}"
                         }
-                    } catch (_: Exception) { analysisGuidance = "" }
+                    } catch (_: Exception) { analysisGuidanceBySession[session.id] = "" }
                 }
 
                 var retryCount = 0
                 val maxRetries = 3
                 var lastError: Exception? = null
+                var effectiveHistoryMessages = settings.historyMessages
                 while (retryCount < maxRetries) {
                     try {
-                        val apiMessages = buildApiMessages(text)
+                        val apiMessages = buildApiMessages(text, effectiveHistoryMessages)
                         DebugLogger.log("Chat/AI", "请求AI, session=${session.id}, mode=$mode, prompt长度=${apiMessages.size}")
                         val parsed = withTimeout(90_000) { sharedUtils.chatWithRetry(apiMessages) }
                         if (parsed.dialogue.isNotEmpty() || parsed.emotion.isNotEmpty()) {
@@ -486,12 +503,9 @@ ${recentDialogues}
                             modeTransitionNotice = ""
                         }
                         val affectionMod = parsed.affection_mod
-                        operatorStateUpdater.updateOperatorIntimacy(session.operatorId, 1 + affectionMod.coerceIn(-3, 3))
-                        val today = settings.rewardDate
                         val currentDate = sharedUtils.beijingSdf("yyyyMMdd").format(java.util.Date())
-                        if (today != currentDate) { settings.rewardDate = currentDate; settings.dailyLmbCount = 0 }
-                        val dailyCount = settings.dailyLmbCount
-                        if (dailyCount < 5000) { val balance = settings.lmb; settings.lmb = balance + 10; settings.dailyLmbCount = dailyCount + 1 }
+                        operatorStateUpdater.updateOperatorIntimacy(session.operatorId, affectionMod.coerceIn(-3, 3))
+                        settings.grantDailyLmb(currentDate, 10)
                         decrementHypnosis()
                         if (sessionCounter >= shortTermThreshold) {
                             generateShortTermSummary(session)
@@ -509,7 +523,7 @@ ${recentDialogues}
                         val currentSessionId = _currentSession.value?.id ?: ""
                         if (currentSessionId != session.id) {
                             val sess = repository.getSession(session.id)
-                            if (sess != null) repository.insertSession(sess.copy(unreadCount = sess.unreadCount + aiResponseCount))
+                            repository.incrementUnread(session.id, aiResponseCount)
                             onUnhideSession(session.id)
                         }
                         lastError = null
@@ -527,9 +541,9 @@ ${recentDialogues}
                              e.message?.contains("maximum context", true) == true ||
                              e.message?.contains("token", true) == true ||
                              e.message?.contains("length", true) == true)
-                        if (isContextError && retryCount < maxRetries - 1 && settings.historyMessages > 5) {
-                            val newLimit = (settings.historyMessages / 2).coerceAtLeast(5)
-                            settings.historyMessages = newLimit
+                        if (isContextError && retryCount < maxRetries - 1 && effectiveHistoryMessages > 5) {
+                            val newLimit = (effectiveHistoryMessages / 2).coerceAtLeast(5)
+                            effectiveHistoryMessages = newLimit
                             retryCount++
                             DebugLogger.log("Chat/AI", "上下文超限，降级历史轮数为$newLimit，第${retryCount}次重试")
                             continue
@@ -540,7 +554,7 @@ ${recentDialogues}
                 }
                 if (lastError != null) {
                     DebugLogger.log("Chat/AI", "AI错误: ${lastError.message?.take(100)}, session=${session.id}")
-                    val errorMsg = if (retryCount > 0) "上下文超限，已降级至${settings.historyMessages}轮后仍失败：${classifyError(lastError)}"
+                    val errorMsg = if (retryCount > 0) "上下文超限，本次已临时降级至${effectiveHistoryMessages}轮后仍失败：${classifyError(lastError)}"
                                    else classifyError(lastError)
                     repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = errorMsg, type = "text", mode = mode, isMe = false))
                 }
@@ -648,6 +662,7 @@ ${recentDialogues}
         val idx = _messages.value.indexOfFirst { it.id == msgId }
         if (idx < 0) return
         val userMsg = _messages.value.take(idx).lastOrNull { it.isMe } ?: return
+        val previousReply = _messages.value.getOrNull(idx)?.content.orEmpty()
         val mode = _currentMode.value
         viewModelScope.launch {
             // 插入占位消息（API 成功前不删原文）
@@ -660,7 +675,16 @@ ${recentDialogues}
             try {
                 aiMutexFor(session.id).lock()
                 mutexLocked = true
-                val apiMessages = buildApiMessages(userMsg.content)
+                modeTransitionNotice = """【重说指令】
+用户要求你重新回答上一轮消息。你上一次的回复如下：
+${previousReply.take(1200)}
+
+请不要复述上一版，不要只替换同义词，也不要沿用完全相同的段落结构。保持当前人设、关系和模式格式，从不同角度、不同情绪推进或不同信息重点重新回应；如果上一版偏解释，这次更偏行动/感受；如果上一版偏安慰，这次更偏陪伴/反问/推进。"""
+                val apiMessages = buildApiMessages(
+                    userContent = userMsg.content,
+                    excludeMessageIds = setOf(msgId, placeholderId),
+                    historyBeforeMessageId = msgId
+                )
                 val parsed = withTimeout(90_000) { sharedUtils.chatWithRetry(apiMessages) }
                 sharedUtils.trackTokens("private", apiMessages, parsed.toString())
                 val serializedJson = try { json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed) } catch (_: Exception) { parsed.toString() }
@@ -684,7 +708,7 @@ ${recentDialogues}
                 _messages.value = _messages.value.filter { it.id != placeholderId }
                 val errId = repository.getNextMessageId()
                 repository.sendMessage(session.id, ChatMessage(id = errId, sessionId = session.id, senderName = session.operatorName, content = classifyError(e), type = "text", mode = mode, isMe = false))
-            } finally { if (mutexLocked) aiMutexFor(session.id).unlock() }
+            } finally { if (mutexLocked) aiMutexFor(session.id).unlock(); modeTransitionNotice = "" }
         }
     }
 
@@ -704,7 +728,7 @@ ${recentDialogues}
 
                 // 深度分析模式（和 sendMessage 一致）
                 if (settings.dualModel && previousUser != null) {
-                    analysisGuidance = ""
+                    analysisGuidanceBySession[session.id] = ""
                     try {
                         val profile = appState.userProfile.value
                         val recentDialogues = _messages.value.takeLast(6).joinToString("\n") { m -> "${if (m.isMe) "用户" else "你"}：${m.content}" }
@@ -754,9 +778,9 @@ ${recentDialogues}
                         val result = sharedUtils.aiService.cleanJson(analysisResult)
                         val analysis: AnalysisResult? = try { json.decodeFromString<AnalysisResult>(result) } catch (_: Exception) { null }
                         if (analysis != null) {
-                            analysisGuidance = "【用户意图分析】${analysis.intent_analysis}\n【用户情绪】${analysis.user_emotion}\n【核心需求】${analysis.user_need}\n【建议干员情绪】${analysis.suggested_emotion}\n【回复策略】${analysis.reply_guidance}\n【好感度修正】${analysis.affection_mod}"
+                            analysisGuidanceBySession[session.id] = "【用户意图分析】${analysis.intent_analysis}\n【用户情绪】${analysis.user_emotion}\n【核心需求】${analysis.user_need}\n【建议干员情绪】${analysis.suggested_emotion}\n【回复策略】${analysis.reply_guidance}\n【好感度修正】${analysis.affection_mod}"
                         }
-                    } catch (_: Exception) { analysisGuidance = "" }
+                    } catch (_: Exception) { analysisGuidanceBySession[session.id] = "" }
                 }
 
                 val apiMessages = buildApiMessages(previousUser?.content ?: "")
@@ -788,9 +812,9 @@ ${recentDialogues}
                 val recent = _messages.value.takeLast(15).joinToString("\n") { "${if (it.isMe) profile.nickname else it.senderName}：${it.content.take(60)}" }
                 val lastOpMsg = _messages.value.lastOrNull { !it.isMe }?.content?.take(60) ?: ""
                 val modeHint = when (_currentMode.value) {
-                    "offline" -> "1. 【线下模式】你和${op.name}面对面在一起，回复要像当面说话一样自然，可用括号带动作描述。"
-                    "director" -> "2. 【导演模式】你可以自由描述场景和行动，回复可以是动作、心理活动或对话。"
-                    else -> "3. 【线上模式】你通过通讯终端与${op.name}文字聊天，回复要像打字聊天一样简洁。"
+                    "offline" -> "【线下模式】你和${op.name}面对面在一起，建议可以包含用户自己的动作或场景推进，但不要替${op.name}说话。"
+                    "director" -> "【导演模式】你可以用用户视角描述场景推进、动作或对白，但不要直接控制${op.name}的内心。"
+                    else -> "【线上模式】你通过通讯终端与${op.name}文字聊天，建议必须像用户发出的短消息，不要写动作括号或旁白。"
                 }
                 val timeHint = when {
                     hour in 6..8 -> "清晨"
@@ -826,13 +850,15 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
    - 第三条（行动）：提出一个具体的行动邀约或场景推进建议，让对话进入下一阶段。
 3. ${modeHint}
 4. 结合用户的人设和当前时间（${timeHint}），让回复更贴合真实的聊天氛围。
+5. 只生成${profile.nickname}要发出的内容，不要替${op.name}说话，不要解释建议用途。
+6. 避免复述最近用户已经说过的话；每条都要能自然推进下一轮。
 
 【输出格式要求】
 严格输出纯JSON，不要添加任何其他文字、markdown标记或解释：
 {"suggestions":["第一条承接话题的回复","第二条关心的回复","第三条行动邀约的回复"]}
 """.trimIndent()
                 val rawResult = withTimeout(15_000) { sharedUtils.chat(listOf(AiMessage("system", prompt))) }
-                val base = rawResult.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+                val base = sharedUtils.aiService.cleanJson(rawResult.trim())
                 val results = try { json.decodeFromString<SuggestionResponse>(base).suggestions.filter { it.isNotBlank() } } catch (_: Exception) {
                     try { json.decodeFromString<SuggestionResponse>(base.replace("，", ",").replace("：", ":")).suggestions.filter { it.isNotBlank() } } catch (_: Exception) { emptyList() }
                 }
@@ -881,7 +907,12 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             .orEmpty()
     }
 
-    private suspend fun buildApiMessages(userContent: String = ""): List<AiMessage> {
+    private suspend fun buildApiMessages(
+        userContent: String = "",
+        historyLimitOverride: Int? = null,
+        excludeMessageIds: Set<Long> = emptySet(),
+        historyBeforeMessageId: Long? = null
+    ): List<AiMessage> {
         val session = _currentSession.value ?: return emptyList()
         val op = repository.getOperator(session.operatorId)
         val shortTerm = repository.getShortTermMemory(session.id)
@@ -890,6 +921,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         val anchors = repository.getAnchors(session.operatorId)
         val nearby = appState.operators.value.filter { it.id != session.operatorId && it.id != "amiya" }.take(3)
         val profile = appState.userProfile.value
+        val analysisGuidance = analysisGuidanceBySession[session.id].orEmpty()
         val analysisBlock = if (settings.dualModel && analysisGuidance.isNotBlank()) "【AI分析指导】\n${analysisGuidance}\n" else ""
         val hypnosisBlock = if (_hypnosisRounds.value > 0) """
 【催眠状态 · 最高优先级】
@@ -990,8 +1022,10 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         )
         val systemPrompt = sharedUtils.compactTemplate(sharedUtils.applyTemplate(getPromptTemplate("private", mode), replacements))
         val rawMsgs = repository.getMessagesSync(session.id).let { msgs ->
-            val limit = settings.historyMessages
-            if (limit > 0) msgs.takeLast(limit) else msgs
+            val scoped = historyBeforeMessageId?.let { targetId -> msgs.takeWhile { it.id != targetId } } ?: msgs
+            val limit = historyLimitOverride ?: settings.historyMessages
+            val filtered = scoped.filter { it.id !in excludeMessageIds }
+            if (limit > 0) filtered.takeLast(limit) else filtered
         }.toMutableList()
         // 去掉最后一条用户消息，避免与 {{USER_CONTENT}} 重复
         if (rawMsgs.lastOrNull()?.isMe == true && rawMsgs.last().content == userContent) {
@@ -1004,19 +1038,24 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         }
         // 估算总 token，超限则丢弃最早的历史消息
         val maxPromptTokens = settings.maxContextTokens - 2000
-        var totalTokens = messages.sumOf { (it.content.length * 1.3).toInt() + 10 }
+        var totalTokens = messages.sumOf { estimateTokens(it.content) + 10 }
         com.rhodes.privatechat.util.DebugLogger.log("Chat/Token", "估算token=$totalTokens, 上限=$maxPromptTokens, 消息数=${messages.size}")
         if (totalTokens > maxPromptTokens) {
-            var dropIdx = 1
             while (messages.size > 2 && totalTokens > maxPromptTokens) {
-                if (dropIdx >= messages.size - 1) break
-                messages.removeAt(dropIdx)
-                totalTokens = messages.sumOf { (it.content.length * 1.3).toInt() + 10 }
-                dropIdx++
+                messages.removeAt(1)
+                totalTokens = messages.sumOf { estimateTokens(it.content) + 10 }
             }
             com.rhodes.privatechat.util.DebugLogger.log("Chat/Token", "截断后: 消息数=${messages.size}, 估算token=$totalTokens")
         }
         return messages
+    }
+
+    private fun estimateTokens(content: String): Int {
+        var total = 0
+        for (ch in content) {
+            total += if (ch.code <= 0x7F) 1 else 2
+        }
+        return (total * 1.2).toInt()
     }
 
     private fun generateDailyIfNeeded() {
@@ -1094,16 +1133,22 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             DebugLogger.log("Memory/Impression", "开始更新印象: op=${session.operatorId}, threshold=$impThreshold, sampleMsgs=${msgs.size}, old=${oldImpression != null}")
             val messagesText = msgs.joinToString("\n") { "${if (it.isMe) profile.nickname else it.senderName}：${it.content.take(120)}" }
             val prompt = """
-基于以下${op.name}与${profile.nickname}的最近${msgs.size}条完整对话，更新${op.name}对${profile.nickname}的主观长期印象。
+基于以下${op.name}与${profile.nickname}的最近${msgs.size}条完整对话，更新${op.name}对${profile.nickname}的主观长期印象。目标是让${op.name}之后能自然记住${profile.nickname}的稳定偏好、边界、承诺和相处方式，而不是把最近聊天流水账背出来。
 
 要求：
 - 重点观察${profile.nickname}明确表达的偏好、禁忌、计划、情绪、边界和反复出现的行为模式。
 - 融合旧印象，不要只复述近期事件。
+- 如果旧印象与新对话冲突，以新对话为准改写，不要把矛盾说法并列保留。
+- 区分“长期特征”和“本轮情绪”：一次性的撒娇、玩笑、疲惫、测试，不要写成永久人格。
+- impression 要包含可用于后续对话的具体线索，例如用户在意什么、讨厌什么、希望被怎样对待、最近有什么约定或牵挂。
+- preferences 只记录用户明确表达的喜好、习惯、期待；taboos 只记录用户明确表达的不喜欢、边界、雷点。
+- keywords 用短词概括稳定特征，不要写空泛词如“复杂”“特别”“有趣”。
 - 如果近期表现只是短暂情绪，不要上升为永久性格。
 - 如果用户主要输入短句、数字、拼音、测试字符或乱码，不要过度心理分析；最多描述为“近期表达较简短/测试性输入较多”。
 - 长期特征必须来自多次明确表达或反复行为，不能从一两句含糊输入中编造人格标签。
 - 不要使用“符号化回应”“高强度思考”“最低限度联系”等过度诊断式标签，除非对话中有明确证据。
 - 这是${op.name}的主观看法，可以带有角色视角，但不要编造用户没有表达过的事实。
+- 禁止提到“系统记录”“摘要”“锚点”“好感度”等机制词。
 
 之前的印象（如有则融合更新）：
 ${oldImpressionText}

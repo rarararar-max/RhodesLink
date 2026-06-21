@@ -18,13 +18,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
@@ -53,6 +51,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.rhodes.privatechat.shared.settings.SettingsRepository
+import com.rhodes.privatechat.ui.settings.SaveableSettingsScaffold
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.util.DebugLogger
 import org.koin.compose.koinInject
@@ -64,16 +63,15 @@ fun ChatSettingsScreen(
     modifier: Modifier = Modifier
 ) {
     val settings: SettingsRepository = koinInject()
-    val tabs = listOf("私聊", "群聊", "记忆上下文", "通用")
+    val tabs = listOf("预设", "私聊", "群聊", "记忆")
     var tabIndex by rememberSaveable { mutableIntStateOf(0) }
 
-    Box(modifier = modifier.fillMaxSize()) {
-    Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
-        Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
-            Text("聊天参数设置", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-        }
-        HorizontalDivider(color = Divider)
+    SaveableSettingsScaffold(
+        title = "聊天参数设置",
+        onBack = onBack,
+        modifier = modifier.fillMaxSize().background(BG).systemBarsPadding(),
+        icon = { Icon(Icons.Default.Tune, null, tint = Primary) }
+    ) {
 
         ScrollableTabRow(selectedTabIndex = tabIndex, containerColor = Surface, contentColor = Blue400, edgePadding = 0.dp) {
             tabs.forEachIndexed { i, title ->
@@ -83,13 +81,12 @@ fun ChatSettingsScreen(
 
         Column(modifier = Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
             when (tabIndex) {
-                0 -> PrivateTab(settings)
-                1 -> GroupTab(settings)
-                2 -> MemoryTab(settings)
-                3 -> GeneralTab(settings, onPromptEditor)
+                0 -> GeneralTab(settings, onPromptEditor)
+                1 -> PrivateTab(settings)
+                2 -> GroupTab(settings)
+                3 -> MemoryTab(settings)
             }
         }
-    }
     }
 
 }
@@ -138,6 +135,8 @@ private fun PrivateTab(settings: SettingsRepository) {
 
 @Composable
 private fun GroupTab(settings: SettingsRepository) {
+    Text("群聊有两种自动方式：空闲自动聊天按时间一直聊；大世界事件唤起只在有动态、评论等事件时聊几轮。具体群是否启用，请到权限管理或群聊编辑页设置。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
+    Spacer(Modifier.height(8.dp))
     SectionTitle("消息长度")
     ParamSlider(settings, "group_msg_min", "每条消息最小字数", 10, 5f..50f, "群聊里每名干员每次说话最少写几个字。建议10-20字，太少了说话没内容。")
     ParamSlider(settings, "group_msg_max", "每条消息最大字数", 100, 30f..200f, "群聊里每名干员每次说话最多写几个字。群聊不是写作文，建议50-100字就够了，太长了一个人刷屏大家就冷场了。", step = 5f, pairKey = "group_msg_min", isMinSide = false)
@@ -146,10 +145,15 @@ private fun GroupTab(settings: SettingsRepository) {
     ParamSlider(settings, "group_speech_min", "每轮每人最少发言", 1, 0f..3f, "每次群聊每名干员至少说几次话。建议1次。设0的话有些干员可能一直不参与对话。")
     ParamSlider(settings, "group_speech_max", "每轮每人最多发言", 2, 1f..5f, "每次群聊每名干员最多说几次话。建议2次就够了，设大了会有个别干员一直刷屏。")
 
-    Spacer(Modifier.height(12.dp)); SectionTitle("自动发言间隔")
-    ParamSlider(settings, "group_chat_min_interval", "自动发言最小间隔(秒)", 60, 5f..600f, "群聊没人说话时，AI干员自动聊起来的最短等待时间（秒）。建议30-60秒，太快了群聊停不下来。", step = 5f)
-    ParamSlider(settings, "group_chat_max_interval", "自动发言最大间隔(秒)", 180, 30f..900f, "群聊没人说话时，AI干员自动聊起来的最长等待时间（秒）。建议180-300秒，太久群就冷清了。", step = 10f)
-    ParamSlider(settings, "group_auto_max_rounds", "自动聊天连续轮数", 50, 1f..300f, "AI干员自动聊天能连续多少轮。到了这个数就自动暂停了，用户发消息或重新开自动会继续。", step = 1f)
+    Spacer(Modifier.height(12.dp)); SectionTitle("空闲自动聊天")
+    ParamSlider(settings, "group_chat_min_interval", "空闲最小间隔(秒)", 60, 5f..600f, "开启群的空闲自动聊天后，AI干员自己聊起来的最短等待时间。建议60秒以上，太快容易刷屏。", step = 5f)
+    ParamSlider(settings, "group_chat_max_interval", "空闲最大间隔(秒)", 180, 30f..900f, "开启群的空闲自动聊天后，AI干员自己聊起来的最长等待时间。建议180-300秒。", step = 10f)
+    ParamSlider(settings, "group_auto_max_rounds", "空闲连续轮数", 20, 1f..300f, "空闲自动聊天最多连续聊多少轮。只影响空闲自动，不影响大世界事件唤起。建议10-30，太高容易刷屏。", step = 1f)
+
+    Spacer(Modifier.height(12.dp)); SectionTitle("大世界事件唤起")
+    ParamSlider(settings, "event_group_rounds", "事件唤起轮数", 2, 1f..10f, "群被大世界事件唤起后连续聊几轮，聊完停止。建议1-3。", step = 1f)
+    ParamSlider(settings, "event_group_cooldown_minutes", "同群冷却(分钟)", 45, 1f..240f, "同一个群被世界事件唤起后的冷却时间。建议30-60分钟。", step = 5f)
+    ParamSlider(settings, "event_max_groups_per_trigger", "每次最多唤起群数", 1, 1f..5f, "一次世界触发最多叫醒几个群。建议1，避免所有群一起热闹。", step = 1f)
 
     Spacer(Modifier.height(12.dp)); SectionTitle("群聊旁白(线上/线下/导演)")
     ParamSlider(settings, "group_nar_seg_min", "最少旁白段数", 1, 1f..10f, "群聊里环境描写最少出现几次。线上模式下用户看不到旁白。建议1-2段就好。")
@@ -163,17 +167,36 @@ private fun GroupTab(settings: SettingsRepository) {
 @Composable
 private fun MemoryTab(settings: SettingsRepository) {
     ParamSlider(settings, "summary_threshold", "触发总结的聊天条数", 20, 3f..200f, "聊多少句话后，AI会自动总结前面聊的内容。设太小（低于10）频繁总结浪费AI额度，太大（超过100）AI记不住前面聊了什么。建议20-50条。", step = 1f)
-    ParamSlider(settings, "summary_retain", "保留最近几条总结", 5, 1f..20f, "保留最近几次对话总结，下次聊天时给AI参考。设太小（1-2条）之前的总结容易被丢掉，太大（超过10条）消耗AI上下文额度太多。建议3-5条。", step = 1f)
+    ParamSlider(settings, "summary_retain", "保留最近几条总结", 5, 1f..50f, "保留最近几次对话总结，下次聊天时给AI参考。设太小（1-2条）之前的总结容易被丢掉，太大（超过10条）消耗AI上下文额度太多。建议3-5条。", step = 1f)
     Spacer(modifier = Modifier.height(12.dp))
-    ParamSlider(settings, "impression_threshold", "触发印象更新的聊天条数", 50, 1f..50f, "聊多少句话后，AI会重新总结对你的整体印象。设太小频繁更新没必要，建议设5-10。设0关闭印象更新。", step = 1f)
+    ParamSlider(settings, "impression_threshold", "触发印象更新的聊天条数", 50, 5f..100f, "聊多少句话后，AI会重新总结对你的整体印象。设太小会频繁消耗额度，设太大则印象变化较慢。建议30-80条。", step = 1f)
     Spacer(modifier = Modifier.height(12.dp))
     ParamSlider(settings, "daily_intimacy_cap", "每日好感变化上限", 5, 1f..20f, "每名干员每天最多涨或掉多少好感。调高数值关系推进更快，调低更慢热。建议3-5。", step = 1f)
     Spacer(modifier = Modifier.height(12.dp))
-    ParamSlider(settings, "history_messages", "每次回复最多回看几句", 20, 0f..200f, "AI回看最近多少句话来生成回复。设0=全部回看。建议15-30句，太少AI记不住上下文，太多消耗AI额度。", step = 1f)
+    ParamSlider(settings, "history_messages", "每次回复最多回看几句", 20, 0f..200f, "AI每次回复最多参考最近多少句聊天。设0表示不按条数限制，但仍会受模型上下文上限影响。建议15-30句。", step = 1f)
     Spacer(modifier = Modifier.height(12.dp))
-    ParamSlider(settings, "clean_days", "记忆过期天数", 30, 1f..365f, "AI对你的对话总结和印象保留多少天。太短（少于7天）AI频繁忘记，太长（超过90天）旧印象一直生效。建议30天。", step = 5f)
+    ParamSlider(settings, "clean_days", "记忆过期天数", 30, 0f..365f, "AI对你的对话总结和印象保留多少天。0=不自动过期；太短AI容易忘记，太长旧印象会长期生效。建议30天。", step = 5f)
     Spacer(modifier = Modifier.height(12.dp))
     SectionTitle("记忆注入")
+    var distinguishPrivateMemory by remember { mutableStateOf(settings.distinguishPrivateMemory) }
+    Row(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Card).padding(12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("区分私密与公开信息", fontSize = 13.sp, color = TextPrimary)
+                HelpButton("开启：私聊中被标为私密的记忆只给当前干员自己使用，不会通过关系网、动态、评论、群聊等公开场景传给别人。关闭：私聊和公开来源的锚点都按普通记忆参与传递，关系网也可以读取私密锚点。默认建议开启，想让世界信息完全流通时可关闭。")
+            }
+            Text("关掉后，私聊记忆也会像公开记忆一样参与关系传递", fontSize = 11.sp, color = TextSecondary)
+        }
+        Switch(checked = distinguishPrivateMemory, onCheckedChange = {
+            distinguishPrivateMemory = it
+            settings.distinguishPrivateMemory = it
+        }, colors = SwitchDefaults.colors(checkedThumbColor = Blue400, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
+    }
+    Spacer(modifier = Modifier.height(8.dp))
     var sourceAwareMemory by remember { mutableStateOf(settings.sourceAwareMemoryEnabled) }
     Row(
         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Card).padding(12.dp),
@@ -194,7 +217,7 @@ private fun MemoryTab(settings: SettingsRepository) {
     }
     Spacer(modifier = Modifier.height(8.dp))
     ParamSlider(settings, "private_anchor_count", "私聊锚点数量", 5, 0f..20f, "每次私聊最多给AI看的关键记忆数量。越高聊天越有连续性，也越消耗AI额度。建议5-8条。", step = 1f)
-    ParamSlider(settings, "private_shared_memory_count", "关系共享记忆", 3, 0f..20f, "私聊时通过你建立的关系网，从其他干员那里「听说」的公开记忆数量。设0就关掉这个功能。建议1-3条。", step = 1f)
+    ParamSlider(settings, "private_shared_memory_count", "关系共享记忆", 3, 0f..20f, "私聊时，当前干员可能通过关系网「听说」其他干员的公开记忆。数值越高，能参考的关系记忆越多。只传公开记忆，不会直接泄露私聊秘密。设0可关闭。建议1-3条。", step = 1f)
     ParamSlider(settings, "private_group_context_count", "私聊群聊回顾", 2, 0f..10f, "私聊时最多回顾该干员最近参与过的群聊摘要数量。设0就不回顾群聊内容。建议1-2条。", step = 1f)
     ParamSlider(settings, "group_member_memory_count", "群成员记忆数量", 2, 0f..10f, "群聊生成时每名成员最多携带几条近期公开记忆。设大了帮助记住历史，也消耗更多额度。建议2-3条。", step = 1f)
     ParamSlider(settings, "moment_anchor_count", "动态参考记忆", 3, 0f..10f, "生成动态时最多参考几条公开记忆。设太多动态总是围绕旧事，设太少动态内容容易空洞。建议3-5条。", step = 1f)
@@ -206,15 +229,29 @@ private fun MemoryTab(settings: SettingsRepository) {
 
 @Composable
 private fun GeneralTab(settings: SettingsRepository, onPromptEditor: () -> Unit = {}) {
-    SectionTitle("上下文模式")
-    Text("当前：${modeLabel(settings.contextMode)}。选择模式会批量调整记忆数量、历史消息和自动世界预算，方便快速获得不同的使用体验。已自定义过的Prompt模板不会被覆盖。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
+    SectionTitle("推荐预设")
+    Text("当前：${modeLabel(settings.contextMode)}。选择预设会批量调整记忆数量、历史消息和自动世界预算；已自定义过的 Prompt 模板不会被覆盖。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         ModeButton("省钱", settings.contextMode == "economy", Modifier.weight(1f)) { settings.applyContextMode("economy") }
         ModeButton("标准", settings.contextMode == "standard", Modifier.weight(1f)) { settings.applyContextMode("standard") }
         ModeButton("完整", settings.contextMode == "full", Modifier.weight(1f)) { settings.applyContextMode("full") }
     }
+    Spacer(modifier = Modifier.height(8.dp))
+    ModeInfoCard(
+        "省钱模式",
+        "减少自动生成和记忆注入，适合 API 额度紧张或主要手动聊天。回看最近12句，私聊记忆3条，每日后台AI预算20次，自动日记关闭。"
+    )
+    ModeInfoCard(
+        "标准模式（推荐）",
+        "聊天、记忆、动态和日记比较均衡，适合日常使用。回看最近20句，私聊记忆5条，每人每日自动动态2条，每日后台AI预算40次。"
+    )
+    ModeInfoCard(
+        "完整模式",
+        "更多记忆、更活跃的世界联动，但会明显增加 AI 调用。回看最近40句，私聊记忆8条，每人每日自动动态3条，每日后台AI预算80次。"
+    )
     Spacer(modifier = Modifier.height(12.dp))
-    ParamSlider(settings, "ai_temperature", "AI 温度", 80, 0f..200f, step = 5f, tip = "AI说话的风格。数字越低越正经稳重（像靠谱助手），越高越奔放活泼（容易跑偏）。建议60-90之间调。当前值除以100就是实际使用的数值。")
+    SectionTitle("生成风格")
+    ParamSlider(settings, "ai_temperature", "AI 温度", 80, 0f..200f, step = 5f, tip = "AI说话的风格。数字越低越正经稳重，越高越活泼发散。建议60-90之间调；当前值除以100就是实际使用的温度。")
     Spacer(modifier = Modifier.height(12.dp))
     var dualModel by remember { mutableStateOf(settings.dualModel) }
     Row(
@@ -237,14 +274,25 @@ private fun GeneralTab(settings: SettingsRepository, onPromptEditor: () -> Unit 
     Spacer(modifier = Modifier.height(6.dp))
 
 
+    Text("高级功能：修改各场景的提示词模板。不了解 Prompt 时建议保持默认。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
     Button(
         onClick = onPromptEditor,
         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)),
         colors = ButtonDefaults.buttonColors(containerColor = Blue400)
     ) {
-        Text("高级编辑", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
+        Text("编辑 Prompt 模板", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
     }
     Spacer(modifier = Modifier.height(12.dp))
+}
+
+@Composable
+private fun ModeInfoCard(title: String, body: String) {
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Card).padding(10.dp)) {
+        Text(title, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+        Spacer(Modifier.height(3.dp))
+        Text(body, fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp)
+    }
+    Spacer(Modifier.height(6.dp))
 }
 
 @Composable

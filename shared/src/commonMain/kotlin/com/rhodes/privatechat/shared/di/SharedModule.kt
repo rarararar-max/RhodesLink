@@ -8,7 +8,8 @@ import org.koin.dsl.module
 
 fun sharedModule(databaseWrapper: DatabaseWrapper) = module {
     single { databaseWrapper }
-    single { ChatRepository(get()) }
+    single { SettingsRepository(com.rhodes.privatechat.shared.settings.createPlatformSettings()) }
+    single { ChatRepository(get(), get()) }
     single { get<ChatRepository>().operators }
     single { get<ChatRepository>().sessions }
     single { get<ChatRepository>().messages }
@@ -20,6 +21,5 @@ fun sharedModule(databaseWrapper: DatabaseWrapper) = module {
     single { get<ChatRepository>().dispatches }
     single { get<ChatRepository>().mahjong }
     single { get<ChatRepository>().cleanup }
-    single { SettingsRepository(com.rhodes.privatechat.shared.settings.createPlatformSettings()) }
     single { AIService() }
 }

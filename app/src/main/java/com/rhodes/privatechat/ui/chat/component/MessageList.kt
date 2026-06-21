@@ -78,6 +78,9 @@ fun MessageList(
     onContinue: ((Long) -> Unit)? = null,
     onSenderClick: ((String) -> Unit)? = null,
     progressiveDisplay: Boolean = false,
+    onLoadOlder: (() -> Unit)? = null,
+    isLoadingOlder: Boolean = false,
+    hasMore: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     // 渐进展示逻辑：首次加载全部立即显示，后续新消息逐条出现（首条无延迟）
@@ -105,19 +108,34 @@ fun MessageList(
     }
     val displayMessages = messages.take(displayCount)
 
-    // 消息数量变化时自动滚动到底部（用户发送、AI回复等）
-    LaunchedEffect(displayMessages.size) {
-        if (displayMessages.isNotEmpty()) {
+    var lastBottomMessageId by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(displayMessages.lastOrNull()?.id) {
+        val lastId = displayMessages.lastOrNull()?.id ?: return@LaunchedEffect
+        val isInitial = lastBottomMessageId == null
+        val nearBottom = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= displayMessages.lastIndex - 2 } ?: true
+        if (isInitial || nearBottom) {
             try {
                 listState.scrollToItem(displayMessages.size - 1)
             } catch (e: Exception) {
                 android.util.Log.e("RHODES_CRASH", "scrollToItem异常: ${e.message}")
             }
         }
+        lastBottomMessageId = lastId
+    }
+
+    LaunchedEffect(listState.firstVisibleItemIndex, displayMessages.size, isLoadingOlder, hasMore) {
+        if (onLoadOlder != null && hasMore && !isLoadingOlder && displayMessages.isNotEmpty() && listState.firstVisibleItemIndex <= 1) {
+            onLoadOlder()
+        }
     }
 
     LazyColumn(state = listState, modifier = modifier.fillMaxWidth()) {
         item { Spacer(modifier = Modifier.height(8.dp)) }
+        if (isLoadingOlder) {
+            item {
+                Text("加载历史消息...", fontSize = 12.sp, color = TextTertiary, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), textAlign = TextAlign.Center)
+            }
+        }
         items(displayMessages.size, key = { displayMessages[it].id }) { i ->
             val msg = displayMessages[i]
             val prevTime = if (i > 0) displayMessages[i - 1].timestamp else 0L

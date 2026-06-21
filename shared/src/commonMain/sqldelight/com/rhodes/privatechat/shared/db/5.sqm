@@ -1,4 +1,5 @@
-DELETE FROM diaries
+UPDATE diaries
+SET date = date || '#' || id
 WHERE id NOT IN (
     SELECT MAX(id)
     FROM diaries

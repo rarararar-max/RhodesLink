@@ -79,6 +79,7 @@ data class WorldLogEntry(val time: Long, val title: String, val detail: String =
 
 private enum class MomentTriggerType { MANUAL, AUTO, EVENT }
 private const val MAX_WORLD_CHAIN_DEPTH = 3
+private const val MOMENT_PAGE_SIZE = 20
 
 class MainViewModel(
     application: Application,
@@ -157,6 +158,8 @@ class MainViewModel(
     val currentSession: StateFlow<ChatSession?> get() = chatViewModel.currentSession
     private val _messages get() = chatViewModel.messages
     val messages: StateFlow<List<ChatMessage>> get() = chatViewModel.messages
+    val isLoadingOlderMessages: StateFlow<Boolean> get() = chatViewModel.isLoadingOlderMessages
+    val hasMoreMessages: StateFlow<Boolean> get() = chatViewModel.hasMoreMessages
     private val _currentMode get() = chatViewModel.currentMode
     val currentMode: StateFlow<String> get() = chatViewModel.currentMode
     val inputText: StateFlow<String> get() = chatViewModel.inputText
@@ -175,6 +178,10 @@ class MainViewModel(
     val userProfile: StateFlow<UserProfile> get() = appState.userProfile
     private val _moments get() = appState.moments
     val moments: StateFlow<List<Moment>> get() = appState.moments
+    private val _isLoadingMoments = MutableStateFlow(false)
+    val isLoadingMoments: StateFlow<Boolean> = _isLoadingMoments.asStateFlow()
+    private val _hasMoreMoments = MutableStateFlow(true)
+    val hasMoreMoments: StateFlow<Boolean> = _hasMoreMoments.asStateFlow()
 
     fun isDualModel(): Boolean = settings.dualModel
 
@@ -196,7 +203,6 @@ class MainViewModel(
     private val updateMutex = Mutex()
     private var lastDbUpdate = 0L
     private var analysisGuidance = ""
-    private val lastProactiveMsgTime = ConcurrentHashMap<String, Long>()
     private var modeTransitionNotice = ""
     private var currentAutoAiTickCount = 0
 
@@ -204,6 +210,8 @@ class MainViewModel(
 
     // Group chat state delegates to GroupChatViewModel
     val groupMessages: StateFlow<List<ChatMessage>> get() = groupChatViewModel.groupMessages
+    val isLoadingOlderGroupMessages: StateFlow<Boolean> get() = groupChatViewModel.isLoadingOlderGroupMessages
+    val hasMoreGroupMessages: StateFlow<Boolean> get() = groupChatViewModel.hasMoreGroupMessages
     val groupLoading: StateFlow<Boolean> get() = groupChatViewModel.groupLoading
     private val _currentGroupId get() = groupChatViewModel.currentGroupId
 
@@ -422,7 +430,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             if (session == null) return@filter false
             val lastUserMsgTime = repository.getLastUserMessageTime(session.id)
             val lastUserOrSession = lastUserMsgTime ?: session.lastTime
-            val lastSent = lastProactiveMsgTime[op.id] ?: 0L
+            val lastSent = getLastProactiveSentAt(op.id)
             (now - maxOf(lastUserOrSession, lastSent)) >= 30 * 60 * 1000L
         }
         if (candidates.size < 1) return
@@ -452,7 +460,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         val op = _operators.value.find { it.id == event.actorId || it.name == event.actorName } ?: return false
         if (!settings.getOperatorMsgPermission(op.id)) return false
         val now = System.currentTimeMillis()
-        val lastSent = lastProactiveMsgTime[op.id] ?: 0L
+        val lastSent = getLastProactiveSentAt(op.id)
         if (now - lastSent < 30 * 60 * 1000L) return false
         if (!tryConsumeAutoAiBudget("proactive_private")) return false
         return sendProactiveMessage(op, event.content)
@@ -546,7 +554,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                     lastTime = System.currentTimeMillis()
                 ))
                 unhideSession(session.id)
-                lastProactiveMsgTime[op.id] = System.currentTimeMillis()
+                setLastProactiveSentAt(op.id, System.currentTimeMillis())
                 if (parsed.emotion.isNotBlank() || parsed.location.isNotBlank() || parsed.state.isNotBlank()) {
                     updateOperatorStatus(op.id, parsed.location, parsed.state, parsed.emotion)
                 }
@@ -556,6 +564,13 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             throw e
         } catch (_: Exception) { }
         return false
+    }
+
+    private fun getLastProactiveSentAt(operatorId: String): Long =
+        settings.getLong("proactive_last_sent_$operatorId", 0L)
+
+    private fun setLastProactiveSentAt(operatorId: String, time: Long) {
+        settings.putLong("proactive_last_sent_$operatorId", time)
     }
 
     private suspend fun refreshAllOperatorStatus(force: Boolean = false) {
@@ -609,15 +624,8 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         if (!settings.autoAiEnabled) return
         if (!settings.dailyAutoMomentEnabled) return
         android.util.Log.d("MomentGen", "** [DBG] ** 自动生成开始")
-        // 清理旧版残留的过量动态（保留 7 天内的）
-        val allNow = repository.getAllMomentsSync()
-        android.util.Log.d("MomentGen", "** [DBG] ** 当前动态总数=${allNow.size}")
         val weekAgo = System.currentTimeMillis() - 7 * 24 * 60 * 60 * 1000L
-        val oldMoments = allNow.filter { it.createdAt < weekAgo }
-        if (oldMoments.size > 10) {
-            repository.deleteOldMoments(weekAgo)
-            android.util.Log.d("MomentGen", "** [DBG] ** 清理了 ${oldMoments.size} 条 7 天前的动态")
-        }
+        repository.deleteOldMoments(weekAgo)
         if (!autoGenerating.compareAndSet(false, true)) return
         DebugLogger.log("MomentGen", "autoGenerating=true")
         viewModelScope.launch {
@@ -647,6 +655,10 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     fun selectOperator(operator: Operator) = chatViewModel.selectOperator(operator)
 
     fun clearSelection() = chatViewModel.clearSelection()
+
+    fun loadOlderMessages() = chatViewModel.loadOlderMessages()
+
+    fun loadOlderGroupMessages() = groupChatViewModel.loadOlderGroupMessages()
 
     fun clearMessages() = chatViewModel.clearMessages()
     fun clearGroupMessages(groupId: String) = groupChatViewModel.clearGroupMessages(groupId)
@@ -1936,20 +1948,22 @@ ${summaries}
                 ))
             }
 
-            // AI auto-replies: 异步生成，不阻塞动态显示
-            val allOpNames = _operators.value.map { it.name }.filter { it != userName }
-            val mentioned = mentionedOps.filter { it in allOpNames }
-            val randomCount = (3 + (Math.random() * 3).toInt()).coerceAtLeast(3)
-            val others = (allOpNames - mentioned.toSet()).shuffled().take((randomCount - mentioned.size).coerceAtLeast(0))
-            val repliers = (mentioned + others).distinct().take(5)
-            val c = content; val u = userName
-            for ((i, name) in repliers.withIndex()) {
-                if (i > 0) delay((1500L + (Math.random() * 1500).toLong()))
+            // 用户主动发布动态引起的 AI 评论不计入自动预算，但仍尊重总自动 AI 开关。
+            if (settings.autoAiEnabled) {
+                val allOpNames = _operators.value.map { it.name }.filter { it != userName }
+                val mentioned = mentionedOps.filter { it in allOpNames }
+                val randomCount = (3 + (Math.random() * 3).toInt()).coerceAtLeast(3)
+                val others = (allOpNames - mentioned.toSet()).shuffled().take((randomCount - mentioned.size).coerceAtLeast(0))
+                val repliers = (mentioned + others).distinct().take(5)
+                val c = content; val u = userName
+                for ((i, name) in repliers.withIndex()) {
+                    if (i > 0) delay((1500L + (Math.random() * 1500).toLong()))
                     val prompt = "你是${name}。用户扮演的角色${u}发布了动态：「${c}」。请用10-40字评论这条动态（根据你的性格自然回应）。直接输出纯文本。注意：你是${name}，不是${u}，不要替${u}说话。"
                     triggerSingleAiReply(momentId, name, c, 0, u, prompt)
                 }
             }
         }
+    }
 
     // === Moments delegation ===
     fun getMomentBadge(): Int = momentsViewModel.getMomentBadge()
@@ -2015,8 +2029,41 @@ ${summaries}
 
     fun refreshMomentsNow() {
         viewModelScope.launch(Dispatchers.IO) {
-            val fresh = repository.getAllMomentsSync()
+            val limit = appState.moments.value.size.coerceAtLeast(MOMENT_PAGE_SIZE)
+            val fresh = repository.getMomentsPaged(limit, 0)
+            _hasMoreMoments.value = fresh.size >= limit
             appState.refreshMoments(fresh)
+        }
+    }
+
+    fun loadInitialMoments() {
+        if (_isLoadingMoments.value) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _isLoadingMoments.value = true
+            try {
+                val firstPage = repository.getMomentsPaged(MOMENT_PAGE_SIZE, 0)
+                _hasMoreMoments.value = firstPage.size >= MOMENT_PAGE_SIZE
+                appState.refreshMoments(firstPage)
+            } finally {
+                _isLoadingMoments.value = false
+            }
+        }
+    }
+
+    fun loadMoreMoments() {
+        if (_isLoadingMoments.value || !_hasMoreMoments.value) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _isLoadingMoments.value = true
+            try {
+                val current = appState.moments.value
+                val more = repository.getMomentsPaged(MOMENT_PAGE_SIZE, current.size)
+                _hasMoreMoments.value = more.size >= MOMENT_PAGE_SIZE
+                if (more.isNotEmpty()) {
+                    appState.refreshMoments((current + more).distinctBy { it.id }.sortedByDescending { it.createdAt })
+                }
+            } finally {
+                _isLoadingMoments.value = false
+            }
         }
     }
     suspend fun getAllImpressions(): List<Memory> = dataViewModel.getAllImpressions()

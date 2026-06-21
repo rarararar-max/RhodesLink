@@ -230,11 +230,12 @@ private fun MemoryTab(settings: SettingsRepository) {
 @Composable
 private fun GeneralTab(settings: SettingsRepository, onPromptEditor: () -> Unit = {}) {
     SectionTitle("推荐预设")
-    Text("当前：${modeLabel(settings.contextMode)}。选择预设会批量调整记忆数量、历史消息和自动世界预算；已自定义过的 Prompt 模板不会被覆盖。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
+    var contextMode by remember { mutableStateOf(settings.contextMode) }
+    Text("当前：${modeLabel(contextMode)}。选择预设会批量调整记忆数量、历史消息和自动世界预算；已自定义过的 Prompt 模板不会被覆盖。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        ModeButton("省钱", settings.contextMode == "economy", Modifier.weight(1f)) { settings.applyContextMode("economy") }
-        ModeButton("标准", settings.contextMode == "standard", Modifier.weight(1f)) { settings.applyContextMode("standard") }
-        ModeButton("完整", settings.contextMode == "full", Modifier.weight(1f)) { settings.applyContextMode("full") }
+        ModeButton("省钱", contextMode == "economy", Modifier.weight(1f)) { settings.applyContextMode("economy"); contextMode = "economy" }
+        ModeButton("标准", contextMode == "standard", Modifier.weight(1f)) { settings.applyContextMode("standard"); contextMode = "standard" }
+        ModeButton("完整", contextMode == "full", Modifier.weight(1f)) { settings.applyContextMode("full"); contextMode = "full" }
     }
     Spacer(modifier = Modifier.height(8.dp))
     ModeInfoCard(

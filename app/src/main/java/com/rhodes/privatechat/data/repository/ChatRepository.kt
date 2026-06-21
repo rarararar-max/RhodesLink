@@ -26,6 +26,9 @@ class ChatRepository(
 
     suspend fun getMessagesSync(sessionId: String): List<ChatMessage> = shared.getMessagesSync(sessionId)
 
+    suspend fun getMessagesBefore(sessionId: String, beforeTimestamp: Long, beforeId: Long, limit: Long = 100): List<ChatMessage> =
+        shared.getMessagesBefore(sessionId, beforeTimestamp, beforeId, limit)
+
     suspend fun updateMessageContent(id: Long, content: String) = shared.updateMessageContent(id, content)
 
     suspend fun sendMessage(sessionId: String, message: ChatMessage) = shared.sendMessage(sessionId, message)

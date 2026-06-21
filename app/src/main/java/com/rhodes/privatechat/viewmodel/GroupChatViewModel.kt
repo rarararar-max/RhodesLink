@@ -56,6 +56,7 @@ class GroupChatViewModel(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     companion object {
         const val DEBUG = true
+        private const val CHAT_PAGE_SIZE = 50L
         /** 静态共享，避免不同 ViewModel 实例干扰 */
         private val globalAutoChatGenerations = ConcurrentHashMap<String, Long>()
         private val globalAutoGroupChatJobs = ConcurrentHashMap<String, Job>()
@@ -68,6 +69,12 @@ class GroupChatViewModel(
     private val _groupMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val groupMessages: StateFlow<List<ChatMessage>> = _groupMessages.asStateFlow()
 
+    private val _isLoadingOlderGroupMessages = MutableStateFlow(false)
+    val isLoadingOlderGroupMessages: StateFlow<Boolean> = _isLoadingOlderGroupMessages.asStateFlow()
+
+    private val _hasMoreGroupMessages = MutableStateFlow(true)
+    val hasMoreGroupMessages: StateFlow<Boolean> = _hasMoreGroupMessages.asStateFlow()
+
     private val _groupLoading = MutableStateFlow(false)
     val groupLoading: StateFlow<Boolean> = _groupLoading.asStateFlow()
     private val groupLoadingStates = ConcurrentHashMap<String, Boolean>()
@@ -79,6 +86,7 @@ class GroupChatViewModel(
     val lastSendError: StateFlow<String> = _lastSendError.asStateFlow()
 
     private var groupMessagesJob: Job? = null
+    private val pageSize: Long get() = CHAT_PAGE_SIZE
     private val groupMessageMutexes = ConcurrentHashMap<String, Mutex>()
     private fun mutexFor(groupId: String): Mutex = groupMessageMutexes.computeIfAbsent(groupId) { Mutex() }
 
@@ -102,8 +110,13 @@ class GroupChatViewModel(
         _groupLoading.value = groupLoadingStates[groupSessionId] == true
         markSessionRead(groupSessionId)
         groupMessagesJob?.cancel()
+        _groupMessages.value = emptyList()
+        _hasMoreGroupMessages.value = true
         groupMessagesJob = scope.launch {
-            repository.getRecentMessages(groupSessionId).collect { _groupMessages.value = it; DebugLogger.log("GroupChat/DB", "群消息刷新, count=${it.size}") }
+            repository.getRecentMessages(groupSessionId, pageSize).collect { msgs ->
+                mergeRecentGroupMessages(msgs)
+                DebugLogger.log("GroupChat/DB", "群消息刷新, count=${msgs.size}")
+            }
         }
     }
 
@@ -111,7 +124,38 @@ class GroupChatViewModel(
         _currentGroupId.value = ""
         groupMessagesJob?.cancel()
         _groupMessages.value = emptyList()
+        _hasMoreGroupMessages.value = true
+        _isLoadingOlderGroupMessages.value = false
         groupActivityCache.clear()
+    }
+
+    fun loadOlderGroupMessages() {
+        val groupId = _currentGroupId.value
+        val first = _groupMessages.value.firstOrNull() ?: return
+        if (groupId.isBlank() || _isLoadingOlderGroupMessages.value || !_hasMoreGroupMessages.value) return
+        scope.launch {
+            _isLoadingOlderGroupMessages.value = true
+            try {
+                val older = repository.getMessagesBefore(groupId, first.timestamp, first.id, pageSize)
+                if (older.isEmpty() || older.size < pageSize) _hasMoreGroupMessages.value = false
+                if (older.isNotEmpty()) {
+                    _groupMessages.value = (older + _groupMessages.value).distinctBy { it.id }.sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
+                }
+            } catch (e: Exception) {
+                DebugLogger.log("GroupChat/Paging", "加载群历史失败: ${e.message}")
+            } finally {
+                _isLoadingOlderGroupMessages.value = false
+            }
+        }
+    }
+
+    private fun mergeRecentGroupMessages(recent: List<ChatMessage>) {
+        if (recent.size < pageSize) _hasMoreGroupMessages.value = false
+        val firstRecent = recent.firstOrNull()
+        val older = if (firstRecent == null) emptyList() else _groupMessages.value.filter { msg ->
+            msg.timestamp < firstRecent.timestamp || (msg.timestamp == firstRecent.timestamp && msg.id < firstRecent.id)
+        }
+        _groupMessages.value = (older + recent).distinctBy { it.id }.sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
     }
 
     fun clear() {

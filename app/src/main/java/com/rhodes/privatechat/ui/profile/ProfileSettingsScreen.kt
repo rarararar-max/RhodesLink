@@ -3,7 +3,6 @@ package com.rhodes.privatechat.ui.profile
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -87,7 +86,7 @@ fun ProfileSettingsScreen(
     val scope = rememberCoroutineScope()
     var avatarUri by remember { mutableStateOf(profile.avatarUri.ifBlank { null }) }
     var cropTarget by remember { mutableStateOf<android.net.Uri?>(null) }
-    val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+    val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         cropTarget = uri?.let { copyToCache(context, it) }
         if (uri != null && cropTarget == null) android.widget.Toast.makeText(context, "无法读取此图片，请尝试选择JPG/PNG图片", android.widget.Toast.LENGTH_SHORT).show()
     }
@@ -126,7 +125,7 @@ fun ProfileSettingsScreen(
                     }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
-                OutlinedButton(onClick = { avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
+                OutlinedButton(onClick = { avatarPicker.launch("image/*") }) {
                     Icon(Icons.Default.PhotoCamera, null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("上传头像", fontSize = 12.sp)

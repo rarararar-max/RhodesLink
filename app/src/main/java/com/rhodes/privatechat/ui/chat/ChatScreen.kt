@@ -81,6 +81,8 @@ fun ChatScreen(
     android.util.Log.d("RHODES_CRASH", "ChatScreen: 开始渲染 operator=${operator.id} name=${operator.name} rawMessages.size=${viewModel.messages.value.size}")
     val settings: SettingsRepository = koinInject()
     val rawMessages by viewModel.messages.collectAsState()
+    val isLoadingOlder by viewModel.isLoadingOlderMessages.collectAsState()
+    val hasMoreMessages by viewModel.hasMoreMessages.collectAsState()
     val inputText by viewModel.inputText.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val currentMode by viewModel.currentMode.collectAsState()
@@ -107,7 +109,10 @@ fun ChatScreen(
     var cropTarget by remember { mutableStateOf<Uri?>(null) }
     val bgPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
-            try { cropTarget = uri } catch (e: Exception) {
+            try {
+                cropTarget = com.rhodes.privatechat.util.copyToCache(context, uri)
+                if (cropTarget == null) android.widget.Toast.makeText(context, "无法读取此图片，请尝试选择JPG/PNG图片", android.widget.Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
                 com.rhodes.privatechat.util.DebugLogger.log("ChatScreen/ERROR", "选图失败: ${e.message}")
                 android.widget.Toast.makeText(context, "无法加载此图片，请尝试其他图片", android.widget.Toast.LENGTH_SHORT).show()
             }
@@ -151,6 +156,9 @@ fun ChatScreen(
                     onRecall = { msgId, segIdx -> viewModel.recallMessageSegment(msgId, segIdx) },
                     onRegenerate = { viewModel.regenerateAiMessage(it) },
                     onContinue = { viewModel.continueAiMessage(it) },
+                    onLoadOlder = { viewModel.loadOlderMessages() },
+                    isLoadingOlder = isLoadingOlder,
+                    hasMore = hasMoreMessages,
                     modifier = Modifier.weight(1f)
                 )
 

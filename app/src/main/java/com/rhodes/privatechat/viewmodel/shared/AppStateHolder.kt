@@ -45,7 +45,6 @@ class AppStateHolder(
                 android.util.Log.d("MainVM", "会话过滤: 总数=${all.size}, 隐藏数=${hidden.size}, 显示数=${_sessions.value.size}")
             }
         }
-        scope.launch { repository.getAllMoments().collect { _moments.value = it } }
         _userProfile.value = loadUserProfile()
     }
 

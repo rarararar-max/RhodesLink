@@ -230,12 +230,12 @@ fun DiaryScreen(
             }
 
             Column(modifier = Modifier.weight(1f).padding(12.dp)) {
-                // 标题行：←角色名→（左箭头=更早，右箭头=更新）
+                // 日记按日期倒序排列：左箭头查看更新，右箭头查看更早。
                 Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Card).padding(horizontal = 8.dp, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    val canPrev = currentDateIdx > 0 && diaryEntries.isNotEmpty()
+                    val canNewer = currentDateIdx > 0 && diaryEntries.isNotEmpty()
                     IconButton(
                         onClick = {
-                            com.rhodes.privatechat.util.DebugLogger.log("Diary", "翻更早: idx=$currentDateIdx, entries=${diaryEntries.size}")
+                            com.rhodes.privatechat.util.DebugLogger.log("Diary", "翻更新: idx=$currentDateIdx, entries=${diaryEntries.size}")
                             if (currentDateIdx > 0) {
                                 val prev = diaryEntries.getOrNull(currentDateIdx - 1)
                                 if (prev != null) {
@@ -244,10 +244,10 @@ fun DiaryScreen(
                                 }
                             }
                         },
-                        enabled = canPrev,
+                        enabled = canNewer,
                         modifier = Modifier.size(28.dp)
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "上一篇", tint = if (canPrev) Primary else TextTertiary, modifier = Modifier.size(18.dp))
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "更新一篇", tint = if (canNewer) Primary else TextTertiary, modifier = Modifier.size(18.dp))
                     }
 
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -261,10 +261,10 @@ fun DiaryScreen(
                         Text(if (diaryEntries.isNotEmpty()) "$currentDateLabel · 第 ${currentDateIdx + 1}/${diaryEntries.size} 篇" else "暂无日记", fontSize = 11.sp, color = TextTertiary)
                     }
 
-                    val canNext = currentDateIdx < diaryEntries.lastIndex && diaryEntries.isNotEmpty()
+                    val canOlder = currentDateIdx < diaryEntries.lastIndex && diaryEntries.isNotEmpty()
                     IconButton(
                         onClick = {
-                            com.rhodes.privatechat.util.DebugLogger.log("Diary", "翻更新: idx=$currentDateIdx, entries=${diaryEntries.size}")
+                            com.rhodes.privatechat.util.DebugLogger.log("Diary", "翻更早: idx=$currentDateIdx, entries=${diaryEntries.size}")
                             if (currentDateIdx < diaryEntries.lastIndex) {
                                 val next = diaryEntries.getOrNull(currentDateIdx + 1)
                                 if (next != null) {
@@ -273,10 +273,10 @@ fun DiaryScreen(
                                 }
                             }
                         },
-                        enabled = canNext,
+                        enabled = canOlder,
                         modifier = Modifier.size(28.dp)
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "下一篇", tint = if (canNext) Primary else TextTertiary, modifier = Modifier.size(18.dp))
+                        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "更早一篇", tint = if (canOlder) Primary else TextTertiary, modifier = Modifier.size(18.dp))
                     }
                 }
 

@@ -63,6 +63,7 @@ class ChatViewModel(
 ) : AndroidViewModel(application) {
     companion object {
         const val DEBUG = true
+        private const val CHAT_PAGE_SIZE = 50L
     }
 
     // === Chat state ===
@@ -74,6 +75,12 @@ class ChatViewModel(
 
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
+
+    private val _isLoadingOlderMessages = MutableStateFlow(false)
+    val isLoadingOlderMessages: StateFlow<Boolean> = _isLoadingOlderMessages.asStateFlow()
+
+    private val _hasMoreMessages = MutableStateFlow(true)
+    val hasMoreMessages: StateFlow<Boolean> = _hasMoreMessages.asStateFlow()
 
     private val _currentMode = MutableStateFlow("offline")
     val currentMode: StateFlow<String> = _currentMode.asStateFlow()
@@ -100,6 +107,7 @@ class ChatViewModel(
     private var modeTransitionNotice = ""
     private var messagesJob: Job? = null
     private val chatAiJobs = ConcurrentHashMap<String, Job>()
+    private val pageSize: Long get() = CHAT_PAGE_SIZE
 
     init {
         loadHypnosis()
@@ -290,8 +298,10 @@ ${text}"""
             _currentMode.value = savedMode
             markSessionRead(session.id)
             messagesJob?.cancel()
+            _messages.value = emptyList()
+            _hasMoreMessages.value = true
             messagesJob = viewModelScope.launch {
-                repository.getRecentMessages(session.id).collect { msgs -> _messages.value = msgs }
+                repository.getRecentMessages(session.id, pageSize).collect { msgs -> mergeRecentMessages(msgs) }
             }
         }
     }
@@ -316,11 +326,13 @@ ${text}"""
             _currentMode.value = savedMode
             markSessionRead(session.id)
             messagesJob?.cancel()
+            _messages.value = emptyList()
+            _hasMoreMessages.value = true
             messagesJob = viewModelScope.launch {
                 try {
-                    repository.getRecentMessages(session.id).collect { msgs ->
+                    repository.getRecentMessages(session.id, pageSize).collect { msgs ->
                         DebugLogger.log("RHODES_CRASH", "selectOperatorSync: messages收集到${msgs.size}条")
-                        _messages.value = msgs.reversed()
+                        mergeRecentMessages(msgs)
                     }
                 } catch (e: Exception) {
                     DebugLogger.log("RHODES_CRASH", "selectOperatorSync: messages收集异常: ${e.message}")
@@ -337,6 +349,8 @@ ${text}"""
         _selectedOperator.value = null
         _currentSession.value = null
         _messages.value = emptyList()
+        _hasMoreMessages.value = true
+        _isLoadingOlderMessages.value = false
     }
 
     fun clearMessages() {
@@ -347,6 +361,35 @@ ${text}"""
             repository.deleteAnchorsBySession(session.id)
             _messages.value = emptyList()
         }
+    }
+
+    fun loadOlderMessages() {
+        val session = _currentSession.value ?: return
+        val first = _messages.value.firstOrNull() ?: return
+        if (_isLoadingOlderMessages.value || !_hasMoreMessages.value) return
+        viewModelScope.launch {
+            _isLoadingOlderMessages.value = true
+            try {
+                val older = repository.getMessagesBefore(session.id, first.timestamp, first.id, pageSize)
+                if (older.isEmpty() || older.size < pageSize) _hasMoreMessages.value = false
+                if (older.isNotEmpty()) {
+                    _messages.value = (older + _messages.value).distinctBy { it.id }.sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
+                }
+            } catch (e: Exception) {
+                DebugLogger.log("Chat/Paging", "加载历史消息失败: ${e.message}")
+            } finally {
+                _isLoadingOlderMessages.value = false
+            }
+        }
+    }
+
+    private fun mergeRecentMessages(recent: List<ChatMessage>) {
+        if (recent.size < pageSize) _hasMoreMessages.value = false
+        val firstRecent = recent.firstOrNull()
+        val older = if (firstRecent == null) emptyList() else _messages.value.filter { msg ->
+            msg.timestamp < firstRecent.timestamp || (msg.timestamp == firstRecent.timestamp && msg.id < firstRecent.id)
+        }
+        _messages.value = (older + recent).distinctBy { it.id }.sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
     }
 
     fun updateInputText(text: String) { _inputText.value = text }

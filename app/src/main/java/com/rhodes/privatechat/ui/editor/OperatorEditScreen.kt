@@ -66,7 +66,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -217,14 +216,14 @@ fun OperatorEditScreen(
             Spacer(modifier = Modifier.height(12.dp))
             SectionCard {
                 SectionTitle("头像")
-                val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+                val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
                     cropTarget = uri?.let { copyToCache(context, it) }
                     if (uri != null && cropTarget == null) android.widget.Toast.makeText(context, "无法读取此图片，请尝试选择JPG/PNG图片", android.widget.Toast.LENGTH_SHORT).show()
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    OperatorAvatarImage(avatarUri = avatarUri, name = name, modifier = Modifier.size(80.dp).clickable { avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) })
+                    OperatorAvatarImage(avatarUri = avatarUri, name = name, modifier = Modifier.size(80.dp).clickable { avatarPicker.launch("image/*") })
                     Spacer(modifier = Modifier.width(16.dp))
-                    OutlinedButton(onClick = { avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }) {
+                    OutlinedButton(onClick = { avatarPicker.launch("image/*") }) {
                         Icon(Icons.Default.PhotoCamera, null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
                         Text("上传头像")

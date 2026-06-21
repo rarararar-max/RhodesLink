@@ -6,6 +6,7 @@ import app.cash.sqldelight.driver.android.AndroidSqliteDriver
 
 actual class DatabaseDriverFactory(private val context: Context) {
     actual fun createDriver(): SqlDriver {
+        DatabaseCompatibility.repairBeforeOpen(context)
         return AndroidSqliteDriver(RhodesDatabase.Schema, context, "rhodes_terminal.db")
     }
 }

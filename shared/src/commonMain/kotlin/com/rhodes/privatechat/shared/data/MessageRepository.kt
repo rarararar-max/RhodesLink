@@ -43,6 +43,12 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
         }.executeAsList()
     }
 
+    suspend fun getMessagesBefore(sessionId: String, beforeTimestamp: Long, beforeId: Long, limit: Long): List<ChatMessage> = withContext(Dispatchers.Default) {
+        db.chatMessagesQueries.getMessagesBefore(sessionId, beforeTimestamp, beforeTimestamp, beforeId, limit) { id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe ->
+            ChatMessage(id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange.toInt(), timestamp, isMe != 0L)
+        }.executeAsList()
+    }
+
     suspend fun updateMessageContent(id: Long, content: String) = withContext(Dispatchers.Default) {
         db.chatMessagesQueries.updateContent(content, id)
     }

@@ -47,7 +47,8 @@ class MomentsViewModel(
                     val count = repository.getLikeCount(momentId)
                     repository.updateLikeCount(momentId, count)
                 }
-                val fresh = withContext(Dispatchers.Default) { repository.getAllMomentsSync() }
+                val loaded = appState.moments.value.size.coerceAtLeast(20)
+                val fresh = withContext(Dispatchers.Default) { repository.getMomentsPaged(loaded, 0) }
                 appState.refreshMoments(fresh)
             } catch (e: Exception) {
                 DebugLogger.log("Moment/ERROR", "likeMoment: ${e.message}")
@@ -64,7 +65,12 @@ class MomentsViewModel(
         return if (latest > lastSeenMoment) (appState.moments.value.count { it.id > lastSeenMoment && !it.isUserPost }) else 0
     }
 
-    suspend fun getMomentBadgeSuspend(): Int = getMomentBadge() + getUnreadCommentCountSuspend()
+    suspend fun getMomentBadgeSuspend(): Int {
+        val lastSeenMoment = settings.lastSeenMomentId
+        val recent = withContext(Dispatchers.IO) { repository.getMomentsPaged(100, 0) }
+        val momentBadge = recent.count { it.id > lastSeenMoment && !it.isUserPost }
+        return momentBadge + getUnreadCommentCountSuspend()
+    }
 
     suspend fun getUnreadCommentCountSuspend(): Int {
         val profile = getUserProfile()

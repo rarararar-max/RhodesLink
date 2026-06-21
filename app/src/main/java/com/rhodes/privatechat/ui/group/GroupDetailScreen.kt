@@ -50,7 +50,12 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
     val scope = rememberCoroutineScope()
     var bgUri by remember { mutableStateOf<String?>(settings.getString("gbg_$groupId", "")) }
     var cropTarget by remember { mutableStateOf<Uri?>(null) }
-    val bgPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri -> cropTarget = uri }
+    val bgPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            cropTarget = com.rhodes.privatechat.util.copyToCache(ctx, uri)
+            if (cropTarget == null) android.widget.Toast.makeText(ctx, "无法读取此图片，请尝试选择JPG/PNG图片", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
     var showBgReset by remember { mutableStateOf(false) }
     var showShare by remember { mutableStateOf(false) }
     var showClearConfirm by remember { mutableStateOf(false) }
@@ -60,6 +65,8 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
     var inputText by rememberSaveable { mutableStateOf("") }
 
     val groupMessages by viewModel.groupMessages.collectAsState()
+    val isLoadingOlder by viewModel.isLoadingOlderGroupMessages.collectAsState()
+    val hasMoreMessages by viewModel.hasMoreGroupMessages.collectAsState()
     val groupLoading by viewModel.groupLoading.collectAsState()
     val sessions by viewModel.allSessions.collectAsState()
     val groupSession = remember(groupId, sessions) { sessions.find { it.id == groupId } }
@@ -130,6 +137,9 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                     onRecall = { msgId, segIdx -> viewModel.recallMessageSegment(msgId, segIdx) },
                     onSenderClick = onOperatorClick,
                     progressiveDisplay = true,
+                    onLoadOlder = { viewModel.loadOlderGroupMessages() },
+                    isLoadingOlder = isLoadingOlder,
+                    hasMore = hasMoreMessages,
                     modifier = Modifier.weight(1f)
                 )
 

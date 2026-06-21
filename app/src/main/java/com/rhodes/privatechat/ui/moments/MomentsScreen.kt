@@ -53,6 +53,8 @@ import com.rhodes.privatechat.viewmodel.MainViewModel
 @Composable
 fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick: (String) -> Unit = {}, onUnreadMessages: () -> Unit = {}, onMomentClick: (Long, Long, String) -> Unit = { _, _, _ -> }, modifier: Modifier = Modifier) {
     val moments by viewModel.moments.collectAsState()
+    val isLoadingMoments by viewModel.isLoadingMoments.collectAsState()
+    val hasMoreMoments by viewModel.hasMoreMoments.collectAsState()
     val genStatus by viewModel.momentGenerateStatus.collectAsState()
     var showPost by rememberSaveable { mutableStateOf(false) }
     var showReplyDialog by rememberSaveable { mutableStateOf(false) }
@@ -67,13 +69,20 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
     LaunchedEffect(Unit) { unreadMsgCount = viewModel.getUnreadCommentCountSuspend() }
     val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(lifecycleOwner) {
-        viewModel.refreshMomentsNow()
+        viewModel.loadInitialMoments()
         while (true) {
-            delay(5_000)
+            delay(30_000)
             if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
                 viewModel.refreshMomentsNow()
                 unreadMsgCount = viewModel.getUnreadCommentCountSuspend()
             }
+        }
+    }
+
+    LaunchedEffect(listState.firstVisibleItemIndex, listState.layoutInfo.totalItemsCount, moments.size, isLoadingMoments, hasMoreMoments) {
+        val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: return@LaunchedEffect
+        if (hasMoreMoments && !isLoadingMoments && lastVisible >= listState.layoutInfo.totalItemsCount - 3) {
+            viewModel.loadMoreMoments()
         }
     }
 
@@ -116,6 +125,9 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
                         onOperatorClick = onOperatorClick,
                         onMomentClick = { onMomentClick(moment.id, 0L, "") })
                 }
+                if (isLoadingMoments) {
+                    item { Text("加载更多动态...", modifier = Modifier.fillMaxWidth().padding(16.dp), textAlign = TextAlign.Center, color = TextTertiary, fontSize = 12.sp) }
+                }
                 item { Spacer(Modifier.height(16.dp)) }
             }
     }
@@ -138,7 +150,7 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
                 if (replyText.isBlank() || replySending) return@TextButton
                 replySending = true
                 viewModel.commentOnMoment(momentId, "user", viewModel.getUserProfile().nickname, replyText, parentId, parentName)
-                replyText = ""; showReplyDialog = false; replySending = false
+                replyText = ""; showReplyDialog = false
             }) { Text("发送", color = Primary) }
         }, dismissButton = { TextButton(onClick = { showReplyDialog = false }) { Text("取消", color = TextSecondary) } })
     }
@@ -155,7 +167,7 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
                 if (commentText.isBlank() || commentSending) return@TextButton
                 commentSending = true
                 viewModel.commentOnMoment(commentMomentId, "user", viewModel.getUserProfile().nickname, commentText, 0, "")
-                commentText = ""; showCommentDialog = false; commentSending = false
+                commentText = ""; showCommentDialog = false
             }) { Text("发布", color = Primary) }
         }, dismissButton = { TextButton(onClick = { showCommentDialog = false }) { Text("取消", color = TextSecondary) } })
     }

@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.rhodes.privatechat.ui.theme.*
+import com.rhodes.privatechat.util.copyToCache
 import com.rhodes.privatechat.util.decodeSampledBitmap
 import com.rhodes.privatechat.util.scaleBitmapToMax
 import java.io.File
@@ -58,10 +59,22 @@ fun ImageCropperDialog(
     var showUseOriginal by remember { mutableStateOf(false) }
     val bitmap = remember(imageUri) { decodeSampledBitmap(context, imageUri, 1024) }
 
+    fun confirmOriginal() {
+        val safeUri = copyToCache(context, imageUri) ?: imageUri
+        onConfirm(safeUri)
+        showUseOriginal = false
+    }
+
     Dialog(onDismissRequest = onCancel) {
         Box(modifier = Modifier.fillMaxWidth().background(Color(0xFF1C1C1E)).padding(8.dp)) {
             if (bitmap == null) {
-                Text("加载图片失败", color = Color.White, modifier = Modifier.padding(16.dp))
+                androidx.compose.foundation.layout.Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                    Text("加载图片失败", color = Color.White, modifier = Modifier.padding(bottom = 12.dp))
+                    androidx.compose.foundation.layout.Row {
+                        TextButton(onClick = onCancel) { Text("取消", color = TextSecondary) }
+                        TextButton(onClick = { confirmOriginal() }) { Text("直接使用原图", color = Primary) }
+                    }
+                }
                 return@Dialog
             }
             val bmp = bitmap
@@ -101,7 +114,10 @@ fun ImageCropperDialog(
                 onClick = {
                     val vw = viewSize.width.toFloat()
                     val vh = viewSize.height.toFloat()
-                    if (vw <= 0 || vh <= 0) return@Button
+                    if (vw <= 0 || vh <= 0) {
+                        Toast.makeText(context, "图片尚未加载完成，请稍后再试", Toast.LENGTH_SHORT).show()
+                        return@Button
+                    }
                     val cropH = if (aspectY > 0) vw * aspectY / aspectX else vh
                     val cropTop = (vh - cropH) / 2f
                     val drawW = bmp.width * scale
@@ -152,7 +168,7 @@ fun ImageCropperDialog(
             title = { Text("裁剪失败", color = TextPrimary) },
             text = { Text("无法裁剪此图片，是否直接使用原图？", color = TextSecondary) },
             confirmButton = {
-                TextButton(onClick = { onConfirm(imageUri); showUseOriginal = false }) {
+                TextButton(onClick = { confirmOriginal() }) {
                     Text("直接使用", color = Primary)
                 }
             },

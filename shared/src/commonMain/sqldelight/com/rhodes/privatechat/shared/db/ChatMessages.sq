@@ -23,7 +23,14 @@ getMessagesSync:
 SELECT * FROM chat_messages WHERE sessionId = ? ORDER BY timestamp ASC;
 
 getRecentMessages:
-SELECT * FROM chat_messages WHERE sessionId = ? ORDER BY timestamp DESC LIMIT ?;
+SELECT * FROM (
+    SELECT * FROM chat_messages WHERE sessionId = ? ORDER BY timestamp DESC, id DESC LIMIT ?
+) ORDER BY timestamp ASC, id ASC;
+
+getMessagesBefore:
+SELECT * FROM (
+    SELECT * FROM chat_messages WHERE sessionId = ? AND (timestamp < ? OR (timestamp = ? AND id < ?)) ORDER BY timestamp DESC, id DESC LIMIT ?
+) ORDER BY timestamp ASC, id ASC;
 
 getMaxId:
 SELECT MAX(id) FROM chat_messages;

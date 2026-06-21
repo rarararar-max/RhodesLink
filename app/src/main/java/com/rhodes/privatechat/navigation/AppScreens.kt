@@ -91,29 +91,22 @@ data class PokerGameRoute(val mode: PokerMode, val opponents: List<PokerOpponent
 data class ChatOperator(val operatorId: String) : Screen {
     @Composable
     override fun Content() {
-        android.util.Log.d("RHODES_CRASH", "ChatOperator.Content: operatorId=$operatorId")
         val navigator = LocalNavigator.currentOrThrow
         val viewModel: MainViewModel = koinViewModel()
         val operators by viewModel.operators.collectAsState()
-        android.util.Log.d("RHODES_CRASH", "ChatOperator: operators.size=${operators.size}")
         val operator = remember(operators, operatorId) { operators.find { it.id == operatorId } }
-        android.util.Log.d("RHODES_CRASH", "ChatOperator: operator found=${operator != null}")
         var ready by remember { mutableStateOf(false) }
-        LaunchedEffect(operatorId, operator) {
-            android.util.Log.d("RHODES_CRASH", "ChatOperator: LaunchedEffect触发, operator=($operatorId)")
+        LaunchedEffect(operatorId) {
             if (operator != null) {
                 try {
                     viewModel.chatViewModel.selectOperatorSync(operator)
-                    android.util.Log.d("RHODES_CRASH", "ChatOperator: selectOperatorSync完成")
                 } catch (e: Exception) {
-                    android.util.Log.e("RHODES_CRASH", "ChatOperator: selectOperatorSync异常: ${e.message}", e)
+                    android.util.Log.e("RHODES_CHAT_TRACE", "[AppScreens] selectOperatorSync.ERROR op=$operatorId err=${e.message}", e)
                 }
                 ready = true
-            } else {
-                android.util.Log.w("RHODES_CRASH", "ChatOperator: operator为null, 跳过selectOperatorSync")
             }
         }
-        DisposableEffect(operatorId) {
+        DisposableEffect(Unit) {
             onDispose { viewModel.chatViewModel.clearSelection() }
         }
         if (ready && operator != null) {

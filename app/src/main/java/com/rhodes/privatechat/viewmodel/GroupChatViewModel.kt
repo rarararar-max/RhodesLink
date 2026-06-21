@@ -9,6 +9,7 @@ import com.rhodes.privatechat.shared.model.Operator
 import com.rhodes.privatechat.shared.model.WorldEvent
 import com.rhodes.privatechat.shared.model.WorldEventType
 import com.rhodes.privatechat.util.DebugLogger
+import com.rhodes.privatechat.util.ChatTrace
 import com.rhodes.privatechat.shared.model.RelationshipType
 import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.shared.memory.AnchorSourcePolicy
@@ -105,7 +106,13 @@ class GroupChatViewModel(
     }
 
     fun setCurrentGroup(groupSessionId: String) {
-        DebugLogger.log("GroupChat", "设置当前群聊: $groupSessionId")
+        val sameGroup = _currentGroupId.value == groupSessionId && groupMessagesJob?.isActive == true
+        ChatTrace.d("GroupVM", "setCurrent group=$groupSessionId sameGroup=$sameGroup")
+        if (sameGroup) {
+            markSessionRead(groupSessionId)
+            _groupLoading.value = groupLoadingStates[groupSessionId] == true
+            return
+        }
         _currentGroupId.value = groupSessionId
         _groupLoading.value = groupLoadingStates[groupSessionId] == true
         markSessionRead(groupSessionId)
@@ -113,9 +120,15 @@ class GroupChatViewModel(
         _groupMessages.value = emptyList()
         _hasMoreGroupMessages.value = true
         groupMessagesJob = scope.launch {
-            repository.getRecentMessages(groupSessionId, pageSize).collect { msgs ->
-                mergeRecentGroupMessages(msgs)
-                DebugLogger.log("GroupChat/DB", "群消息刷新, count=${msgs.size}")
+            try {
+                repository.getRecentMessages(groupSessionId, pageSize).collect { msgs ->
+                    ChatTrace.d("GroupVM", "flow group=$groupSessionId count=${msgs.size}")
+                    mergeGroupMessagesFromFlow(msgs)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                ChatTrace.d("GroupVM", "flow.CANCEL group=$groupSessionId")
+            } catch (e: Exception) {
+                ChatTrace.e("GroupVM", "flow.ERROR group=$groupSessionId err=${e.message}", e)
             }
         }
     }
@@ -137,6 +150,7 @@ class GroupChatViewModel(
             _isLoadingOlderGroupMessages.value = true
             try {
                 val older = repository.getMessagesBefore(groupId, first.timestamp, first.id, pageSize)
+                ChatTrace.d("GroupVM", "loadOlder group=$groupId before=${first.id}/${first.timestamp} result=${older.size} ids=${ChatTrace.ids(older.map { it.id })}")
                 if (older.isEmpty() || older.size < pageSize) _hasMoreGroupMessages.value = false
                 if (older.isNotEmpty()) {
                     _groupMessages.value = (older + _groupMessages.value).distinctBy { it.id }.sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
@@ -149,13 +163,19 @@ class GroupChatViewModel(
         }
     }
 
-    private fun mergeRecentGroupMessages(recent: List<ChatMessage>) {
-        if (recent.size < pageSize) _hasMoreGroupMessages.value = false
-        val firstRecent = recent.firstOrNull()
-        val older = if (firstRecent == null) emptyList() else _groupMessages.value.filter { msg ->
-            msg.timestamp < firstRecent.timestamp || (msg.timestamp == firstRecent.timestamp && msg.id < firstRecent.id)
+    private fun mergeGroupMessagesFromFlow(messages: List<ChatMessage>) {
+        val sortedIncoming = messages.distinctBy { it.id }.sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
+        val olderLoaded = sortedIncoming.firstOrNull()?.let { firstRecent ->
+            _groupMessages.value.filter { it.timestamp < firstRecent.timestamp || (it.timestamp == firstRecent.timestamp && it.id < firstRecent.id) }
+        } ?: emptyList()
+        val merged = (olderLoaded + sortedIncoming)
+            .distinctBy { it.id }
+            .sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
+        _groupMessages.value = merged
+        if (merged.size == sortedIncoming.size) {
+            _hasMoreGroupMessages.value = sortedIncoming.size >= pageSize
         }
-        _groupMessages.value = (older + recent).distinctBy { it.id }.sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
+        ChatTrace.d("GroupVM", "merge incoming=${sortedIncoming.size} total=${merged.size} hasMore=${_hasMoreGroupMessages.value}")
     }
 
     fun clear() {
@@ -587,6 +607,7 @@ class GroupChatViewModel(
                         senderName = "系统", content = "群聊回复格式错误或发言者不在当前群成员中，请重试。",
                         type = "system", mode = mode, isMe = false
                     ))
+                    markGroupUnreadIfNotCurrent(groupSessionId)
                 }
                 if (filtered.isNotEmpty()) {
                     val aiMsgId = repository.getNextMessageId()
@@ -641,10 +662,7 @@ class GroupChatViewModel(
                         sharedUtils.buildUnconsumedEventContextForGroup(groupSessionId, activeMembers.map { it.id }, activeMembers.map { it.name }, settings.eventContextCount, markConsumed = true)
                     }
                 }
-                if (_currentGroupId.value != groupSessionId && filtered.isNotEmpty()) {
-                    repository.incrementUnread(groupSessionId)
-                    unhideSession(groupSessionId)
-                }
+                if (filtered.isNotEmpty()) markGroupUnreadIfNotCurrent(groupSessionId)
                 val gc = sessionMessageCounter.merge(groupSessionId, 1) { old, inc -> old + inc } ?: 1
                 if (gc >= settings.summaryThreshold && groupSessionId.isNotBlank()) {
                     val gs = repository.getSession(groupSessionId)
@@ -672,6 +690,7 @@ class GroupChatViewModel(
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                 Log.e("GroupChat", "Timeout: ${e.message}")
                 repository.sendMessage(groupSessionId, ChatMessage(id = repository.getNextMessageId(), sessionId = groupSessionId, senderName = "系统", content = "响应超时，请重试", type = "system", mode = mode, isMe = false))
+                markGroupUnreadIfNotCurrent(groupSessionId)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // 被新消息取消，不做任何事
             } catch (e: Exception) {
@@ -679,6 +698,7 @@ class GroupChatViewModel(
                 Log.e("GroupChat", "Error: ${e.message}", e)
                 DebugLogger.log("GroupChat/Error", "发送失败: $errMsg")
                 repository.sendMessage(groupSessionId, ChatMessage(id = repository.getNextMessageId(), sessionId = groupSessionId, senderName = "系统", content = errMsg, type = "system", mode = mode, isMe = false))
+                markGroupUnreadIfNotCurrent(groupSessionId)
                 _lastSendError.value = errMsg
             } finally {
                 setGroupLoading(groupSessionId, false)
@@ -696,6 +716,13 @@ class GroupChatViewModel(
     }
 
     fun clearSendError() { _lastSendError.value = "" }
+
+    private suspend fun markGroupUnreadIfNotCurrent(groupSessionId: String, count: Int = 1) {
+        if (_currentGroupId.value != groupSessionId) {
+            repository.incrementUnread(groupSessionId, count)
+            unhideSession(groupSessionId)
+        }
+    }
 
     private fun classifyGroupError(e: Exception): String = when {
         e.message?.contains("401") == true || e.message?.contains("api key", true) == true -> "API Key 无效或已过期，请在设置中检查"

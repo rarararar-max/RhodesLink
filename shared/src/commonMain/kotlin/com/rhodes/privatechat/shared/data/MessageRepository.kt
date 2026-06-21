@@ -61,18 +61,37 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
             message.narration, message.segmentGroup, message.intimacyChange.toLong(), ts,
             if (message.isMe) 1L else 0L
         )
-        val preview = if (message.type == "ai_json") {
-            try {
-                val obj = json.parseToJsonElement(message.content) as? kotlinx.serialization.json.JsonObject
-                val segArray = obj?.get("segments") as? kotlinx.serialization.json.JsonArray
-                if (segArray != null && segArray.isNotEmpty()) {
-                    val last = segArray.last() as? kotlinx.serialization.json.JsonObject
-                    (last?.get("content") as? kotlinx.serialization.json.JsonPrimitive)?.content?.take(50)
-                        ?: message.content.take(50)
-                } else message.content.take(50)
-            } catch (_: Exception) { message.content.take(50) }
-        } else message.content.take(50)
+        val preview = if (message.type == "ai_json") previewFromAiJson(message.content) else message.content.take(50)
         db.chatSessionsQueries.updateLastMessage(preview, ts, sessionId)
+    }
+
+    private fun previewFromAiJson(content: String): String {
+        return try {
+            when (val root = json.parseToJsonElement(content)) {
+                is kotlinx.serialization.json.JsonArray -> {
+                    val last = root.lastOrNull() as? kotlinx.serialization.json.JsonObject
+                    val speaker = (last?.get("speaker") as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+                    val text = (last?.get("message") as? kotlinx.serialization.json.JsonPrimitive)?.content
+                        ?: (last?.get("content") as? kotlinx.serialization.json.JsonPrimitive)?.content
+                    if (!text.isNullOrBlank()) listOf(speaker.takeIf { it.isNotBlank() }, text.take(50)).filterNotNull().joinToString("：") else content.take(50)
+                }
+                is kotlinx.serialization.json.JsonObject -> {
+                    val segArray = root["segments"] as? kotlinx.serialization.json.JsonArray
+                    val lastText = segArray?.mapNotNull { it as? kotlinx.serialization.json.JsonObject }
+                        ?.asReversed()
+                        ?.firstNotNullOfOrNull { obj ->
+                            (obj["content"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
+                        }
+                    lastText?.take(50)
+                        ?: (root["dialogue"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.take(50)
+                        ?: content.take(50)
+                }
+                else -> content.take(50)
+            }
+        } catch (_: Exception) {
+            Regex("\"(?:content|message)\"\\s*:\\s*\"([^\"]{1,80})").findAll(content).lastOrNull()?.groupValues?.getOrNull(1)?.take(50)
+                ?: content.take(50)
+        }
     }
 
     suspend fun getNextMessageId(): Long = idMutex.withLock {

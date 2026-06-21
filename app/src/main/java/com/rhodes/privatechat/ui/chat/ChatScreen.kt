@@ -65,6 +65,7 @@ import com.rhodes.privatechat.ui.chat.model.ChatUiMessage
 import com.rhodes.privatechat.ui.chat.util.MessageParser
 import com.rhodes.privatechat.shared.model.Operator
 import com.rhodes.privatechat.ui.theme.*
+import com.rhodes.privatechat.util.ChatTrace
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import org.koin.compose.koinInject
 import kotlinx.coroutines.launch
@@ -78,7 +79,6 @@ fun ChatScreen(
     onEditOperator: () -> Unit = {}, onViewStatus: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    android.util.Log.d("RHODES_CRASH", "ChatScreen: 开始渲染 operator=${operator.id} name=${operator.name} rawMessages.size=${viewModel.messages.value.size}")
     val settings: SettingsRepository = koinInject()
     val rawMessages by viewModel.messages.collectAsState()
     val isLoadingOlder by viewModel.isLoadingOlderMessages.collectAsState()
@@ -96,13 +96,24 @@ fun ChatScreen(
 
     // 使用 MessageParser 将原始消息转换为统一 UI 模型
     val messages = remember(rawMessages, op, userProfile) {
-        MessageParser.parse(
-            messages = rawMessages,
-            isGroup = false,
-            aiName = op.name,
-            aiAvatarUri = op.avatarUri,
-            userAvatarUri = userProfile.avatarUri
-        )
+        try {
+            val parsed = MessageParser.parse(
+                messages = rawMessages,
+                isGroup = false,
+                aiName = op.name,
+                aiAvatarUri = op.avatarUri,
+                userAvatarUri = userProfile.avatarUri
+            )
+            ChatTrace.d("ChatScreen", "parsed op=${op.id} raw=${rawMessages.size} parsed=${parsed.size}")
+            parsed
+        } catch (e: Exception) {
+            ChatTrace.e("ChatScreen", "parse.ERROR op=${op.id} raw=${rawMessages.size} err=${e.message}", e)
+            emptyList()
+        }
+    }
+
+    androidx.compose.runtime.LaunchedEffect(rawMessages.size, messages.size, isLoading) {
+        ChatTrace.d("ChatScreen", "op=${op.id} raw=${rawMessages.size} parsed=${messages.size} loading=$isLoading")
     }
 
     var bgUri by remember { mutableStateOf<String?>(settings.getString("bg_${op.id}", "")) }
@@ -159,6 +170,7 @@ fun ChatScreen(
                     onLoadOlder = { viewModel.loadOlderMessages() },
                     isLoadingOlder = isLoadingOlder,
                     hasMore = hasMoreMessages,
+                    forceScrollToLatest = true,
                     modifier = Modifier.weight(1f)
                 )
 

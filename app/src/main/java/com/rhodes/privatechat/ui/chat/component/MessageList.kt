@@ -58,6 +58,7 @@ import com.rhodes.privatechat.ui.chat.formatChatTime
 import com.rhodes.privatechat.ui.chat.model.ChatUiMessage
 import com.rhodes.privatechat.ui.theme.*
 
+
 /**
  * 私聊和群聊共用的消息列表。
  *
@@ -81,26 +82,37 @@ fun MessageList(
     onLoadOlder: (() -> Unit)? = null,
     isLoadingOlder: Boolean = false,
     hasMore: Boolean = false,
+    forceScrollToLatest: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
-    // 渐进展示逻辑：首次加载全部立即显示，后续新消息逐条出现（首条无延迟）
     var displayCount by remember { mutableIntStateOf(Int.MAX_VALUE) }
     var initialLoadDone by remember { mutableStateOf(false) }
+    var lastMessageCount by remember { mutableIntStateOf(0) }
     if (progressiveDisplay) {
-        LaunchedEffect(messages) {
-            if (!initialLoadDone && messages.isNotEmpty()) {
-                displayCount = messages.size
+        LaunchedEffect(messages.size) {
+            val currentSize = messages.size
+            if (currentSize == 0) {
+                displayCount = 0
+                initialLoadDone = false
+                lastMessageCount = 0
+            } else if (!initialLoadDone) {
+                displayCount = currentSize
                 initialLoadDone = true
-            } else if (initialLoadDone && messages.size > displayCount) {
-                val oldCount = displayCount
-                for (i in oldCount until messages.size) {
-                    if (i > oldCount) {
+                lastMessageCount = currentSize
+            } else if (currentSize > lastMessageCount) {
+                for (i in lastMessageCount until currentSize) {
+                    if (i > lastMessageCount) {
                         kotlinx.coroutines.delay((500L + (Math.random() * 500)).toLong())
                     }
                     displayCount = i + 1
                 }
-            } else if (messages.size < displayCount) {
-                displayCount = messages.size
+                lastMessageCount = currentSize
+            } else if (currentSize < lastMessageCount) {
+                displayCount = currentSize
+                lastMessageCount = currentSize
+            } else {
+                displayCount = currentSize
+                lastMessageCount = currentSize
             }
         }
     } else {
@@ -113,12 +125,10 @@ fun MessageList(
         val lastId = displayMessages.lastOrNull()?.id ?: return@LaunchedEffect
         val isInitial = lastBottomMessageId == null
         val nearBottom = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= displayMessages.lastIndex - 2 } ?: true
-        if (isInitial || nearBottom) {
+        if (!isLoadingOlder && (forceScrollToLatest || isInitial || nearBottom)) {
             try {
                 listState.scrollToItem(displayMessages.size - 1)
-            } catch (e: Exception) {
-                android.util.Log.e("RHODES_CRASH", "scrollToItem异常: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
         lastBottomMessageId = lastId
     }
@@ -136,11 +146,10 @@ fun MessageList(
                 Text("加载历史消息...", fontSize = 12.sp, color = TextTertiary, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), textAlign = TextAlign.Center)
             }
         }
-        items(displayMessages.size, key = { displayMessages[it].id }) { i ->
+        items(displayMessages.size, key = { i -> "${displayMessages[i].originalMessageId}_${displayMessages[i].segmentIndex}_${displayMessages[i].id}_$i" }) { i ->
             val msg = displayMessages[i]
             val prevTime = if (i > 0) displayMessages[i - 1].timestamp else 0L
             val showTime = prevTime == 0L || (msg.timestamp - prevTime) > 3 * 60 * 1000
-
             MessageBubble(
                 message = msg,
                 showTime = showTime,

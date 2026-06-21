@@ -18,6 +18,7 @@ import com.rhodes.privatechat.shared.model.SuggestionResponse
 import com.rhodes.privatechat.shared.model.UnifiedMemoryResponse
 import com.rhodes.privatechat.shared.network.AIService
 import com.rhodes.privatechat.shared.model.AiMessage
+import com.rhodes.privatechat.util.ChatTrace
 import com.rhodes.privatechat.util.DebugLogger
 import com.rhodes.privatechat.viewmodel.shared.AppStateHolder
 import com.rhodes.privatechat.viewmodel.shared.OperatorStateUpdater
@@ -279,35 +280,48 @@ ${text}"""
     // === Public API ===
 
     fun selectOperator(operator: Operator) {
-        // 保存当前干员的催眠/读心状态
         val prevOp = _selectedOperator.value
         if (prevOp != null) {
             settings.putString("hypnosis_cmd_${prevOp.id}", _hypnosisCommand.value)
             settings.putInt("hypnosis_round_${prevOp.id}", _hypnosisRounds.value)
         }
         _selectedOperator.value = operator
-        // 恢复新干员的催眠状态
         _hypnosisCommand.value = settings.getString("hypnosis_cmd_${operator.id}", "")
         _hypnosisRounds.value = settings.getInt("hypnosis_round_${operator.id}", 0)
         settings.hypnosisCmd = _hypnosisCommand.value
         settings.hypnosisRound = _hypnosisRounds.value
         viewModelScope.launch {
             val session = repository.getOrCreateSession(operator.id, operator.name, operator.avatarUri)
+            val sameSession = _currentSession.value?.id == session.id
+            ChatTrace.d("ChatVM", "select op=${operator.id} session=${session.id} sameSession=$sameSession jobActive=${messagesJob?.isActive}")
             _currentSession.value = session
-            val savedMode = settings.getLastMode(operator.id)
-            _currentMode.value = savedMode
+            _currentMode.value = settings.getLastMode(operator.id)
             markSessionRead(session.id)
+            if (sameSession && messagesJob?.isActive == true) return@launch
+            if (sameSession) {
+                ChatTrace.d("ChatVM", "select restarting dead job for session=${session.id}")
+            }
             messagesJob?.cancel()
-            _messages.value = emptyList()
-            _hasMoreMessages.value = true
+            if (!sameSession) {
+                _messages.value = emptyList()
+                _hasMoreMessages.value = true
+            }
             messagesJob = viewModelScope.launch {
-                repository.getRecentMessages(session.id, pageSize).collect { msgs -> mergeRecentMessages(msgs) }
+                try {
+                    repository.getRecentMessages(session.id, pageSize).collect { msgs ->
+                        ChatTrace.d("ChatVM", "flow session=${session.id} count=${msgs.size}")
+                        mergeMessagesFromFlow(msgs)
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    ChatTrace.d("ChatVM", "flow.CANCEL session=${session.id}")
+                } catch (e: Exception) {
+                    ChatTrace.e("ChatVM", "flow.ERROR session=${session.id} err=${e.message}", e)
+                }
             }
         }
     }
 
     suspend fun selectOperatorSync(operator: Operator) {
-        DebugLogger.log("RHODES_CRASH", "selectOperatorSync: 开始 operator=${operator.id} name=${operator.name}")
         try {
             val prevOp = _selectedOperator.value
             if (prevOp != null) {
@@ -320,27 +334,34 @@ ${text}"""
             settings.hypnosisCmd = _hypnosisCommand.value
             settings.hypnosisRound = _hypnosisRounds.value
             val session = repository.getOrCreateSession(operator.id, operator.name, operator.avatarUri)
-            DebugLogger.log("RHODES_CRASH", "selectOperatorSync: session=${session?.id} operatorId=${session?.operatorId}")
+            val sameSession = _currentSession.value?.id == session.id
+            ChatTrace.d("ChatVM", "selectSync op=${operator.id} session=${session.id} sameSession=$sameSession jobActive=${messagesJob?.isActive}")
             _currentSession.value = session
-            val savedMode = settings.getLastMode(operator.id)
-            _currentMode.value = savedMode
+            _currentMode.value = settings.getLastMode(operator.id)
             markSessionRead(session.id)
+            if (sameSession && messagesJob?.isActive == true) return
+            if (sameSession) {
+                ChatTrace.d("ChatVM", "selectSync restarting dead job for session=${session.id}")
+            }
             messagesJob?.cancel()
-            _messages.value = emptyList()
-            _hasMoreMessages.value = true
+            if (!sameSession) {
+                _messages.value = emptyList()
+                _hasMoreMessages.value = true
+            }
             messagesJob = viewModelScope.launch {
                 try {
                     repository.getRecentMessages(session.id, pageSize).collect { msgs ->
-                        DebugLogger.log("RHODES_CRASH", "selectOperatorSync: messages收集到${msgs.size}条")
-                        mergeRecentMessages(msgs)
+                        ChatTrace.d("ChatVM", "flowSync session=${session.id} count=${msgs.size}")
+                        mergeMessagesFromFlow(msgs)
                     }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    ChatTrace.d("ChatVM", "flowSync.CANCEL session=${session.id}")
                 } catch (e: Exception) {
-                    DebugLogger.log("RHODES_CRASH", "selectOperatorSync: messages收集异常: ${e.message}")
+                    ChatTrace.e("ChatVM", "flowSync.ERROR session=${session.id} err=${e.message}", e)
                 }
             }
-            DebugLogger.log("RHODES_CRASH", "selectOperatorSync: 完成")
         } catch (e: Exception) {
-            DebugLogger.log("RHODES_CRASH", "selectOperatorSync: 整体异常: ${e.message}")
+            ChatTrace.e("ChatVM", "selectSync.ERROR op=${operator.id} err=${e.message}", e)
             _selectedOperator.value = operator
         }
     }
@@ -371,6 +392,7 @@ ${text}"""
             _isLoadingOlderMessages.value = true
             try {
                 val older = repository.getMessagesBefore(session.id, first.timestamp, first.id, pageSize)
+                ChatTrace.d("ChatVM", "loadOlder session=${session.id} before=${first.id}/${first.timestamp} result=${older.size} ids=${ChatTrace.ids(older.map { it.id })}")
                 if (older.isEmpty() || older.size < pageSize) _hasMoreMessages.value = false
                 if (older.isNotEmpty()) {
                     _messages.value = (older + _messages.value).distinctBy { it.id }.sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
@@ -383,13 +405,19 @@ ${text}"""
         }
     }
 
-    private fun mergeRecentMessages(recent: List<ChatMessage>) {
-        if (recent.size < pageSize) _hasMoreMessages.value = false
-        val firstRecent = recent.firstOrNull()
-        val older = if (firstRecent == null) emptyList() else _messages.value.filter { msg ->
-            msg.timestamp < firstRecent.timestamp || (msg.timestamp == firstRecent.timestamp && msg.id < firstRecent.id)
+    private fun mergeMessagesFromFlow(messages: List<ChatMessage>) {
+        val sortedIncoming = messages.distinctBy { it.id }.sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
+        val olderLoaded = sortedIncoming.firstOrNull()?.let { firstRecent ->
+            _messages.value.filter { it.timestamp < firstRecent.timestamp || (it.timestamp == firstRecent.timestamp && it.id < firstRecent.id) }
+        } ?: emptyList()
+        val merged = (olderLoaded + sortedIncoming)
+            .distinctBy { it.id }
+            .sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
+        _messages.value = merged
+        if (merged.size == sortedIncoming.size) {
+            _hasMoreMessages.value = sortedIncoming.size >= pageSize
         }
-        _messages.value = (older + recent).distinctBy { it.id }.sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
+        ChatTrace.d("ChatVM", "merge incoming=${sortedIncoming.size} total=${merged.size} hasMore=${_hasMoreMessages.value}")
     }
 
     fun updateInputText(text: String) { _inputText.value = text }
@@ -418,6 +446,13 @@ ${text}"""
         viewModelScope.launch {
             val session = repository.getSession(sessionId) ?: return@launch
             repository.insertSession(session.copy(unreadCount = 0))
+        }
+    }
+
+    private suspend fun markUnreadIfNotCurrent(sessionId: String, count: Int = 1) {
+        if ((_currentSession.value?.id ?: "") != sessionId) {
+            repository.incrementUnread(sessionId, count)
+            onUnhideSession(sessionId)
         }
     }
 
@@ -578,17 +613,13 @@ ${recentDialogues}
                             generateLongTermImpression(session)
                             settings.putInt(impKey, 0)
                         }
-                        val currentSessionId = _currentSession.value?.id ?: ""
-                        if (currentSessionId != session.id) {
-                            val sess = repository.getSession(session.id)
-                            repository.incrementUnread(session.id, aiResponseCount)
-                            onUnhideSession(session.id)
-                        }
+                        markUnreadIfNotCurrent(session.id, aiResponseCount)
                         lastError = null
                         break  // 成功，退出重试循环
                     } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                         DebugLogger.log("Chat/AI", "AI超时, session=${session.id}")
                         repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = classifyError(e), type = "text", mode = mode, isMe = false))
+                        markUnreadIfNotCurrent(session.id)
                         break
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         DebugLogger.log("Chat/AI", "AI被取消, session=${session.id}")
@@ -615,6 +646,7 @@ ${recentDialogues}
                     val errorMsg = if (retryCount > 0) "上下文超限，本次已临时降级至${effectiveHistoryMessages}轮后仍失败：${classifyError(lastError)}"
                                    else classifyError(lastError)
                     repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = errorMsg, type = "text", mode = mode, isMe = false))
+                    markUnreadIfNotCurrent(session.id)
                 }
             } finally { _loadingSessions.update { it - session.id }; if (mutexLocked) aiMutexFor(session.id).unlock() }
         }
@@ -622,6 +654,7 @@ ${recentDialogues}
     }
 
     fun recallMessage(msgId: Long) {
+        _messages.value = _messages.value.filter { it.id != msgId }
         viewModelScope.launch {
             repository.deleteMessage(msgId)
         }
@@ -753,6 +786,7 @@ ${previousReply.take(1200)}
                     repository.deleteMessage(placeholderId)
                     val newAiMsgId = repository.getNextMessageId()
                     repository.sendMessage(session.id, ChatMessage(id = newAiMsgId, sessionId = session.id, senderName = session.operatorName, content = rawJson, type = "ai_json", mode = mode, isMe = false))
+                    markUnreadIfNotCurrent(session.id)
                     _messages.value = _messages.value.filter { it.id != msgId && it.id != placeholderId }
                     if (parsed.emotion.isNotBlank() || parsed.location.isNotBlank() || parsed.state.isNotBlank()) {
                         operatorStateUpdater.updateOperatorStatus(session.operatorId, parsed.location, parsed.state, parsed.emotion) { opId, newLoc, newAct, newEmo ->
@@ -766,6 +800,7 @@ ${previousReply.take(1200)}
                 _messages.value = _messages.value.filter { it.id != placeholderId }
                 val errId = repository.getNextMessageId()
                 repository.sendMessage(session.id, ChatMessage(id = errId, sessionId = session.id, senderName = session.operatorName, content = classifyError(e), type = "text", mode = mode, isMe = false))
+                markUnreadIfNotCurrent(session.id)
             } finally { if (mutexLocked) aiMutexFor(session.id).unlock(); modeTransitionNotice = "" }
         }
     }
@@ -846,12 +881,16 @@ ${recentDialogues}
                 sharedUtils.trackTokens("private", apiMessages, parsed.toString())
                 val serializedJson = try { json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed) } catch (_: Exception) { parsed.toString() }
                 repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = serializedJson, type = "ai_json", mode = mode, isMe = false))
+                markUnreadIfNotCurrent(session.id)
                 if (parsed.emotion.isNotBlank() || parsed.location.isNotBlank() || parsed.state.isNotBlank()) {
                     operatorStateUpdater.updateOperatorStatus(session.operatorId, parsed.location, parsed.state, parsed.emotion) { opId, newLoc, newAct, newEmo ->
                         if (opId == _selectedOperator.value?.id) { _selectedOperator.value = _selectedOperator.value?.copy(location = newLoc, activity = newAct, emotion = newEmo) }
                     }
                 }
-            } catch (e: Exception) { repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = classifyError(e), type = "text", mode = mode, isMe = false)) }
+            } catch (e: Exception) {
+                repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = classifyError(e), type = "text", mode = mode, isMe = false))
+                markUnreadIfNotCurrent(session.id)
+            }
             finally { if (mutexLocked) aiMutexFor(session.id).unlock(); modeTransitionNotice = "" }
         }
     }

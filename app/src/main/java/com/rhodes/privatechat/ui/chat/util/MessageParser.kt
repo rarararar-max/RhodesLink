@@ -4,8 +4,10 @@ import androidx.compose.ui.graphics.Color
 import com.rhodes.privatechat.data.db.entity.ChatMessageEntity
 import com.rhodes.privatechat.ui.chat.model.ChatUiMessage
 import com.rhodes.privatechat.ui.theme.*
+import com.rhodes.privatechat.util.ChatTrace
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -34,23 +36,32 @@ object MessageParser {
         aiAvatarUri: String = "",
         userAvatarUri: String = ""
     ): List<ChatUiMessage> {
-        return messages.flatMap { msg ->
-            val mode = msg.mode
-            val isOnline = mode == "online"
-            when {
-                msg.type == "ai_json" && isGroup -> parseGroupAiJson(msg, isOnline, senderColor, senderAvatar)
-                msg.type == "ai_json" && !isGroup -> parsePrivateAiJson(msg, isOnline, aiName, aiAvatarUri)
-                msg.type == "system" || msg.senderName == "系统" || msg.senderName == "" ->
-                    listOf(systemMsg(msg))
-                msg.type == "narration" ->
-                    if (isOnline) emptyList()
-                    else listOf(narrationMsg(msg))
-                msg.isMe ->
-                    listOf(userMsg(msg, userAvatarUri))
-                else ->
-                    listOf(otherMsg(msg, if (isGroup) senderColor(msg.senderName) else Primary, if (isGroup) senderAvatar(msg.senderName) else aiAvatarUri))
+        ChatTrace.d("Parser", "start isGroup=$isGroup rawCount=${messages.size} ids=${ChatTrace.ids(messages.map { it.id })}")
+        val parsed = messages.flatMap { msg ->
+            try {
+                val mode = msg.mode
+                val isOnline = mode == "online"
+                val result = when {
+                    msg.type == "ai_json" && isGroup -> parseGroupAiJson(msg, isOnline, senderColor, senderAvatar)
+                    msg.type == "ai_json" && !isGroup -> parsePrivateAiJson(msg, isOnline, aiName, aiAvatarUri)
+                    msg.type == "system" || msg.senderName == "系统" || msg.senderName == "" ->
+                        listOf(systemMsg(msg))
+                    msg.type == "narration" ->
+                        if (isOnline) emptyList() else listOf(narrationMsg(msg))
+                    msg.isMe ->
+                        listOf(userMsg(msg, userAvatarUri))
+                    else ->
+                        listOf(otherMsg(msg, if (isGroup) senderColor(msg.senderName) else Primary, if (isGroup) senderAvatar(msg.senderName) else aiAvatarUri))
+                }
+                ChatTrace.d("Parser", "msg id=${msg.id} type=${msg.type} out=${result.size}")
+                result
+            } catch (e: Exception) {
+                ChatTrace.e("Parser", "ERROR id=${msg.id} type=${msg.type} sender=${msg.senderName} content=${ChatTrace.short(msg.content)} err=${e.message}", e)
+                listOf(ChatUiMessage(msg.id, msg.senderName.ifBlank { "系统" }, Gray100, msg.content.ifBlank { "[消息解析失败]" }, msg.timestamp, isSystem = msg.type == "system", originalMessageId = msg.id))
             }
         }
+        ChatTrace.d("Parser", "done isGroup=$isGroup resultCount=${parsed.size} ids=${ChatTrace.ids(parsed.map { it.id })}")
+        return parsed
     }
 
     /** 群聊 ai_json：解析 JSON 数组 [{speaker, message, type}] */
@@ -61,11 +72,16 @@ object MessageParser {
         senderAvatar: (String) -> String
     ): List<ChatUiMessage> {
         return try {
-            val arr = json.parseToJsonElement(msg.content) as JsonArray
-            arr.mapIndexedNotNull { idx, el ->
+            val root = json.parseToJsonElement(msg.content)
+            val arr = when (root) {
+                is JsonArray -> root
+                is JsonObject -> (root["messages"] as? JsonArray) ?: (root["segments"] as? JsonArray) ?: JsonArray(emptyList())
+                else -> JsonArray(emptyList())
+            }
+            val result = arr.mapIndexedNotNull { idx, el ->
                 val obj = el.jsonObject
-                val name = obj["speaker"]?.jsonPrimitive?.content ?: return@mapIndexedNotNull null
-                val content = obj["message"]?.jsonPrimitive?.content ?: return@mapIndexedNotNull null
+                val name = obj["speaker"]?.jsonPrimitive?.content ?: obj["sender"]?.jsonPrimitive?.content ?: obj["name"]?.jsonPrimitive?.content ?: return@mapIndexedNotNull null
+                val content = obj["message"]?.jsonPrimitive?.content ?: obj["content"]?.jsonPrimitive?.content ?: obj["text"]?.jsonPrimitive?.content ?: return@mapIndexedNotNull null
                 val msgType = obj["type"]?.jsonPrimitive?.content ?: "dialogue"
                 if (content.isBlank()) return@mapIndexedNotNull null
                 if (isOnline && (msgType == "narration" || name == "旁白")) return@mapIndexedNotNull null
@@ -78,6 +94,7 @@ object MessageParser {
                         avatarUri = senderAvatar(name), mode = msg.mode, originalMessageId = msg.id, segmentIndex = idx)
                 }
             }
+            result
         } catch (_: Exception) {
             listOf(ChatUiMessage(msg.id, msg.senderName, Gray100, msg.content, msg.timestamp,
                 avatarUri = senderAvatar(msg.senderName), mode = msg.mode, originalMessageId = msg.id))
@@ -98,6 +115,7 @@ object MessageParser {
                 avatarUri = aiAvatarUri, mode = msg.mode, emotion = msg.emotion,
                 activity = msg.activity, location = msg.location, originalMessageId = msg.id))
         }
+        ChatTrace.d("Parser.PrivateJson", "id=${msg.id} segments=${segments.size} mode=${msg.mode}")
         val result = mutableListOf<ChatUiMessage>()
         // 先添加一条元数据消息（包含 emotion/location/activity），但只在有值时
         if (emotion.isNotBlank() || msg.location.isNotBlank() || msg.activity.isNotBlank()) {
@@ -125,7 +143,7 @@ object MessageParser {
         return result
     }
 
-    /** 解析私聊 JSON 的三层容错逻辑 */
+    /** 解析私聊 JSON：标准解析优先，失败后用宽松扫描兜底。 */
     private fun parsePrivateJson(content: String): Pair<String?, List<com.rhodes.privatechat.network.Segment>> {
         fun parse(raw: String): Pair<String?, List<com.rhodes.privatechat.network.Segment>> = try {
             val obj = json.parseToJsonElement(raw).jsonObject
@@ -161,8 +179,128 @@ object MessageParser {
             if (!s.endsWith("}")) { val end = s.lastIndexOf('}'); if (end >= 0) s = s.substring(0, end + 1) }
             result = parse(s)
         }
+        if (result.first == null || result.second.isEmpty()) {
+            result = parsePrivateJsonLenient(content)
+        }
         return result
     }
+
+    private fun parsePrivateJsonLenient(content: String): Pair<String?, List<com.rhodes.privatechat.network.Segment>> {
+        var s = content.trim()
+            .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+            .replace("，", ",").replace("：", ":")
+        val start = s.indexOf('{')
+        val end = s.lastIndexOf('}')
+        if (start >= 0 && end > start) s = s.substring(start, end + 1)
+
+        val emotion = extractStringFieldLenient(s, "emotion") ?: ""
+        val segments = mutableListOf<com.rhodes.privatechat.network.Segment>()
+        val array = extractArrayBlock(s, "segments")
+        if (array != null) {
+            splitObjectBlocksLenient(array).forEach { obj ->
+                val type = extractStringFieldLenient(obj, "type") ?: "dialogue"
+                val text = extractStringFieldLenient(obj, "content")
+                    ?: extractStringFieldLenient(obj, "message")
+                    ?: extractStringFieldLenient(obj, "text")
+                if (!text.isNullOrBlank()) {
+                    segments.add(com.rhodes.privatechat.network.Segment(type = type.ifBlank { "dialogue" }, content = text))
+                }
+            }
+        }
+        if (segments.isEmpty()) {
+            extractStringFieldLenient(s, "dialogue")?.takeIf { it.isNotBlank() }?.let {
+                segments.add(com.rhodes.privatechat.network.Segment(type = "dialogue", content = it))
+            }
+        }
+        if (segments.isEmpty()) {
+            extractStringFieldLenient(s, "narration")?.takeIf { it.isNotBlank() }?.let {
+                segments.add(com.rhodes.privatechat.network.Segment(type = "narration", content = it))
+            }
+        }
+        return if (segments.isEmpty()) null to emptyList() else emotion to segments
+    }
+
+    private fun extractArrayBlock(raw: String, key: String): String? {
+        val keyIndex = raw.indexOf("\"$key\"")
+        if (keyIndex < 0) return null
+        val start = raw.indexOf('[', keyIndex)
+        if (start < 0) return null
+        var depth = 0
+        for (i in start until raw.length) {
+            when (raw[i]) {
+                '[' -> depth++
+                ']' -> {
+                    depth--
+                    if (depth == 0) return raw.substring(start + 1, i)
+                }
+            }
+        }
+        val end = raw.lastIndexOf(']')
+        return if (end > start) raw.substring(start + 1, end) else null
+    }
+
+    private fun splitObjectBlocksLenient(raw: String): List<String> {
+        val result = mutableListOf<String>()
+        var start = -1
+        var depth = 0
+        for (i in raw.indices) {
+            when (raw[i]) {
+                '{' -> { if (depth == 0) start = i; depth++ }
+                '}' -> {
+                    if (depth > 0) depth--
+                    if (depth == 0 && start >= 0) {
+                        result.add(raw.substring(start, i + 1))
+                        start = -1
+                    }
+                }
+            }
+        }
+        return result
+    }
+
+    private fun extractStringFieldLenient(raw: String, key: String): String? {
+        val keyIndex = raw.indexOf("\"$key\"")
+        if (keyIndex < 0) return null
+        val colon = raw.indexOf(':', keyIndex)
+        if (colon < 0) return null
+        val startQuote = raw.indexOf('"', colon + 1)
+        if (startQuote < 0) return null
+        findFieldBoundary(raw, startQuote + 1)?.let { end ->
+            return unescapeJsonString(raw.substring(startQuote + 1, end).trim())
+        }
+        var i = startQuote + 1
+        while (i < raw.length) {
+            if (raw[i] == '"' && raw.getOrNull(i - 1) != '\\') {
+                val next = raw.drop(i + 1).firstOrNull { !it.isWhitespace() }
+                if (next == ',' || next == '}' || next == ']') {
+                    return unescapeJsonString(raw.substring(startQuote + 1, i).trim())
+                }
+            }
+            i++
+        }
+        return null
+    }
+
+    private fun findFieldBoundary(raw: String, start: Int): Int? {
+        var i = start
+        while (i < raw.length) {
+            if (raw[i] == '"' && raw.getOrNull(i - 1) != '\\') {
+                var j = i + 1
+                while (j < raw.length && raw[j].isWhitespace()) j++
+                if (j >= raw.length || raw[j] == ',' || raw[j] == '}' || raw[j] == ']') return i
+                if (raw.startsWith(",\"type\"", i + 1) || raw.startsWith(",\"content\"", i + 1) || raw.startsWith(",\"message\"", i + 1)) return i
+            }
+            i++
+        }
+        return null
+    }
+
+    private fun unescapeJsonString(value: String): String = value
+        .replace("\\\"", "\"")
+        .replace("\\n", "\n")
+        .replace("\\r", "\r")
+        .replace("\\t", "\t")
+        .replace("\\\\", "\\")
 
     private fun systemMsg(msg: ChatMessageEntity) = ChatUiMessage(
         msg.id, msg.senderName, Gray100, msg.content, msg.timestamp,

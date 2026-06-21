@@ -1877,12 +1877,15 @@ ${summaries}
                         "commentMemoryCount" to settings.commentMemoryCount.toString()
                     )
                 )
-                val prompt = if (customPrompt != null) "$customPrompt\n$contextBlock" else "你是${speakerName}。用户扮演的角色${userName}刚刚回复了你的评论，说：「${userContent}」。\n$contextBlock\n请用10-50字自然回复。只输出回复内容本身，不要加任何前缀如「回复xxx」或冒号。直接输出纯文本。注意：你是${speakerName}，不是${userName}，不要替${userName}说话。"
+                val prompt = if (customPrompt != null) {
+                    listOf(customPrompt, contextBlock.takeIf { it.isNotBlank() }?.let { "【可参考背景，不要覆盖动态原文】\n$it" }).filterNotNull().joinToString("\n")
+                } else "你是${speakerName}。用户扮演的角色${userName}刚刚回复了你的评论，说：「${userContent}」。\n$contextBlock\n请用10-50字自然回复。只输出回复内容本身，不要加任何前缀如「回复xxx」或冒号。直接输出纯文本。注意：你是${speakerName}，不是${userName}，不要替${userName}说话。"
                 val reply = withTimeout(10_000) { chat(listOf(AiMessage("system", prompt))) }.trim()
                 if (reply.isNotBlank()) {
                     val realId = realOp?.id ?: speakerName
                     repository.insertComment(MomentComment(momentId = momentId, operatorId = realId, operatorName = speakerName, content = reply, parentCommentId = parentCommentId, replyToName = userName, createdAt = System.currentTimeMillis()))
                     refreshMomentCommentCount(momentId)
+                    refreshMomentsNow()
                     repository.insertWorldEvent(WorldEvent(
                         type = WorldEventType.COMMENT_POSTED,
                         actorId = realId,
@@ -1928,7 +1931,9 @@ ${summaries}
             DebugLogger.log("Moment/DB", "动态已写入DB, id=$momentId")
             refreshMomentsNow()
             // 创建动态锚点：被@的干员必定记住，再补随机围观干员。
-            val mentionedIds = mentionedOps.mapNotNull { name -> _operators.value.find { it.name == name || it.id == name }?.id }
+            val mentionedOperators = mentionedOps.mapNotNull { resolveMentionedOperator(it) }.distinctBy { it.id }
+            val mentionedIds = mentionedOperators.map { it.id }
+            DebugLogger.log("Moment/Mention", "解析@角色: raw=${mentionedOps.joinToString("|")}, resolved=${mentionedOperators.joinToString("、") { it.name }}")
             val randomObservers = _operators.value.filter { it.id != "user" && it.id !in mentionedIds }.shuffled().take(settings.momentUserPostObserverCount).map { it.id }
             val anchorOps = mentionedIds + randomObservers
             for (opId in anchorOps.distinct()) {
@@ -1948,22 +1953,68 @@ ${summaries}
                 ))
             }
 
-            // 用户主动发布动态引起的 AI 评论不计入自动预算，但仍尊重总自动 AI 开关。
-            if (settings.autoAiEnabled) {
-                val allOpNames = _operators.value.map { it.name }.filter { it != userName }
-                val mentioned = mentionedOps.filter { it in allOpNames }
-                val randomCount = (3 + (Math.random() * 3).toInt()).coerceAtLeast(3)
-                val others = (allOpNames - mentioned.toSet()).shuffled().take((randomCount - mentioned.size).coerceAtLeast(0))
-                val repliers = (mentioned + others).distinct().take(5)
-                val c = content; val u = userName
-                for ((i, name) in repliers.withIndex()) {
-                    if (i > 0) delay((1500L + (Math.random() * 1500).toLong()))
-                    val prompt = "你是${name}。用户扮演的角色${u}发布了动态：「${c}」。请用10-40字评论这条动态（根据你的性格自然回应）。直接输出纯文本。注意：你是${name}，不是${u}，不要替${u}说话。"
-                    triggerSingleAiReply(momentId, name, c, 0, u, prompt)
+            // 用户主动发布/@触发的互动不消耗自动预算，也不受 autoAiEnabled 总开关限制。
+            val eligibleOps = _operators.value.filter { it.name != userName && settings.getOperatorDynPermission(it.id) }
+            val mentionedInteractive = mentionedOperators.filter { settings.getOperatorDynPermission(it.id) }
+            val randomLikers = eligibleOps.filter { it.id !in mentionedInteractive.map { op -> op.id } }.shuffled().take((2..6).random())
+            val likers = (mentionedInteractive + randomLikers).distinctBy { it.id }
+            likers.forEach { liker ->
+                if (repository.getLike(momentId, liker.id) == null) {
+                    repository.insertLike(MomentLike(momentId = momentId, operatorId = liker.id, operatorName = liker.name, createdAt = System.currentTimeMillis()))
                 }
+            }
+            repository.updateLikeCount(momentId, repository.getLikeCount(momentId))
+            refreshMomentsNow()
+
+            val randomReplyCount = (1..3).random()
+            val randomRepliers = eligibleOps.filter { it.id !in mentionedInteractive.map { op -> op.id } }.shuffled().take(randomReplyCount)
+            val repliers = (mentionedInteractive + randomRepliers).distinctBy { it.id }.take(6)
+            DebugLogger.log("Moment/Mention", "评论角色: mentioned=${mentionedInteractive.joinToString("、") { it.name }}, random=${randomRepliers.joinToString("、") { it.name }}")
+            val c = content; val u = userName
+            for ((i, op) in repliers.withIndex()) {
+                if (i > 0) delay((1500L + (Math.random() * 1500).toLong()))
+                val prompt = if (op.id in mentionedIds) buildMentionedCommentPrompt(op.name, u, c) else buildBystanderCommentPrompt(op.name, u, c, mentionedInteractive.map { it.name })
+                triggerSingleAiReply(momentId, op.name, c, 0, u, prompt)
             }
         }
     }
+
+    private fun resolveMentionedOperator(raw: String): Operator? {
+        val normalized = raw.trim().removePrefix("@").trim()
+        if (normalized.isBlank()) return null
+        val ops = _operators.value
+        return ops.find { it.id == normalized || it.name == normalized }
+            ?: ops.find { normalized.contains(it.name) }
+    }
+
+    private fun buildMentionedCommentPrompt(operatorName: String, userName: String, content: String): String = """
+你是${operatorName}。用户${userName}刚发布了一条动态，并通过@功能明确提到了你。
+
+动态原文：${content}
+
+任务：你必须以${operatorName}本人身份，在这条动态下评论。
+要求：
+- 评论必须直接回应动态原文，或回应用户@你的事实。
+- 不要说“${operatorName}姐/哥/老师”来称呼自己，也不要用第三人称称呼自己。
+- 不要替其他角色发言，不要编造动态里没有的信息。
+- 10-40字，像朋友圈评论。
+- 只输出评论内容本身，不要加引号、前缀、冒号。
+""".trimIndent()
+
+    private fun buildBystanderCommentPrompt(operatorName: String, userName: String, content: String, mentionedNames: List<String>): String = """
+你是${operatorName}。你刷到用户${userName}发布的一条动态。
+
+动态原文：${content}
+被@的人：${mentionedNames.joinToString("、").ifBlank { "无" }}
+
+任务：你作为旁观者，在这条动态下评论。
+要求：
+- 评论必须围绕动态原文，不要转移到无关话题。
+- 如果提到被@的人，只能作为旁观者提一句，不要冒充对方。
+- 不要编造动态里没有的信息。
+- 10-35字，像朋友圈评论。
+- 只输出评论内容本身，不要加引号、前缀、冒号。
+""".trimIndent()
 
     // === Moments delegation ===
     fun getMomentBadge(): Int = momentsViewModel.getMomentBadge()

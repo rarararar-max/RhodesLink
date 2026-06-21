@@ -37,6 +37,7 @@ import com.rhodes.privatechat.ui.chat.model.ChatUiMessage
 import com.rhodes.privatechat.ui.chat.util.MessageParser
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import com.rhodes.privatechat.ui.theme.*
+import com.rhodes.privatechat.util.ChatTrace
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import org.koin.compose.koinInject
 import kotlinx.coroutines.delay
@@ -98,13 +99,24 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
 
     // 使用 MessageParser 将原始消息转换为统一 UI 模型
     val uiMessages = remember(groupMessages, allOperators, profile) {
-        MessageParser.parse(
-            messages = groupMessages,
-            isGroup = true,
-            senderColor = senderColor,
-            senderAvatar = ::senderAvatar,
-            userAvatarUri = profile.avatarUri
-        )
+        try {
+            val parsed = MessageParser.parse(
+                messages = groupMessages,
+                isGroup = true,
+                senderColor = senderColor,
+                senderAvatar = ::senderAvatar,
+                userAvatarUri = profile.avatarUri
+            )
+            ChatTrace.d("GroupScreen", "parsed group=$groupId raw=${groupMessages.size} parsed=${parsed.size}")
+            parsed
+        } catch (e: Exception) {
+            ChatTrace.e("GroupScreen", "parse.ERROR group=$groupId raw=${groupMessages.size} err=${e.message}", e)
+            emptyList()
+        }
+    }
+
+    LaunchedEffect(groupMessages.size, uiMessages.size, groupLoading) {
+        ChatTrace.d("GroupScreen", "group=$groupId raw=${groupMessages.size} parsed=${uiMessages.size} loading=$groupLoading")
     }
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -140,6 +152,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                     onLoadOlder = { viewModel.loadOlderGroupMessages() },
                     isLoadingOlder = isLoadingOlder,
                     hasMore = hasMoreMessages,
+                    forceScrollToLatest = true,
                     modifier = Modifier.weight(1f)
                 )
 

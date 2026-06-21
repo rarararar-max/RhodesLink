@@ -78,6 +78,7 @@ fun ChatScreen(
     onEditOperator: () -> Unit = {}, onViewStatus: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    android.util.Log.d("RHODES_CRASH", "ChatScreen: 开始渲染 operator=${operator.id} name=${operator.name} rawMessages.size=${viewModel.messages.value.size}")
     val settings: SettingsRepository = koinInject()
     val rawMessages by viewModel.messages.collectAsState()
     val inputText by viewModel.inputText.collectAsState()

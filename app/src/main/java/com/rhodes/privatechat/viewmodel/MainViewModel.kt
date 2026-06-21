@@ -1499,6 +1499,7 @@ ${summaries}
 
     /** 为指定干员同步生成 1 条动态（不含点赞评论），返回 momentId */
     private suspend fun generateOneForOpSync(op: Operator, triggerType: MomentTriggerType = MomentTriggerType.MANUAL, parentEvent: WorldEvent? = null): Long? {
+        Log.d("RHODES_MOMENT", "generateOneForOpSync: 开始 op=${op.name} triggerType=$triggerType")
         return try {
             val profile = getUserProfile()
             val impression = repository.getLongTermImpression(op.id)?.content ?: "无"
@@ -1562,6 +1563,7 @@ ${summaries}
                 try {
                     momentResult = ""
                     momentResult = withTimeout(15_000) { chat(listOf(AiMessage("system", prompt)), "Moment") }
+                    Log.d("RHODES_MOMENT", "generateOneForOpSync: AI调用 attempt=$attempt 长度=${momentResult.length} op=${op.name}")
                     if (momentResult.isNotBlank()) return@repeat
                 } catch (e: CancellationException) {
                     throw e
@@ -1572,6 +1574,7 @@ ${summaries}
             if (content.isNotBlank()) {
                 val moment = Moment(operatorId = op.id, operatorName = op.name, content = content, createdAt = fakeTs)
                 val momentId = repository.insertMoment(moment)
+                Log.d("RHODES_MOMENT", "generateOneForOpSync: 写入成功 id=$momentId op=${op.name}")
                 addWorldLog("${op.name}发布了一条动态", content.take(80), "moment")
                 if (triggerType != MomentTriggerType.MANUAL) {
                     val today = beijingSdf("yyyyMMdd").format(java.util.Date(fakeTs))
@@ -1604,14 +1607,22 @@ ${summaries}
                     sharedUtils.buildUnconsumedEventContextForOperator(op.id, op.name, "moment:${op.id}", settings.eventContextCount, markConsumed = true)
                 }
                 momentId
-            } else null
+            } else {
+                Log.w("RHODES_MOMENT", "generateOneForOpSync: AI结果为空 op=${op.name}")
+                null
+            }
         } catch (e: CancellationException) {
+            Log.e("RHODES_MOMENT", "generateOneForOpSync: 取消 op=${op.name}")
             throw e
-        } catch (_: Exception) { null }
+        } catch (e: Exception) {
+            Log.e("RHODES_MOMENT", "generateOneForOpSync: 异常 op=${op.name} ${e.message}", e)
+            null
+        }
     }
 
     /** 异步生成点赞和评论（不阻塞调用方） */
     private fun generateLikesAndComments(momentId: Long, op: Operator, consumeBudget: Boolean = false, parentEvent: WorldEvent? = null) {
+        Log.d("RHODES_MOMENT", "generateLikesAndComments: 开始 momentId=$momentId op=${op.name} consumeBudget=$consumeBudget")
         appScope.launch {
             try {
                 val profile = getUserProfile()
@@ -1621,12 +1632,15 @@ ${summaries}
                 val likers = _operators.value.filter { it.id != opId && it.name != profile.nickname }.shuffled().take((3..8).random())
                 likers.forEach { liker -> repository.insertLike(MomentLike(momentId = momentId, operatorId = liker.id, operatorName = liker.name, createdAt = System.currentTimeMillis())) }
                 repository.updateLikeCount(momentId, likers.size)
-                DebugLogger.log("Moment", "生成点赞完成: momentId=$momentId, count=${likers.size}")
+                Log.d("RHODES_MOMENT", "generateLikesAndComments: 点赞 ${likers.size}人 momentId=$momentId")
                 val commenters = _operators.value.filter { it.id != opId && it.name != profile.nickname }.shuffled().take((1..3).random())
                 val cmtTpl = getPromptTemplate("moment_comment")
                 var actualComments = 0
                 commenters.forEach { commenter ->
-                    if (consumeBudget && !tryConsumeAutoAiBudget("moment_comment")) return@forEach
+                    if (consumeBudget && !tryConsumeAutoAiBudget("moment_comment")) {
+                        Log.w("RHODES_MOMENT", "generateLikesAndComments: 评论跳过(预算不足) commenter=${commenter.name}")
+                        return@forEach
+                    }
                     try {
                         val cmtReplacements = mapOf(
                             "COMMENTER_NAME" to commenter.name, "COMMENTER_PERSONA" to (commenter.groupPrompt.ifBlank { commenter.description }),
@@ -1651,19 +1665,20 @@ ${summaries}
                                 expiresAt = MemoryPolicy.memoryExpiresAt(settings)
                             ), parentEvent))
                             actualComments++
+                            Log.d("RHODES_MOMENT", "generateLikesAndComments: 评论成功 i=${commenters.indexOf(commenter)} name=${commenter.name}")
                         }
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
-                        DebugLogger.log("Moment", "评论生成失败: ${e.message?.take(100)}")
+                        Log.w("RHODES_MOMENT", "generateLikesAndComments: 评论生成失败 ${commenter.name} ${e.message?.take(100)}")
                     }
                 }
                 refreshMomentCommentCount(momentId)
-                DebugLogger.log("Moment", "生成评论完成: momentId=$momentId, count=$actualComments")
+                Log.d("RHODES_MOMENT", "generateLikesAndComments: 完成 momentId=$momentId 评论=$actualComments")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                DebugLogger.log("Moment", "生成点赞评论异常: ${e.message?.take(100)}")
+                Log.e("RHODES_MOMENT", "generateLikesAndComments: 异常 ${e.message}", e)
             }
         }
     }
@@ -1675,6 +1690,7 @@ ${summaries}
     fun commentOnMoment(momentId: Long, operatorId: String, operatorName: String, content: String, parentCommentId: Long = 0, replyToName: String = "") {
         val cleanContent = content.trim()
         if (cleanContent.isBlank()) return
+        Log.d("RHODES_MOMENT", "commentOnMoment: operatorId=$operatorId momentId=$momentId content=${cleanContent.take(50)} parentId=$parentCommentId replyTo=$replyToName")
         DebugLogger.log("Moment", "用户发评论: momentId=$momentId, content=${cleanContent.take(50)}, parentId=$parentCommentId, replyTo=$replyToName")
         viewModelScope.launch {
             // 微信模式：向上追溯到根一级评论，所有回复挂在一级下面
@@ -1686,6 +1702,7 @@ ${summaries}
                     parentCommentId
             } else 0L
             repository.insertComment(MomentComment(momentId = momentId, operatorId = operatorId, operatorName = operatorName, content = cleanContent, parentCommentId = rootParentId, replyToName = replyToName, createdAt = System.currentTimeMillis(), isRead = operatorId == "user"))
+            Log.d("RHODES_MOMENT", "commentOnMoment: 评论已写入")
             addWorldLog("${operatorName}评论了一条动态", cleanContent.take(80), "comment")
             refreshMomentCommentCount(momentId)
             val commentEvent = WorldEvent(
@@ -1755,30 +1772,29 @@ ${summaries}
 
             val alreadyReplied = mutableSetOf<String>()
             if (parentCommentId > 0 && replyToName.isNotBlank() && replyToName.trim() != moment.operatorName.trim() && replyToName.trim() != userName.trim()) {
-                if (tryConsumeAutoAiBudget("comment_reply")) {
-                    triggerSingleAiReply(momentId, replyToName, content, rootParentId, userName)
-                    alreadyReplied.add(replyToName)
-                }
+                Log.d("RHODES_MOMENT", "commentOnMoment: 回复目标人=$replyToName")
+                triggerSingleAiReply(momentId, replyToName, content, rootParentId, userName)
+                alreadyReplied.add(replyToName)
                 delay((1500L + (Math.random() * 1500).toLong()))
             }
 
             if (moment.operatorName != "我" && moment.operatorName.trim() != userName.trim() && moment.operatorName !in alreadyReplied) {
-                if (tryConsumeAutoAiBudget("moment_owner_reply")) {
-                    triggerSingleAiReply(momentId, moment.operatorName, content, rootParentId, userName, "你是${moment.operatorName}。用户${userName}在你的动态下评论了：「${content}」。请用10-50字自然回复。只输出回复内容本身，不要加任何前缀如「回复xxx」或冒号。直接输出纯文本。")
-                    alreadyReplied.add(moment.operatorName)
-                }
+                Log.d("RHODES_MOMENT", "commentOnMoment: 动态主人回复 start=${moment.operatorName}")
+                triggerSingleAiReply(momentId, moment.operatorName, content, rootParentId, userName, "你是${moment.operatorName}。用户${userName}在你的动态下评论了：「${content}」。请用10-50字自然回复。只输出回复内容本身，不要加任何前缀如「回复xxx」或冒号。直接输出纯文本。")
+                alreadyReplied.add(moment.operatorName)
                 delay((1500L + (Math.random() * 1500).toLong()))
             }
 
             val bystanderCount = pickBystanderReplyCount()
+            Log.d("RHODES_MOMENT", "commentOnMoment: 旁观者回复 count=$bystanderCount")
             val bystanders = _operators.value
                 .filter { settings.getOperatorDynPermission(it.id) }
                 .map { it.name }
                 .filter { it !in alreadyReplied && it != "我" && it != userName }
                 .shuffled()
                 .take(bystanderCount)
-            for (bystander in bystanders) {
-                if (!tryConsumeAutoAiBudget("comment_bystander")) break
+            for ((i, bystander) in bystanders.withIndex()) {
+                Log.d("RHODES_MOMENT", "commentOnMoment: 旁观者回复 i=$i name=$bystander")
                 val bp = "你是${bystander}。你刚看到${moment.operatorName}的动态下，用户${userName}评论了「${content}」。请用10-40字凑热闹式地回复这条评论（看戏、调侃、起哄风格）。直接输出纯文本。"
                 triggerSingleAiReply(momentId, bystander, content, rootParentId, userName, bp)
                 delay((1500L + (Math.random() * 1500).toLong()))
@@ -1867,8 +1883,13 @@ ${summaries}
                         createdAt = System.currentTimeMillis(),
                         expiresAt = MemoryPolicy.memoryExpiresAt(settings)
                     ))
+                    Log.d("RHODES_MOMENT", "triggerSingleAiReply: $speakerName 回复成功")
+                } else {
+                    Log.w("RHODES_MOMENT", "triggerSingleAiReply: $speakerName 回复内容为空")
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.e("RHODES_MOMENT", "triggerSingleAiReply: $speakerName 异常: ${e.message}", e)
+            }
         }
     }
 
@@ -1948,10 +1969,10 @@ ${summaries}
     suspend fun getDailyRanking(): List<SenderCount> = dataViewModel.getDailyRanking()
     fun forceGenerateMoments() {
         if (!forceGenerating.compareAndSet(false, true)) {
-            android.util.Log.w("MainVM", "正在生成中，跳过强制生成")
+            Log.w("RHODES_MOMENT", "forceGenerateMoments: 正在生成中跳过")
             return
         }
-        DebugLogger.log("Moment", "手动催发开始")
+        Log.d("RHODES_MOMENT", "forceGenerateMoments: 开始 operators.size=${_operators.value.size}")
         _momentGenerateStatus.value = MomentGenerateStatus(running = true, msg = "开始生成...")
         appScope.launch {
             try {
@@ -1959,22 +1980,33 @@ ${summaries}
                 val candidates = _operators.value.filter {
                     settings.getOperatorDynPermission(it.id)
                 }.shuffled()
-                DebugLogger.log("Moment", "催发候选干员: ${candidates.size}人")
-                android.util.Log.d("MainVM", "** [DBG] ** forceGenerateMoments: candidates=${candidates.size} VM=${System.identityHashCode(this)}")
+                Log.d("RHODES_MOMENT", "forceGenerateMoments: 候选干员 ${candidates.size}人")
                 for (op in candidates) {
                     _momentGenerateStatus.value = MomentGenerateStatus(running = true, msg = "${op.name}发布中...")
-                    val momentId = generateOneForOpSync(op, MomentTriggerType.MANUAL)
-                    if (momentId != null) {
-                        generated++
-                        generateLikesAndComments(momentId, op, consumeBudget = false)
-                        refreshMomentsNow()
+                    Log.d("RHODES_MOMENT", "forceGenerateMoments: 正在生成 op=${op.name}")
+                    try {
+                        val momentId = generateOneForOpSync(op, MomentTriggerType.MANUAL)
+                        if (momentId != null) {
+                            generated++
+                            Log.d("RHODES_MOMENT", "forceGenerateMoments: 生成成功 op=${op.name} id=${momentId}")
+                            generateLikesAndComments(momentId, op, consumeBudget = false)
+                            refreshMomentsNow()
+                        } else {
+                            Log.w("RHODES_MOMENT", "forceGenerateMoments: 生成失败 op=${op.name} (返回null)")
+                        }
+                    } catch (e: Exception) {
+                        Log.e("RHODES_MOMENT", "forceGenerateMoments: 生成异常 op=${op.name} ${e.message}", e)
                     }
                 }
+                Log.d("RHODES_MOMENT", "forceGenerateMoments: 完成 generated=$generated")
                 _momentGenerateStatus.value = MomentGenerateStatus(
                     running = false,
                     msg = if (generated > 0) "生成完成（${generated}条）" else "无可用干员"
                 )
                 refreshMomentsNow()
+            } catch (e: Exception) {
+                Log.e("RHODES_MOMENT", "forceGenerateMoments: 整体异常 ${e.message}", e)
+                _momentGenerateStatus.value = MomentGenerateStatus(running = false, msg = "生成失败")
             } finally {
                 forceGenerating.set(false)
             }

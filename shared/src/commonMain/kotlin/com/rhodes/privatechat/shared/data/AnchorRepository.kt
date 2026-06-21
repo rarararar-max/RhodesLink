@@ -1,5 +1,6 @@
 package com.rhodes.privatechat.shared.data
 
+import android.util.Log
 import com.rhodes.privatechat.shared.db.DatabaseWrapper
 import com.rhodes.privatechat.shared.db.RhodesDatabase
 import com.rhodes.privatechat.shared.memory.AnchorSourcePolicy
@@ -15,24 +16,37 @@ class AnchorRepository(private val wrapper: DatabaseWrapper, private val setting
 
     // --- Memory Anchors ---
     suspend fun saveAnchor(anchor: MemoryAnchor) = withContext(Dispatchers.Default) {
-        if (isDuplicate(anchor)) return@withContext
-        db.memoryAnchorsQueries.insertAnchor(anchor.sessionId, anchor.operatorId, anchor.type.name, anchor.content, if (anchor.isPrivate) 1L else 0L, anchor.createdAt, anchor.expiresAt, anchor.source, anchor.sourceName, anchor.sourceActor, anchor.sourceTarget, anchor.importance, anchor.knownFrom)
+        try {
+            if (isDuplicate(anchor)) return@withContext
+            db.memoryAnchorsQueries.insertAnchor(anchor.sessionId, anchor.operatorId, anchor.type.name, anchor.content, if (anchor.isPrivate) 1L else 0L, anchor.createdAt, anchor.expiresAt, anchor.source, anchor.sourceName, anchor.sourceActor, anchor.sourceTarget, anchor.importance, anchor.knownFrom)
+        } catch (e: Exception) {
+            Log.e("AnchorRepository", "保存锚点失败", e)
+        }
     }
 
     suspend fun saveAnchors(anchors: List<MemoryAnchor>) = withContext(Dispatchers.Default) {
         anchors.forEach { anchor ->
-            if (isDuplicate(anchor)) return@forEach
-            db.memoryAnchorsQueries.insertAnchor(anchor.sessionId, anchor.operatorId, anchor.type.name, anchor.content, if (anchor.isPrivate) 1L else 0L, anchor.createdAt, anchor.expiresAt, anchor.source, anchor.sourceName, anchor.sourceActor, anchor.sourceTarget, anchor.importance, anchor.knownFrom)
+            try {
+                if (isDuplicate(anchor)) return@forEach
+                db.memoryAnchorsQueries.insertAnchor(anchor.sessionId, anchor.operatorId, anchor.type.name, anchor.content, if (anchor.isPrivate) 1L else 0L, anchor.createdAt, anchor.expiresAt, anchor.source, anchor.sourceName, anchor.sourceActor, anchor.sourceTarget, anchor.importance, anchor.knownFrom)
+            } catch (e: Exception) {
+                Log.e("AnchorRepository", "保存锚点失败", e)
+            }
         }
     }
 
     private fun isDuplicate(anchor: MemoryAnchor): Boolean {
-        val now = Clock.System.now().toEpochMilliseconds()
-        val existing = db.memoryAnchorsQueries.getDuplicateCandidates(anchor.operatorId, anchor.type.name, if (anchor.isPrivate) 1L else 0L, anchor.source, anchor.sourceName, now) { id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom ->
-            mapAnchor(id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom)
-        }.executeAsList()
-        val normalized = normalize(anchor.content)
-        return existing.any { normalize(it.content) == normalized }
+        return try {
+            val now = Clock.System.now().toEpochMilliseconds()
+            val existing = db.memoryAnchorsQueries.getDuplicateCandidates(anchor.operatorId, anchor.type.name, if (anchor.isPrivate) 1L else 0L, anchor.source, anchor.sourceName, now) { id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom ->
+                mapAnchor(id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom)
+            }.executeAsList()
+            val normalized = normalize(anchor.content)
+            existing.any { normalize(it.content) == normalized }
+        } catch (e: Exception) {
+            Log.e("AnchorRepository", "检查重复锚点失败", e)
+            false
+        }
     }
 
     private fun normalize(value: String): String = value
@@ -45,23 +59,33 @@ class AnchorRepository(private val wrapper: DatabaseWrapper, private val setting
         .replace("？", "")
 
     suspend fun getPublicAnchors(operatorId: String): List<MemoryAnchor> = withContext(Dispatchers.Default) {
-        val now = Clock.System.now().toEpochMilliseconds()
-        if (settings?.distinguishPrivateMemory == false) {
-            db.memoryAnchorsQueries.getAllAnchors(operatorId, now) { id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom ->
-                mapAnchor(id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom)
-            }.executeAsList()
-        } else {
-            db.memoryAnchorsQueries.getPublicAnchors(operatorId, now) { id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom ->
-                mapAnchor(id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom)
-            }.executeAsList()
+        try {
+            val now = Clock.System.now().toEpochMilliseconds()
+            if (settings?.distinguishPrivateMemory == false) {
+                db.memoryAnchorsQueries.getAllAnchors(operatorId, now) { id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom ->
+                    mapAnchor(id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom)
+                }.executeAsList()
+            } else {
+                db.memoryAnchorsQueries.getPublicAnchors(operatorId, now) { id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom ->
+                    mapAnchor(id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom)
+                }.executeAsList()
+            }
+        } catch (e: Exception) {
+            Log.e("AnchorRepository", "查询公开锚点失败，可能是数据库迁移问题", e)
+            emptyList()
         }
     }
 
     suspend fun getAnchors(operatorId: String): List<MemoryAnchor> = withContext(Dispatchers.Default) {
-        val now = Clock.System.now().toEpochMilliseconds()
-        db.memoryAnchorsQueries.getAllAnchors(operatorId, now) { id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom ->
-            mapAnchor(id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom)
-        }.executeAsList()
+        try {
+            val now = Clock.System.now().toEpochMilliseconds()
+            db.memoryAnchorsQueries.getAllAnchors(operatorId, now) { id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom ->
+                mapAnchor(id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom)
+            }.executeAsList()
+        } catch (e: Exception) {
+            Log.e("AnchorRepository", "查询锚点失败，可能是数据库迁移问题", e)
+            emptyList()
+        }
     }
 
     private fun mapAnchor(
@@ -96,12 +120,41 @@ class AnchorRepository(private val wrapper: DatabaseWrapper, private val setting
         knownFrom = knownFrom
     ))
 
-    suspend fun getAnchorCount(): Int = withContext(Dispatchers.Default) { db.memoryAnchorsQueries.getAnchorCount().executeAsOne().toInt() }
-    suspend fun deleteOldAnchors(cutoff: Long) = withContext(Dispatchers.Default) { db.memoryAnchorsQueries.deleteOldAnchors(cutoff) }
-    suspend fun deleteAnchorsBySession(sessionId: String) = withContext(Dispatchers.Default) { db.memoryAnchorsQueries.deleteAnchorsBySession(sessionId) }
-    suspend fun deleteAnchorsByOperator(operatorId: String) = withContext(Dispatchers.Default) { db.memoryAnchorsQueries.deleteAnchorsByOperator(operatorId) }
+    suspend fun getAnchorCount(): Int = withContext(Dispatchers.Default) {
+        try {
+            db.memoryAnchorsQueries.getAnchorCount().executeAsOne().toInt()
+        } catch (e: Exception) {
+            Log.e("AnchorRepository", "获取锚点数量失败", e)
+            0
+        }
+    }
+    suspend fun deleteOldAnchors(cutoff: Long) = withContext(Dispatchers.Default) {
+        try {
+            db.memoryAnchorsQueries.deleteOldAnchors(cutoff)
+        } catch (e: Exception) {
+            Log.e("AnchorRepository", "删除旧锚点失败", e)
+        }
+    }
+    suspend fun deleteAnchorsBySession(sessionId: String) = withContext(Dispatchers.Default) {
+        try {
+            db.memoryAnchorsQueries.deleteAnchorsBySession(sessionId)
+        } catch (e: Exception) {
+            Log.e("AnchorRepository", "按会话删除锚点失败", e)
+        }
+    }
+    suspend fun deleteAnchorsByOperator(operatorId: String) = withContext(Dispatchers.Default) {
+        try {
+            db.memoryAnchorsQueries.deleteAnchorsByOperator(operatorId)
+        } catch (e: Exception) {
+            Log.e("AnchorRepository", "按操作员删除锚点失败", e)
+        }
+    }
 
     suspend fun enforceAnchorRetain(operatorId: String, keepCount: Int = 200) = withContext(Dispatchers.Default) {
-        db.memoryAnchorsQueries.enforceAnchorRetain(operatorId, operatorId, keepCount.toLong())
+        try {
+            db.memoryAnchorsQueries.enforceAnchorRetain(operatorId, operatorId, keepCount.toLong())
+        } catch (e: Exception) {
+            Log.e("AnchorRepository", "强制保留锚点失败", e)
+        }
     }
 }

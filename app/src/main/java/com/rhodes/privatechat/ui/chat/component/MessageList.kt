@@ -108,7 +108,11 @@ fun MessageList(
     // 消息数量变化时自动滚动到底部（用户发送、AI回复等）
     LaunchedEffect(displayMessages.size) {
         if (displayMessages.isNotEmpty()) {
-            listState.scrollToItem(displayMessages.size - 1)
+            try {
+                listState.scrollToItem(displayMessages.size - 1)
+            } catch (e: Exception) {
+                android.util.Log.e("RHODES_CRASH", "scrollToItem异常: ${e.message}")
+            }
         }
     }
 

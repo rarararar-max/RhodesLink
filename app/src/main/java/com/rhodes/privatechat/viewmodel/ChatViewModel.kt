@@ -297,24 +297,39 @@ ${text}"""
     }
 
     suspend fun selectOperatorSync(operator: Operator) {
-        val prevOp = _selectedOperator.value
-        if (prevOp != null) {
-            settings.putString("hypnosis_cmd_${prevOp.id}", _hypnosisCommand.value)
-            settings.putInt("hypnosis_round_${prevOp.id}", _hypnosisRounds.value)
-        }
-        _selectedOperator.value = operator
-        _hypnosisCommand.value = settings.getString("hypnosis_cmd_${operator.id}", "")
-        _hypnosisRounds.value = settings.getInt("hypnosis_round_${operator.id}", 0)
-        settings.hypnosisCmd = _hypnosisCommand.value
-        settings.hypnosisRound = _hypnosisRounds.value
-        val session = repository.getOrCreateSession(operator.id, operator.name, operator.avatarUri)
-        _currentSession.value = session
-        val savedMode = settings.getLastMode(operator.id)
-        _currentMode.value = savedMode
-        markSessionRead(session.id)
-        messagesJob?.cancel()
-        messagesJob = viewModelScope.launch {
-            repository.getRecentMessages(session.id).collect { msgs -> _messages.value = msgs }
+        DebugLogger.log("RHODES_CRASH", "selectOperatorSync: 开始 operator=${operator.id} name=${operator.name}")
+        try {
+            val prevOp = _selectedOperator.value
+            if (prevOp != null) {
+                settings.putString("hypnosis_cmd_${prevOp.id}", _hypnosisCommand.value)
+                settings.putInt("hypnosis_round_${prevOp.id}", _hypnosisRounds.value)
+            }
+            _selectedOperator.value = operator
+            _hypnosisCommand.value = settings.getString("hypnosis_cmd_${operator.id}", "")
+            _hypnosisRounds.value = settings.getInt("hypnosis_round_${operator.id}", 0)
+            settings.hypnosisCmd = _hypnosisCommand.value
+            settings.hypnosisRound = _hypnosisRounds.value
+            val session = repository.getOrCreateSession(operator.id, operator.name, operator.avatarUri)
+            DebugLogger.log("RHODES_CRASH", "selectOperatorSync: session=${session?.id} operatorId=${session?.operatorId}")
+            _currentSession.value = session
+            val savedMode = settings.getLastMode(operator.id)
+            _currentMode.value = savedMode
+            markSessionRead(session.id)
+            messagesJob?.cancel()
+            messagesJob = viewModelScope.launch {
+                try {
+                    repository.getRecentMessages(session.id).collect { msgs ->
+                        DebugLogger.log("RHODES_CRASH", "selectOperatorSync: messages收集到${msgs.size}条")
+                        _messages.value = msgs.reversed()
+                    }
+                } catch (e: Exception) {
+                    DebugLogger.log("RHODES_CRASH", "selectOperatorSync: messages收集异常: ${e.message}")
+                }
+            }
+            DebugLogger.log("RHODES_CRASH", "selectOperatorSync: 完成")
+        } catch (e: Exception) {
+            DebugLogger.log("RHODES_CRASH", "selectOperatorSync: 整体异常: ${e.message}")
+            _selectedOperator.value = operator
         }
     }
 

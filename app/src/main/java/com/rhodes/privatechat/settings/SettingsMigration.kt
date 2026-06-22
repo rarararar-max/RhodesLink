@@ -2,6 +2,7 @@ package com.rhodes.privatechat.settings
 
 import android.content.Context
 import android.content.SharedPreferences
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -14,9 +15,35 @@ object SettingsMigration {
     private const val MIGRATION_DONE_KEY = "prefs_migration_done_v1"
     private const val MIGRATION_FIX_V2_KEY = "prefs_migration_fix_v2"
 
+    private val intFixKeys = listOf(
+        "msg_counter", "impression_msg_counter", "summary_threshold",
+        "ai_temperature", "clean_days", "summary_retain", "history_messages",
+        "nar_seg_min", "nar_seg_max", "nar_min", "nar_max",
+        "dia_seg_min", "dia_seg_max", "dia_min", "dia_max", "daily_moment_target",
+        "moment_min_chars", "moment_max_chars", "diary_min_chars", "diary_max_chars",
+        "online_min_chars", "online_max_chars", "online_min_segs", "online_max_segs",
+        "dispatch_min_chars", "dispatch_max_chars", "group_chat_min_interval", "group_chat_max_interval",
+        "group_auto_min", "group_auto_max", "group_msg_min", "group_msg_max",
+        "group_speech_min", "group_speech_max", "group_nar_seg_min", "group_nar_seg_max",
+        "group_nar_min", "group_nar_max", "comment_min_chars", "comment_max_chars",
+        "clean_days_messages", "clean_days_anchors", "clean_days_diaries", "clean_days_moments",
+        "clean_days_dispatches", "clean_days_world_events", "hypnosis_round", "max_context_tokens",
+        "impression_threshold", "private_anchor_count", "private_shared_memory_count", "private_group_context_count",
+        "group_member_memory_count", "group_user_event_count", "moment_user_post_observer_count",
+        "group_relationship_hint_count", "moment_anchor_count", "moment_recent_post_count", "moment_user_related_rate",
+        "comment_context_count", "comment_memory_count", "comment_bystander_min", "comment_bystander_max",
+        "diary_anchor_count", "diary_group_summary_count", "diary_relation_event_count",
+        "daily_world_event_limit", "daily_world_trigger_limit", "tick_world_trigger_limit", "daily_diary_operator_limit",
+        "daily_proactive_limit", "moment_trigger_strength", "group_trigger_strength", "event_group_rounds",
+        "event_group_cooldown_minutes", "event_max_groups_per_trigger", "event_context_count", "daily_auto_ai_limit",
+        "tick_auto_ai_limit", "comment_to_private_trigger_rate", "moment_to_group_trigger_rate", "group_auto_max_rounds",
+        "daily_intimacy_cap", "today_intimacy_count", "lmb", "daily_lmb_count", "lmb_daily_count",
+        "last_seen_moment_id", "last_seen_comment_id"
+    )
+
     fun migrateIfNeeded(context: Context) {
         val target = context.getSharedPreferences(TARGET_SP, Context.MODE_PRIVATE)
-        if (target.getBoolean(MIGRATION_DONE_KEY, false)) {
+        if (safeBoolean(target, MIGRATION_DONE_KEY, false)) {
             runFixV2IfNeeded(context, target)
             return
         }
@@ -98,34 +125,14 @@ object SettingsMigration {
         migrateDynamicKeys(context, "prompt_templates", editor)
 
         // 修复已迁移用户：被旧版 migrateFile 存成 String 的 int/bool 转回正确类型
-        fixupCorruptedInts(context, editor, listOf(
-            "msg_counter", "impression_msg_counter", "summary_threshold",
-            "ai_temperature", "clean_days", "summary_retain", "history_messages",
-            "nar_seg_min", "nar_seg_max", "nar_min", "nar_max",
-            "dia_seg_min", "dia_seg_max", "dia_min", "dia_max",
-            "daily_moment_target",
-            "moment_min_chars", "moment_max_chars", "diary_min_chars", "diary_max_chars",
-            "online_min_chars", "online_max_chars", "online_min_segs", "online_max_segs",
-            "dispatch_min_chars", "dispatch_max_chars",
-            "group_chat_min_interval", "group_chat_max_interval",
-            "group_auto_min", "group_auto_max",
-            "group_msg_min", "group_msg_max",
-            "group_speech_min", "group_speech_max",
-            "group_nar_seg_min", "group_nar_seg_max",
-            "group_nar_min", "group_nar_max",
-            "comment_min_chars", "comment_max_chars",
-            "clean_days_messages", "clean_days_anchors", "clean_days_diaries",
-            "clean_days_moments", "clean_days_dispatches",
-            "hypnosis_round"
-        ))
-        fixupCorruptedBooleans(context, editor, listOf("dual_model", "dispatch_fast_mode", "dark_mode"))
+        fixupCorruptedInts(context, editor, intFixKeys)
+        fixupCorruptedBooleans(context, editor, listOf("dual_model", "dispatch_fast_mode", "dark_mode", "permissions_initialized", "initial_hidden_done"))
         editor.putBoolean(MIGRATION_DONE_KEY, true)
         editor.putBoolean(MIGRATION_FIX_V2_KEY, true)
         editor.apply()
     }
 
     private fun runFixV2IfNeeded(context: Context, target: SharedPreferences) {
-        if (target.getBoolean(MIGRATION_FIX_V2_KEY, false)) return
         val editor = target.edit()
 
         val hidden = target.all["hidden_ids"]
@@ -137,14 +144,17 @@ object SettingsMigration {
         }
 
         if (!target.contains("daily_lmb_count")) {
-            if (target.contains("lmb_daily_count")) editor.putInt("daily_lmb_count", target.getInt("lmb_daily_count", 0))
+            if (target.contains("lmb_daily_count")) editor.putInt("daily_lmb_count", safeInt(target, "lmb_daily_count", 0))
             else migrateIntKey(context, "dispatch", editor, "lmb_daily_count", "daily_lmb_count")
         }
 
         if (!target.contains("mahjong_history_json")) {
-            if (target.contains("games")) target.getString("games", null)?.let { editor.putString("mahjong_history_json", it) }
+            if (target.contains("games")) safeString(target, "games", null)?.let { editor.putString("mahjong_history_json", it) }
             else migrateStringKey(context, "mahjong_history", editor, "games", "mahjong_history_json")
         }
+
+        fixupCorruptedInts(context, editor, intFixKeys)
+        fixupCorruptedBooleans(context, editor, listOf("dual_model", "dispatch_fast_mode", "dark_mode", "permissions_initialized", "initial_hidden_done"))
 
         editor.putBoolean(MIGRATION_FIX_V2_KEY, true)
         editor.apply()
@@ -175,7 +185,7 @@ object SettingsMigration {
         val source = context.getSharedPreferences(spName, Context.MODE_PRIVATE)
         for (key in keys) {
             if (source.contains(key)) {
-                val value = source.getString(key, null)
+                val value = safeString(source, key, null)
                 if (value != null) editor.putString(key, value)
             }
         }
@@ -185,26 +195,26 @@ object SettingsMigration {
         val source = context.getSharedPreferences(spName, Context.MODE_PRIVATE)
         for (key in keys) {
             if (source.contains(key)) {
-                editor.putInt(key, source.getInt(key, 0))
+                editor.putInt(key, safeInt(source, key, 0))
             }
         }
     }
 
     private fun migrateIntKey(context: Context, spName: String, editor: SharedPreferences.Editor, sourceKey: String, targetKey: String) {
         val source = context.getSharedPreferences(spName, Context.MODE_PRIVATE)
-        if (source.contains(sourceKey)) editor.putInt(targetKey, source.getInt(sourceKey, 0))
+        if (source.contains(sourceKey)) editor.putInt(targetKey, safeInt(source, sourceKey, 0))
     }
 
     private fun migrateStringKey(context: Context, spName: String, editor: SharedPreferences.Editor, sourceKey: String, targetKey: String) {
         val source = context.getSharedPreferences(spName, Context.MODE_PRIVATE)
-        if (source.contains(sourceKey)) source.getString(sourceKey, null)?.let { editor.putString(targetKey, it) }
+        if (source.contains(sourceKey)) safeString(source, sourceKey, null)?.let { editor.putString(targetKey, it) }
     }
 
     private fun migrateBooleanKeys(context: Context, spName: String, editor: SharedPreferences.Editor, keys: List<String>) {
         val source = context.getSharedPreferences(spName, Context.MODE_PRIVATE)
         for (key in keys) {
             if (source.contains(key)) {
-                editor.putBoolean(key, source.getBoolean(key, false))
+                editor.putBoolean(key, safeBoolean(source, key, false))
             }
         }
     }
@@ -213,7 +223,7 @@ object SettingsMigration {
         val source = context.getSharedPreferences(spName, Context.MODE_PRIVATE)
         for (key in keys) {
             if (source.contains(key)) {
-                editor.putLong(key, source.getLong(key, 0))
+                editor.putLong(key, safeLong(source, key, 0L))
             }
         }
     }
@@ -222,7 +232,7 @@ object SettingsMigration {
         val source = context.getSharedPreferences(spName, Context.MODE_PRIVATE)
         for (key in keys) {
             if (source.contains(key)) {
-                val set = source.getStringSet(key, null)
+                val set = safeStringSet(source, key)
                 if (set != null) editor.putStringSet(key, set)
             }
         }
@@ -232,10 +242,48 @@ object SettingsMigration {
         val source = context.getSharedPreferences(spName, Context.MODE_PRIVATE)
         for (key in keys) {
             if (source.contains(key)) {
-                val set = source.getStringSet(key, null)
+                val set = safeStringSet(source, key)
                 if (set != null) editor.putString(key, Json.encodeToString(set))
             }
         }
+    }
+
+    private fun safeString(prefs: SharedPreferences, key: String, default: String?): String? = when (val value = prefs.all[key]) {
+        is String -> value
+        null -> default
+        else -> value.toString()
+    }
+
+    private fun safeInt(prefs: SharedPreferences, key: String, default: Int): Int = when (val value = prefs.all[key]) {
+        is Int -> value
+        is Long -> value.toInt()
+        is Float -> value.toInt()
+        is String -> value.toIntOrNull() ?: default
+        is Boolean -> if (value) 1 else 0
+        else -> default
+    }
+
+    private fun safeLong(prefs: SharedPreferences, key: String, default: Long): Long = when (val value = prefs.all[key]) {
+        is Long -> value
+        is Int -> value.toLong()
+        is Float -> value.toLong()
+        is String -> value.toLongOrNull() ?: default
+        is Boolean -> if (value) 1L else 0L
+        else -> default
+    }
+
+    private fun safeBoolean(prefs: SharedPreferences, key: String, default: Boolean): Boolean = when (val value = prefs.all[key]) {
+        is Boolean -> value
+        is String -> value.equals("true", true) || value == "1"
+        is Int -> value != 0
+        is Long -> value != 0L
+        else -> default
+    }
+
+    private fun safeStringSet(prefs: SharedPreferences, key: String): Set<String>? = when (val value = prefs.all[key]) {
+        is Set<*> -> value.filterIsInstance<String>().toSet()
+        is String -> try { Json.decodeFromString<Set<String>>(value) } catch (_: Exception) { null }
+        else -> null
     }
 
     private fun migrateDynamicKeys(context: Context, spName: String, editor: SharedPreferences.Editor) {

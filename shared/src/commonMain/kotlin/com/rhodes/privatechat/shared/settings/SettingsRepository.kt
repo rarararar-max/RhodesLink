@@ -45,19 +45,46 @@ class SettingsRepository(private val settings: ObservableSettings) {
     }
 
     private fun draftString(key: String, default: String): String = synchronized(draftLock) {
-        if (draftActive && draftValues.containsKey(key)) draftValues[key] as? String ?: default else settings.getString(key, default)
+        if (draftActive && draftValues.containsKey(key)) draftValues[key] as? String ?: default else safeGetString(key, default)
     }
 
     private fun draftInt(key: String, default: Int): Int = synchronized(draftLock) {
-        if (draftActive && draftValues.containsKey(key)) draftValues[key] as? Int ?: default else settings.getInt(key, default)
+        if (draftActive && draftValues.containsKey(key)) draftValues[key] as? Int ?: default else safeGetInt(key, default)
     }
 
     private fun draftBoolean(key: String, default: Boolean): Boolean = synchronized(draftLock) {
-        if (draftActive && draftValues.containsKey(key)) draftValues[key] as? Boolean ?: default else settings.getBoolean(key, default)
+        if (draftActive && draftValues.containsKey(key)) draftValues[key] as? Boolean ?: default else safeGetBoolean(key, default)
     }
 
     private fun draftLong(key: String, default: Long): Long = synchronized(draftLock) {
-        if (draftActive && draftValues.containsKey(key)) draftValues[key] as? Long ?: default else settings.getLong(key, default)
+        if (draftActive && draftValues.containsKey(key)) draftValues[key] as? Long ?: default else safeGetLong(key, default)
+    }
+
+    private fun safeGetString(key: String, default: String): String = try {
+        settings.getString(key, default)
+    } catch (_: Exception) {
+        default
+    }
+
+    private fun safeGetInt(key: String, default: Int): Int = try {
+        settings.getInt(key, default)
+    } catch (_: Exception) {
+        val asString = try { settings.getString(key, default.toString()) } catch (_: Exception) { null }
+        asString?.toIntOrNull() ?: default
+    }
+
+    private fun safeGetBoolean(key: String, default: Boolean): Boolean = try {
+        settings.getBoolean(key, default)
+    } catch (_: Exception) {
+        val asString = try { settings.getString(key, default.toString()) } catch (_: Exception) { null }
+        asString?.equals("true", true) ?: default
+    }
+
+    private fun safeGetLong(key: String, default: Long): Long = try {
+        settings.getLong(key, default)
+    } catch (_: Exception) {
+        val asString = try { settings.getString(key, default.toString()) } catch (_: Exception) { null }
+        asString?.toLongOrNull() ?: default
     }
 
     // === 模型设置 ===
@@ -81,11 +108,11 @@ class SettingsRepository(private val settings: ObservableSettings) {
     val apiKeyFlow: Flow<String> = flowSettings.getStringFlow("api_key", "")
 
     var aiAvatarUri: String
-        get() = settings.getString("ai_avatar_uri", "")
+        get() = getString("ai_avatar_uri", "")
         set(value) = settings.putString("ai_avatar_uri", value)
 
     var bgUri: String
-        get() = settings.getString("bg_uri", "")
+        get() = getString("bg_uri", "")
         set(value) = settings.putString("bg_uri", value)
 
     // === 聊天设置 ===
@@ -94,11 +121,11 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putBoolean("dual_model", value)
 
     var messageCounter: Int
-        get() = settings.getInt("msg_counter", 0)
+        get() = getInt("msg_counter", 0)
         set(value) = settings.putInt("msg_counter", value)
 
     var impressionMsgCounter: Int
-        get() = settings.getInt("impression_msg_counter", 0)
+        get() = getInt("impression_msg_counter", 0)
         set(value) = settings.putInt("impression_msg_counter", value)
 
     var summaryThreshold: Int
@@ -106,11 +133,11 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putInt("summary_threshold", value.coerceIn(3, 200))
 
     var summaryRetain: Int
-        get() = settings.getInt("summary_retain", 5).coerceIn(1, 50)
+        get() = getInt("summary_retain", 5).coerceIn(1, 50)
         set(value) = settings.putInt("summary_retain", value.coerceIn(1, 50))
 
     var impressionThreshold: Int
-        get() = settings.getInt("impression_threshold", 50).coerceIn(5, 500)
+        get() = getInt("impression_threshold", 50).coerceIn(5, 500)
         set(value) = settings.putInt("impression_threshold", value.coerceIn(5, 500))
 
     var historyMessages: Int
@@ -127,7 +154,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putInt("ai_temperature", (value.coerceIn(0.0, 2.0) * 100).toInt())
 
     var cleanDays: Int
-        get() = settings.getInt("clean_days", 30).coerceIn(0, 3650)
+        get() = getInt("clean_days", 30).coerceIn(0, 3650)
         set(value) = settings.putInt("clean_days", value.coerceIn(0, 3650))
 
     // === 记忆注入设置 ===
@@ -523,7 +550,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     // === 深色模式 ===
     var darkMode: Boolean
-        get() = settings.getBoolean("dark_mode", true)
+        get() = getBoolean("dark_mode", true)
         set(value) = settings.putBoolean("dark_mode", value)
 
     // === 清理设置 ===
@@ -766,7 +793,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
     }
 
     fun getStringSet(key: String, default: Set<String> = emptySet()): Set<String> {
-        val json = settings.getString(key, "")
+        val json = safeGetString(key, "")
         return if (json.isBlank()) default
         else try { Json.decodeFromString<Set<String>>(json) } catch (_: Exception) { default }
     }

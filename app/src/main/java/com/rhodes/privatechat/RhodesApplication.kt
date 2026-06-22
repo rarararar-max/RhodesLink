@@ -31,12 +31,14 @@ class RhodesApplication : Application() {
     private fun clearNavigationStateIfNeeded() {
         try {
             val prefs = getSharedPreferences("voyager_state", Context.MODE_PRIVATE)
+            val runtimePrefs = getSharedPreferences("rhodes_runtime", Context.MODE_PRIVATE)
             val lastVersion = prefs.getInt("last_version", 0)
             val currentVersion = packageManager.getPackageInfo(packageName, 0).versionCode
             Log.d("RHODES_CRASH", "clearNavState: lastVersion=$lastVersion currentVersion=$currentVersion")
             
             if (lastVersion < currentVersion) {
                 prefs.edit().clear().apply()
+                runtimePrefs.edit().putBoolean("drop_saved_state_once", true).apply()
                 Log.d("RHODES_CRASH", "clearNavState: 已清除 voyager_state")
             }
             

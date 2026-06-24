@@ -38,6 +38,19 @@ var Blue400 by mutableStateOf(Color(0xFF4A7FDC))
 
 var NavBarBg by mutableStateOf(Color(0xFF252529))   // 底部导航栏背景
 
+var ElevatedSurface by mutableStateOf(Color(0xFFFFFFFF))
+var Stroke by mutableStateOf(Color(0x1A000000))
+var StrokeStrong by mutableStateOf(Color(0x33000000))
+var Glow by mutableStateOf(Color(0x334A7FDC))
+var Scrim by mutableStateOf(Color(0x66000000))
+var HeaderStart by mutableStateOf(Color(0xFFFFFFFF))
+var HeaderEnd by mutableStateOf(Color(0xFFF4F7FF))
+var BubbleMine by mutableStateOf(Color(0xFFDCEAFF))
+var BubbleMineEnd by mutableStateOf(Color(0xFFBFD7FF))
+var BubbleOther by mutableStateOf(Color(0xFFFFFFFF))
+var WarningContainer by mutableStateOf(Color(0xFFFFF1D6))
+var SuccessContainer by mutableStateOf(Color(0xFFE3F8EA))
+
 // -- 深色主题 --
 fun applyDarkTheme() {
     BG          = Color(0xFF1A1A1E)
@@ -61,6 +74,18 @@ fun applyDarkTheme() {
     Gray500 = Color(0xFF6A6A70)
     Blue400 = Color(0xFF6B8CFF)
     NavBarBg = Color(0xFF1A1A1E)
+    ElevatedSurface = Color(0xFF2B2B31)
+    Stroke = Color(0x24FFFFFF)
+    StrokeStrong = Color(0x3DFFFFFF)
+    Glow = Color(0x336B8CFF)
+    Scrim = Color(0x99000000)
+    HeaderStart = Color(0xFF272832)
+    HeaderEnd = Color(0xFF1A1B22)
+    BubbleMine = Color(0xFF314A7A)
+    BubbleMineEnd = Color(0xFF496CBA)
+    BubbleOther = Color(0xFF2E2E34)
+    WarningContainer = Color(0xFF4A3219)
+    SuccessContainer = Color(0xFF1F3A2A)
 }
 
 // -- 浅色主题（默认） --
@@ -86,4 +111,16 @@ fun applyLightTheme() {
     Gray500 = Color(0xFFA0A0A4)
     Blue400 = Color(0xFF4A7FDC)
     NavBarBg = Color(0xFF252529)
+    ElevatedSurface = Color(0xFFFFFFFF)
+    Stroke = Color(0x1A17345C)
+    StrokeStrong = Color(0x3317345C)
+    Glow = Color(0x264A7FDC)
+    Scrim = Color(0x66000000)
+    HeaderStart = Color(0xFFFFFFFF)
+    HeaderEnd = Color(0xFFEFF5FF)
+    BubbleMine = Color(0xFFDDEBFF)
+    BubbleMineEnd = Color(0xFFBFD8FF)
+    BubbleOther = Color(0xFFFFFFFF)
+    WarningContainer = Color(0xFFFFF1D6)
+    SuccessContainer = Color(0xFFE3F8EA)
 }

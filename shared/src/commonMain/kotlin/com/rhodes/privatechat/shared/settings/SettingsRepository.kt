@@ -307,6 +307,18 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = settings.getInt("daily_proactive_limit", 3).coerceIn(0, 20)
         set(value) = settings.putInt("daily_proactive_limit", value.coerceIn(0, 20))
 
+    var proactiveGlobalCooldownMinutes: Int
+        get() = settings.getInt("proactive_global_cooldown_minutes", 60).coerceIn(0, 1440)
+        set(value) = settings.putInt("proactive_global_cooldown_minutes", value.coerceIn(0, 1440))
+
+    var proactiveQuietAfterUserMinutes: Int
+        get() = settings.getInt("proactive_quiet_after_user_minutes", 10).coerceIn(0, 1440)
+        set(value) = settings.putInt("proactive_quiet_after_user_minutes", value.coerceIn(0, 1440))
+
+    var proactiveOperatorCooldownMinutes: Int
+        get() = settings.getInt("proactive_operator_cooldown_minutes", 120).coerceIn(0, 1440)
+        set(value) = settings.putInt("proactive_operator_cooldown_minutes", value.coerceIn(0, 1440))
+
     var momentTriggerStrength: Int
         get() = settings.getInt("moment_trigger_strength", 50).coerceIn(0, 100)
         set(value) = settings.putInt("moment_trigger_strength", value.coerceIn(0, 100))

@@ -63,7 +63,7 @@ class ChatViewModel(
     private val onRefreshOperatorStatus: suspend () -> Unit
 ) : AndroidViewModel(application) {
     companion object {
-        const val DEBUG = true
+        const val DEBUG = false
         private const val CHAT_PAGE_SIZE = 50L
     }
 
@@ -145,7 +145,7 @@ class ChatViewModel(
                 return
             }
             val oldSummary = repository.getShortTermMemory(session.id)?.content?.takeIf { it.isNotBlank() } ?: "无"
-            val text = older.joinToString("\n") { "${it.senderName}：${it.content.take(100)}" }
+            val text = older.joinToString("\n") { formatPrivateMessageForMemory(it, 100) }
             DebugLogger.log("Memory/Summary", "开始短期摘要: session=${session.id}, operator=${session.operatorName}, totalMsgs=${msgs.size}, older=${older.size}, retain=$retain, oldSummary=${oldSummary != "无"}")
             val prompt = if (settings.unifiedMemoryEnabled) """
 你是罗德岛的随行记录员，负责把角色真正会记住的事整理成可长期使用的记忆。
@@ -303,7 +303,6 @@ ${text}"""
             }
             messagesJob?.cancel()
             if (!sameSession) {
-                _messages.value = emptyList()
                 _hasMoreMessages.value = true
             }
             messagesJob = viewModelScope.launch {
@@ -345,7 +344,6 @@ ${text}"""
             }
             messagesJob?.cancel()
             if (!sameSession) {
-                _messages.value = emptyList()
                 _hasMoreMessages.value = true
             }
             messagesJob = viewModelScope.launch {
@@ -454,6 +452,27 @@ ${text}"""
             repository.incrementUnread(sessionId, count)
             onUnhideSession(sessionId)
         }
+    }
+
+    private fun visiblePrivateSegmentCount(parsed: com.rhodes.privatechat.shared.model.OfflineModeResponse, mode: String): Int {
+        val segments = parsed.segments.orEmpty().filter { it.content.isNotBlank() }
+        val count = if (mode == "online") segments.count { it.type != "narration" } else segments.size
+        return count.coerceAtLeast(if (parsed.dialogue.isNotBlank()) 1 else 0).coerceAtLeast(1)
+    }
+
+    private fun ensureVisiblePrivateReply(
+        parsed: com.rhodes.privatechat.shared.model.OfflineModeResponse,
+        mode: String
+    ): com.rhodes.privatechat.shared.model.OfflineModeResponse {
+        if (mode != "online") return parsed
+        val segments = parsed.segments.orEmpty().filter { it.content.isNotBlank() }
+        if (segments.any { !it.type.equals("narration", true) }) return parsed
+        val fallback = parsed.dialogue.ifBlank { segments.firstOrNull()?.content.orEmpty() }.trim()
+        if (fallback.isBlank()) return parsed
+        return parsed.copy(
+            dialogue = "",
+            segments = listOf(com.rhodes.privatechat.shared.model.Segment(type = "dialogue", content = fallback))
+        )
     }
 
     fun sendMessage() {
@@ -572,7 +591,22 @@ ${recentDialogues}
                     try {
                         val apiMessages = buildApiMessages(text, effectiveHistoryMessages)
                         DebugLogger.log("Chat/AI", "请求AI, session=${session.id}, mode=$mode, prompt长度=${apiMessages.size}")
-                        val parsed = withTimeout(90_000) { sharedUtils.chatWithRetry(apiMessages) }
+                        logPrivatePromptTrace(
+                            stage = "REQUEST",
+                            sessionId = session.id,
+                            operatorName = session.operatorName,
+                            mode = mode,
+                            messages = apiMessages
+                        )
+                        var parsed = withTimeout(90_000) { sharedUtils.chatWithRetry(apiMessages) }
+                        parsed = ensureVisiblePrivateReply(parsed, mode)
+                        logPrivatePromptTrace(
+                            stage = "RESPONSE",
+                            sessionId = session.id,
+                            operatorName = session.operatorName,
+                            mode = mode,
+                            response = parsed.toString()
+                        )
                         if (parsed.dialogue.isNotEmpty() || parsed.emotion.isNotEmpty()) {
                             DebugLogger.log("Chat/AI", "AI响应成功, emotion=${parsed.emotion}, dialogue=${replyPreview(parsed).take(40)}")
                             sharedUtils.trackTokens("private", apiMessages, parsed.toString())
@@ -581,7 +615,7 @@ ${recentDialogues}
                         }
                         val serializedJson = try { json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed) } catch (_: Exception) { parsed.toString() }
                         val rawJson = sharedUtils.aiService.cleanJson(serializedJson)
-                        var aiResponseCount = 1
+                        var aiResponseCount = visiblePrivateSegmentCount(parsed, mode)
                         if (rawJson.isNotBlank()) {
                             repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = rawJson, type = "ai_json", mode = mode, isMe = false))
                             DebugLogger.log("Chat/DB", "AI响应已写入, session=${session.id}, id=$aiMsgId")
@@ -592,7 +626,6 @@ ${recentDialogues}
                                     }
                                 }
                             }
-                            aiResponseCount = 1
                             modeTransitionNotice = ""
                         }
                         val affectionMod = parsed.affection_mod
@@ -766,17 +799,14 @@ ${recentDialogues}
             try {
                 aiMutexFor(session.id).lock()
                 mutexLocked = true
-                modeTransitionNotice = """【重说指令】
-用户要求你重新回答上一轮消息。你上一次的回复如下：
-${previousReply.take(1200)}
-
-请不要复述上一版，不要只替换同义词，也不要沿用完全相同的段落结构。保持当前人设、关系和模式格式，从不同角度、不同情绪推进或不同信息重点重新回应；如果上一版偏解释，这次更偏行动/感受；如果上一版偏安慰，这次更偏陪伴/反问/推进。"""
-                val apiMessages = buildApiMessages(
+                val apiMessages = buildRegenerateApiMessages(
                     userContent = userMsg.content,
+                    previousReply = previousReply,
                     excludeMessageIds = setOf(msgId, placeholderId),
                     historyBeforeMessageId = msgId
                 )
-                val parsed = withTimeout(90_000) { sharedUtils.chatWithRetry(apiMessages) }
+                var parsed = withTimeout(90_000) { sharedUtils.chatWithRetry(apiMessages) }
+                parsed = ensureVisiblePrivateReply(parsed, mode)
                 sharedUtils.trackTokens("private", apiMessages, parsed.toString())
                 val serializedJson = try { json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed) } catch (_: Exception) { parsed.toString() }
                 val rawJson = sharedUtils.aiService.cleanJson(serializedJson)
@@ -877,7 +907,8 @@ ${recentDialogues}
                 }
 
                 val apiMessages = buildApiMessages(previousUser?.content ?: "")
-                val parsed = withTimeout(90_000) { sharedUtils.chatWithRetry(apiMessages) }
+                var parsed = withTimeout(90_000) { sharedUtils.chatWithRetry(apiMessages) }
+                parsed = ensureVisiblePrivateReply(parsed, mode)
                 sharedUtils.trackTokens("private", apiMessages, parsed.toString())
                 val serializedJson = try { json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed) } catch (_: Exception) { parsed.toString() }
                 repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = serializedJson, type = "ai_json", mode = mode, isMe = false))
@@ -976,6 +1007,19 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         else -> "发送失败：${e.message?.take(50) ?: "未知错误"}"
     }
 
+    private fun logPrivatePromptTrace(
+        stage: String,
+        sessionId: String,
+        operatorName: String,
+        mode: String,
+        messages: List<AiMessage> = emptyList(),
+        response: String = ""
+    ) {
+    }
+
+    private fun logTraceChunks(label: String, text: String) {
+    }
+
     private fun sanitizeAnchorContent(content: String): String {
         return content
             .replace("好感度提升", "")
@@ -1002,6 +1046,44 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             ?.filter { it.type == "dialogue" }
             ?.joinToString(" ") { it.content }
             .orEmpty()
+    }
+
+    private fun formatPrivateHistoryForPrompt(msg: ChatMessage): String {
+        if (msg.isMe) return "用户：${msg.content.take(500)}"
+        if (msg.type != "ai_json") return "干员台词：${msg.content.take(500)}"
+        return try {
+            val parsed = sharedUtils.aiService.normalizeOfflineResponse(msg.content)
+            val lines = mutableListOf<String>()
+            parsed.segments.orEmpty().forEach { seg ->
+                val text = seg.content.trim().take(500)
+                if (text.isNotBlank()) {
+                    lines += if (seg.type == "narration") "干员动作：$text" else "干员台词：$text"
+                }
+            }
+            if (lines.isEmpty() && parsed.dialogue.isNotBlank()) lines += "干员台词：${parsed.dialogue.take(500)}"
+            lines.joinToString("\n").ifBlank { "干员回复：[上一条消息格式异常]" }
+        } catch (_: Exception) {
+            "干员回复：[上一条消息格式异常]"
+        }
+    }
+
+    private fun formatPrivateMessageForMemory(msg: ChatMessage, limit: Int): String {
+        if (msg.isMe) return "用户：${msg.content.take(limit)}"
+        if (msg.type != "ai_json") return "${msg.senderName}：${msg.content.take(limit)}"
+        return try {
+            val parsed = sharedUtils.aiService.normalizeOfflineResponse(msg.content)
+            val lines = mutableListOf<String>()
+            parsed.segments.orEmpty().forEach { seg ->
+                val text = seg.content.trim().take(limit)
+                if (text.isNotBlank()) {
+                    lines += if (seg.type == "narration") "${msg.senderName}动作：$text" else "${msg.senderName}台词：$text"
+                }
+            }
+            if (lines.isEmpty() && parsed.dialogue.isNotBlank()) lines += "${msg.senderName}台词：${parsed.dialogue.take(limit)}"
+            lines.joinToString("\n").ifBlank { "${msg.senderName}回复：[格式异常]" }
+        } catch (_: Exception) {
+            "${msg.senderName}回复：[格式异常]"
+        }
     }
 
     private suspend fun buildApiMessages(
@@ -1071,6 +1153,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
                 }
             },
             "MEMORY_ANCHORS" to sharedUtils.trimContextBlock(pickedAnchors.joinToString("\n") { "- ${sharedUtils.anchorTimeLabel(it)} ${it.content}" }.ifBlank { "暂无" }, sharedUtils.contextBlockLimit()),
+            "OPERATOR_MEMORY_INJECTION" to (op?.memoryInjection?.trim().orEmpty().ifBlank { "无" }),
             "SOURCE_AWARE_MEMORIES" to sharedUtils.trimContextBlock(sourceAwareMemories, sharedUtils.contextBlockLimit()),
             "UNCONSUMED_EVENTS" to sharedUtils.trimContextBlock(unconsumedEvents, sharedUtils.contextBlockLimit()),
             "RECENT_SOCIAL_EVENTS" to unconsumedEvents,
@@ -1117,7 +1200,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
                 "privateGroupContextCount" to settings.privateGroupContextCount.toString()
             )
         )
-        val systemPrompt = sharedUtils.compactTemplate(sharedUtils.applyTemplate(getPromptTemplate("private", mode), replacements))
+        var systemPrompt = sharedUtils.compactTemplate(sharedUtils.applyTemplate(getPromptTemplate("private", mode), replacements))
         val rawMsgs = repository.getMessagesSync(session.id).let { msgs ->
             val scoped = historyBeforeMessageId?.let { targetId -> msgs.takeWhile { it.id != targetId } } ?: msgs
             val limit = historyLimitOverride ?: settings.historyMessages
@@ -1128,8 +1211,11 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         if (rawMsgs.lastOrNull()?.isMe == true && rawMsgs.last().content == userContent) {
             rawMsgs.removeAt(rawMsgs.lastIndex)
         }
-        val messages = rawMsgs.map { msg -> AiMessage(if (msg.isMe) "user" else "assistant", if (msg.isMe) "用户：${msg.content}" else msg.content) }.toMutableList()
-        messages.add(0, AiMessage("system", systemPrompt))
+        val historyBlock = rawMsgs.takeLast(12).joinToString("\n") { formatPrivateHistoryForPrompt(it) }
+        if (historyBlock.isNotBlank()) {
+            systemPrompt += "\n\n【最近对话，仅供理解上下文，禁止模仿格式】\n$historyBlock\n【最近对话结束】\n你当前回复仍必须只输出 JSON。"
+        }
+        val messages = mutableListOf(AiMessage("system", systemPrompt))
         if (userContent.isNotBlank()) {
             messages.add(AiMessage("user", "用户：$userContent"))
         }
@@ -1145,6 +1231,42 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             com.rhodes.privatechat.util.DebugLogger.log("Chat/Token", "截断后: 消息数=${messages.size}, 估算token=$totalTokens")
         }
         return messages
+    }
+
+    private suspend fun buildRegenerateApiMessages(
+        userContent: String,
+        previousReply: String,
+        excludeMessageIds: Set<Long> = emptySet(),
+        historyBeforeMessageId: Long? = null
+    ): List<AiMessage> {
+        val angle = listOf(
+            "从行动推进切入，减少解释，把场景往前推一步",
+            "从情绪反差切入，表现出和上一版不同的迟疑、克制或主动",
+            "从关系互动切入，多回应用户当下感受，少复述背景",
+            "从具体细节切入，换一个动作、位置或关注点",
+            "从短句和反问切入，让回复更像临场反应",
+            "从陪伴和试探切入，不沿用上一版安慰方式"
+        ).random()
+        val cur = _currentSession.value
+        val avoid = formatPrivateHistoryForPrompt(ChatMessage(id = 0L, sessionId = cur?.id ?: "", content = previousReply, type = "ai_json", senderName = cur?.operatorName ?: "干员", isMe = false)).take(1600)
+        modeTransitionNotice = """【重说任务 · 最高优先级】
+用户要求你重新回答上一轮消息。
+本次重写角度：$angle
+
+上一版回复如下，只能作为避重复参考，禁止复刻：
+$avoid
+
+重写规则：
+- 保持同一角色、人设、关系、当前模式和 JSON 输出格式。
+- 必须回应同一条用户消息，但换一个切入角度、情绪节奏、动作安排或信息重点。
+- 禁止复用上一版开头、核心动作、段落顺序和连续 8 个字以上的原句。
+- 不要只做同义词替换；如果上一版偏解释，这次偏行动/感受；如果上一版偏安慰，这次偏陪伴/反问/推进。
+- 不要提到“重说”“上一版”“重新生成”。"""
+        return buildApiMessages(
+            userContent = userContent,
+            excludeMessageIds = excludeMessageIds,
+            historyBeforeMessageId = historyBeforeMessageId
+        )
     }
 
     private fun estimateTokens(content: String): Int {
@@ -1176,7 +1298,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             val dayEnd = java.util.Date(dayBegin.time + 86_400_000)
             val allMsgs = repository.getMessagesInRange(dayBegin.time, dayEnd.time)
             if (allMsgs.size < 4) return
-            val text = allMsgs.joinToString("\n") { "${it.senderName}：${it.content.take(60)}" }
+            val text = allMsgs.joinToString("\n") { formatPrivateMessageForMemory(it, 60) }
             val dateStr = sharedUtils.beijingSdf("yyyy年MM月dd日").format(dayBegin)
             val prompt = "请总结${dateStr}的聊天记录，生成50-150字的每日摘要。直接输出纯文本。\n${text}"
             val content = withTimeout(15_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Memory") }.trim()
@@ -1199,7 +1321,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             val msgs = repository.getMessagesInRange(dayBegin.time, dayEnd.time)
                 .filter { it.sessionId == session.id }
             if (msgs.size < 4) return
-            val text = msgs.joinToString("\n") { "${it.senderName}：${it.content.take(60)}" }
+            val text = msgs.joinToString("\n") { formatPrivateMessageForMemory(it, 60) }
             val dateStr = sharedUtils.beijingSdf("yyyy年MM月dd日").format(dayBegin)
             val prompt = "请总结${dateStr}你和用户的聊天记录，生成50-150字的每日摘要。直接输出纯文本。\n${text}"
             val content = withTimeout(15_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Memory") }.trim()
@@ -1228,7 +1350,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
                 return
             }
             DebugLogger.log("Memory/Impression", "开始更新印象: op=${session.operatorId}, threshold=$impThreshold, sampleMsgs=${msgs.size}, old=${oldImpression != null}")
-            val messagesText = msgs.joinToString("\n") { "${if (it.isMe) profile.nickname else it.senderName}：${it.content.take(120)}" }
+            val messagesText = msgs.joinToString("\n") { formatPrivateMessageForMemory(it, 120) }
             val prompt = """
 基于以下${op.name}与${profile.nickname}的最近${msgs.size}条完整对话，更新${op.name}对${profile.nickname}的主观长期印象。目标是让${op.name}之后能自然记住${profile.nickname}的稳定偏好、边界、承诺和相处方式，而不是把最近聊天流水账背出来。
 
@@ -1284,16 +1406,5 @@ ${messagesText}
 
     private fun dumpDebugState() {
         if (!DEBUG) return
-        val aiTag = "AI调试输出"
-        Log.d(aiTag, "╔══ 调试状态 ════════════════════════")
-        Log.d(aiTag, "║ selectedOperator: ${_selectedOperator.value?.name}")
-        Log.d(aiTag, "║ currentSession: ${_currentSession.value?.id}")
-        Log.d(aiTag, "║ messages: ${_messages.value.size}")
-        Log.d(aiTag, "║ currentMode: ${_currentMode.value}")
-        val sessionId = _currentSession.value?.id ?: "?"
-        Log.d(aiTag, "║ messageCounter: ${settings.getSessionMessageCounter(sessionId)} / $shortTermThreshold")
-        val opId = _selectedOperator.value?.id ?: "?"
-        Log.d(aiTag, "║ impression_${opId}: ${settings.getInt("impression_$opId", 0)}")
-        Log.d(aiTag, "╚══════════════════════════════════════")
     }
 }

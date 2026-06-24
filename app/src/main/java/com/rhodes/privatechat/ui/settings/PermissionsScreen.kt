@@ -64,7 +64,7 @@ private fun OperatorPermTab(operators: List<com.rhodes.privatechat.data.db.entit
     val settings: SettingsRepository = koinInject()
 
     Column {
-        Text("批量设置角色主动私聊和动态参与权限。动态权限会影响每日自动动态、事件触发动态、自动评论/围观回复。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        Text("批量设置角色主动私聊和动态参与权限。动态权限会影响每日自动动态、事件触发动态、自动评论/围观回复；主动私聊权限只影响角色在你未发消息时主动找你，不影响你主动聊天后的正常回复。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
 
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("干员", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, modifier = Modifier.weight(1f))

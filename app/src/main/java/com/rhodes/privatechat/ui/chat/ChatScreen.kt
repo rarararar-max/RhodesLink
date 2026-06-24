@@ -63,6 +63,8 @@ import com.rhodes.privatechat.ui.chat.component.MenuChip
 import com.rhodes.privatechat.ui.chat.component.MessageList
 import com.rhodes.privatechat.ui.chat.model.ChatUiMessage
 import com.rhodes.privatechat.ui.chat.util.MessageParser
+import com.rhodes.privatechat.ui.common.ThemedAlertDialog
+import com.rhodes.privatechat.ui.common.softTextFieldColors
 import com.rhodes.privatechat.shared.model.Operator
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.util.ChatTrace
@@ -71,6 +73,11 @@ import org.koin.compose.koinInject
 import kotlinx.coroutines.launch
 
 private const val PROP_PRICE = 100
+
+private fun String.compactHeaderPart(maxChars: Int): String {
+    val clean = trim().replace(Regex("\\s+"), " ")
+    return if (clean.length <= maxChars) clean else clean.take(maxChars) + "..."
+}
 
 @Composable
 fun ChatScreen(
@@ -104,11 +111,38 @@ fun ChatScreen(
                 aiAvatarUri = op.avatarUri,
                 userAvatarUri = userProfile.avatarUri
             )
-            ChatTrace.d("ChatScreen", "parsed op=${op.id} raw=${rawMessages.size} parsed=${parsed.size}")
-            parsed
+            val safeParsed = if (parsed.isEmpty() && rawMessages.isNotEmpty()) {
+                rawMessages.map { raw ->
+                    com.rhodes.privatechat.ui.chat.model.ChatUiMessage(
+                        id = raw.id,
+                        senderName = if (raw.isMe) "我" else op.name,
+                        senderColor = Primary,
+                        content = raw.content.takeIf { !it.trim().startsWith("{") && !it.trim().startsWith("[") } ?: "[消息格式异常，已隐藏原始结构]",
+                        timestamp = raw.timestamp,
+                        isMe = raw.isMe,
+                        avatarUri = if (raw.isMe) userProfile.avatarUri else op.avatarUri,
+                        mode = raw.mode,
+                        originalMessageId = raw.id
+                    )
+                }
+            } else parsed
+            ChatTrace.d("ChatScreen", "parsed op=${op.id} raw=${rawMessages.size} parsed=${safeParsed.size}")
+            safeParsed
         } catch (e: Exception) {
             ChatTrace.e("ChatScreen", "parse.ERROR op=${op.id} raw=${rawMessages.size} err=${e.message}", e)
-            emptyList()
+            rawMessages.map { raw ->
+                com.rhodes.privatechat.ui.chat.model.ChatUiMessage(
+                    id = raw.id,
+                    senderName = if (raw.isMe) "我" else op.name,
+                    senderColor = Primary,
+                    content = raw.content.takeIf { !it.trim().startsWith("{") && !it.trim().startsWith("[") } ?: "[消息格式异常，已隐藏原始结构]",
+                    timestamp = raw.timestamp,
+                    isMe = raw.isMe,
+                    avatarUri = if (raw.isMe) userProfile.avatarUri else op.avatarUri,
+                    mode = raw.mode,
+                    originalMessageId = raw.id
+                )
+            }
         }
     }
 
@@ -144,11 +178,11 @@ fun ChatScreen(
 
         Column(modifier = modifier.fillMaxSize()) {
             ChatHeader(
-                title = displayOp.name,
+                title = displayOp.name.compactHeaderPart(12),
                 avatarUri = displayOp.avatarUri,
                 mode = currentMode,
                 isLoading = isLoading,
-                subtitleText = "${displayOp.location} | ${displayOp.activity} | ${displayOp.emotion}",
+                subtitleText = "${displayOp.location.compactHeaderPart(8)} | ${displayOp.activity.compactHeaderPart(8)} | ${displayOp.emotion.compactHeaderPart(6)}",
                 onBack = onBack,
                 menuContent = {
                     ChatDropdownMenuItem(text = { Text("更换背景图") }, onClick = { bgPicker.launch("image/*") })
@@ -202,18 +236,9 @@ fun ChatScreen(
     }
 
     if (showBgReset) {
-        AlertDialog(onDismissRequest = { showBgReset = false }, title = { Text("恢复默认背景", color = TextPrimary) },
-            text = { Text("将移除当前背景图", color = TextSecondary) },
-            confirmButton = { TextButton(onClick = { bgUri = null; settings.remove("bg_${op.id}"); showBgReset = false }) { Text("确认", color = Primary) } },
-            dismissButton = { TextButton(onClick = { showBgReset = false }) { Text("取消", color = TextSecondary) } })
+        ThemedAlertDialog("恢复默认背景", "将移除当前背景图", { showBgReset = false }, "确认", { bgUri = null; settings.remove("bg_${op.id}"); showBgReset = false })
     }
-    if (showClearConfirm) AlertDialog(
-        onDismissRequest = { showClearConfirm = false },
-        title = { Text("清除聊天记录", color = TextPrimary) },
-        text = { Text("将清除与${op.name}的全部聊天记录，此操作不可撤销。", color = TextSecondary) },
-        confirmButton = { TextButton(onClick = { viewModel.clearMessages(); showClearConfirm = false }) { Text("确认清除", color = ErrorRed) } },
-        dismissButton = { TextButton(onClick = { showClearConfirm = false }) { Text("取消", color = TextSecondary) } }
-    )
+    if (showClearConfirm) ThemedAlertDialog("清除聊天记录", "将清除与${op.name}的全部聊天记录，此操作不可撤销。", { showClearConfirm = false }, "确认清除", { viewModel.clearMessages(); showClearConfirm = false }, danger = true)
     if (showPropShop) {
         PropShopDialog(viewModel = viewModel, context = context, scope = scope, onDismiss = { showPropShop = false })
     }
@@ -238,7 +263,7 @@ private fun PropShopDialog(
     val settings: SettingsRepository = koinInject()
     val balance by settings.lmbFlow.collectAsState(initial = settings.lmb)
 
-    AlertDialog(onDismissRequest = onDismiss, title = { Row { Icon(Icons.Default.ShoppingCart, null, tint = AccentOrange, modifier = Modifier.size(20.dp)); Spacer(modifier = Modifier.width(6.dp)); Text("道具商店", color = TextPrimary) } },
+    AlertDialog(onDismissRequest = onDismiss, containerColor = ElevatedSurface, shape = RoundedCornerShape(24.dp), title = { Row { Icon(Icons.Default.ShoppingCart, null, tint = AccentOrange, modifier = Modifier.size(20.dp)); Spacer(modifier = Modifier.width(6.dp)); Text("道具商店", color = TextPrimary) } },
         text = {
             Column {
                 Text("余额：${balance} 龙门币", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = AccentOrange)
@@ -257,7 +282,7 @@ private fun PropShopDialog(
                         OutlinedTextField(value = hypnotizeInput, onValueChange = { hypnotizeInput = it },
                             modifier = Modifier.fillMaxWidth(), singleLine = true,
                             placeholder = { Text("输入催眠指令...", color = TextTertiary) }, shape = RoundedCornerShape(8.dp),
-                            colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Primary, unfocusedBorderColor = Divider))
+                            colors = softTextFieldColors())
                         Spacer(modifier = Modifier.height(6.dp))
                         Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
                             TextButton(onClick = { showHypnotizeInput = false }) { Text("取消") }

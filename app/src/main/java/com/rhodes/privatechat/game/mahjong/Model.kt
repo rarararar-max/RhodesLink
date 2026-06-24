@@ -90,9 +90,31 @@ data class GameState(
     var chatLog: MutableList<String> = mutableListOf(),
     var matchStatus: String = "playing"
 ) {
-    fun currentPlayer() = players[currentTurn]
-    fun dealer() = players[dealerIdx]
-    fun isDealer(seat: Seat) = players[dealerIdx].seat == seat
+    fun normalizeTurn() {
+        if (players.isEmpty()) {
+            currentTurn = 0
+            dealerIdx = 0
+            return
+        }
+        if (currentTurn !in players.indices) currentTurn = ((currentTurn % players.size) + players.size) % players.size
+        if (dealerIdx !in players.indices) dealerIdx = 0
+    }
+    fun currentPlayerOrNull(): PlayerState? {
+        normalizeTurn()
+        return players.getOrNull(currentTurn)
+    }
+    fun currentPlayer(): PlayerState {
+        normalizeTurn()
+        return players.getOrNull(currentTurn) ?: error("Mahjong game has no players")
+    }
+    fun dealer(): PlayerState {
+        normalizeTurn()
+        return players.getOrNull(dealerIdx) ?: error("Mahjong game has no dealer")
+    }
+    fun isDealer(seat: Seat): Boolean {
+        normalizeTurn()
+        return players.getOrNull(dealerIdx)?.seat == seat
+    }
     fun humanPlayer() = players.find { it.isHuman }
     fun assistantPlayer() = players.find { it.opId == assistantOpId }
     fun roundLabel(): String = when (matchMode) {

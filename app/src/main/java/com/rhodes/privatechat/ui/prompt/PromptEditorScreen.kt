@@ -66,8 +66,8 @@ fun PromptEditorScreen(
     var tabIndex by remember { mutableIntStateOf(0) }
     val context = LocalContext.current
 
-    val privModeLabels = listOf("线上模式", "线下模式", "导演模式")
-    val privModes = listOf("online", "offline", "director")
+    val privModeLabels = listOf("线上模式", "线下模式", "导演模式", "主动消息")
+    val privModes = listOf("online", "offline", "director", "proactive")
     val grpModeLabels = listOf("线上模式", "线下模式", "导演模式")
     val grpModes = listOf("online", "offline", "director")
 
@@ -129,6 +129,8 @@ fun PromptEditorScreen(
         "{{AI_ANALYSIS}}" to "双模型分析结果（为空则不注入）",
         "{{HYPNOSIS}}" to "催眠指令（为空则不注入）",
         "{{TRANSITION_NOTICE}}" to "模式切换、继续说、重说等临时系统指令",
+        "{{PROACTIVE_TRIGGER_TYPE}}" to "主动触发类型（idle/event）",
+        "{{PROACTIVE_TRIGGER_CONTEXT}}" to "主动触发事件内容",
         "{{CURRENT_LOCATION}}" to "干员当前位置",
         "{{CURRENT_STATE}}" to "干员当前正在做什么",
         "{{CURRENT_EMOTION}}" to "干员当前心情",
@@ -166,8 +168,18 @@ fun PromptEditorScreen(
         "{{GROUP_SUMMARY}}" to "群聊短期摘要",
         "{{GROUP_TRIGGER_EVENT}}" to "唤起群聊的大世界事件",
         "{{GROUP_TOPIC_SEED}}" to "群聊自动续聊或事件触发的话题种子",
+        "{{GROUP_RULES}}" to "群聊自定义规则",
+        "{{MEMBER_NAMES}}" to "群成员名单",
+        "{{USER_OBSERVING}}" to "用户在场但未发言",
+        "{{AUTO_REASON}}" to "自动触发原因",
+        "{{AUTO_REASON_TEXT}}" to "自动触发说明",
+        "{{GROUP_MODE_FORMAT}}" to "自动群聊格式提示",
         "{{USER_MESSAGE}}" to "用户最新发言内容",
         "{{OUTPUT_FORMAT}}" to "输出JSON格式规范",
+        "{{GROUP_NAR_SEG_MIN}}" to "群聊旁白段数下限",
+        "{{GROUP_NAR_SEG_MAX}}" to "群聊旁白段数上限",
+        "{{GROUP_NAR_MIN}}" to "群聊旁白单段字数下限",
+        "{{GROUP_NAR_MAX}}" to "群聊旁白单段字数上限",
         "{{GROUP_MSG_MIN}}" to "群聊每条消息字数下限",
         "{{GROUP_MSG_MAX}}" to "群聊每条消息字数上限",
         "{{GROUP_SPEECH_MIN}}" to "群聊每人发言次数下限",
@@ -184,6 +196,13 @@ fun PromptEditorScreen(
         "{{SEG_MAX}}" to "总段数建议上限",
         "{{MOMENT_MIN_CHARS}}" to "动态字数下限",
         "{{MOMENT_MAX_CHARS}}" to "动态字数上限",
+        "{{CURRENT_DATE}}" to "当前日期",
+        "{{TIME_OF_DAY}}" to "当前时段",
+        "{{RECENT_CHAT_SUMMARY}}" to "近期聊天摘要",
+        "{{RECENT_MEMORIES}}" to "近期记忆",
+        "{{RECENT_WORLD_EVENTS}}" to "近期世界事件",
+        "{{RECENT_POSTS}}" to "近期动态",
+        "{{MOMENT_TRIGGER_REASON}}" to "动态触发原因",
         "{{MOMENT_EVENT_SEED}}" to "触发本条动态的大世界事件",
         "{{RECENT_DAILY_SUMMARY}}" to "动态可参考的近期每日摘要",
         "{{COMMENTER_NAME}}" to "评论者名称",
@@ -191,6 +210,14 @@ fun PromptEditorScreen(
         "{{POST_CONTENT}}" to "被评论的动态正文",
         "{{COMMENT_MIN_CHARS}}" to "评论字数下限",
         "{{COMMENT_MAX_CHARS}}" to "评论字数上限",
+        "{{YESTERDAY_DATE}}" to "昨天日期",
+        "{{PRIVATE_DAILY_SUMMARY}}" to "私聊每日摘要",
+        "{{PRIVATE_SUMMARY}}" to "私聊摘要",
+        "{{GROUP_SUMMARIES}}" to "群聊摘要",
+        "{{WORLD_DAY_EVENTS}}" to "今日世界事件",
+        "{{DIARY_EVENT_DIGEST}}" to "日记事件汇总",
+        "{{SELF_STATUS_CHANGES}}" to "自身状态变化",
+        "{{SOCIAL_INTERACTIONS}}" to "社交互动记录",
         "{{DIARY_CONTEXT}}" to "日记上下文（昨日回顾/近期对话/群聊动态/事件锚点）",
         "{{RELATION_EVENTS}}" to "日记可参考的关系相关事件",
         "{{STATUS_EVENTS}}" to "日记可参考的自身状态变化",

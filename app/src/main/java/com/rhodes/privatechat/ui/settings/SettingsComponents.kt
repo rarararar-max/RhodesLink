@@ -1,6 +1,7 @@
 package com.rhodes.privatechat.ui.settings
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,6 +40,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.shared.settings.SettingsRepository
+import com.rhodes.privatechat.ui.common.GradientHeader
+import com.rhodes.privatechat.ui.common.SoftCard
+import com.rhodes.privatechat.ui.common.ThemedAlertDialog
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.util.DebugLogger
 
@@ -62,38 +66,14 @@ fun SaveableSettingsScaffold(
     BackHandler { requestBack() }
 
     Column(modifier = modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            androidx.compose.material3.IconButton(onClick = { requestBack() }) {
-                androidx.compose.material3.Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary)
-            }
-            Spacer(Modifier.width(4.dp))
-            if (icon != null) {
-                icon()
-                Spacer(Modifier.width(6.dp))
-            }
-            Text(title, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, modifier = Modifier.weight(1f))
-            Button(
-                onClick = { settings.saveDraft(); onBack() },
-                colors = ButtonDefaults.buttonColors(containerColor = Blue400)
-            ) { Text("保存", color = androidx.compose.ui.graphics.Color.White, fontSize = 13.sp) }
-        }
-        androidx.compose.material3.HorizontalDivider(color = Divider)
+        GradientHeader(title = title, onBack = { requestBack() }, actions = {
+            Button(onClick = { settings.saveDraft(); onBack() }, colors = ButtonDefaults.buttonColors(containerColor = Blue400), shape = RoundedCornerShape(999.dp)) { Text("保存", color = androidx.compose.ui.graphics.Color.White, fontSize = 13.sp) }
+        })
         content()
     }
 
     if (showDiscardDialog) {
-        AlertDialog(
-            onDismissRequest = { showDiscardDialog = false },
-            title = { Text("有未保存的修改", color = TextPrimary) },
-            text = { Text("你已经修改了设置。要保存后离开，还是放弃这些修改？", color = TextSecondary) },
-            confirmButton = { TextButton(onClick = { settings.saveDraft(); showDiscardDialog = false; onBack() }) { Text("保存修改", color = Primary) } },
-            dismissButton = {
-                Row {
-                    TextButton(onClick = { settings.discardDraft(); showDiscardDialog = false; onBack() }) { Text("放弃修改", color = ErrorRed) }
-                    TextButton(onClick = { showDiscardDialog = false }) { Text("继续编辑", color = TextSecondary) }
-                }
-            }
-        )
+        AlertDialog(onDismissRequest = { showDiscardDialog = false }, containerColor = ElevatedSurface, shape = RoundedCornerShape(24.dp), title = { Text("有未保存的修改", color = TextPrimary) }, text = { Text("你已经修改了设置。要保存后离开，还是放弃这些修改？", color = TextSecondary) }, confirmButton = { TextButton(onClick = { settings.saveDraft(); showDiscardDialog = false; onBack() }) { Text("保存修改", color = Primary) } }, dismissButton = { Row { TextButton(onClick = { settings.discardDraft(); showDiscardDialog = false; onBack() }) { Text("放弃修改", color = ErrorRed) }; TextButton(onClick = { showDiscardDialog = false }) { Text("继续编辑", color = TextSecondary) } } })
     }
 }
 
@@ -120,8 +100,8 @@ fun SettingsHelpButton(message: String) {
 @Composable
 fun SettingsSwitchCard(title: String, desc: String, checked: Boolean, enabled: Boolean = true, onCheckedChange: (Boolean) -> Unit) {
     var local by remember(checked) { mutableStateOf(checked) }
-    Row(
-        modifier = Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.45f).clip(RoundedCornerShape(8.dp)).background(Card).padding(12.dp),
+    SoftCard(modifier = Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.45f), shadow = false) { Row(
+        modifier = Modifier.fillMaxWidth().padding(14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(modifier = Modifier.weight(1f)) {
@@ -132,7 +112,7 @@ fun SettingsSwitchCard(title: String, desc: String, checked: Boolean, enabled: B
             local = it
             onCheckedChange(it)
         }, colors = SwitchDefaults.colors(checkedThumbColor = Blue400, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
-    }
+    } }
     Spacer(modifier = Modifier.height(8.dp))
 }
 
@@ -140,7 +120,7 @@ fun SettingsSwitchCard(title: String, desc: String, checked: Boolean, enabled: B
 fun SettingsParamSlider(settings: SettingsRepository, key: String, label: String, defaultVal: Int, range: ClosedFloatingPointRange<Float>, tip: String, step: Float = 1f, pairKey: String? = null, isMinSide: Boolean = true, enabled: Boolean = true) {
     var value by remember { mutableFloatStateOf(settings.getInt(key, defaultVal).toFloat().coerceIn(range)) }
     var pairValue by remember { mutableFloatStateOf(if (pairKey != null) settings.getInt(pairKey, defaultVal).toFloat() else 0f) }
-    Column(Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.45f).clip(RoundedCornerShape(8.dp)).background(Card).padding(12.dp)) {
+    SoftCard(modifier = Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.45f), shadow = false) { Column(Modifier.fillMaxWidth().padding(14.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(label, fontSize = 13.sp, color = TextPrimary)
             Spacer(Modifier.width(2.dp))
@@ -167,6 +147,6 @@ fun SettingsParamSlider(settings: SettingsRepository, key: String, label: String
                 DebugLogger.log("Settings/Param", "联动参数: $pairKey ${oldPairValue ?: 0} -> ${pairValue.toInt()}")
             }
         }, valueRange = range, steps = ((range.endInclusive - range.start) / step).toInt(), colors = SliderDefaults.colors(thumbColor = Blue400, activeTrackColor = Blue400))
-    }
+    } }
     Spacer(Modifier.height(4.dp))
 }

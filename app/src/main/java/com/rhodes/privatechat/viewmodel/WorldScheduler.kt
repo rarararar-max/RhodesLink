@@ -9,6 +9,10 @@ import com.rhodes.privatechat.viewmodel.shared.AppStateHolder
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
 class WorldScheduler(
     private val repository: ChatRepository,
@@ -20,7 +24,8 @@ class WorldScheduler(
     private val generateDiary: suspend (String) -> Boolean,
     private val triggerProactivePrivate: suspend (WorldEvent) -> Boolean = { false },
     private val canUseWorldTrigger: (String) -> Boolean = { true },
-    private val consumeWorldTrigger: (String) -> Unit = { }
+    private val consumeWorldTrigger: (String) -> Unit = { },
+    private val addWorldLog: (String, String, String) -> Unit = { _, _, _ -> }
 ) {
     fun tick() {
         if (!settings.autoAiEnabled) return
@@ -61,6 +66,7 @@ class WorldScheduler(
             if (!canUseWorldTrigger("event_moment")) return
             DebugLogger.log("World/Scheduler", "触发动态: seed=${seed?.type ?: "none"}")
             if (generateOneMoment(seed)) {
+                addWorldLog("事件触发了一条动态", seed?.content?.take(80).orEmpty(), "world")
                 consumeWorldTrigger("event_moment")
                 recent.take(settings.eventContextCount).forEach { repository.markWorldEventConsumed(it.id, "world:moment") }
             }
@@ -74,7 +80,10 @@ class WorldScheduler(
             if (seed.chainDepth >= 3) return
             if (!canUseWorldTrigger("event_group")) return
             DebugLogger.log("World/Scheduler", "事件唤起群聊: recentTopics=true groups=${appState.sessions.value.count { it.operatorId.startsWith("group_") }}")
-            if (triggerEventGroups(seed)) consumeWorldTrigger("event_group")
+            if (triggerEventGroups(seed)) {
+                addWorldLog("事件唤起了群聊", seed.content.take(80), "group")
+                consumeWorldTrigger("event_group")
+            }
         }
     }
 
@@ -97,6 +106,7 @@ class WorldScheduler(
                 sentToday += 1
                 settings.putInt(sentKey, sentToday)
                 repository.markWorldEventConsumed(event.id, "world:private")
+                addWorldLog("事件触发了主动私聊", event.content.take(80), "private")
                 DebugLogger.log("World/Scheduler", "主动私聊事件已发送: ${event.content.take(80)}")
             } else {
                 DebugLogger.log("World/Scheduler", "主动私聊事件等待重试: ${event.content.take(80)}")
@@ -113,9 +123,12 @@ class WorldScheduler(
         scope.launch {
             var success = false
             appState.operators.value
-            .sortedByDescending { it.activityLevel }
+            .map { it to diaryPriorityScore(it.id, it.activityLevel) }
+            .filter { it.second > 0 }
+            .ifEmpty { appState.operators.value.map { it to (it.activityLevel * 10).toInt().coerceAtLeast(1) } }
+            .sortedWith(compareByDescending<Pair<com.rhodes.privatechat.shared.model.Operator, Int>> { it.second }.thenBy { it.first.name })
             .take(settings.dailyDiaryOperatorLimit)
-            .forEach { op ->
+            .forEach { (op, _) ->
                 DebugLogger.log("World/Scheduler", "自动日记: ${op.name}")
                 if (generateDiary(op.id)) success = true
             }
@@ -125,6 +138,22 @@ class WorldScheduler(
 
     private fun isToday(time: Long): Boolean {
         return time >= todayStartMillis()
+    }
+
+    private suspend fun diaryPriorityScore(operatorId: String, activityLevel: Float): Int {
+        val session = repository.getSessionByOperator(operatorId) ?: return (activityLevel * 5).toInt()
+        val now = System.currentTimeMillis()
+        val dayAgo = now - 86_400_000L
+        val weekAgo = now - 7L * 86_400_000L
+        val recent = repository.getMessagesSync(session.id).filter { it.timestamp >= weekAgo }
+        val dayCount = recent.count { it.timestamp >= dayAgo }
+        val weekCount = recent.size
+        val hasSummary = repository.getPrivateChatSummary(operatorId) != null
+        val hasDaily = repository.getLatestPrivateDaily(operatorId) != null
+        return dayCount * 5 + weekCount * 2 +
+            (if (hasDaily) 30 else 0) +
+            (if (hasSummary) 20 else 0) +
+            (activityLevel * 10).toInt()
     }
 
     private fun todayStartMillis(): Long {

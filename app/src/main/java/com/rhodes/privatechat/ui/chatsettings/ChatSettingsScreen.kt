@@ -142,7 +142,7 @@ private fun GroupTab(settings: SettingsRepository) {
     ParamSlider(settings, "group_msg_max", "每条消息最大字数", 100, 30f..200f, "群聊里每名干员每次说话最多写几个字。群聊不是写作文，建议50-100字就够了，太长了一个人刷屏大家就冷场了。", step = 5f, pairKey = "group_msg_min", isMinSide = false)
 
     Spacer(Modifier.height(12.dp)); SectionTitle("发言频率")
-    ParamSlider(settings, "group_speech_min", "每轮每人最少发言", 1, 0f..3f, "每次群聊每名干员至少说几次话。建议1次。设0的话有些干员可能一直不参与对话。")
+    ParamSlider(settings, "group_speech_min", "每轮每人最少发言", 1, 1f..3f, "每次群聊每名未禁言干员至少说几次话。建议1次。")
     ParamSlider(settings, "group_speech_max", "每轮每人最多发言", 2, 1f..5f, "每次群聊每名干员最多说几次话。建议2次就够了，设大了会有个别干员一直刷屏。")
 
     Spacer(Modifier.height(12.dp)); SectionTitle("空闲自动聊天")
@@ -156,7 +156,7 @@ private fun GroupTab(settings: SettingsRepository) {
     ParamSlider(settings, "event_max_groups_per_trigger", "每次最多唤起群数", 1, 1f..5f, "一次世界触发最多叫醒几个群。建议1，避免所有群一起热闹。", step = 1f)
 
     Spacer(Modifier.height(12.dp)); SectionTitle("群聊旁白(线上/线下/导演)")
-    ParamSlider(settings, "group_nar_seg_min", "最少旁白段数", 1, 1f..10f, "群聊里环境描写最少出现几次。线上模式下用户看不到旁白。建议1-2段就好。")
+    ParamSlider(settings, "group_nar_seg_min", "最少旁白段数", 1, 1f..10f, "群聊里环境描写最少出现几次。线上模式会过滤旁白。建议1-2段就好。")
     ParamSlider(settings, "group_nar_seg_max", "最多旁白段数", 3, 1f..10f, "群聊里环境描写最多出现几次。超过3段就像在读剧本了。")
     ParamSlider(settings, "group_nar_min", "旁白最小字数", 20, 20f..200f, "每段环境描写最少写几个字。线上模式旁白很短，不受这里控制。", step = 5f, pairKey = "group_nar_max", isMinSide = true)
     ParamSlider(settings, "group_nar_max", "旁白最大字数", 100, 50f..300f, "每段环境描写最多写几个字。群聊旁白建议100字以内，太长了像私聊剧本。", step = 5f, pairKey = "group_nar_min", isMinSide = false)

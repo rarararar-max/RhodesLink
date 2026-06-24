@@ -44,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -54,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.rhodes.privatechat.ui.common.OperatorAvatarImage
+import com.rhodes.privatechat.ui.common.ThemedDropdownMenu
 import com.rhodes.privatechat.ui.chat.formatChatTime
 import com.rhodes.privatechat.ui.chat.model.ChatUiMessage
 import com.rhodes.privatechat.ui.theme.*
@@ -182,10 +184,10 @@ private fun MessageBubble(
             val context = LocalContext.current
             var showNarrationMenu by remember { mutableStateOf(false) }
             Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp).combinedClickable(onLongClick = { showNarrationMenu = true }, onClick = {}), contentAlignment = Alignment.Center) {
-                Box(modifier = Modifier.fillMaxWidth(0.9f).clip(RoundedCornerShape(12.dp)).background(Card.copy(alpha = 0.85f)).padding(horizontal = 16.dp, vertical = 8.dp)) {
+                Box(modifier = Modifier.fillMaxWidth(0.9f).clip(RoundedCornerShape(16.dp)).background(Card.copy(alpha = 0.88f)).border(1.dp, Stroke, RoundedCornerShape(16.dp)).padding(horizontal = 16.dp, vertical = 8.dp)) {
                     Text(message.content, fontSize = 14.sp, color = TextPrimary, fontStyle = FontStyle.Italic, textAlign = TextAlign.Start, lineHeight = 20.sp)
                 }
-                DropdownMenu(expanded = showNarrationMenu, onDismissRequest = { showNarrationMenu = false }, containerColor = Surface) {
+                ThemedDropdownMenu(expanded = showNarrationMenu, onDismissRequest = { showNarrationMenu = false }) {
                     DropdownMenuItem(text = { Row { Icon(Icons.Default.ContentCopy, null, tint = TextPrimary, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text("复制", color = TextPrimary) } },
                         onClick = {
                             (context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager)
@@ -209,7 +211,7 @@ private fun MessageBubble(
     val context = LocalContext.current
     var showMenu by remember { mutableStateOf(false) }
     val isMe = message.isMe
-    val bubbleColor = if (isMe) Color(0xFF95EC69) else Card
+    val bubbleColor = if (isMe) BubbleMine else BubbleOther
     val bubbleShape = if (isMe) RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp) else RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp)
 
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp)) {
@@ -248,11 +250,13 @@ private fun MessageBubble(
                     }
                     // 气泡
                     Box(modifier = Modifier.widthIn(max = if (onSenderClick != null) 240.dp else 260.dp)
-                        .clip(bubbleShape).background(bubbleColor)
+                        .clip(bubbleShape)
+                        .background(if (isMe) Brush.linearGradient(listOf(BubbleMine, BubbleMineEnd)) else Brush.linearGradient(listOf(bubbleColor, bubbleColor)))
+                        .border(1.dp, if (isMe) Primary.copy(alpha = 0.20f) else Stroke, bubbleShape)
                         .padding(horizontal = if (onSenderClick != null) 12.dp else 14.dp, vertical = if (onSenderClick != null) 8.dp else 10.dp)) {
                         Text(message.content.ifEmpty { if (isMe) "" else "..." },
                             fontSize = if (onSenderClick != null) 15.sp else 16.sp,
-                            color = if (isMe) Color(0xFF1C1C1E) else TextPrimary,
+                            color = if (isMe) TextPrimary else TextPrimary,
                             fontWeight = FontWeight.Normal)
                     }
                 }
@@ -272,7 +276,7 @@ private fun MessageBubble(
             }
 
             // 上下文菜单
-            DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }, containerColor = Surface) {
+            ThemedDropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                 DropdownMenuItem(text = { Row { Icon(Icons.Default.ContentCopy, null, tint = TextPrimary, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text("复制", color = TextPrimary) } },
                     onClick = {
                         (context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager)

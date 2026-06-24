@@ -26,17 +26,18 @@ data class OperatorExport(
     val location: String = "宿舍", val activity: String = "休息",
     val emotion: String = "平静", val intimacy: Int = 0,
     val privatePrompt: String = "", val groupPrompt: String = "",
+    val memoryInjection: String = "",
     val userRelation: String = "",
     val lmb: Int = 10000, val attack: Float = 0.5f,
     val defense: Float = 0.5f, val meldPref: String = "medium",
     val activityLevel: Float = 0.5f
 ) {
     fun toEntity() = Operator(id, name, title, description, gender, avatarUri, location, activity, emotion, intimacy,
-        privatePrompt, groupPrompt, userRelation, lmb, attack, defense, meldPref, activityLevel)
+        privatePrompt, groupPrompt, memoryInjection, userRelation, lmb, attack, defense, meldPref, activityLevel)
     companion object {
         fun fromEntity(e: Operator) = OperatorExport(e.id, e.name, e.title, e.description, e.gender, e.avatarUri,
             e.location, e.activity, e.emotion, e.intimacy,
-            e.privatePrompt, e.groupPrompt, e.userRelation, e.lmb, e.attack, e.defense, e.meldPref, e.activityLevel)
+            e.privatePrompt, e.groupPrompt, e.memoryInjection, e.userRelation, e.lmb, e.attack, e.defense, e.meldPref, e.activityLevel)
     }
 }
 

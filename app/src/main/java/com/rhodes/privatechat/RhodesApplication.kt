@@ -2,7 +2,6 @@ package com.rhodes.privatechat
 
 import android.app.Application
 import android.content.Context
-import android.util.Log
 import com.rhodes.privatechat.di.appModule
 import com.rhodes.privatechat.settings.SettingsMigration
 import com.rhodes.privatechat.shared.db.DatabaseWrapper
@@ -34,17 +33,14 @@ class RhodesApplication : Application() {
             val runtimePrefs = getSharedPreferences("rhodes_runtime", Context.MODE_PRIVATE)
             val lastVersion = prefs.getInt("last_version", 0)
             val currentVersion = packageManager.getPackageInfo(packageName, 0).versionCode
-            Log.d("RHODES_CRASH", "clearNavState: lastVersion=$lastVersion currentVersion=$currentVersion")
-            
+
             if (lastVersion < currentVersion) {
                 prefs.edit().clear().apply()
                 runtimePrefs.edit().putBoolean("drop_saved_state_once", true).apply()
-                Log.d("RHODES_CRASH", "clearNavState: 已清除 voyager_state")
             }
             
             prefs.edit().putInt("last_version", currentVersion).apply()
-        } catch (e: Exception) {
-            Log.e("RHODES_CRASH", "clearNavState: 异常: ${e.message}", e)
+        } catch (_: Exception) {
         }
     }
 }

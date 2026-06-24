@@ -64,8 +64,7 @@ fun DispatchHistoryScreen(
         }
         HorizontalDivider(color = Divider)
 
-        if (selected != null) {
-            val entry = selected!!
+        selected?.let { entry ->
             val markers = listOf("【开局】", "【第", "【结局】", "【已中断】")
             val rawSegments = mutableListOf<String>()
             var pos = 0
@@ -128,7 +127,7 @@ fun DispatchHistoryScreen(
                     }
                 }
             }
-        } else {
+        } ?: run {
             LazyColumn(Modifier.padding(12.dp)) {
                 itemsIndexed(historyList) { i, entry ->
                     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Card).clickable { selected = entry }.padding(16.dp)) {

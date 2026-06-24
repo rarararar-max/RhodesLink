@@ -20,6 +20,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -140,11 +141,13 @@ private fun pokerDeck(includeJokers: Boolean = true): MutableList<PokerCard> {
 @Composable
 fun SimplePokerGameScreen(mode: PokerMode, opponents: List<PokerOpponent>, userName: String, userAvatarUri: String, balance: Int, onBack: () -> Unit, onSettle: (Int) -> Unit, onGenerateTalk: ((String, String, String, String, List<String>, String, (String) -> Unit) -> Unit)? = null) {
     var game by remember(mode, opponents) { mutableStateOf(SimplePokerState.newGame(mode, opponents.map { it.name })) }
-    var selected by remember(game.players[0].hand) { mutableStateOf(setOf<Int>()) }
+    var selected by remember(game.players.getOrNull(0)?.hand) { mutableStateOf(setOf<Int>()) }
     var settled by remember(game.finished, game.userNetGain) { mutableStateOf(false) }
     var showExitDialog by remember { mutableStateOf(false) }
     var showRules by remember { mutableStateOf(false) }
     var generatedTalkEventId by remember { mutableIntStateOf(-1) }
+    var talkBubble by remember { mutableStateOf<PokerTalkBubble?>(null) }
+    val displayBalance = balance + if (settled && game.finished) game.userNetGain else 0
     val recentTalk = remember(game.history, game.tableTalk) { game.history.flatten().takeLast(6).map { it.label } + listOf(game.tableTalk).filter { it.isNotBlank() } }
     val avatarMap = remember(opponents, userAvatarUri) { opponents.associate { it.name to it.avatarUri } + ("你" to userAvatarUri) + (userName to userAvatarUri) }
     LaunchedEffect(game.finished, game.userNetGain) {
@@ -160,9 +163,9 @@ fun SimplePokerGameScreen(mode: PokerMode, opponents: List<PokerOpponent>, userN
                 Text(mode.title, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
                 Text(mode.subtitle, fontSize = 11.sp, color = Color.White.copy(alpha = 0.62f))
             }
-            Text("余额 $balance", fontSize = 11.sp, color = Color(0xFFFFD54F), fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 8.dp))
+            Text("余额 $displayBalance", fontSize = 11.sp, color = Color(0xFFFFD54F), fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 8.dp))
             Text("规则", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.padding(end = 8.dp).clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha = 0.14f)).clickable { showRules = true }.padding(horizontal = 10.dp, vertical = 6.dp))
-            Text("重开", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha = 0.14f)).clickable { game = SimplePokerState.newGame(mode, opponents.map { it.name }); selected = emptySet(); settled = false }.padding(horizontal = 10.dp, vertical = 6.dp))
+            Text("重开", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Bold, modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(Color.White.copy(alpha = 0.14f)).clickable { game = SimplePokerState.newGame(mode, opponents.map { it.name }); selected = emptySet(); settled = false; generatedTalkEventId = -1; talkBubble = null }.padding(horizontal = 10.dp, vertical = 6.dp))
         }
         LaunchedEffect(game.turn, game.finished) {
             if (!game.finished && game.turn != 0) {
@@ -172,30 +175,50 @@ fun SimplePokerGameScreen(mode: PokerMode, opponents: List<PokerOpponent>, userN
         }
         LaunchedEffect(game.talkEventId) {
             if (game.talkEventId <= 0 || generatedTalkEventId == game.talkEventId) return@LaunchedEffect
-            val speaker = game.players.getOrNull(game.lastPlayer)?.name ?: return@LaunchedEffect
+            val speaker = game.tableTalk.substringBefore("：", "").ifBlank { game.players.getOrNull(game.lastPlayer)?.name.orEmpty() }
+            if (speaker.isBlank()) return@LaunchedEffect
             if (speaker == "你" || game.tableTalk.isBlank()) return@LaunchedEffect
             generatedTalkEventId = game.talkEventId
             val fallback = game.tableTalk.substringAfter("：", game.tableTalk)
-            val tableInfo = game.lastCombo?.label ?: "刚开局"
-            onGenerateTalk?.invoke(speaker, mode.title, game.message, tableInfo, recentTalk, fallback) { generated ->
-                if (generated.isNotBlank() && game.talkEventId == generatedTalkEventId) game = game.copy(tableTalk = "$speaker：$generated")
+            val speakerRole = game.players.firstOrNull { it.name == speaker }?.role.orEmpty()
+            val landlord = game.players.getOrNull(game.landlordIndex)?.name.orEmpty()
+            val tableInfo = buildString {
+                append(game.lastCombo?.label ?: "刚开局")
+                if (speakerRole.isNotBlank()) append("；$speaker 是$speakerRole")
+                if (landlord.isNotBlank()) append("；地主是$landlord")
+                if (game.mode == PokerMode.LANDLORD) append("；当前倍率x${game.multiplier}")
             }
+            talkBubble = PokerTalkBubble(speaker, fallback, game.talkEventId)
+            onGenerateTalk?.invoke(speaker, mode.title, game.message, tableInfo, recentTalk, fallback) { generated ->
+                if (generated.isNotBlank() && game.talkEventId == generatedTalkEventId) {
+                    game = game.copy(tableTalk = "$speaker：$generated")
+                    talkBubble = PokerTalkBubble(speaker, generated, generatedTalkEventId)
+                }
+            }
+            kotlinx.coroutines.delay(5200)
+            if (talkBubble?.eventId == generatedTalkEventId) talkBubble = null
         }
+        Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             PokerRulesCard(mode)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                OpponentPokerPanel(game.players[1], game.turn == 1, game.lastPlay[1], game.history[1], avatarMap[game.players[1].name].orEmpty(), Modifier.weight(1f))
-                OpponentPokerPanel(game.players[2], game.turn == 2, game.lastPlay[2], game.history[2], avatarMap[game.players[2].name].orEmpty(), Modifier.weight(1f))
+                val leftPlayer = game.players.getOrNull(1)
+                val rightPlayer = game.players.getOrNull(2)
+                if (leftPlayer != null) OpponentPokerPanel(leftPlayer, game.turn == 1, game.lastPlay.getOrNull(1), game.history.getOrNull(1).orEmpty(), avatarMap[leftPlayer.name].orEmpty(), Modifier.weight(1f)) else Spacer(Modifier.weight(1f))
+                if (rightPlayer != null) OpponentPokerPanel(rightPlayer, game.turn == 2, game.lastPlay.getOrNull(2), game.history.getOrNull(2).orEmpty(), avatarMap[rightPlayer.name].orEmpty(), Modifier.weight(1f)) else Spacer(Modifier.weight(1f))
             }
+            val userPlayer = game.players.getOrNull(0)
+            if (userPlayer != null) {
             TableInfo(game, avatarMap, Modifier.weight(1f).fillMaxWidth())
             UserPokerPanel(
-                player = game.players[0],
+                player = userPlayer,
                 active = game.turn == 0,
                 avatarUri = avatarMap["你"].orEmpty(),
-                history = game.history[0],
+                history = game.history.getOrNull(0).orEmpty(),
                 selected = selected,
                 onToggle = if (game.turn == 0 && !game.finished) { i -> selected = if (i in selected) selected - i else selected + i } else null
             )
+            }
             if (game.finished) {
                 Text("本局结算：${if (game.userNetGain >= 0) "+" else ""}${game.userNetGain}龙门币", fontSize = 16.sp, color = if (game.userNetGain >= 0) Color(0xFFFFD54F) else Color(0xFFFF8A80), fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
             }
@@ -205,11 +228,13 @@ fun SimplePokerGameScreen(mode: PokerMode, opponents: List<PokerOpponent>, userN
                 OutlinedButton(onClick = { game = game.passUser(); selected = emptySet() }, enabled = !game.finished && game.turn == 0 && game.lastCombo != null, modifier = Modifier.weight(1f)) { Text("过") }
             }
             if (!game.finished && game.turn != 0) {
-                Text("${game.players[game.turn].name}正在思考...", fontSize = 12.sp, color = Color.White.copy(alpha = 0.65f), modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+                Text("${game.players.getOrNull(game.turn)?.name ?: "对手"}正在思考...", fontSize = 12.sp, color = Color.White.copy(alpha = 0.65f), modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
             }
         }
+        talkBubble?.let { PokerTalkBubbleOverlay(it, game.players, avatarMap) }
+        }
         if (game.finished) {
-            PokerSettlementDialog(game, avatarMap, mode.title, recentTalk, onGenerateTalk, onBack = onBack, onAgain = { game = SimplePokerState.newGame(mode, opponents.map { it.name }); selected = emptySet(); settled = false; generatedTalkEventId = -1 })
+            PokerSettlementDialog(game, avatarMap, mode.title, recentTalk, onGenerateTalk, onBack = onBack, onAgain = { game = SimplePokerState.newGame(mode, opponents.map { it.name }); selected = emptySet(); settled = false; generatedTalkEventId = -1; talkBubble = null })
         }
         if (showExitDialog) {
             AlertDialog(
@@ -237,6 +262,11 @@ private fun PokerRuleDialog(mode: PokerMode, onDismiss: () -> Unit) {
                 Spacer(Modifier.height(8.dp))
                 Text("怎么压牌", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
                 Text("通常要同牌型、同长度并且点数更大。炸弹可以压普通牌。两家都过后，上一手出牌的人重新出牌。", fontSize = 13.sp, color = Color.White.copy(alpha = 0.8f), lineHeight = 18.sp)
+                if (mode == PokerMode.LANDLORD) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("斗地主结算", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                    Text("随机地主，地主拿3张底牌并先出。基础分100，地主赢两份、农民各输一份；农民赢各赢一份、地主输两份。炸弹/王炸翻倍，春天/反春天再翻倍。", fontSize = 13.sp, color = Color.White.copy(alpha = 0.8f), lineHeight = 18.sp)
+                }
                 Spacer(Modifier.height(8.dp))
                 Text("页面说明", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
                 Text("上方能看到对手头像、剩余牌数、刚出牌和最近出牌历史。中间桌面显示当前牌和AI发言。底部点击自己的牌选择，点出牌即可。", fontSize = 13.sp, color = Color.White.copy(alpha = 0.8f), lineHeight = 18.sp)
@@ -285,6 +315,20 @@ private fun PokerSettlementDialog(game: SimplePokerState, avatarMap: Map<String,
                 }
                 Spacer(Modifier.height(6.dp))
                 Text("龙门币：${if (game.userNetGain >= 0) "+" else ""}${game.userNetGain}", fontSize = 16.sp, color = if (game.userNetGain >= 0) Color(0xFFFFD54F) else Color(0xFFFF8A80), fontWeight = FontWeight.Bold)
+                if (game.mode == PokerMode.LANDLORD) {
+                    Spacer(Modifier.height(8.dp))
+                    val landlord = game.players.getOrNull(game.landlordIndex)?.name ?: "未知"
+                    val multiplierText = buildString {
+                        append("x${game.multiplier * (if (game.springType.isNotBlank()) 2 else 1)}")
+                        if (game.bombCount > 0) append(" · 炸弹${game.bombCount}次")
+                        if (game.springType.isNotBlank()) append(" · ${game.springType}")
+                    }
+                    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Color.White.copy(alpha = 0.07f)).padding(10.dp)) {
+                        Text("地主：$landlord", fontSize = 12.sp, color = Color.White.copy(alpha = 0.8f))
+                        Text("基础分：${game.baseScore} · 倍率：$multiplierText", fontSize = 12.sp, color = Color(0xFFFFD54F))
+                        if (game.bottomCards.isNotEmpty()) Text("底牌：${game.bottomCards.joinToString("、") { it.label }}", fontSize = 11.sp, color = Color.White.copy(alpha = 0.62f))
+                    }
+                }
                 Spacer(Modifier.height(10.dp))
                 game.players.forEachIndexed { i, p ->
                     Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -292,7 +336,8 @@ private fun PokerSettlementDialog(game: SimplePokerState, avatarMap: Map<String,
                         OperatorAvatarImage(avatarMap[p.name].orEmpty(), p.name, Modifier.size(24.dp).clip(RoundedCornerShape(12.dp)))
                         Spacer(Modifier.width(8.dp))
                         Text(p.name, color = Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f))
-                        Text("剩${p.hand.size}张", color = Color.White.copy(alpha = 0.65f), fontSize = 12.sp)
+                        val gain = game.settlement.getOrNull(i) ?: 0
+                        Text(if (game.mode == PokerMode.LANDLORD) "${if (gain >= 0) "+" else ""}$gain" else "剩${p.hand.size}张", color = if (gain >= 0) Color(0xFFFFD54F) else Color(0xFFFF8A80), fontSize = 12.sp)
                     }
                     if (p.name != "你") {
                         Text("${p.name}：${generatedLines[p.name] ?: fixedLines[p.name].orEmpty()}", fontSize = 11.sp, color = Color.White.copy(alpha = 0.62f), lineHeight = 15.sp, modifier = Modifier.padding(start = 50.dp, bottom = 4.dp))
@@ -308,7 +353,7 @@ private fun PokerSettlementDialog(game: SimplePokerState, avatarMap: Map<String,
 }
 
 enum class PokerMode(val title: String, val subtitle: String) {
-    LANDLORD("斗地主", "三人局，支持顺子、连对、三带、炸弹，先出完赢"),
+    LANDLORD("斗地主", "地主拿3张底牌，炸弹和春天翻倍"),
     RUN_FAST("跑得快", "三人局，支持顺子、连对、三带、炸弹，能压就压")
 }
 
@@ -328,6 +373,7 @@ private data class PokerCombo(val type: ComboType, val rank: Int, val cards: Lis
     }
 }
 private data class PokerHistoryEntry(val player: String, val combo: PokerCombo, val label: String)
+private data class PokerTalkBubble(val speaker: String, val text: String, val eventId: Int)
 
 private data class SimplePokerState(
     val mode: PokerMode,
@@ -343,7 +389,15 @@ private data class SimplePokerState(
     val talkEventId: Int = 0,
     val finished: Boolean = false,
     val winnerIndex: Int = -1,
-    val userNetGain: Int = 0
+    val userNetGain: Int = 0,
+    val landlordIndex: Int = -1,
+    val bottomCards: List<PokerCard> = emptyList(),
+    val baseScore: Int = 100,
+    val multiplier: Int = 1,
+    val bombCount: Int = 0,
+    val springType: String = "",
+    val playerPlayCounts: List<Int> = listOf(0, 0, 0),
+    val settlement: List<Int> = listOf(0, 0, 0)
 ) {
     companion object {
         fun newGame(mode: PokerMode, opponentNames: List<String> = emptyList()): SimplePokerState {
@@ -351,22 +405,28 @@ private data class SimplePokerState(
             val fallback = if (mode == PokerMode.LANDLORD) listOf("能天使", "德克萨斯") else listOf("可颂", "空")
             val names = listOf("你") + List(2) { opponentNames.getOrNull(it) ?: fallback[it] }
             val hands = List(3) { mutableListOf<PokerCard>() }
-            deck.forEachIndexed { i, card -> hands[i % 3].add(card) }
             val landlord = if (mode == PokerMode.LANDLORD) Random.nextInt(3) else -1
+            val bottomCards = if (mode == PokerMode.LANDLORD) deck.takeLast(3) else emptyList()
+            val dealCards = if (mode == PokerMode.LANDLORD) deck.dropLast(3) else deck
+            dealCards.forEachIndexed { i, card -> hands[i % 3].add(card) }
+            if (landlord >= 0) hands[landlord].addAll(bottomCards)
             val players = names.mapIndexed { i, n ->
                 SimplePokerPlayer(n, hands[i].sortedWith(compareBy<PokerCard> { it.rank }.thenBy { it.suit }), if (i == landlord) "地主" else if (mode == PokerMode.LANDLORD) "农民" else "")
             }
             val first = if (landlord >= 0) landlord else 0
-            return SimplePokerState(mode, players, first, null, -1, 0, listOf(null, null, null), List(3) { emptyList() }, "${players[first].name}先出牌", "先说好，输了别赖账。")
+            val bottomText = if (mode == PokerMode.LANDLORD) "，底牌${bottomCards.joinToString("、") { it.label }}归${players[first].name}" else ""
+            return SimplePokerState(mode, players, first, null, -1, 0, listOf(null, null, null), List(3) { emptyList() }, "${players[first].name}先出牌$bottomText", "先说好，输了别赖账。", landlordIndex = landlord, bottomCards = bottomCards)
         }
     }
 
     fun playUserSelected(indices: List<Int>): SimplePokerState {
         if (finished || turn != 0) return this
-        val hand = players[0].hand
+        val hand = players.getOrNull(0)?.hand ?: return this
         val cards = indices.distinct().sorted().mapNotNull { hand.getOrNull(it) }
-        val combo = detectCombo(cards) ?: return copy(message = "这组牌不能这样出。支持单张、对子、三张、三带、顺子、连对、炸弹。", tableTalk = "能天使：博士，这牌型不对吧？")
-        if (!canBeat(combo, lastCombo)) return copy(message = "${combo.label} 压不过上家。", tableTalk = "德克萨斯：这手不够大，先别急。")
+        val commenter = players.drop(1).randomOrNull()?.name ?: "系统"
+        val calmCommenter = players.getOrNull(2)?.name ?: commenter
+        val combo = detectCombo(cards) ?: return copy(message = "这组牌不能这样出。支持单张、对子、三张、三带、顺子、连对、炸弹。", tableTalk = "$commenter：博士，这牌型不对吧？", lastPlayer = players.indexOfFirst { it.name == commenter }.takeIf { it >= 0 } ?: 1, talkEventId = talkEventId + 1)
+        if (!canBeat(combo, lastCombo)) return copy(message = "${combo.label} 压不过上家。", tableTalk = "$calmCommenter：这手不够大，先别急。", talkEventId = talkEventId + 1)
         return playCombo(0, combo)
     }
 
@@ -381,27 +441,30 @@ private data class SimplePokerState(
 
     private fun aiStep(): SimplePokerState {
         if (finished || turn == 0) return this
-        val player = players[turn]
+        val player = players.getOrNull(turn) ?: return copy(turn = 0)
         val combo = findAiCombo(player.hand, lastCombo)
-        return if (combo == null && lastCombo != null) pass(turn) else playCombo(turn, combo ?: smallestLead(player.hand))
+        val lead = if (lastCombo == null) smallestLead(player.hand) else combo
+        return if (lead == null && lastCombo != null) pass(turn) else if (lead != null) playCombo(turn, lead) else copy(turn = 0)
     }
 
     private fun pass(playerIndex: Int): SimplePokerState {
         if (finished || playerIndex != turn || lastCombo == null) return this
+        val player = players.getOrNull(playerIndex) ?: return copy(turn = 0)
         val nextPass = passCount + 1
         val next = (playerIndex + 1) % players.size
         return if (nextPass >= 2) {
             val lead = if (lastPlayer >= 0) lastPlayer else next
-            copy(turn = lead, lastCombo = null, passCount = 0, message = "两家都过，${players[lead].name}重新出牌", tableTalk = "${players[playerIndex].name}：过，这手先让你。")
+            copy(turn = lead, lastCombo = null, passCount = 0, message = "两家都过，${players.getOrNull(lead)?.name ?: "对手"}重新出牌", tableTalk = "${player.name}：过，这手先让你。", talkEventId = talkEventId + 1)
         } else {
-            copy(turn = next, passCount = nextPass, message = "${players[playerIndex].name}选择过牌，轮到${players[next].name}", tableTalk = "${players[playerIndex].name}：过。")
+            copy(turn = next, passCount = nextPass, message = "${player.name}选择过牌，轮到${players.getOrNull(next)?.name ?: "对手"}", tableTalk = "${player.name}：过。", talkEventId = talkEventId + 1)
         }
     }
 
     private fun playCombo(playerIndex: Int, combo: PokerCombo): SimplePokerState {
         if (finished || playerIndex != turn) return this
-        val player = players[playerIndex]
+        val player = players.getOrNull(playerIndex) ?: return copy(turn = 0)
         val newHand = player.hand.toMutableList()
+        if (!combo.cards.all { newHand.contains(it) }) return copy(message = "选牌状态已变化，请重新选择。")
         combo.cards.forEach { newHand.remove(it) }
         val newPlayers = players.toMutableList().also { it[playerIndex] = player.copy(hand = newHand) }
         val won = newHand.isEmpty()
@@ -410,10 +473,21 @@ private data class SimplePokerState(
             rows[playerIndex] = rows[playerIndex] + PokerHistoryEntry(player.name, combo, "${player.name}：${combo.label}")
         }
         val next = (playerIndex + 1) % players.size
-        val net = if (!won) 0 else if (playerIndex == 0) 200 else -120
-        val msg = if (won) "${player.name}出完了，${player.name}获胜！" else "${player.name}出了 ${combo.label}，轮到${players[next].name}"
+        val nextPlayCounts = playerPlayCounts.toMutableList().also { if (playerIndex in it.indices) it[playerIndex] = it[playerIndex] + 1 }
+        val bombed = mode == PokerMode.LANDLORD && combo.type == ComboType.BOMB
+        val nextBombCount = bombCount + if (bombed) 1 else 0
+        val nextMultiplier = multiplier * if (bombed) 2 else 1
+        val finalSettlement = if (won) calculateSettlement(playerIndex, nextPlayCounts, nextMultiplier) else settlement to ""
+        val net = if (won) finalSettlement.first.getOrNull(0) ?: 0 else 0
+        val msg = if (won) {
+            val side = if (mode == PokerMode.LANDLORD && playerIndex == landlordIndex) "地主" else if (mode == PokerMode.LANDLORD) "农民" else player.name
+            "${player.name}出完了，${side}获胜！"
+        } else {
+            val bombText = if (bombed) "，倍率x$nextMultiplier" else ""
+            "${player.name}出了 ${combo.label}$bombText，轮到${players.getOrNull(next)?.name ?: "对手"}"
+        }
         val talk = when {
-            won && playerIndex == 0 -> "能天使：博士这把可以啊，龙门币拿走！"
+            won && playerIndex == 0 -> "${players.drop(1).randomOrNull()?.name ?: "系统"}：博士这把可以啊，龙门币拿走！"
             won -> "${player.name}：承让承让，这局我收下了。"
             combo.type == ComboType.BOMB -> "${player.name}：炸一下，别怪我。"
             combo.type == ComboType.PAIR -> "${player.name}：对子压上。"
@@ -421,7 +495,31 @@ private data class SimplePokerState(
             combo.type == ComboType.PAIR_CHAIN -> "${player.name}：连对，别接不上。"
             else -> "${player.name}：我出${combo.cards.first().label}。"
         }
-        return copy(players = newPlayers, turn = next, lastCombo = combo, lastPlayer = playerIndex, passCount = 0, lastPlay = newLast, history = newHistory, message = msg, tableTalk = talk, talkEventId = talkEventId + 1, finished = won, winnerIndex = if (won) playerIndex else -1, userNetGain = net)
+        return copy(players = newPlayers, turn = next, lastCombo = combo, lastPlayer = playerIndex, passCount = 0, lastPlay = newLast, history = newHistory, message = msg, tableTalk = talk, talkEventId = talkEventId + 1, finished = won, winnerIndex = if (won) playerIndex else -1, userNetGain = net, multiplier = nextMultiplier, bombCount = nextBombCount, springType = if (won) finalSettlement.second else "", playerPlayCounts = nextPlayCounts, settlement = if (won) finalSettlement.first else settlement)
+    }
+
+    private fun calculateSettlement(winnerIndex: Int, playCounts: List<Int>, currentMultiplier: Int): Pair<List<Int>, String> {
+        if (mode != PokerMode.LANDLORD || landlordIndex !in players.indices) {
+            val userGain = if (winnerIndex == 0) 200 else -120
+            return listOf(userGain, if (winnerIndex == 1) 200 else 0, if (winnerIndex == 2) 200 else 0) to ""
+        }
+        val landlordWin = winnerIndex == landlordIndex
+        val spring = when {
+            landlordWin && playCounts.withIndex().filter { it.index != landlordIndex }.all { it.value == 0 } -> "春天"
+            !landlordWin && playCounts.getOrElse(landlordIndex) { 0 } <= 1 -> "反春天"
+            else -> ""
+        }
+        val finalMultiplier = currentMultiplier * if (spring.isNotBlank()) 2 else 1
+        val gains = MutableList(3) { 0 }
+        for (i in gains.indices) {
+            gains[i] = when {
+                i == landlordIndex && landlordWin -> 2 * baseScore * finalMultiplier
+                i == landlordIndex -> -2 * baseScore * finalMultiplier
+                landlordWin -> -baseScore * finalMultiplier
+                else -> baseScore * finalMultiplier
+            }
+        }
+        return gains to spring
     }
 
     private fun detectCombo(cards: List<PokerCard>): PokerCombo? {
@@ -461,7 +559,8 @@ private data class SimplePokerState(
         return allCombos(hand).filter { canBeat(it, target) }.minWithOrNull(compareBy<PokerCombo> { if (it.type == ComboType.BOMB) 1 else 0 }.thenBy { it.cards.size }.thenBy { it.rank })
     }
 
-    private fun smallestLead(hand: List<PokerCard>): PokerCombo {
+    private fun smallestLead(hand: List<PokerCard>): PokerCombo? {
+        if (hand.isEmpty()) return null
         val choices = allCombos(hand).filter { it.type != ComboType.BOMB }.sortedWith(compareBy<PokerCombo> { it.cards.size }.thenBy { it.rank })
         return choices.firstOrNull() ?: hand.minBy { it.rank }.let { PokerCombo(ComboType.SINGLE, it.rank, listOf(it)) }
     }
@@ -511,7 +610,7 @@ private data class SimplePokerState(
 private fun PokerRulesCard(mode: PokerMode) {
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Color.Black.copy(alpha = 0.20f)).padding(12.dp)) {
         Text("玩法说明", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFD54F))
-        val text = if (mode == PokerMode.LANDLORD) "规则：单张、对子、三张、三带一、三带二、顺子、连对、炸弹、王炸。牌型一致且更大才能压，炸弹可压普通牌，先出完获胜并结算龙门币。" else "规则：单张、对子、三张、三带一、三带二、顺子、连对、炸弹。牌型一致且更大才能压，先出完获胜。"
+        val text = if (mode == PokerMode.LANDLORD) "规则：随机地主拿3张底牌并先出。基础分100，地主赢两份，农民各一份；炸弹/王炸、春天/反春天都会翻倍。" else "规则：单张、对子、三张、三带一、三带二、顺子、连对、炸弹。牌型一致且更大才能压，先出完获胜。"
         Text(text, fontSize = 12.sp, color = Color.White.copy(alpha = 0.78f), lineHeight = 17.sp)
     }
 }
@@ -576,13 +675,19 @@ private fun UserPokerPanel(player: SimplePokerPlayer, active: Boolean, avatarUri
 @Composable
 private fun TableInfo(game: SimplePokerState, avatarMap: Map<String, String>, modifier: Modifier = Modifier) {
     Column(modifier.clip(RoundedCornerShape(18.dp)).background(Color.Black.copy(alpha = 0.22f)).border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(18.dp)).padding(14.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        if (game.mode == PokerMode.LANDLORD) {
+            val landlord = game.players.getOrNull(game.landlordIndex)?.name ?: "未知"
+            Text("地主：$landlord · 倍率 x${game.multiplier}${if (game.bombCount > 0) " · 炸弹${game.bombCount}次" else ""}", fontSize = 12.sp, color = Color(0xFFFFD54F), fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+            if (game.bottomCards.isNotEmpty()) Text("底牌：${game.bottomCards.joinToString("、") { it.label }}", fontSize = 11.sp, color = Color.White.copy(alpha = 0.62f), textAlign = TextAlign.Center, modifier = Modifier.padding(top = 3.dp))
+            Spacer(Modifier.height(8.dp))
+        }
         Text(game.message, fontSize = 14.sp, color = Color.White, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
         if (game.lastCombo != null) {
             Spacer(Modifier.height(8.dp))
             Text("桌面", fontSize = 11.sp, color = Color.White.copy(alpha = 0.55f))
             Spacer(Modifier.height(4.dp))
             Row(horizontalArrangement = Arrangement.Center) { game.lastCombo.cards.forEach { PokerCardView(it, faceUp = true) } }
-            Text("${game.lastCombo.label} · ${game.players[game.lastPlayer].name}出的", fontSize = 12.sp, color = Color(0xFFFFD54F), modifier = Modifier.padding(top = 4.dp))
+            Text("${game.lastCombo.label} · ${game.players.getOrNull(game.lastPlayer)?.name ?: "对手"}出的", fontSize = 12.sp, color = Color(0xFFFFD54F), modifier = Modifier.padding(top = 4.dp))
         }
         if (game.tableTalk.isNotBlank()) {
             val speaker = game.tableTalk.substringBefore("：", "")
@@ -590,6 +695,29 @@ private fun TableInfo(game: SimplePokerState, avatarMap: Map<String, String>, mo
                 if (speaker.isNotBlank()) OperatorAvatarImage(avatarMap[speaker].orEmpty(), speaker, Modifier.size(30.dp).clip(RoundedCornerShape(15.dp)))
                 Spacer(Modifier.width(8.dp))
                 Text(game.tableTalk, fontSize = 12.sp, color = Color.White.copy(alpha = 0.82f), lineHeight = 16.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PokerTalkBubbleOverlay(bubble: PokerTalkBubble, players: List<SimplePokerPlayer>, avatarMap: Map<String, String>) {
+    val index = players.indexOfFirst { it.name == bubble.speaker }
+    if (index <= 0) return
+    val player = players.getOrNull(index) ?: return
+    val alignment = if (index == 1) Alignment.TopStart else Alignment.TopEnd
+    val start = if (index == 1) 18.dp else 96.dp
+    val end = if (index == 1) 96.dp else 18.dp
+    Box(Modifier.fillMaxSize().padding(start = start, top = 92.dp, end = end), contentAlignment = alignment) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.shadow(12.dp, RoundedCornerShape(18.dp)).background(Color(0xFF141A1F).copy(alpha = 0.94f), RoundedCornerShape(18.dp)).border(1.dp, Color(0xFFFFD54F).copy(alpha = 0.38f), RoundedCornerShape(18.dp)).padding(horizontal = 12.dp, vertical = 10.dp)
+        ) {
+            OperatorAvatarImage(avatarMap[player.name].orEmpty(), player.name, Modifier.size(34.dp).clip(RoundedCornerShape(17.dp)))
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.widthIn(max = 250.dp)) {
+                Text(if (player.role.isNotBlank()) "${player.name} · ${player.role}" else player.name, fontSize = 10.sp, color = Color(0xFFFFD54F), fontWeight = FontWeight.SemiBold)
+                Text(bubble.text, fontSize = 14.sp, color = Color.White, lineHeight = 19.sp, maxLines = 3)
             }
         }
     }

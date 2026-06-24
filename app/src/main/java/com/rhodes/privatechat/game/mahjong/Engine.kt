@@ -1,28 +1,21 @@
 package com.rhodes.privatechat.game.mahjong
 
-import android.util.Log
-
 object Engine {
-    private const val TAG = "麻将"
     private val BASIC_WIN_PATTERNS = Tile.allTiles()
 
     fun deal(game: GameState) {
-        Log.d(TAG, "发牌开始：${game.players.joinToString { it.name }}")
         game.wall = Tile.fullWall().apply { shuffle() }
         game.doraIndicators.clear(); game.uraDoraIndicators.clear()
         game.riichiSticks = 0
-        Log.d(TAG, "基础麻将发牌，牌山剩余：${game.wall.size}")
         for (p in game.players) {
             p.hand.clear(); p.discards.clear(); p.melds.clear()
             p.isRiichi = false; p.isFuriten = false; p.isTenpai = false
             repeat(13) { p.hand.add(game.wall.removeLast()) }
             p.hand.sortBy { it.ordinalForSort() }
-            Log.d(TAG, "${p.name}手牌：${p.hand.joinToString { Tile.tileName(it) }}")
         }
         val dealer = game.dealer()
         dealer.hand.add(game.wall.removeLast())
         dealer.hand.sortBy { it.ordinalForSort() }
-        Log.d(TAG, "庄家${dealer.name}摸第14张：手牌${dealer.hand.size}张")
         game.winnerSeat = null; game.drawnIdx = -1
     }
 
@@ -33,7 +26,6 @@ object Engine {
         p.hand.add(game.wall.removeLast())
         p.hand.sortBy { it.ordinalForSort() }
         game.drawnIdx = p.hand.size - 1
-        Log.d(TAG, "${p.name}摸牌，手牌${p.hand.size}张，牌山剩余${game.wall.size}")
     }
 
     fun shanten(hand: List<Tile>): Int {

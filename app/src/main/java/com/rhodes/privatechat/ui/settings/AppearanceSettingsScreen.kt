@@ -27,21 +27,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.shared.settings.SettingsRepository
+import com.rhodes.privatechat.ui.common.AppBackground
+import com.rhodes.privatechat.ui.common.GradientHeader
+import com.rhodes.privatechat.ui.common.SoftCard
 import com.rhodes.privatechat.ui.theme.*
 import org.koin.compose.koinInject
 
 @Composable
 fun AppearanceSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     val settings: SettingsRepository = koinInject()
-    Column(modifier = modifier.fillMaxSize().background(BG).systemBarsPadding()) {
-        Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
-            Spacer(Modifier.width(4.dp))
-            Icon(Icons.Default.Palette, null, tint = Primary)
-            Spacer(Modifier.width(6.dp))
-            Text("外观设置", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-        }
-        HorizontalDivider(color = Divider)
+    AppBackground(modifier = modifier.fillMaxSize()) { Column(modifier = Modifier.fillMaxSize()) {
+        GradientHeader("外观设置", onBack = onBack, icon = Icons.Default.Palette)
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp).navigationBarsPadding()) {
             SettingsSectionTitle("主题")
             SettingsSwitchCard(
@@ -53,11 +49,11 @@ fun AppearanceSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) 
                     settings.darkMode = it
                 }
             )
-            Row(Modifier.fillMaxWidth().background(Card).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            SoftCard(modifier = Modifier.fillMaxWidth(), shadow = false) { Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.DarkMode, null, tint = TextSecondary)
                 Spacer(Modifier.width(8.dp))
                 Text("背景与聊天壁纸仍沿用各聊天页面的现有入口，后续可继续集中到这里。", fontSize = 12.sp, color = TextSecondary)
-            }
+            } }
         }
-    }
+    } }
 }

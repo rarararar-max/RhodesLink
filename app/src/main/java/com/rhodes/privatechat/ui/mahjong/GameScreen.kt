@@ -41,6 +41,7 @@ private val CARD_BACK = Color(0xFF2E5A3A); private val CARD_EDGE = Color(0xFF4A7
 
 data class MeldUI(val r: Boolean, val k: Boolean, val p: Boolean, val c: Boolean, val co: List<List<Tile>>?, val dt: Tile, val ds: Seat, val actingSeat: Seat = Seat.EAST)
 data class ChatMsg(val sender: String, val text: String, val isAssistant: Boolean = false, val isSystem: Boolean = false)
+private enum class DiscardResult { CONTINUE_NEXT, WAIT_HUMAN_RESPONSE, AI_CLAIMED, ROUND_ENDED }
 
 @Composable
 fun GameScreen(game: GameState, onBack: () -> Unit, onSettlement: (SettlementResult) -> Unit, assistantName: String = "", assistantAvatarUri: String = "", avatarMap: Map<String, String> = emptyMap(), onSave: ((GameState) -> Unit)? = null, onGenerateTalk: ((PlayerState, String, Tile?, String, Int, Int, String, List<String>, List<String>, (String) -> Unit) -> Unit)? = null) {
@@ -58,14 +59,20 @@ fun GameScreen(game: GameState, onBack: () -> Unit, onSettlement: (SettlementRes
     var showChatPanel by remember { mutableStateOf(false) }
     var chatSearch by remember { mutableStateOf("") }
     var lastPhaseTalkTurn by remember { mutableIntStateOf(-1) }
-    val u = g.humanPlayer() ?: return; val dl = g.dealer(); val oi = g.players.filter { !it.isHuman }
+    val u = g.humanPlayer()
+    val dl = g.dealerOrNull()
+    if (u == null || dl == null || g.players.size != 4) {
+        InvalidMahjongStateScreen(onBack)
+        return
+    }
+    val oi = g.players.filter { !it.isHuman }
     val shouldDealNewGame = remember(game) { game.players.all { it.hand.isEmpty() && it.discards.isEmpty() && it.melds.isEmpty() } }
     val asstName = assistantName.ifBlank { oi.firstOrNull()?.name ?: "" }
     val humanName = u.name.ifBlank { "你" }
     val humanAvatar = avatarMap[u.opId].orEmpty()
     val userShanten = Engine.shanten(u.hand); val isUserTenpai = Engine.isTenpaiState(u.hand)
     val hasYaku = if(isUserTenpai) Engine.checkYakuLocal(u.hand, u.melds, u.seat, g.roundWind, u.melds.isEmpty(), false, u.isRiichi).isValid else false
-    val effectAlpha by animateFloatAsState(if(effectText.isNotEmpty())1f else 0f); val curSeat = g.currentPlayer().seat
+    val effectAlpha by animateFloatAsState(if(effectText.isNotEmpty())1f else 0f); val curSeat = g.currentPlayerOrNull()?.seat ?: u.seat
     val phaseTip = when {
         showResult -> "本局结束，确认后进入结算"
         mld != null -> "有人打出了可响应的牌，请选择 和/碰/吃/杠 或跳过"
@@ -117,24 +124,28 @@ fun GameScreen(game: GameState, onBack: () -> Unit, onSettlement: (SettlementRes
     }
     fun requestHelp(){
         if(u.hand.isEmpty())return
-        val asst = g.assistantPlayer() ?: g.players.first{!it.isHuman}
+        val asst = g.assistantPlayer() ?: g.players.firstOrNull{!it.isHuman} ?: return
         helpBubble = AiChat.help(asst, u.hand, userShanten)
         scope.launch { delay(4000); helpBubble = "" }
     }
     fun ce(){if(g.wall.isEmpty()){
-        cnv("exhaustive", g.players.firstOrNull { it.isHuman } ?: g.players.first())
+        tLoopJob?.cancel(); tLoopJob = null
+        cnv("exhaustive", g.players.firstOrNull { it.isHuman } ?: g.players.firstOrNull() ?: return)
         showResult=true;g=g.copy();showEffect("流局","牌山已空",Color(0xFF90A4AE))
     }}
     fun win(p:PlayerState){
+        tLoopJob?.cancel(); tLoopJob = null
         g.winnerSeat=p.seat;showResult=true;g=g.copy()
         val isRon=g.lastDiscard!=null&&g.lastDiscardSeat!=null
         showEffect(p.name,if(isRon)"点炮！"else"自摸！",Color(0xFFFFD700))
         tableTalk(if(isRon)"ron"else"tsumo",p,g.lastDiscard)
     }
-    fun confirmResult(){showResult=false;if(!settled){settled=true;onSettlement(Engine.settle(g))}}
+    fun confirmResult(){tLoopJob?.cancel();tLoopJob=null;showResult=false;if(!settled){settled=true;onSettlement(Engine.settle(g))}}
     fun checkTsumo(p:PlayerState)=Engine.canWin(p.hand,p.melds,p.seat,g.roundWind,p.melds.isEmpty(),true,p.isRiichi,g.ippatsuPlayerIdx>=0&&g.players.indexOf(p)==g.ippatsuPlayerIdx)
+    fun setTurnTo(p:PlayerState){val idx=g.players.indexOfFirst{it.seat==p.seat};if(idx>=0)g.currentTurn=idx;g.normalizeTurn()}
+    fun advanceTurnAfter(p:PlayerState){val idx=g.players.indexOfFirst{it.seat==p.seat};g.currentTurn=if(idx>=0&&g.players.isNotEmpty())(idx+1)%g.players.size else 0;g.normalizeTurn()}
     fun checkAllMelds(discard:Tile,fromSeat:Seat){
-        val hu=g.humanPlayer()!!
+        val hu=g.humanPlayer()?:return
         if(hu.seat!=fromSeat&&!hu.isRiichi){val th=hu.hand.toMutableList().apply{add(discard);sortBy{it.ordinalForSort()}}
         val R=Engine.canWin(th,hu.melds,hu.seat,g.roundWind,hu.melds.isEmpty(),false,hu.isRiichi,g.ippatsuPlayerIdx>=0&&g.players.indexOf(hu)==g.ippatsuPlayerIdx)
         val P=Engine.canPon(hu.hand,discard);val K=Engine.canKan(hu.hand,discard)
@@ -142,7 +153,7 @@ fun GameScreen(game: GameState, onBack: () -> Unit, onSettlement: (SettlementRes
         if(R||P||K||C)mld=MeldUI(R,K,P,C,if(C)co else null,discard,fromSeat,hu.seat)}
     }
     fun aiDecideMeld(p:PlayerState,tile:Tile,type:MeldType)=AiDiscard.decideMeld(p,type,g)
-    fun gameCopy(g:GameState)=GameSerializer.deserialize(GameSerializer.serialize(g))
+    fun gameCopy(g:GameState)=GameSerializer.deserialize(GameSerializer.serialize(g)).also { it.normalizeTurn() }
     fun removeCalledDiscard(tile:Tile,fromSeat:Seat){
         val fromPlayer=g.players.find{it.seat==fromSeat}?:return
         val idx=fromPlayer.discards.indexOfLast{it==tile}
@@ -151,36 +162,36 @@ fun GameScreen(game: GameState, onBack: () -> Unit, onSettlement: (SettlementRes
     fun executeMeld(p:PlayerState,type:MeldType,tile:Tile,fromSeat:Seat,chiOpts:List<Tile>?=null){
         when(type){
             MeldType.PON->{p.hand.filter{it==tile}.take(2).forEach{p.hand.remove(it)};p.melds.add(Meld(MeldType.PON,listOf(tile,tile,tile),fromSeat))}
-            MeldType.KAN->{p.hand.filter{it==tile}.take(3).forEach{p.hand.remove(it)};p.melds.add(Meld(MeldType.KAN,listOf(tile,tile,tile,tile),fromSeat));g.currentTurn=g.players.indexOf(p);if(g.wall.isNotEmpty()){Engine.draw(g)};g.ippatsuPlayerIdx=-1}
+            MeldType.KAN->{p.hand.filter{it==tile}.take(3).forEach{p.hand.remove(it)};p.melds.add(Meld(MeldType.KAN,listOf(tile,tile,tile,tile),fromSeat));setTurnTo(p);if(g.wall.isNotEmpty()){Engine.draw(g)};g.ippatsuPlayerIdx=-1}
             MeldType.CHI->{chiOpts?.forEach{t->val idx=p.hand.indexOf(t);if(idx>=0)p.hand.removeAt(idx)};p.melds.add(Meld(MeldType.CHI,listOf(tile)+(chiOpts?:emptyList()),fromSeat))}
             else->return
         }
         removeCalledDiscard(tile,fromSeat)
         showEffect(p.name,when(type){MeldType.PON->"碰！";MeldType.KAN->"杠！";MeldType.CHI->"吃！";else->"鸣牌"},C3)
         tableTalk(when(type){MeldType.PON->"pon";MeldType.KAN->"kan";MeldType.CHI->"chi";else->"discard"},p,tile)
-        g.currentTurn=g.players.indexOf(p);g.ippatsuPlayerIdx=-1
+        setTurnTo(p);g.ippatsuPlayerIdx=-1
     }
     var aiDiscardOnly: (suspend (PlayerState) -> Unit)? = null
-    fun processDiscard(tile:Tile,from:PlayerState):Boolean{
+    fun processDiscard(tile:Tile,from:PlayerState):DiscardResult{
         g.lastDiscard=tile;g.lastDiscardSeat=from.seat
         val ao=g.players.filter{it.seat!=from.seat}.sortedBy{(it.seat.ordinal-from.seat.ordinal+4)%4}
         for(p in ao){if(Engine.isFuriten(p))continue
             if(Engine.canWin(p.hand.toMutableList().apply{add(tile);sortBy{it.ordinalForSort()}},p.melds,p.seat,g.roundWind,p.melds.isEmpty(),false,p.isRiichi,g.ippatsuPlayerIdx>=0&&g.players.indexOf(p)==g.ippatsuPlayerIdx)){
-                if(p.isHuman){checkAllMelds(tile,from.seat);return false}
-                p.hand.add(tile);p.hand.sortBy{it.ordinalForSort()};showEffect(p.name,"放铳！",Color(0xFFC62828));win(p);return true}
+                if(p.isHuman){checkAllMelds(tile,from.seat);return DiscardResult.WAIT_HUMAN_RESPONSE}
+                p.hand.add(tile);p.hand.sortBy{it.ordinalForSort()};showEffect(p.name,"胡牌！",Color(0xFFFFD700));win(p);return DiscardResult.ROUND_ENDED}
         }
         for(p in ao.filter{!it.isHuman&&!Engine.isTenpaiState(it.hand)}){
             if(Engine.canKan(p.hand,tile) && Random.nextFloat() < 0.18f){
-                executeMeld(p,MeldType.KAN,tile,from.seat);g=gameCopy(g);aiDiscardOnly?.let{fn->scope.launch{thinkingPlayer=p.name;fn(p)}};return false
+                tLoopJob?.cancel();executeMeld(p,MeldType.KAN,tile,from.seat);g=gameCopy(g);aiDiscardOnly?.let{fn->scope.launch{thinkingPlayer=p.name;fn(p)}};return DiscardResult.AI_CLAIMED
             }
         }
         for(p in ao.filter{!it.isHuman&&!Engine.isTenpaiState(it.hand)}){
             if(Engine.canPon(p.hand,tile) && Random.nextFloat() < 0.24f){
-                executeMeld(p,MeldType.PON,tile,from.seat);g=gameCopy(g);aiDiscardOnly?.let{fn->scope.launch{thinkingPlayer=p.name;fn(p)}};return false
+                tLoopJob?.cancel();executeMeld(p,MeldType.PON,tile,from.seat);g=gameCopy(g);aiDiscardOnly?.let{fn->scope.launch{thinkingPlayer=p.name;fn(p)}};return DiscardResult.AI_CLAIMED
             }
         }
         // AI 不主动吃牌，避免顺序判断过复杂；用户仍可响应别人弃牌。
-        checkAllMelds(tile,from.seat);if(mld!=null)return false;return true
+        checkAllMelds(tile,from.seat);if(mld!=null)return DiscardResult.WAIT_HUMAN_RESPONSE;return DiscardResult.CONTINUE_NEXT
     }
     aiDiscardOnly = discardOnly@ { p: PlayerState ->
         if(p.hand.isEmpty()){showResult=true;showEffect("流局","手牌异常，牌局结束",Color(0xFF90A4AE));g=gameCopy(g);return@discardOnly}
@@ -190,43 +201,49 @@ fun GameScreen(game: GameState, onBack: () -> Unit, onSettlement: (SettlementRes
         p.discards.add(tile);thinkingPlayer=""
         showEffect(p.name,"打出 ${Tile.tileName(tile)}",Color(0xFF90A4AE));g=gameCopy(g)
         if(Engine.isTenpaiState(p.hand) && Random.nextFloat() < 0.35f)tableTalk("tenpai",p)
-        if(!processDiscard(tile,p)){if(mld==null&&!showResult)g.currentTurn=g.players.indexOf(p);g=gameCopy(g);return@discardOnly}
-        if(showResult)return@discardOnly
-        g.currentTurn=(g.players.indexOf(p)+1)%4;g=gameCopy(g)
+        when(processDiscard(tile,p)){
+            DiscardResult.CONTINUE_NEXT -> { advanceTurnAfter(p); g=gameCopy(g) }
+            DiscardResult.WAIT_HUMAN_RESPONSE, DiscardResult.AI_CLAIMED -> { g=gameCopy(g); return@discardOnly }
+            DiscardResult.ROUND_ENDED -> return@discardOnly
+        }
     }
     suspend fun aiT(p:PlayerState){
         if(g.wall.isNotEmpty()&&p.hand.size<14)Engine.draw(g);g.ippatsuPlayerIdx=-1
         if(checkTsumo(p)){thinkingPlayer="";showEffect(p.name,"自摸！",Color(0xFFFFD700));win(p);g=gameCopy(g);return}
-        delay(400L);val tile=AiDiscard.decideDiscard(p,g);p.hand.remove(tile);p.discards.add(tile);thinkingPlayer=""
+        delay(400L);if(p.hand.isEmpty()){thinkingPlayer="";tLoopJob?.cancel();showResult=true;showEffect("流局","手牌异常，牌局结束",Color(0xFF90A4AE));g=gameCopy(g);return};val tile=AiDiscard.decideDiscard(p,g);if(!p.hand.remove(tile)){thinkingPlayer="";g=gameCopy(g);return};p.discards.add(tile);thinkingPlayer=""
         showEffect(p.name,"打出 ${Tile.tileName(tile)}",Color(0xFF90A4AE));g=gameCopy(g)
         if(Engine.isTenpaiState(p.hand) && Random.nextFloat() < 0.35f)tableTalk("tenpai",p)
-        if(!processDiscard(tile,p)){if(mld==null&&!showResult)g.currentTurn=g.players.indexOf(p);g=gameCopy(g);return}
-        if(showResult)return;g.currentTurn=(g.players.indexOf(p)+1)%4;g=gameCopy(g)
+        when(processDiscard(tile,p)){
+            DiscardResult.CONTINUE_NEXT -> { advanceTurnAfter(p); g=gameCopy(g) }
+            DiscardResult.WAIT_HUMAN_RESPONSE, DiscardResult.AI_CLAIMED -> { g=gameCopy(g); return }
+            DiscardResult.ROUND_ENDED -> return
+        }
     }
     suspend fun tLoop(){
         while(!showResult&&mld==null){
-            val c=g.currentPlayer()
+            val c=g.currentPlayerOrNull()
+            if(c==null){showResult=true;showEffect("牌局","数据异常",Color(0xFF90A4AE));break}
             if(c.isHuman){isU=true;thinkingPlayer="";g.ippatsuPlayerIdx=-1;if(g.wall.isNotEmpty()){Engine.draw(g);rnd++;g=gameCopy(g);if(checkTsumo(c)){win(c);break}}else{ce();break};break}
             else{thinkingPlayer=c.name;delay(800L+Random.nextLong(1200));maybePhaseTalk();aiT(c);rnd++}
         }
     }
     fun launchTLoop(){tLoopJob?.cancel();tLoopJob=scope.launch{tLoop()}}
-    fun disc(idx:Int){val human=g.humanPlayer()?:return;if(idx !in human.hand.indices)return;val t=human.hand[idx];human.hand.removeAt(idx);human.discards.add(t);sel=null;isU=false;g.drawnIdx=-1;if(!processDiscard(t,human))g.currentTurn=g.players.indexOf(human);g=gameCopy(g);if(!showResult&&mld==null){g.currentTurn=(g.currentTurn+1)%4;g=gameCopy(g);launchTLoop()}}
-    fun dm(t:MeldType){val m=mld?:return;val human=g.humanPlayer()?:return;executeMeld(human,t,m.dt,m.ds,m.co?.firstOrNull());mld=null;isU=true;g=g.copy()}
-    fun dp(){mld=null;if(!showResult){g.currentTurn=(g.currentTurn+1)%4;g=g.copy();launchTLoop()}}
-    fun doAnkan(tile:Tile){val human=g.humanPlayer()?:return;repeat(4){val idx=human.hand.indexOfFirst{it==tile};if(idx>=0)human.hand.removeAt(idx)};human.melds.add(Meld(MeldType.ANKAN,listOf(tile,tile,tile,tile),Seat.EAST));showEffect(human.name,"暗杠！",C3);g.currentTurn=g.players.indexOf(human);if(g.wall.isNotEmpty()){Engine.draw(g)};g=g.copy();sel=null;isU=true;g.drawnIdx=human.hand.size-1}
+    fun disc(idx:Int){val human=g.humanPlayer()?:return;if(idx !in human.hand.indices)return;val t=human.hand[idx];human.hand.removeAt(idx);human.discards.add(t);sel=null;isU=false;g.drawnIdx=-1;when(processDiscard(t,human)){DiscardResult.CONTINUE_NEXT->{advanceTurnAfter(human);g=gameCopy(g);launchTLoop()};DiscardResult.WAIT_HUMAN_RESPONSE->{setTurnTo(human);g=gameCopy(g)};DiscardResult.AI_CLAIMED->{g=gameCopy(g)};DiscardResult.ROUND_ENDED->{g=gameCopy(g)}}}
+    fun dm(t:MeldType){val m=mld?:return;val human=g.humanPlayer()?:return;tLoopJob?.cancel();executeMeld(human,t,m.dt,m.ds,m.co?.firstOrNull());mld=null;isU=true;g=gameCopy(g)}
+    fun dp(){mld=null;if(!showResult){val size=g.players.size.coerceAtLeast(1);g.currentTurn=(g.currentTurn+1)%size;g.normalizeTurn();g=g.copy();launchTLoop()}}
+    fun doAnkan(tile:Tile){val human=g.humanPlayer()?:return;repeat(4){val idx=human.hand.indexOfFirst{it==tile};if(idx>=0)human.hand.removeAt(idx)};human.melds.add(Meld(MeldType.ANKAN,listOf(tile,tile,tile,tile),human.seat));showEffect(human.name,"暗杠！",C3);setTurnTo(human);if(g.wall.isNotEmpty()){Engine.draw(g)};g=gameCopy(g);sel=null;isU=true;g.drawnIdx=human.hand.size-1}
 
-    LaunchedEffect(Unit){if(shouldDealNewGame)Engine.deal(g);g=g.copy();start=true}
+    LaunchedEffect(Unit){g.normalizeTurn();if(shouldDealNewGame)Engine.deal(g);g=gameCopy(g);start=true}
     LaunchedEffect(start){
         if(!start)return@LaunchedEffect
         if(shouldDealNewGame){
-            if(!dl.isHuman){delay(500L+Random.nextLong(800));if(!showResult)aiT(dl);if(!showResult){g.currentTurn=(g.dealerIdx+1)%4;g=g.copy();tLoop()}}else isU=true
+            if(!dl.isHuman){delay(500L+Random.nextLong(800));if(!showResult)aiT(dl);if(!showResult){advanceTurnAfter(dl);g=gameCopy(g);tLoop()}}else isU=true
         } else {
-            if(g.currentPlayer().isHuman) isU=true else tLoop()
+            if(g.currentPlayerOrNull()?.isHuman == true) isU=true else tLoop()
         }
     }
     LaunchedEffect(effectText){if(effectText.isNotEmpty()){delay(2000);effectText=""}}
-    LaunchedEffect(Unit){while(true){delay(10000);onSave?.invoke(g)}}
+    LaunchedEffect(start, showResult){while(start&&!showResult){delay(10000);onSave?.invoke(g)}}
 
     val topOpp=oi.firstOrNull();val lOp=oi.getOrNull(1);val rOp=oi.getOrNull(2)
     Box(Modifier.fillMaxSize()){
@@ -271,7 +288,7 @@ fun GameScreen(game: GameState, onBack: () -> Unit, onSettlement: (SettlementRes
         Row(Modifier.fillMaxWidth().background(Color.Black.copy(alpha=0.48f)).padding(horizontal=4.dp,vertical=4.dp),horizontalArrangement=Arrangement.spacedBy(3.dp),verticalAlignment=Alignment.CenterVertically){
             val ms=mld
             if(ms!=null){
-                    if(ms.r)Bt("胡",Color(0xFFC62828),Modifier.weight(1f)){val d=g.lastDiscard;if(d!=null){val human=g.humanPlayer()?:return@Bt;human.hand.add(d);g=g.copy();win(human)}}
+                    if(ms.r)Bt("胡",Color(0xFFC62828),Modifier.weight(1f)){val d=g.lastDiscard;if(d!=null){val human=g.humanPlayer()?:return@Bt;g.lastDiscardSeat?.let { removeCalledDiscard(d, it) };human.hand.add(d);g=g.copy();win(human)}}
                 if(ms.k)Bt("杠",C3,Modifier.weight(1f)){dm(MeldType.KAN)};if(ms.p)Bt("碰",C3,Modifier.weight(1f)){dm(MeldType.PON)};if(ms.c)Bt("吃",C3,Modifier.weight(1f)){dm(MeldType.CHI)}
                 Bt("过",Color(0xFF37474F),Modifier.weight(1f)){dp()}
             }else{
@@ -334,7 +351,7 @@ fun GameScreen(game: GameState, onBack: () -> Unit, onSettlement: (SettlementRes
         }
     }
     }
-    if(showResult&&g.winnerSeat!=null){val w=g.players.find{it.seat==g.winnerSeat}!!;val isRon=g.lastDiscard!=null&&g.lastDiscardSeat!=null;val lName=if(isRon)g.players.find{it.seat==g.lastDiscardSeat}?.name else null
+    if(showResult&&g.winnerSeat!=null){val w=g.players.find{it.seat==g.winnerSeat};if(w!=null){val isRon=g.lastDiscard!=null&&g.lastDiscardSeat!=null;val lName=if(isRon)g.players.find{it.seat==g.lastDiscardSeat}?.name else null
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha=0.7f)),contentAlignment=Alignment.Center){Box(Modifier.widthIn(max=340.dp).heightIn(max=520.dp).background(C1,RoundedCornerShape(12.dp)).padding(16.dp)){Column(horizontalAlignment=Alignment.CenterHorizontally,modifier=Modifier.verticalScroll(rememberScrollState())){Text("${w.name} ${if(isRon)"点炮和牌！"else"自摸和牌！"}",fontSize=18.sp,fontWeight=FontWeight.Bold,color=Color(0xFFFFD700))
         if(lName!=null)Text("放铳者：$lName",fontSize=13.sp,color=Color.White.copy(alpha=0.7f));Spacer(Modifier.height(8.dp))
         g.players.forEach{p->val label=if(p.isHuman)humanName else p.name;val pAvatar=if(p.isHuman)humanAvatar else avatarMap[p.opId];Row(verticalAlignment=Alignment.CenterVertically,modifier=Modifier.fillMaxWidth().padding(vertical=2.dp)){
@@ -344,7 +361,7 @@ fun GameScreen(game: GameState, onBack: () -> Unit, onSettlement: (SettlementRes
             Column(Modifier.weight(1f)){Row(Modifier.horizontalScroll(rememberScrollState())){p.hand.sortedBy{it.ordinalForSort()}.forEach{t->PTile(t,w=24.dp,h=34.dp,fs=11.sp)}};if(p.melds.isNotEmpty()){Row(Modifier.horizontalScroll(rememberScrollState())){p.melds.forEach{m->Box(Modifier.padding(0.5.dp).background(Color.White.copy(alpha=0.1f),RoundedCornerShape(2.dp)).padding(1.dp)){Row{m.tiles.forEach{t->PTile(t,w=20.dp,h=28.dp,fs=9.sp)}}}}}}}
         }}
         Spacer(Modifier.height(4.dp));Text("牌墙剩余：${g.wall.size}张",fontSize=11.sp,color=Color.White.copy(alpha=0.6f));Spacer(Modifier.height(10.dp))
-        Bt("确认",C3,Modifier.fillMaxWidth()){confirmResult()}}}}
+        Bt("确认",C3,Modifier.fillMaxWidth()){confirmResult()}}}}}
     }
     if(showResult&&g.winnerSeat==null){
         val tenpaiNames = g.players.filter{Engine.isTenpaiState(it.hand)}.map{it.name}
@@ -409,6 +426,27 @@ fun GameScreen(game: GameState, onBack: () -> Unit, onSettlement: (SettlementRes
     }
 }
 }
+
+private fun GameState.dealerOrNull(): PlayerState? {
+    normalizeTurn()
+    return players.getOrNull(dealerIdx)
+}
+
+@Composable
+private fun InvalidMahjongStateScreen(onBack: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().background(C1).systemBarsPadding().padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text("牌局数据异常", fontSize=18.sp, fontWeight=FontWeight.Bold, color=C4)
+        Spacer(Modifier.height(8.dp))
+        Text("当前麻将存档或牌局数据不完整，请返回后重新开局。", fontSize=13.sp, color=Color.White.copy(alpha=0.72f), lineHeight=19.sp)
+        Spacer(Modifier.height(16.dp))
+        Bt("返回", C3, Modifier.fillMaxWidth()) { onBack() }
+    }
+}
+
 @Composable fun Bt(t:String,c:Color,m:Modifier,en:Boolean=true,on:()->Unit){
     Button(onClick=on,modifier=m.height(34.dp),enabled=en,colors=ButtonDefaults.buttonColors(containerColor=c,disabledContainerColor=Color.Gray),shape=RoundedCornerShape(17.dp)){Text(t,fontSize=12.sp,fontWeight=FontWeight.Bold,color=if(en)Color.White else Color.White.copy(alpha=0.5f))}
 }

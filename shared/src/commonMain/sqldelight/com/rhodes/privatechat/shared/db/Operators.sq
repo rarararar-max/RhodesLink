@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS operators (
     intimacy INTEGER NOT NULL DEFAULT 0,
     privatePrompt TEXT NOT NULL DEFAULT '',
     groupPrompt TEXT NOT NULL DEFAULT '',
+    memoryInjection TEXT NOT NULL DEFAULT '',
     userRelation TEXT NOT NULL DEFAULT '',
     lmb INTEGER NOT NULL DEFAULT 10000,
     attack REAL NOT NULL DEFAULT 0.5,
@@ -32,11 +33,11 @@ getCount:
 SELECT COUNT(*) FROM operators;
 
 insertOperator:
-INSERT OR REPLACE INTO operators(id, name, title, description, gender, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, userRelation, lmb, attack, defense, meldPref, activityLevel)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO operators(id, name, title, description, gender, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, memoryInjection, userRelation, lmb, attack, defense, meldPref, activityLevel)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 updateOperator:
-UPDATE operators SET name = ?, title = ?, description = ?, gender = ?, avatarUri = ?, location = ?, activity = ?, emotion = ?, intimacy = ?, privatePrompt = ?, groupPrompt = ?, userRelation = ?, lmb = ?, attack = ?, defense = ?, meldPref = ?, activityLevel = ?
+UPDATE operators SET name = ?, title = ?, description = ?, gender = ?, avatarUri = ?, location = ?, activity = ?, emotion = ?, intimacy = ?, privatePrompt = ?, groupPrompt = ?, memoryInjection = ?, userRelation = ?, lmb = ?, attack = ?, defense = ?, meldPref = ?, activityLevel = ?
 WHERE id = ?;
 
 updateIntimacy:
@@ -52,8 +53,8 @@ deleteOperator:
 DELETE FROM operators WHERE id = ?;
 
 insertAllOperators:
-INSERT OR REPLACE INTO operators(id, name, title, description, gender, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, userRelation, lmb, attack, defense, meldPref, activityLevel)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO operators(id, name, title, description, gender, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, memoryInjection, userRelation, lmb, attack, defense, meldPref, activityLevel)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 deleteAllOperators:
 DELETE FROM operators;

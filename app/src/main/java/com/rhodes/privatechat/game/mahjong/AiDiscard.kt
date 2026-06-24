@@ -1,16 +1,13 @@
 package com.rhodes.privatechat.game.mahjong
 
-import android.util.Log
 import kotlin.random.Random
 
 object AiDiscard {
-    private const val TAG = "麻将"
     data class DiscardOption(val tile: Tile, val shantenAfter: Int, val dangerScore: Int, val isSafe: Boolean)
 
     fun decideDiscard(player: PlayerState, gameState: GameState): Tile {
         val hand = player.hand.toList()
         if (hand.isEmpty()) return Tile(Suit.WIND, 1)
-        Log.d(TAG, "${player.name} 出牌决策开始，手牌：${hand.size}张，向听：${Engine.shanten(hand)}，进攻：${player.attack}，防守：${player.defense}")
         val options = hand.map { tile ->
             val remaining = hand.toMutableList().also { it.remove(tile) }
             val sh = Engine.shanten(remaining)
@@ -43,7 +40,6 @@ object AiDiscard {
             if (Random.nextFloat() < 0.15f) return hand.random()
         }
         val chosen = scored.firstOrNull()?.first?.tile ?: bestOptions.first().tile
-        Log.d(TAG, "${player.name} 选择打出 ${Tile.tileName(chosen)}，向听变为 ${Engine.shanten(hand.filter{it!=chosen})}，有效进攻${effectiveAttack(player,gameState)} 有效防守${effectiveDefense(player,gameState)}")
         return chosen
     }
 
@@ -58,8 +54,9 @@ object AiDiscard {
 
     fun effectiveDefense(player: PlayerState, gameState: GameState): Float {
         var d = player.defense
-        val dealer = gameState.dealer()
-        if (dealer.isRiichi || Engine.isTenpai(dealer.hand)) d += 0.25f
+        val dealer = gameState.currentPlayerOrNull()?.takeIf { gameState.isDealer(it.seat) }
+            ?: gameState.players.getOrNull(gameState.dealerIdx)
+        if (dealer != null && (dealer.isRiichi || Engine.isTenpai(dealer.hand))) d += 0.25f
         if (player.points < 10000) d += 0.15f
         if (player.points < 5000) d += 0.3f
         if (player.specialTraits.any { it.contains("稳健") || it.contains("谨慎") }) d += 0.15f

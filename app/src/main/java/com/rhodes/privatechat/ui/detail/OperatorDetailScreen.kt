@@ -190,6 +190,7 @@ private fun relDesc(operatorName: String, rel: RelationshipEntity): String {
     if (t == RelationshipType.COMRADE) return "${rel.relatedOperatorName}的【战友】"
     if (t == RelationshipType.TEAMMATE) return "${rel.relatedOperatorName}的【队友】"
     if (t == RelationshipType.RIVAL) return "${rel.relatedOperatorName}的【对手】"
+    if (t == RelationshipType.LOVE_RIVAL) return "${rel.relatedOperatorName}的【情敌】"
     if (t == RelationshipType.CRUSH) return "${rel.relatedOperatorName}的【暗恋对象】"
     if (t == RelationshipType.LOVER) return "${rel.relatedOperatorName}的【恋人】"
     if (t == RelationshipType.FAMILY) return "${rel.relatedOperatorName}的【家人】"
@@ -219,6 +220,7 @@ private fun bfsLabel(parentName: String, childName: String, type: RelationshipTy
         RelationshipType.STUDENT -> "学生"; RelationshipType.CLOSE_FRIEND -> "挚友"
         RelationshipType.FRIEND -> "朋友"; RelationshipType.COMRADE -> "战友"
         RelationshipType.TEAMMATE -> "队友"; RelationshipType.RIVAL -> "对手"
+        RelationshipType.LOVE_RIVAL -> "情敌"
         RelationshipType.CRUSH -> "暗恋对象"; RelationshipType.LOVER -> "恋人"
         RelationshipType.FAMILY -> "家人"; else -> ""
     }

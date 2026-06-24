@@ -40,6 +40,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.ui.theme.*
+import com.rhodes.privatechat.ui.common.WechatIconTile
+import com.rhodes.privatechat.ui.common.WechatListGroup
+import com.rhodes.privatechat.ui.common.WechatTopBar
 
 data class FeatureEntry(
     val icon: ImageVector,
@@ -65,43 +68,37 @@ fun FeaturesScreen(
     onGameRoom: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    Box(modifier = modifier.fillMaxSize()) {
-    Column(modifier = Modifier.fillMaxSize().background(BG).statusBarsPadding()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 16.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("功能", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-        }
-        HorizontalDivider(color = Divider)
+    Column(modifier = modifier.fillMaxSize().background(BG)) {
+        WechatTopBar("功能")
 
         Column(modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(top = 8.dp, bottom = 24.dp).navigationBarsPadding()) {
-            FeatureButton(FeatureEntry(Icons.Default.Share, "动态广场", "查看所有干员发布的动态", badge = momentBadge, iconColor = Primary), commentBadge = commentBadge, onClick = onMoments)
-            FeatureButton(FeatureEntry(Icons.AutoMirrored.Filled.MenuBook, "干员日记", "查看干员们的内心独白", badge = diaryBadge, iconColor = Primary), diaryBadge = diaryBadge, onClick = onDiary)
-            FeatureButton(FeatureEntry(Icons.Default.Public, "世界运行日志", "查看今天自动发生了什么", iconColor = Primary), onClick = onWorldLog)
-            FeatureButton(FeatureEntry(Icons.Default.EmojiEvents, "聊天排行榜", "昨日聊天数据排名", iconColor = Primary), onClick = onRanking)
-            FeatureButton(FeatureEntry(Icons.AutoMirrored.Filled.Assignment, "大家的印象", "干员对你的长期印象总结", iconColor = Primary), onClick = onImpressions)
-            FeatureButton(FeatureEntry(Icons.AutoMirrored.Filled.SendToMobile, "干员派遣", "组建小队执行任务", iconColor = Primary), onClick = onDispatch)
-            FeatureButton(FeatureEntry(Icons.Default.BarChart, "消费统计", "Token消耗分析", iconColor = Primary), onClick = onTokenStats)
-            FeatureButton(FeatureEntry(Icons.Default.Casino, "游戏室", "麻将、斗地主、跑得快", iconColor = Color(0xFFFF8F00)), onClick = onGameRoom)
+            WechatListGroup {
+                FeatureButton(FeatureEntry(Icons.Default.Share, "动态广场", "查看所有干员发布的动态", badge = momentBadge, iconColor = Color(0xFF07C160)), commentBadge = commentBadge, onClick = onMoments)
+                FeatureButton(FeatureEntry(Icons.AutoMirrored.Filled.MenuBook, "干员日记", "查看干员们的内心独白", badge = diaryBadge, iconColor = Color(0xFF1989FA)), diaryBadge = diaryBadge, onClick = onDiary)
+                FeatureButton(FeatureEntry(Icons.AutoMirrored.Filled.Assignment, "大家的印象", "干员对你的长期印象总结", iconColor = Color(0xFFFF9500)), onClick = onImpressions)
+            }
+            Spacer(Modifier.height(8.dp))
+            WechatListGroup {
+                FeatureButton(FeatureEntry(Icons.Default.Public, "世界运行日志", "查看今天自动发生了什么", iconColor = Color(0xFF576B95)), onClick = onWorldLog)
+                FeatureButton(FeatureEntry(Icons.AutoMirrored.Filled.SendToMobile, "干员派遣", "组建小队执行任务", iconColor = Color(0xFF8B5CF6)), onClick = onDispatch)
+            }
+            Spacer(Modifier.height(8.dp))
+            WechatListGroup {
+                FeatureButton(FeatureEntry(Icons.Default.EmojiEvents, "聊天排行榜", "昨日聊天数据排名", iconColor = Color(0xFFFFB300)), onClick = onRanking)
+                FeatureButton(FeatureEntry(Icons.Default.BarChart, "消费统计", "Token消耗分析", iconColor = Color(0xFF00BCD4)), onClick = onTokenStats)
+                FeatureButton(FeatureEntry(Icons.Default.Casino, "游戏室", "麻将、斗地主、跑得快", iconColor = Color(0xFFFF8F00)), onClick = onGameRoom)
+            }
         }
-    }
     }
 }
 
 @Composable
 private fun FeatureButton(feature: FeatureEntry, commentBadge: Int = 0, diaryBadge: Int = 0, onClick: () -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxWidth().background(Surface).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 14.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(modifier = Modifier.size(40.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(feature.iconColor.copy(alpha = 0.12f)),
-                contentAlignment = Alignment.Center
-            ) {
+    Column(modifier = Modifier.fillMaxWidth().background(Surface).clickable(onClick = onClick)) {
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box {
+                WechatIconTile(feature.icon, feature.iconColor)
                 Box {
-                    Icon(feature.icon, null, tint = feature.iconColor, modifier = Modifier.size(22.dp))
                     if (feature.badge > 0) {
                         Box(modifier = Modifier.size(16.dp)
                             .clip(RoundedCornerShape(8.dp))
@@ -132,6 +129,6 @@ private fun FeatureButton(feature: FeatureEntry, commentBadge: Int = 0, diaryBad
                 Text(feature.desc, fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 2.dp))
             }
         }
+        HorizontalDivider(color = Divider.copy(alpha = 0.45f), modifier = Modifier.padding(start = 70.dp))
     }
-    HorizontalDivider(color = BG)
 }

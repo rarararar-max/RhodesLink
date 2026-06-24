@@ -25,6 +25,7 @@ object RelationshipUiMapper {
         RelationshipType.COMRADE -> "战友"
         RelationshipType.TEAMMATE -> "队友"
         RelationshipType.RIVAL -> "对手"
+        RelationshipType.LOVE_RIVAL -> "情敌"
         RelationshipType.CRUSH -> "暗恋对象"
         RelationshipType.LOVER -> "恋人"
         RelationshipType.FAMILY -> "家人"
@@ -43,6 +44,7 @@ object RelationshipUiMapper {
         RelationshipType.MENTOR, RelationshipType.STUDENT -> Color(0xFF8B5CF6)
         RelationshipType.COMRADE, RelationshipType.TEAMMATE -> Color(0xFF9E9E9E)
         RelationshipType.RIVAL -> Color(0xFFEF4444)
+        RelationshipType.LOVE_RIVAL -> Color(0xFFD81B60)
         RelationshipType.CRUSH -> Color(0xFFF48FB1)
         RelationshipType.LOVER -> Color(0xFFE91E63)
         else -> Color(0xFFBDBDBD)

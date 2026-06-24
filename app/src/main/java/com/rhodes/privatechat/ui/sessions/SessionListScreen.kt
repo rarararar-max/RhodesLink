@@ -50,6 +50,11 @@ import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.rhodes.privatechat.data.db.entity.ChatSessionEntity
 import com.rhodes.privatechat.ui.common.OperatorAvatarImage
+import com.rhodes.privatechat.ui.common.AppBackground
+import com.rhodes.privatechat.ui.common.ThemedAlertDialog
+import com.rhodes.privatechat.ui.common.ThemedDropdownMenu
+import com.rhodes.privatechat.ui.common.WechatListGroup
+import com.rhodes.privatechat.ui.common.WechatTopBar
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import java.text.SimpleDateFormat
@@ -72,19 +77,16 @@ fun SessionListScreen(
     var showOverflowMenu by remember { mutableStateOf(false) }
     var showClearAllConfirm by remember { mutableStateOf(false) }
 
-    Box(modifier = modifier.fillMaxSize()) {
-    Column(modifier = Modifier.fillMaxSize().background(BG).statusBarsPadding()) {
-        Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("聊天", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = TextPrimary, modifier = Modifier.weight(1f).padding(start = 12.dp))
+    Column(modifier = modifier.fillMaxSize().background(BG)) {
+        WechatTopBar("聊天", actions = {
             Box {
                 IconButton(onClick = { showOverflowMenu = true }) { Icon(Icons.Default.MoreVert, "菜单", tint = TextPrimary) }
-                DropdownMenu(expanded = showOverflowMenu, onDismissRequest = { showOverflowMenu = false }, containerColor = Surface) {
+                ThemedDropdownMenu(expanded = showOverflowMenu, onDismissRequest = { showOverflowMenu = false }) {
                     DropdownMenuItem(text = { Text("清除所有消息") }, onClick = { showOverflowMenu = false; showClearAllConfirm = true })
                     DropdownMenuItem(text = { Text("全部标记已读") }, onClick = { showOverflowMenu = false; viewModel.markAllRead() })
                 }
             }
-        }
-        HorizontalDivider(color = Divider)
+        })
 
         if (sessions.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -92,6 +94,7 @@ fun SessionListScreen(
             }
         } else {
             LazyColumn {
+                item { WechatListGroup { } }
                 items(sessions, key = { it.id }) { session ->
                     SessionItem(session = session, onClick = { onSessionClick(session) },
                         onLongClick = { showSessionActions = session })
@@ -99,35 +102,16 @@ fun SessionListScreen(
             }
         }
     }
-    }
 
-    if (showDeleteConfirm != null) {
-        AlertDialog(onDismissRequest = { showDeleteConfirm = null }, title = { Text("删除会话", color = TextPrimary) },
-            text = { Text("删除后将无法恢复", color = TextSecondary) },
-            confirmButton = { TextButton(onClick = { onDelete(showDeleteConfirm!!); showDeleteConfirm = null }) { Text("删除", color = ErrorRed) } },
-            dismissButton = { TextButton(onClick = { showDeleteConfirm = null }) { Text("取消", color = TextSecondary) } })
+    showDeleteConfirm?.let { sessionId ->
+        ThemedAlertDialog("删除会话", "删除后将无法恢复", { showDeleteConfirm = null }, "删除", { onDelete(sessionId); showDeleteConfirm = null }, danger = true)
     }
 
     if (showClearAllConfirm) {
-        AlertDialog(
-            onDismissRequest = { showClearAllConfirm = false },
-            title = { Text("清除所有消息", color = TextPrimary) },
-            text = { Text("将清除全部会话的聊天记录，此操作不可撤销。", color = TextSecondary) },
-            confirmButton = {
-                TextButton(onClick = { viewModel.clearAllMessages(); showClearAllConfirm = false }) {
-                    Text("确认清除", color = ErrorRed)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showClearAllConfirm = false }) {
-                    Text("取消", color = TextSecondary)
-                }
-            }
-        )
+        ThemedAlertDialog("清除所有消息", "将清除全部会话的聊天记录，此操作不可撤销。", { showClearAllConfirm = false }, "确认清除", { viewModel.clearAllMessages(); showClearAllConfirm = false }, danger = true)
     }
 
-    if (showSessionActions != null) {
-        val s = showSessionActions!!
+    showSessionActions?.let { s ->
         AlertDialog(
             onDismissRequest = { showSessionActions = null },
             title = { Text("操作", color = TextPrimary) },
@@ -151,7 +135,7 @@ private fun SessionItem(session: ChatSessionEntity, onClick: () -> Unit, onLongC
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(modifier = Modifier
             .fillMaxWidth()
-            .background(Surface)
+            .background(if (session.isPinned) Primary.copy(alpha = 0.06f) else Surface)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -179,7 +163,7 @@ private fun SessionItem(session: ChatSessionEntity, onClick: () -> Unit, onLongC
                 Text(session.lastMessage.ifBlank { "暂无消息" }, fontSize = 14.sp, color = TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
-        HorizontalDivider(color = Divider)
+        HorizontalDivider(color = Divider.copy(alpha = 0.45f), modifier = Modifier.padding(start = 76.dp))
     }
 }
 

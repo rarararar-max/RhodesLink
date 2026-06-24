@@ -52,6 +52,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import coil3.compose.AsyncImage
 import com.rhodes.privatechat.shared.settings.SettingsRepository
+import com.rhodes.privatechat.ui.common.WechatIconTile
+import com.rhodes.privatechat.ui.common.WechatListGroup
+import com.rhodes.privatechat.ui.common.WechatTopBar
 import com.rhodes.privatechat.ui.theme.*
 import org.koin.compose.koinInject
 
@@ -68,20 +71,20 @@ fun SettingsScreen(
 ) {
     val settings: SettingsRepository = koinInject()
     val balance by settings.lmbFlow.collectAsState(initial = settings.lmb)
-    Box(modifier = modifier.fillMaxSize()) {
-    Column(modifier = Modifier.fillMaxSize().background(BG).statusBarsPadding()) {
-        Row(modifier = Modifier.fillMaxWidth().background(Surface).clickable(onClick = onProfile).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+    Column(modifier = modifier.fillMaxSize().background(BG)) {
+        WechatTopBar("我")
+        Row(modifier = Modifier.fillMaxWidth().background(Surface).clickable(onClick = onProfile).padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
             if (userAvatarUri.isNotBlank()) {
-                AsyncImage(model = userAvatarUri, contentDescription = null, modifier = Modifier.size(48.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+                AsyncImage(model = userAvatarUri, contentDescription = null, modifier = Modifier.size(58.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
             } else {
-                Box(modifier = Modifier.size(48.dp).clip(CircleShape).background(Blue400), contentAlignment = Alignment.Center) {
+                Box(modifier = Modifier.size(58.dp).clip(RoundedCornerShape(8.dp)).background(Blue400), contentAlignment = Alignment.Center) {
                     Text(userNickname.take(1), color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 }
             }
-            Spacer(modifier = Modifier.width(12.dp))
-            Column {
+            Spacer(modifier = Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(userNickname, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                    Text(userNickname, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
                     if (userGender.isNotBlank()) { Spacer(modifier = Modifier.width(6.dp)); Text(userGender, fontSize = 12.sp, color = TextTertiary) }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -90,39 +93,42 @@ fun SettingsScreen(
                     Text("龙门币: ${balance}", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = AccentOrange)
                 }
             }
+            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = TextTertiary, modifier = Modifier.size(22.dp))
         }
-        HorizontalDivider(color = Divider)
 
-        Column(modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(vertical = 8.dp)) {
-            SettingsGroupTitle("个人与模型")
-            SettingItem(SettingEntry(Icons.Default.Person, "身份设置", "昵称、性别、简介、头像", iconColor = Blue400), onClick = onProfile)
-            SettingItem(SettingEntry(Icons.Default.SmartToy, "模型设置", "AI厂商、API Key、TTS", iconColor = Color(0xFFFF9800)), onClick = onModel)
-            SettingsGroupTitle("AI 行为")
-            SettingItem(SettingEntry(Icons.Default.Tune, "聊天表现", "回复长短、上下文记忆、角色说话风格", iconColor = Color(0xFF00BCD4)), onClick = onChatParams)
-            SettingItem(SettingEntry(Icons.Default.AutoAwesome, "自动世界", "自动动态、主动私聊、事件联动、群聊唤起", iconColor = Color(0xFF4CAF50)), onClick = onWorld)
-            SettingItem(SettingEntry(Icons.AutoMirrored.Filled.MenuBook, "日记与派遣", "干员日记、派遣故事长度、自动生成规则", iconColor = Color(0xFF795548)), onClick = onStory)
-            SettingItem(SettingEntry(Icons.Default.Build, "权限管理", "干员主动消息、动态和群聊权限", iconColor = Color(0xFFFF9800)), onClick = onPermissions)
-            SettingsGroupTitle("数据与调试")
-            SettingItem(SettingEntry(Icons.Default.AutoFixHigh, "数据管理", "统计信息与自动清理", iconColor = Color(0xFF8B5CF6)), onClick = onDataManage)
-            SettingItem(SettingEntry(Icons.Default.Favorite, "感谢", "支持股东名单", iconColor = Primary), onClick = onCredits)
-            SettingItem(SettingEntry(Icons.Default.DarkMode, "外观设置", "白天/黑夜模式、界面外观", iconColor = Color(0xFF607D8B)), onClick = onAppearance)
+        Column(modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(bottom = 12.dp)) {
+            Spacer(Modifier.height(8.dp))
+            WechatListGroup {
+                SettingItem(SettingEntry(Icons.Default.Person, "身份设置", "昵称、性别、简介、头像", iconColor = Blue400), onClick = onProfile)
+                SettingItem(SettingEntry(Icons.Default.SmartToy, "模型设置", "AI厂商、API Key、TTS", iconColor = Color(0xFFFF9800)), onClick = onModel)
+            }
+            Spacer(Modifier.height(8.dp))
+            WechatListGroup {
+                SettingItem(SettingEntry(Icons.Default.Tune, "聊天表现", "回复长短、上下文记忆、角色说话风格", iconColor = Color(0xFF00BCD4)), onClick = onChatParams)
+                SettingItem(SettingEntry(Icons.Default.AutoAwesome, "自动世界", "自动动态、主动私聊、事件联动、群聊唤起", iconColor = Color(0xFF4CAF50)), onClick = onWorld)
+                SettingItem(SettingEntry(Icons.AutoMirrored.Filled.MenuBook, "日记与派遣", "干员日记、派遣故事长度、自动生成规则", iconColor = Color(0xFF795548)), onClick = onStory)
+                SettingItem(SettingEntry(Icons.Default.Build, "权限管理", "干员主动消息、动态和群聊权限", iconColor = Color(0xFFFF9800)), onClick = onPermissions)
+            }
+            Spacer(Modifier.height(8.dp))
+            WechatListGroup {
+                SettingItem(SettingEntry(Icons.Default.AutoFixHigh, "数据管理", "统计信息与自动清理", iconColor = Color(0xFF8B5CF6)), onClick = onDataManage)
+                SettingItem(SettingEntry(Icons.Default.Favorite, "感谢", "支持股东名单", iconColor = Primary), onClick = onCredits)
+                SettingItem(SettingEntry(Icons.Default.DarkMode, "外观设置", "白天/黑夜模式、界面外观", iconColor = Color(0xFF607D8B)), onClick = onAppearance)
+            }
         }
-    }
     }
 }
 
 @Composable
 private fun SettingsGroupTitle(title: String) {
-    Text(title, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextTertiary, modifier = Modifier.fillMaxWidth().background(BG).padding(horizontal = 16.dp, vertical = 8.dp))
+    Text(title, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextTertiary, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp))
 }
 
 @Composable
 private fun SettingItem(entry: SettingEntry, onClick: () -> Unit) {
-    Column {
-        Row(modifier = Modifier.fillMaxWidth().background(Surface).clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(modifier = Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)).background(entry.iconColor.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) {
-                Icon(entry.icon, null, tint = entry.iconColor, modifier = Modifier.size(20.dp))
-            }
+    Column(modifier = Modifier.fillMaxWidth().background(Surface).clickable(onClick = onClick)) {
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+            WechatIconTile(entry.icon, entry.iconColor, modifier = Modifier.size(36.dp))
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(entry.title, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
@@ -130,6 +136,6 @@ private fun SettingItem(entry: SettingEntry, onClick: () -> Unit) {
             }
             Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = TextTertiary, modifier = Modifier.size(20.dp))
         }
-        HorizontalDivider(color = BG)
+        HorizontalDivider(color = Divider.copy(alpha = 0.45f), modifier = Modifier.padding(start = 68.dp))
     }
 }

@@ -30,6 +30,10 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 class AIService(private val client: HttpClient = createHttpClient()) {
 
@@ -42,26 +46,61 @@ class AIService(private val client: HttpClient = createHttpClient()) {
     // --- Response parsing utilities ---
 
     fun parseOfflineResponse(raw: String): OfflineModeResponse {
-        val clean = cleanJson(raw)
-        return try {
-            json.decodeFromString<OfflineModeResponse>(clean)
-        } catch (_: Exception) {
-            val segments = mutableListOf<Segment>()
-            val segRegex = Regex("""\"type\"\s*:\s*\"(narration|dialogue)\"[^}]*\"content\"\s*:\s*\"((?:[^"\\]|\\.)*)\"""")
-            for (m in segRegex.findAll(raw)) {
-                segments.add(Segment(type = m.groupValues[1], content = m.groupValues[2]))
-            }
-            if (segments.isNotEmpty()) {
-                OfflineModeResponse(segments = segments)
-            } else {
-                val dialogue = Regex("\"dialogue\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"").find(raw)?.groupValues?.getOrNull(1) ?: raw
-                OfflineModeResponse(dialogue = dialogue)
+        return normalizeOfflineResponse(raw)
+    }
+
+    fun normalizeOfflineResponse(raw: String, maxNestedDepth: Int = 2): OfflineModeResponse {
+        val candidates = listOf(raw, cleanJson(raw), compactJsonBlock(raw)).distinct().filter { it.isNotBlank() }
+        for (candidate in candidates) {
+            parseStrictOffline(candidate)?.let { parsed ->
+                return normalizeNestedDialogue(parsed, maxNestedDepth)
             }
         }
+
+        parseScriptResponse(raw).takeIf { !it.segments.isNullOrEmpty() || it.dialogue.isNotBlank() }?.let { return it }
+        parseSegmentsLenient(raw).takeIf { it.isNotEmpty() }?.let { return OfflineModeResponse(segments = it) }
+        extractFirstReadableField(raw)?.let { text ->
+            if (looksLikeJson(text) && maxNestedDepth > 0) {
+                val nested = normalizeOfflineResponse(text, maxNestedDepth - 1)
+                if (!nested.segments.isNullOrEmpty() || nested.dialogue.isNotBlank()) return nested
+            }
+            return OfflineModeResponse(segments = listOf(Segment(type = "dialogue", content = text)))
+        }
+
+        val safe = raw.trim().lineSequence().firstOrNull { it.isNotBlank() && !looksLikeJson(it) }?.take(240)
+            ?: "刚才那条消息格式有点乱，我重新整理一下再说。"
+        return OfflineModeResponse(segments = listOf(Segment(type = "dialogue", content = safe)))
+    }
+
+    private fun parseStrictOffline(raw: String): OfflineModeResponse? = try {
+        val parsed = json.decodeFromString<OfflineModeResponse>(raw)
+        if (parsed.segments.isNullOrEmpty() && parsed.dialogue.isBlank() && parsed.narration.isBlank()) null else parsed
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun normalizeNestedDialogue(response: OfflineModeResponse, depth: Int): OfflineModeResponse {
+        val directSegments = response.segments?.filter { it.content.isNotBlank() }
+        if (!directSegments.isNullOrEmpty()) return response.copy(segments = directSegments)
+        val nestedText = response.dialogue.ifBlank { response.narration }
+        if (depth > 0 && looksLikeJson(nestedText)) {
+            val nested = normalizeOfflineResponse(nestedText, depth - 1)
+            if (!nested.segments.isNullOrEmpty() || nested.dialogue.isNotBlank()) {
+                return nested.copy(
+                    emotion = nested.emotion.ifBlank { response.emotion },
+                    state = nested.state.ifBlank { response.state },
+                    location = nested.location.ifBlank { response.location },
+                    affection_mod = nested.affection_mod.takeIf { it != 0 } ?: response.affection_mod
+                )
+            }
+        }
+        return if (nestedText.isNotBlank()) response.copy(segments = listOf(Segment(type = "dialogue", content = nestedText)), dialogue = "") else response
     }
 
     fun parseScriptResponse(raw: String): OfflineModeResponse {
         val emotion = Regex("【情绪：([^】]*)】").find(raw)?.groupValues?.getOrNull(1)?.trim() ?: ""
+        val location = Regex("【位置：([^】]*)】").find(raw)?.groupValues?.getOrNull(1)?.trim() ?: ""
+        val state = Regex("【状态：([^】]*)】").find(raw)?.groupValues?.getOrNull(1)?.trim() ?: ""
         val segments = mutableListOf<Segment>()
         val regex = Regex("【(旁白|台词)：([^】]*)】")
         for (m in regex.findAll(raw)) {
@@ -71,8 +110,74 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                 segments.add(Segment(type = type, content = content))
             }
         }
-        return OfflineModeResponse(emotion = emotion, segments = segments.ifEmpty { null })
+        return OfflineModeResponse(emotion = emotion, location = location, state = state, segments = segments.ifEmpty { null })
     }
+
+    private fun parseSegmentsLenient(raw: String): List<Segment> {
+        val clean = compactJsonBlock(raw)
+        val parsed = try { json.parseToJsonElement(clean) } catch (_: Exception) { null }
+        if (parsed is JsonObject) {
+            val arr = (parsed["segments"] as? JsonArray) ?: (parsed["messages"] as? JsonArray)
+            if (arr != null) {
+                return arr.mapNotNull { item ->
+                    val obj = item as? JsonObject ?: item.jsonObject
+                    val type = obj["type"]?.jsonPrimitive?.content ?: "dialogue"
+                    val content = obj["content"]?.jsonPrimitive?.content
+                        ?: obj["message"]?.jsonPrimitive?.content
+                        ?: obj["text"]?.jsonPrimitive?.content
+                    if (content.isNullOrBlank()) null else Segment(type = normalizeSegmentType(type), content = content)
+                }
+            }
+        }
+        val segments = mutableListOf<Segment>()
+        val segRegex = Regex("""\"type\"\s*:\s*\"(narration|dialogue)\"[^}]*\"(?:content|message|text)\"\s*:\s*\"((?:[^"\\]|\\.)*)\"""")
+        for (m in segRegex.findAll(raw)) {
+            segments.add(Segment(type = m.groupValues[1], content = m.groupValues[2].replace("\\\"", "\"")))
+        }
+        return segments
+    }
+
+    private fun extractFirstReadableField(raw: String): String? {
+        val keys = listOf("dialogue", "content", "message", "text", "narration")
+        for (key in keys) {
+            Regex("""\"$key\"\s*:\s*\"((?:[^"\\]|\\.)*)\"""").find(raw)?.groupValues?.getOrNull(1)
+                ?.replace("\\\"", "\"")
+                ?.takeIf { it.isNotBlank() }
+                ?.let { return it }
+        }
+        return null
+    }
+
+    private fun compactJsonBlock(raw: String): String {
+        var s = raw.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+            .replace(Regex(",\\s*([}\\]])"), "$1")
+        val start = listOf(s.indexOf('{'), s.indexOf('[')).filter { it >= 0 }.minOrNull() ?: return s
+        val open = s[start]
+        val close = if (open == '{') '}' else ']'
+        var depth = 0
+        var inStr = false
+        var esc = false
+        for (i in start until s.length) {
+            val c = s[i]
+            if (esc) { esc = false; continue }
+            if (c == '\\') { esc = true; continue }
+            if (c == '"') { inStr = !inStr; continue }
+            if (inStr) continue
+            if (c == open) depth++
+            if (c == close) {
+                depth--
+                if (depth == 0) return s.substring(start, i + 1)
+            }
+        }
+        return s.substring(start)
+    }
+
+    private fun looksLikeJson(text: String): Boolean {
+        val t = text.trim()
+        return (t.startsWith("{") || t.startsWith("[")) && (t.contains("segments") || t.contains("dialogue") || t.contains("content") || t.contains("message"))
+    }
+
+    private fun normalizeSegmentType(type: String): String = if (type.equals("narration", true) || type == "旁白") "narration" else "dialogue"
 
     fun cleanJson(raw: String): String {
         var s = raw.trim()
@@ -233,7 +338,6 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                 throw e
             } catch (e: Exception) {
                 requestError = e
-                println("WARN: [$logTag] API请求失败 (attempt $attempt/$maxRetries): ${e.message}")
                 if (attempt < maxRetries) {
                     kotlinx.coroutines.delay(500L * attempt)
                 }
@@ -250,13 +354,11 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                 return parsed
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Exception) {
-                println("WARN: [$logTag] JSON解析失败 (attempt ${index + 1}/$maxRetries): ${e.message}")
+            } catch (_: Exception) {
             }
         }
 
-        println("ERROR: [$logTag] 本地解析失败，降级为原始文本。原始内容: ${lastRaw.take(200)}")
-        return OfflineModeResponse(dialogue = lastRaw)
+        return normalizeOfflineResponse(lastRaw)
     }
 
     // --- Streaming chat (保留用于兼容) ---

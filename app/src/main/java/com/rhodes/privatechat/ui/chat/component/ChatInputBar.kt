@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -40,12 +41,14 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.ui.theme.*
+import com.rhodes.privatechat.ui.common.softTextFieldColors
 
 /**
  * 私聊和群聊共用的输入栏。
@@ -89,13 +92,13 @@ fun ChatInputBar(
         }
     }
 
-    Column(modifier = modifier.fillMaxWidth().background(Surface)) {
+    Column(modifier = modifier.fillMaxWidth().background(ElevatedSurface.copy(alpha = 0.96f)).border(1.dp, Stroke)) {
         // 顶部指示器（如催眠状态）
         indicatorBanner?.invoke()
 
         // 灵感建议面板
         AnimatedVisibility(visible = showInspire, enter = slideInVertically(initialOffsetY = { it }), exit = slideOutVertically(targetOffsetY = { it })) {
-            Column(modifier = Modifier.fillMaxWidth().background(Card).padding(12.dp)) {
+            Column(modifier = Modifier.fillMaxWidth().background(ElevatedSurface).padding(12.dp)) {
                 Text("灵感建议", fontSize = 12.sp, color = TextSecondary, fontWeight = FontWeight.SemiBold)
                 Spacer(modifier = Modifier.height(6.dp))
                 if (localSuggestions.isEmpty() && onGenerateSuggestions != null) {
@@ -116,7 +119,7 @@ fun ChatInputBar(
         // 菜单面板
         if (menuItems != null) {
             AnimatedVisibility(visible = showMenu, enter = slideInVertically(initialOffsetY = { it }), exit = slideOutVertically(targetOffsetY = { it })) {
-                Column(modifier = Modifier.fillMaxWidth().background(Card).padding(12.dp)) {
+                Column(modifier = Modifier.fillMaxWidth().background(ElevatedSurface).padding(12.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         MenuChip("( )", Primary) {
                             val pos = tfValue.selection.start
@@ -131,7 +134,7 @@ fun ChatInputBar(
         }
 
         // 输入行
-        Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             if (onGenerateSuggestions != null) {
                 IconButton(onClick = {
                     showInspire = !showInspire
@@ -155,7 +158,7 @@ fun ChatInputBar(
                 minLines = 1, maxLines = 4,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
                 keyboardActions = KeyboardActions(onAny = { /* 不做任何事，防止键盘收起 */ }),
-                colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Divider, unfocusedBorderColor = Divider)
+                colors = softTextFieldColors()
             )
             Spacer(modifier = Modifier.width(4.dp))
             if (menuItems != null) {
@@ -170,7 +173,7 @@ fun ChatInputBar(
                 onClick = { onSend(tfValue.text) },
                 enabled = enabled && text.isNotBlank(),
                 modifier = Modifier.size(36.dp).clip(CircleShape)
-                    .background(if (text.isNotBlank() && enabled) Primary else Color.Transparent)
+                    .background(if (text.isNotBlank() && enabled) Brush.linearGradient(listOf(Primary, Blue400)) else Brush.linearGradient(listOf(Color.Transparent, Color.Transparent)))
             ) {
                 Icon(Icons.AutoMirrored.Filled.Send, "发送",
                     tint = if (text.isNotBlank() && enabled) OnPrimary else TextSecondary,

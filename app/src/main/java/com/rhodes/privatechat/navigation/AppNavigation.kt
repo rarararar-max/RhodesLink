@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.background
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -30,12 +31,18 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.delay
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.border
 import com.rhodes.privatechat.ui.theme.NavBarBg
 import com.rhodes.privatechat.ui.theme.Primary
 import com.rhodes.privatechat.ui.theme.PrimaryContainer
+import com.rhodes.privatechat.ui.theme.Stroke
+import com.rhodes.privatechat.ui.theme.ElevatedSurface
 import com.rhodes.privatechat.ui.theme.TextSecondary
 import cafe.adriel.voyager.core.screen.Screen
 import cafe.adriel.voyager.navigator.CurrentScreen
@@ -67,7 +74,10 @@ class MainScreen : Screen {
         Scaffold(
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             bottomBar = {
-                NavigationBar(containerColor = NavBarBg, tonalElevation = 0.dp) {
+                NavigationBar(
+                    modifier = Modifier.background(Brush.verticalGradient(listOf(ElevatedSurface.copy(alpha = 0.94f), NavBarBg.copy(alpha = 0.96f)))).border(1.dp, Stroke),
+                    containerColor = NavBarBg.copy(alpha = 0.96f), tonalElevation = 0.dp
+                ) {
                     tabs.forEachIndexed { i, tab ->
                         NavigationBarItem(
                             selected = activeTab == i,
@@ -77,7 +87,7 @@ class MainScreen : Screen {
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = Primary,
                                 selectedTextColor = Primary,
-                                indicatorColor = PrimaryContainer,
+                                indicatorColor = PrimaryContainer.copy(alpha = 0.78f),
                                 unselectedIconColor = TextSecondary,
                                 unselectedTextColor = TextSecondary
                             )
@@ -153,7 +163,7 @@ private fun FeaturesTabContent(navigator: Navigator) {
         momentBadge = momentBadge,
         commentBadge = commentBadge,
         diaryBadge = diaryBadge,
-        onMoments = { viewModel.markMomentsSeen(); navigator.push(MomentsRoute) },
+        onMoments = { viewModel.markMomentsSeen(); momentBadge = 0; navigator.push(MomentsRoute) },
         onDiary = { navigator.push(DiaryRoute) },
         onWorldLog = { navigator.push(WorldLogRoute) },
         onRanking = { navigator.push(RankingRoute) },

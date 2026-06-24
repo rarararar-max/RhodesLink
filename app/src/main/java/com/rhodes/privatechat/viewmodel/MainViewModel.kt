@@ -95,7 +95,7 @@ class MainViewModel(
     )
     companion object {
         /** 全局调试开关，上线前改为 false */
-        const val DEBUG = true
+        const val DEBUG = false
         /** 道具价格 */
         const val PROP_PRICE = 100
         /** 防止多个 ViewModel 实例并发执行自动生成 */
@@ -120,6 +120,7 @@ class MainViewModel(
         onRefreshOperatorStatus = { refreshAllOperatorStatus(force = true) }
     )
     private val sessionMessageCounter = ConcurrentHashMap<String, Int>()
+    private val pendingCommentJobs = ConcurrentHashMap<String, kotlinx.coroutines.Job>()
     val momentsViewModel = MomentsViewModel(repository, settings, appState, viewModelScope) { getUserProfile() }
     val dispatchViewModel = DispatchViewModel(repository, settings, sharedUtils, operatorStateUpdater, appState, viewModelScope, { refreshAllOperatorStatus(force = true) }) { getUserProfile() }
     val groupChatViewModel = GroupChatViewModel(
@@ -145,7 +146,8 @@ class MainViewModel(
         { opId -> generateDiarySync(opId, auto = true) },
         { event -> triggerProactivePrivateFromEvent(event) },
         { reason -> canUseWorldTrigger(reason) },
-        { reason -> consumeWorldTrigger(reason) }
+        { reason -> consumeWorldTrigger(reason) },
+        { title, detail, type -> addWorldLog(title, detail, type) }
     )
 
     private val _momentGenerateStatus: MutableStateFlow<MomentGenerateStatus> get() = _globalMomentStatus
@@ -251,7 +253,6 @@ class MainViewModel(
     }
 
     init {
-        android.util.Log.d("MainVM", "** [DBG] ** init 实例: ${System.identityHashCode(this)}")
         viewModelScope.launch {
             repository.insertPresetOperators()
             // 只在首次安装时设置默认权限，不覆盖用户手动修改
@@ -360,7 +361,12 @@ class MainViewModel(
         summary: String,
         userNetGain: Int,
         assistantName: String
-    ) = mahjongViewModel.settleMahjongGame(participantNames, winnerName, loserName, winType, summary, userNetGain, assistantName)
+    ) {
+        mahjongViewModel.settleMahjongGame(participantNames, winnerName, loserName, winType, summary, userNetGain, assistantName)
+        val resultTitle = if (winnerName.isBlank() || winType == "流局") "活动室麻将流局" else "活动室麻将结束：${winnerName}获胜"
+        val gainText = if (userNetGain >= 0) "+$userNetGain" else userNetGain.toString()
+        addWorldLog(resultTitle, "参与者：${participantNames.joinToString("、")}；你的龙门币变化：$gainText。${summary.take(80)}", "mahjong")
+    }
 
     fun generatePokerTalk(
         speaker: String,
@@ -383,6 +389,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
 
 只输出一句你说出口的话，不要姓名前缀，不要JSON，不要解释。
 要像牌桌上随口吐槽、得意、嘴硬或提醒。博士就在场，不要说博士不在。
+如果桌面情况里出现地主、农民、倍率、底牌等信息，要按自己当前身份自然说话；可以提醒队友或挑衅对手，但不要透露隐藏手牌。
 12到36个中文字符。
 """.trimIndent()
             val text = try {
@@ -413,6 +420,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         if (!settings.autoAiEnabled) return
         if (!settings.idleProactiveChatEnabled) return
         val now = System.currentTimeMillis()
+        if (isGlobalProactiveCoolingDown(now)) return
         val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
         val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
         // 深夜跳过（23:00~05:59 不发送主动消息）
@@ -429,13 +437,16 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             val session = repository.getSessionByOperator(op.id)
             if (session == null) return@filter false
             val lastUserMsgTime = repository.getLastUserMessageTime(session.id)
+            if (isOperatorQuietAfterUser(lastUserMsgTime, now)) return@filter false
             val lastUserOrSession = lastUserMsgTime ?: session.lastTime
             val lastSent = getLastProactiveSentAt(op.id)
-            (now - maxOf(lastUserOrSession, lastSent)) >= 30 * 60 * 1000L
+            val hasRecentTalk = lastUserMsgTime != null && now - lastUserMsgTime < 7L * 24 * 60 * 60 * 1000L
+            val hasMemory = repository.getShortTermMemory(session.id) != null || repository.getLongTermImpression(op.id) != null
+            (hasRecentTalk || hasMemory) && (now - maxOf(lastUserOrSession, lastSent)) >= operatorProactiveCooldownMs()
         }
         if (candidates.size < 1) return
-        // 随机选 1-2 人
-        val count = (1..candidates.size.coerceAtMost(2)).random()
+        // 每轮最多 1 人，避免主动消息像群发。
+        val count = 1
         val selected = candidates.shuffled().take(count)
         // 错峰：每人独立协程，随机延迟 5-10 分钟
         for (op in selected) {
@@ -446,7 +457,10 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 val session = repository.getSessionByOperator(op.id)
                 if (session != null) {
                     val lastUserMsgTime = repository.getLastUserMessageTime(session.id)
-                    if (lastUserMsgTime != null && System.currentTimeMillis() - lastUserMsgTime < 5 * 60 * 1000) return@launch
+                    val sendNow = System.currentTimeMillis()
+                    if (isOperatorQuietAfterUser(lastUserMsgTime, sendNow)) return@launch
+                    if (isGlobalProactiveCoolingDown(sendNow)) return@launch
+                    if (sendNow - getLastProactiveSentAt(op.id) < operatorProactiveCooldownMs()) return@launch
                 }
                 if (!settings.autoAiEnabled || !settings.idleProactiveChatEnabled) return@launch
                 sendProactiveMessage(op)
@@ -457,17 +471,44 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     private suspend fun triggerProactivePrivateFromEvent(event: WorldEvent): Boolean {
         if (!settings.autoAiEnabled) return false
         if (!settings.worldProactiveChatEnabled) return false
+        if (!isStrongUserRelatedPrivateTrigger(event)) return false
         val op = _operators.value.find { it.id == event.actorId || it.name == event.actorName } ?: return false
         if (!settings.getOperatorMsgPermission(op.id)) return false
         val now = System.currentTimeMillis()
+        if (isGlobalProactiveCoolingDown(now)) return false
+        val session = repository.getSessionByOperator(op.id)
+        val lastUserMsgTime = session?.let { repository.getLastUserMessageTime(it.id) }
+        if (isOperatorQuietAfterUser(lastUserMsgTime, now)) return false
         val lastSent = getLastProactiveSentAt(op.id)
-        if (now - lastSent < 30 * 60 * 1000L) return false
+        if (now - lastSent < operatorProactiveCooldownMs()) return false
         if (!tryConsumeAutoAiBudget("proactive_private")) return false
-        return sendProactiveMessage(op, event.content)
+        return sendProactiveMessage(op, buildPrivateEventContext(event))
+    }
+
+    private fun isStrongUserRelatedPrivateTrigger(event: WorldEvent): Boolean {
+        if (event.type != WorldEventType.PRIVATE_TRIGGER) return false
+        if (event.targetId != "user") return false
+        val sourceOk = event.source == "comment" || event.source == "moment"
+        if (!sourceOk) return false
+        val userName = getUserProfile().nickname
+        val text = event.content
+        return text.contains(userName) || text.contains("用户") || text.contains("博士")
+    }
+
+    private fun buildPrivateEventContext(event: WorldEvent): String {
+        val structured = sharedUtils.formatWorldEventForPrompt(event, 180)
+        val userAction = when {
+            event.type == WorldEventType.MOMENT_POSTED && event.actorId == "user" -> "这是用户本人发布的动态，可以说“你刚刚发的动态”。"
+            event.type == WorldEventType.COMMENT_POSTED && event.actorId == "user" -> "这是用户本人发表的评论，只能说“你在评论区说的/我看到你的评论”，不要说用户发了动态。"
+            event.actorId == "user" -> "这是用户本人触发的事件，可以用“你刚刚/你之前”指代。"
+            else -> "这不是用户本人发布的动态或发言。严禁说“你刚刚发的动态/你发的动态”。如果要提及，只能说看到${event.actorName.ifBlank { "其他干员" }}的动态、评论或公开事件。"
+        }
+        return "$structured\n【事件归因规则】$userAction"
     }
 
     private suspend fun sendProactiveMessage(op: Operator, eventContext: String = ""): Boolean {
         if (!settings.autoAiEnabled) return false
+        if (!settings.getOperatorMsgPermission(op.id)) return false
         if (eventContext.isBlank() && !settings.idleProactiveChatEnabled) return false
         if (eventContext.isNotBlank() && !settings.worldProactiveChatEnabled) return false
         if (getApiKey().isBlank()) return false
@@ -505,6 +546,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             "CURRENT_STATE" to op.activity,
             "CURRENT_EMOTION" to op.emotion,
             "LONG_TERM_IMPRESSION" to (longTerm?.content ?: "暂无"),
+            "OPERATOR_MEMORY_INJECTION" to op.memoryInjection.trim().ifBlank { "无" },
             "USER_PREFS" to buildString {
                 longTerm?.preferences?.takeIf { it.isNotBlank() }?.let {
                     append("已知偏好：${it.split(",").map { it.trim() }.joinToString("、")}\n")
@@ -536,10 +578,11 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             "TRANSITION_NOTICE" to "",
             "GROUP_CONTEXT" to ""
         )
-        val prompt = applyTemplate(getPromptTemplate("private", "online"), replacements)
+        val prompt = applyTemplate(getPromptTemplate("private", "proactive"), replacements)
         try {
             val parsed = withTimeout(60_000) { sharedUtils.chatWithRetry(listOf(AiMessage("system", prompt)), "ProactivePrivate") }
-            val raw = json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed)
+            val normalized = normalizeProactiveResponse(parsed)
+            val raw = json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), normalized)
             if (raw.isNotBlank()) {
                 val msgId = repository.getNextMessageId()
                 repository.sendMessage(session.id, ChatMessage(
@@ -547,16 +590,11 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                     senderName = op.name, content = raw,
                     type = "ai_json", mode = "online", isMe = false
                 ))
-                // 重新读取会话，仅更新未读计数（lastMessage 由 sendMessage 自动更新）
-                val freshSession = repository.getSession(session.id) ?: session
-                repository.insertSession(freshSession.copy(
-                    unreadCount = freshSession.unreadCount + 1,
-                    lastTime = System.currentTimeMillis()
-                ))
                 unhideSession(session.id)
                 setLastProactiveSentAt(op.id, System.currentTimeMillis())
-                if (parsed.emotion.isNotBlank() || parsed.location.isNotBlank() || parsed.state.isNotBlank()) {
-                    updateOperatorStatus(op.id, parsed.location, parsed.state, parsed.emotion)
+                setLastGlobalProactiveSentAt(System.currentTimeMillis())
+                if (normalized.emotion.isNotBlank() || normalized.location.isNotBlank() || normalized.state.isNotBlank()) {
+                    updateOperatorStatus(op.id, normalized.location, normalized.state, normalized.emotion)
                 }
                 return true
             }
@@ -566,11 +604,51 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         return false
     }
 
+    private fun normalizeProactiveResponse(response: com.rhodes.privatechat.shared.model.OfflineModeResponse): com.rhodes.privatechat.shared.model.OfflineModeResponse {
+        val source = response.segments.orEmpty().filter { it.content.isNotBlank() }
+        val narration = source.firstOrNull { it.type.equals("narration", true) }
+        val dialogue = source.firstOrNull { it.type.equals("dialogue", true) }
+            ?: response.dialogue.takeIf { it.isNotBlank() }?.let { com.rhodes.privatechat.shared.model.Segment(type = "dialogue", content = it) }
+            ?: narration?.let { com.rhodes.privatechat.shared.model.Segment(type = "dialogue", content = it.content) }
+            ?: com.rhodes.privatechat.shared.model.Segment(type = "dialogue", content = "刚刚想到你，就想发来看看。")
+        val result = buildList {
+            narration?.let { add(com.rhodes.privatechat.shared.model.Segment(type = "narration", content = it.content.take(60))) }
+            add(com.rhodes.privatechat.shared.model.Segment(type = "dialogue", content = dialogue.content))
+        }.take(2)
+        return response.copy(dialogue = "", narration = "", segments = result)
+    }
+
     private fun getLastProactiveSentAt(operatorId: String): Long =
         settings.getLong("proactive_last_sent_$operatorId", 0L)
 
     private fun setLastProactiveSentAt(operatorId: String, time: Long) {
         settings.putLong("proactive_last_sent_$operatorId", time)
+    }
+
+    private fun getLastGlobalProactiveSentAt(): Long =
+        settings.getLong("proactive_last_sent_global", 0L)
+
+    private fun setLastGlobalProactiveSentAt(time: Long) {
+        settings.putLong("proactive_last_sent_global", time)
+    }
+
+    private fun proactiveGlobalCooldownMs(): Long =
+        settings.proactiveGlobalCooldownMinutes.toLong() * 60_000L
+
+    private fun operatorProactiveCooldownMs(): Long =
+        settings.proactiveOperatorCooldownMinutes.toLong() * 60_000L
+
+    private fun proactiveQuietAfterUserMs(): Long =
+        settings.proactiveQuietAfterUserMinutes.toLong() * 60_000L
+
+    private fun isGlobalProactiveCoolingDown(now: Long): Boolean {
+        val cooldown = proactiveGlobalCooldownMs()
+        return cooldown > 0L && now - getLastGlobalProactiveSentAt() < cooldown
+    }
+
+    private fun isOperatorQuietAfterUser(lastUserMsgTime: Long?, now: Long): Boolean {
+        val quiet = proactiveQuietAfterUserMs()
+        return quiet > 0L && lastUserMsgTime != null && now - lastUserMsgTime < quiet
     }
 
     private suspend fun refreshAllOperatorStatus(force: Boolean = false) {
@@ -623,7 +701,6 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     private suspend fun autoGenerateTodayMoments() {
         if (!settings.autoAiEnabled) return
         if (!settings.dailyAutoMomentEnabled) return
-        android.util.Log.d("MomentGen", "** [DBG] ** 自动生成开始")
         val weekAgo = System.currentTimeMillis() - 7 * 24 * 60 * 60 * 1000L
         repository.deleteOldMoments(weekAgo)
         if (!autoGenerating.compareAndSet(false, true)) return
@@ -633,7 +710,6 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 val dateKey = beijingSdf("yyyyMMdd").format(java.util.Date())
                 val target = intPref("daily_moment_target", 2)
                 val permCount = _operators.value.count { settings.getOperatorDynPermission(it.id) }
-                android.util.Log.d("MomentGen", "** [DBG] ** target=$target 有权限=$permCount 总干员=${_operators.value.size}")
                 DebugLogger.log("MomentGen", "调用 generateAllMoments target=$target dateKey=$dateKey")
                 if (target <= 0) return@launch
                 generateAllMoments(target, dateKey) { /* silent */ }
@@ -1025,7 +1101,6 @@ ${summaries}
             sb.appendLine("║ ${op.name.take(8)} | 主动:$msg | 动态:$dyn")
         }
         sb.appendLine("╚══════════════════════════════════════════════")
-        Log.d(aiTag, sb.toString())
     }
 
     private fun runBlockingCatching(block: suspend () -> Unit) = sharedUtils.runBlockingCatching(block)
@@ -1159,14 +1234,15 @@ ${summaries}
     }
 
     fun saveOperator(id: String, name: String, title: String = "", description: String,
-                     privatePrompt: String = "", groupPrompt: String = "",
-                     userRelation: String = "", avatarUri: String = "",
+                      privatePrompt: String = "", groupPrompt: String = "",
+                      memoryInjection: String = "",
+                      userRelation: String = "", avatarUri: String = "",
                      autoPost: Boolean = true, allowChat: Boolean = true,
                      relationships: List<com.rhodes.privatechat.shared.model.Relationship> = emptyList(),
                      activityLevel: Float = 0.5f,
                      gender: String = "",
                      onComplete: () -> Unit = {}) =
-        operatorViewModel.saveOperator(id, name, title, description, privatePrompt, groupPrompt, userRelation, avatarUri, autoPost, allowChat, relationships, activityLevel, gender, onComplete)
+        operatorViewModel.saveOperator(id, name, title, description, privatePrompt, groupPrompt, memoryInjection, userRelation, avatarUri, autoPost, allowChat, relationships, activityLevel, gender, onComplete)
 
     fun loadRelationships(operatorId: String, callback: (List<com.rhodes.privatechat.shared.model.Relationship>) -> Unit) =
         operatorViewModel.loadRelationships(operatorId, callback)
@@ -1417,9 +1493,27 @@ ${summaries}
                                      var actualComments = 0
                                      commenters.forEach { commenter ->
                                         if (!tryConsumeAutoAiBudget("auto_moment_comment")) return@forEach
-                                         try {
+                                          try {
+                                            val recentComments = try {
+                                                withTimeout(500) { repository.getComments(momentId).first() }
+                                                    .takeLast(settings.commentContextCount)
+                                                    .joinToString("\n") { "${it.operatorName}：${it.content.take(60)}" }
+                                            } catch (_: Exception) { "" }
+                                            val commenterMemory = sharedUtils.pickAnchorsForSurface(repository.getPublicAnchors(commenter.id), settings.commentMemoryCount, MemorySurface.COMMENT, c)
+                                                .joinToString("\n") { "- ${it.content}" }
+                                                .ifBlank { "无" }
+                                            val sourceAwareMemory = sharedUtils.buildSourceAwareMemoryContext(repository.getPublicAnchors(commenter.id), settings.commentMemoryCount, MemorySurface.COMMENT, c)
                                             val cmtReplacements = mapOf(
                                                 "COMMENTER_NAME" to commenter.name, "COMMENTER_PERSONA" to (commenter.groupPrompt.ifBlank { commenter.description }),
+                                                "POST_AUTHOR_NAME" to op.name,
+                                                "POST_AUTHOR_PERSONA" to (op.groupPrompt.ifBlank { op.description }),
+                                                "COMMENTER_LOCATION" to commenter.location,
+                                                "COMMENTER_STATE" to commenter.activity,
+                                                "COMMENTER_EMOTION" to commenter.emotion,
+                                                "COMMENT_CONTEXT" to recentComments.ifBlank { "暂无" },
+                                                "COMMENTER_MEMORY" to commenterMemory,
+                                                "SOURCE_AWARE_MEMORIES" to sourceAwareMemory,
+                                                "SOURCE_AWARE_RULES" to sharedUtils.sourceAwareUsageRule(MemorySurface.COMMENT),
                                                 "POST_CONTENT" to c,
                                                 "COMMENT_MIN_CHARS" to intPref("comment_min_chars", 10).toString(),
                                                 "COMMENT_MAX_CHARS" to intPref("comment_max_chars", 40).toString()
@@ -1654,8 +1748,26 @@ ${summaries}
                         return@forEach
                     }
                     try {
+                        val recentComments = try {
+                            withTimeout(500) { repository.getComments(momentId).first() }
+                                .takeLast(settings.commentContextCount)
+                                .joinToString("\n") { "${it.operatorName}：${it.content.take(60)}" }
+                        } catch (_: Exception) { "" }
+                        val commenterMemory = sharedUtils.pickAnchorsForSurface(repository.getPublicAnchors(commenter.id), settings.commentMemoryCount, MemorySurface.COMMENT, postContent)
+                            .joinToString("\n") { "- ${it.content}" }
+                            .ifBlank { "无" }
+                        val sourceAwareMemory = sharedUtils.buildSourceAwareMemoryContext(repository.getPublicAnchors(commenter.id), settings.commentMemoryCount, MemorySurface.COMMENT, postContent)
                         val cmtReplacements = mapOf(
                             "COMMENTER_NAME" to commenter.name, "COMMENTER_PERSONA" to (commenter.groupPrompt.ifBlank { commenter.description }),
+                            "POST_AUTHOR_NAME" to op.name,
+                            "POST_AUTHOR_PERSONA" to (op.groupPrompt.ifBlank { op.description }),
+                            "COMMENTER_LOCATION" to commenter.location,
+                            "COMMENTER_STATE" to commenter.activity,
+                            "COMMENTER_EMOTION" to commenter.emotion,
+                            "COMMENT_CONTEXT" to recentComments.ifBlank { "暂无" },
+                            "COMMENTER_MEMORY" to commenterMemory,
+                            "SOURCE_AWARE_MEMORIES" to sourceAwareMemory,
+                            "SOURCE_AWARE_RULES" to sharedUtils.sourceAwareUsageRule(MemorySurface.COMMENT),
                             "POST_CONTENT" to postContent, "COMMENT_MIN_CHARS" to intPref("comment_min_chars", 10).toString(),
                             "COMMENT_MAX_CHARS" to intPref("comment_max_chars", 40).toString()
                         )
@@ -1785,16 +1897,14 @@ ${summaries}
             val alreadyReplied = mutableSetOf<String>()
             if (parentCommentId > 0 && replyToName.isNotBlank() && replyToName.trim() != moment.operatorName.trim() && replyToName.trim() != userName.trim()) {
                 Log.d("RHODES_MOMENT", "commentOnMoment: 回复目标人=$replyToName")
-                triggerSingleAiReply(momentId, replyToName, content, rootParentId, userName)
+                scheduleAiComment(momentId, replyToName, content, rootParentId, userName)
                 alreadyReplied.add(replyToName)
-                delay((1500L + (Math.random() * 1500).toLong()))
             }
 
             if (moment.operatorName != "我" && moment.operatorName.trim() != userName.trim() && moment.operatorName !in alreadyReplied) {
                 Log.d("RHODES_MOMENT", "commentOnMoment: 动态主人回复 start=${moment.operatorName}")
-                triggerSingleAiReply(momentId, moment.operatorName, content, rootParentId, userName, "你是${moment.operatorName}。用户${userName}在你的动态下评论了：「${content}」。请用10-50字自然回复。只输出回复内容本身，不要加任何前缀如「回复xxx」或冒号。直接输出纯文本。")
+                scheduleAiComment(momentId, moment.operatorName, content, rootParentId, userName, "你是${moment.operatorName}。用户${userName}在你的动态下评论了：「${content}」。请用10-50字自然回复。只输出回复内容本身，不要加任何前缀如「回复xxx」或冒号。直接输出纯文本。")
                 alreadyReplied.add(moment.operatorName)
-                delay((1500L + (Math.random() * 1500).toLong()))
             }
 
             val bystanderCount = pickBystanderReplyCount()
@@ -1808,8 +1918,7 @@ ${summaries}
             for ((i, bystander) in bystanders.withIndex()) {
                 Log.d("RHODES_MOMENT", "commentOnMoment: 旁观者回复 i=$i name=$bystander")
                 val bp = "你是${bystander}。你刚看到${moment.operatorName}的动态下，用户${userName}评论了「${content}」。请用10-40字凑热闹式地回复这条评论（看戏、调侃、起哄风格）。直接输出纯文本。"
-                triggerSingleAiReply(momentId, bystander, content, rootParentId, userName, bp)
-                delay((1500L + (Math.random() * 1500).toLong()))
+                scheduleAiComment(momentId, bystander, content, rootParentId, userName, bp)
             }
         }
     }
@@ -1826,6 +1935,32 @@ ${summaries}
         repository.updateCommentCount(momentId, count)
     }
 
+    private fun randomCommentDelayMs(): Long = 10_000L + (Math.random() * 20_000L).toLong()
+
+    private fun scheduleAiComment(
+        momentId: Long,
+        speakerName: String,
+        userContent: String,
+        parentCommentId: Long,
+        userName: String,
+        customPrompt: String? = null,
+        mustInsert: Boolean = false,
+        fallbackComment: String = "我看到了，特意来回一句。"
+    ) {
+        val key = "$momentId:$speakerName:$parentCommentId:${customPrompt?.hashCode() ?: 0}"
+        if (pendingCommentJobs.containsKey(key)) return
+        val job = appScope.launch {
+            try {
+                delay(randomCommentDelayMs())
+                if (repository.getMoment(momentId) == null) return@launch
+                triggerSingleAiReply(momentId, speakerName, userContent, parentCommentId, userName, customPrompt, mustInsert, fallbackComment)
+            } finally {
+                pendingCommentJobs.remove(key)
+            }
+        }
+        pendingCommentJobs[key] = job
+    }
+
     private fun todayStartMillis(): Long {
         val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
         cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
@@ -1839,11 +1974,29 @@ ${summaries}
         return maxOf(settings.getMomentCount(operatorId, dateKey), repository.countMomentsByOperatorSince(operatorId, todayStartMillis()))
     }
 
-    private fun triggerSingleAiReply(momentId: Long, speakerName: String, userContent: String, parentCommentId: Long, userName: String, customPrompt: String? = null) {
-        viewModelScope.launch {
+    private suspend fun insertAiComment(momentId: Long, speakerName: String, content: String, parentCommentId: Long, userName: String) {
+        val realOp = _operators.value.find { it.name == speakerName || it.id == speakerName }
+        val realId = realOp?.id ?: speakerName
+        repository.insertComment(MomentComment(momentId = momentId, operatorId = realId, operatorName = speakerName, content = content, parentCommentId = parentCommentId, replyToName = userName, createdAt = System.currentTimeMillis()))
+        refreshMomentCommentCount(momentId)
+        refreshMomentsNow()
+        repository.insertWorldEvent(WorldEvent(
+            type = WorldEventType.COMMENT_POSTED,
+            actorId = realId,
+            actorName = speakerName,
+            targetId = momentId.toString(),
+            targetName = userName,
+            source = "comment",
+            sourceId = momentId.toString(),
+            content = "${speakerName}回复评论：${content.take(120)}",
+            createdAt = System.currentTimeMillis(),
+            expiresAt = MemoryPolicy.memoryExpiresAt(settings)
+        ))
+    }
+
+    private suspend fun triggerSingleAiReply(momentId: Long, speakerName: String, userContent: String, parentCommentId: Long, userName: String, customPrompt: String? = null, mustInsert: Boolean = false, fallbackComment: String = "我看到了，特意来回一句。") {
             try {
                 val realOp = _operators.value.find { it.name == speakerName || it.id == speakerName }
-                if (realOp != null && !settings.getOperatorDynPermission(realOp.id)) return@launch
                 val recentComments = try {
                     withTimeout(500) { repository.getComments(momentId).first() }
                         .takeLast(settings.commentContextCount)
@@ -1882,30 +2035,18 @@ ${summaries}
                 } else "你是${speakerName}。用户扮演的角色${userName}刚刚回复了你的评论，说：「${userContent}」。\n$contextBlock\n请用10-50字自然回复。只输出回复内容本身，不要加任何前缀如「回复xxx」或冒号。直接输出纯文本。注意：你是${speakerName}，不是${userName}，不要替${userName}说话。"
                 val reply = withTimeout(10_000) { chat(listOf(AiMessage("system", prompt))) }.trim()
                 if (reply.isNotBlank()) {
-                    val realId = realOp?.id ?: speakerName
-                    repository.insertComment(MomentComment(momentId = momentId, operatorId = realId, operatorName = speakerName, content = reply, parentCommentId = parentCommentId, replyToName = userName, createdAt = System.currentTimeMillis()))
-                    refreshMomentCommentCount(momentId)
-                    refreshMomentsNow()
-                    repository.insertWorldEvent(WorldEvent(
-                        type = WorldEventType.COMMENT_POSTED,
-                        actorId = realId,
-                        actorName = speakerName,
-                        targetId = momentId.toString(),
-                        targetName = userName,
-                        source = "comment",
-                        sourceId = momentId.toString(),
-                        content = "${speakerName}回复评论：${reply.take(120)}",
-                        createdAt = System.currentTimeMillis(),
-                        expiresAt = MemoryPolicy.memoryExpiresAt(settings)
-                    ))
+                    insertAiComment(momentId, speakerName, reply, parentCommentId, userName)
                     Log.d("RHODES_MOMENT", "triggerSingleAiReply: $speakerName 回复成功")
                 } else {
+                    if (mustInsert) insertAiComment(momentId, speakerName, fallbackComment, parentCommentId, userName)
                     Log.w("RHODES_MOMENT", "triggerSingleAiReply: $speakerName 回复内容为空")
                 }
             } catch (e: Exception) {
+                if (mustInsert) {
+                    try { insertAiComment(momentId, speakerName, fallbackComment, parentCommentId, userName) } catch (_: Exception) {}
+                }
                 Log.e("RHODES_MOMENT", "triggerSingleAiReply: $speakerName 异常: ${e.message}", e)
             }
-        }
     }
 
 
@@ -1955,7 +2096,7 @@ ${summaries}
 
             // 用户主动发布/@触发的互动不消耗自动预算，也不受 autoAiEnabled 总开关限制。
             val eligibleOps = _operators.value.filter { it.name != userName && settings.getOperatorDynPermission(it.id) }
-            val mentionedInteractive = mentionedOperators.filter { settings.getOperatorDynPermission(it.id) }
+            val mentionedInteractive = mentionedOperators
             val randomLikers = eligibleOps.filter { it.id !in mentionedInteractive.map { op -> op.id } }.shuffled().take((2..6).random())
             val likers = (mentionedInteractive + randomLikers).distinctBy { it.id }
             likers.forEach { liker ->
@@ -1968,13 +2109,22 @@ ${summaries}
 
             val randomReplyCount = (1..3).random()
             val randomRepliers = eligibleOps.filter { it.id !in mentionedInteractive.map { op -> op.id } }.shuffled().take(randomReplyCount)
-            val repliers = (mentionedInteractive + randomRepliers).distinctBy { it.id }.take(6)
+            val repliers = (mentionedInteractive + randomRepliers).distinctBy { it.id }
             DebugLogger.log("Moment/Mention", "评论角色: mentioned=${mentionedInteractive.joinToString("、") { it.name }}, random=${randomRepliers.joinToString("、") { it.name }}")
             val c = content; val u = userName
-            for ((i, op) in repliers.withIndex()) {
-                if (i > 0) delay((1500L + (Math.random() * 1500).toLong()))
+            for (op in repliers) {
                 val prompt = if (op.id in mentionedIds) buildMentionedCommentPrompt(op.name, u, c) else buildBystanderCommentPrompt(op.name, u, c, mentionedInteractive.map { it.name })
-                triggerSingleAiReply(momentId, op.name, c, 0, u, prompt)
+                val mustInsert = op.id in mentionedIds
+                scheduleAiComment(
+                    momentId = momentId,
+                    speakerName = op.name,
+                    userContent = c,
+                    parentCommentId = 0,
+                    userName = u,
+                    customPrompt = prompt,
+                    mustInsert = mustInsert,
+                    fallbackComment = if (mustInsert) "我在，刚看到你提到我。" else "我也看到了，顺手留个评论。"
+                )
             }
         }
     }
@@ -2019,6 +2169,7 @@ ${summaries}
     // === Moments delegation ===
     fun getMomentBadge(): Int = momentsViewModel.getMomentBadge()
     suspend fun getMomentBadgeSuspend(): Int = momentsViewModel.getMomentBadgeSuspend()
+    suspend fun hasNewMomentsSince(latestLoadedId: Long): Boolean = momentsViewModel.hasNewMomentsSince(latestLoadedId)
     suspend fun getUnreadCommentCountSuspend(): Int = momentsViewModel.getUnreadCommentCountSuspend()
     fun markMomentsSeen() = momentsViewModel.markMomentsSeen()
     fun loadInboxComments(callback: (List<MomentComment>) -> Unit) = momentsViewModel.loadInboxComments(callback)
@@ -2241,7 +2392,11 @@ ${summaries}
                     )
                 )
                 val prompt = sharedUtils.applyTemplate(diaryTpl, dReplacements)
-                val text = withTimeout(25_000) { sharedUtils.chat(listOf(AiMessage("system", prompt))) }.trim()
+                var text = withTimeout(25_000) { sharedUtils.chat(listOf(AiMessage("system", prompt))) }.trim()
+                if (looksThirdPersonDiary(text, op)) {
+                    val retryPrompt = "$prompt\n\n【重写要求】上一版像第三人称记录，不像日记。请改写成${op.name}本人第一人称日记，全篇用“我”，不要用角色名、她、他或这名干员称呼自己。直接输出日记文本。"
+                    text = withTimeout(25_000) { sharedUtils.chat(listOf(AiMessage("system", retryPrompt))) }.trim()
+                }
                 sharedUtils.trackTokens("diary", prompt, text)
                 if (text.isNotBlank()) {
                     val now = System.currentTimeMillis()
@@ -2282,6 +2437,15 @@ ${summaries}
                 DebugLogger.log("Diary", "日记生成异常: ${e.message?.take(100)}")
                 return ""
             }
+    }
+
+    private fun looksThirdPersonDiary(text: String, op: Operator): Boolean {
+        val sample = text.take(240)
+        if (sample.isBlank()) return false
+        val firstPersonCount = Regex("[我咱]").findAll(sample).count()
+        val namePattern = Regex("${Regex.escape(op.name)}(昨天|今天|最近|在|觉得|想|听说|看到|写|去了|说)")
+        val thirdPersonSignals = listOf("这名干员", "这位干员", "她昨天", "他昨天", "她今天", "他今天", "她最近", "他最近")
+        return namePattern.containsMatchIn(sample) || (firstPersonCount == 0 && thirdPersonSignals.any { sample.contains(it) })
     }
 
     // === AI 人设生成 ===

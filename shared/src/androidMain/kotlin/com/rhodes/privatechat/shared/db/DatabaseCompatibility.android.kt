@@ -7,7 +7,7 @@ import android.util.Log
 object DatabaseCompatibility {
     private const val DB_NAME = "rhodes_terminal.db"
     private const val TAG = "DbCompatibility"
-    private const val TARGET_VERSION = 7
+    private const val TARGET_VERSION = 8
     private const val SETTINGS_SP = "rhodes_settings"
     private const val DERIVED_CLEAN_KEY = "derived_data_cleaned_for_1_05"
 
@@ -19,21 +19,17 @@ object DatabaseCompatibility {
                 val userVersion = db.rawQuery("PRAGMA user_version", null).use { cursor ->
                     if (cursor.moveToFirst()) cursor.getInt(0) else 0
                 }
-                val memoryColumns = existingColumns(db, "memory_anchors")
-                val worldColumns = existingColumns(db, "world_events")
-                val hasHalfMigration = userVersion < TARGET_VERSION && (
-                    memoryColumns.any { it in memoryAnchorCompatibilityColumns.map { col -> col.first } } ||
-                        worldColumns.isNotEmpty()
-                )
+                ensureOperatorsCompatibility(db)
+                val hasPartialCompatibilityArtifacts = hasPartialCompatibilityArtifacts(db)
 
-                if (hasHalfMigration) {
+                if (userVersion < TARGET_VERSION && hasPartialCompatibilityArtifacts) {
                     ensureCompatibilitySchema(db)
                     clearDerivedTables(db)
                     if (tableExists(db, "diaries")) {
                         db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS idx_diaries_operator_date ON diaries(operatorId, date)")
                     }
-                    db.execSQL("PRAGMA user_version = $TARGET_VERSION")
-                    Log.w(TAG, "Recovered half-migrated database and advanced user_version to $TARGET_VERSION")
+                    val targetVersion = if (hasFullCompatibilitySchema(db)) TARGET_VERSION else userVersion
+                    db.execSQL("PRAGMA user_version = $targetVersion")
                 } else if (!isDerivedDataCleaned(context)) {
                     clearDerivedTables(db)
                 }
@@ -58,6 +54,7 @@ object DatabaseCompatibility {
     }
 
     private fun ensureCompatibilitySchema(db: SQLiteDatabase) {
+        ensureOperatorsCompatibility(db)
         ensureColumns(
             db = db,
             table = "memory_anchors",
@@ -105,6 +102,54 @@ object DatabaseCompatibility {
             """.trimIndent(),
             columns = worldEventCompatibilityColumns
         )
+    }
+
+    private fun ensureOperatorsCompatibility(db: SQLiteDatabase) {
+        if (!tableExists(db, "operators")) return
+        ensureColumns(
+            db = db,
+            table = "operators",
+            createSql = """
+                CREATE TABLE IF NOT EXISTS operators (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    title TEXT NOT NULL DEFAULT '',
+                    description TEXT NOT NULL DEFAULT '',
+                    gender TEXT NOT NULL DEFAULT '',
+                    avatarUri TEXT NOT NULL DEFAULT '',
+                    location TEXT NOT NULL DEFAULT '宿舍',
+                    activity TEXT NOT NULL DEFAULT '休息',
+                    emotion TEXT NOT NULL DEFAULT '平静',
+                    intimacy INTEGER NOT NULL DEFAULT 0,
+                    privatePrompt TEXT NOT NULL DEFAULT '',
+                    groupPrompt TEXT NOT NULL DEFAULT '',
+                    memoryInjection TEXT NOT NULL DEFAULT '',
+                    userRelation TEXT NOT NULL DEFAULT '',
+                    lmb INTEGER NOT NULL DEFAULT 10000,
+                    attack REAL NOT NULL DEFAULT 0.5,
+                    defense REAL NOT NULL DEFAULT 0.5,
+                    meldPref TEXT NOT NULL DEFAULT 'medium',
+                    activityLevel REAL NOT NULL DEFAULT 0.5
+                )
+            """.trimIndent(),
+            columns = listOf("memoryInjection" to "TEXT NOT NULL DEFAULT ''")
+        )
+    }
+
+    private fun hasFullCompatibilitySchema(db: SQLiteDatabase): Boolean {
+        val memoryColumns = existingColumns(db, "memory_anchors")
+        val worldColumns = existingColumns(db, "world_events")
+        val operatorColumns = existingColumns(db, "operators")
+        return memoryAnchorCompatibilityColumns.all { it.first in memoryColumns } &&
+            worldEventCompatibilityColumns.all { it.first in worldColumns } &&
+            (operatorColumns.isEmpty() || "memoryInjection" in operatorColumns)
+    }
+
+    private fun hasPartialCompatibilityArtifacts(db: SQLiteDatabase): Boolean {
+        val memoryColumns = existingColumns(db, "memory_anchors")
+        val worldColumns = existingColumns(db, "world_events")
+        val compatibilityMemoryColumns = memoryAnchorCompatibilityColumns.map { it.first }
+        return memoryColumns.any { it in compatibilityMemoryColumns } || worldColumns.isNotEmpty()
     }
 
     private fun clearDerivedTables(db: SQLiteDatabase) {

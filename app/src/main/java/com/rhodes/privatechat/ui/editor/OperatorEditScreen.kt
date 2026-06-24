@@ -54,6 +54,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -104,6 +105,10 @@ fun OperatorEditScreen(
     var avatarUri by remember { mutableStateOf(operator?.avatarUri ?: "") }
     var privatePrompt by remember { mutableStateOf(operator?.privatePrompt ?: "") }
     var groupPrompt by remember { mutableStateOf(operator?.groupPrompt ?: "") }
+    var memoryInjection by remember { mutableStateOf(operator?.memoryInjection ?: "") }
+    val initialOpKey = operator?.id ?: name.lowercase()
+    var privateSlot by remember { mutableIntStateOf(settings.getInt("operator_prompt_slot_${initialOpKey}_private", 1).coerceIn(1, 3)) }
+    var groupSlot by remember { mutableIntStateOf(settings.getInt("operator_prompt_slot_${initialOpKey}_group", 1).coerceIn(1, 3)) }
     var description by remember { mutableStateOf(operator?.description ?: "") }
     var userRelation by remember { mutableStateOf(operator?.userRelation ?: "") }
     var relationships by remember { mutableStateOf<List<RelationshipEntity>>(emptyList()) }
@@ -117,6 +122,12 @@ fun OperatorEditScreen(
     var promptReqText by remember { mutableStateOf("") }
     var isGeneratingPrompt by remember { mutableStateOf(false) }
 
+    fun opKey(): String = operator?.id ?: name.lowercase()
+    fun slotKey(type: String, slot: Int): String = "operator_prompt_slot_${opKey()}_${type}_$slot"
+    fun activeSlotKey(type: String): String = "operator_prompt_slot_${opKey()}_${type}"
+    fun loadPromptSlot(type: String, slot: Int, fallback: String): String = settings.getString(slotKey(type, slot), "")?.ifBlank { null } ?: fallback
+    fun savePromptSlot(type: String, slot: Int, content: String) { settings.putString(slotKey(type, slot), content) }
+
     // 加载已有关系
     LaunchedEffect(operator) {
         if (operator != null) {
@@ -128,11 +139,16 @@ fun OperatorEditScreen(
     }
 
     val onSave: () -> Unit = {
+        savePromptSlot("private", privateSlot, privatePrompt)
+        savePromptSlot("group", groupSlot, groupPrompt)
+        settings.putInt(activeSlotKey("private"), privateSlot)
+        settings.putInt(activeSlotKey("group"), groupSlot)
         viewModel.saveOperator(
             id = operator?.id ?: name.lowercase(),
             name = name, title = title,
             description = description.ifBlank { "${name}，罗德岛干员" },
             privatePrompt = privatePrompt, groupPrompt = groupPrompt,
+            memoryInjection = memoryInjection,
             userRelation = userRelation, avatarUri = avatarUri,
             autoPost = autoPost, allowChat = allowChat,
             relationships = relationships,
@@ -150,6 +166,7 @@ fun OperatorEditScreen(
         avatarUri != (operator?.avatarUri ?: "") ||
         privatePrompt != (operator?.privatePrompt ?: "") ||
         groupPrompt != (operator?.groupPrompt ?: "") ||
+        memoryInjection != (operator?.memoryInjection ?: "") ||
         description != (operator?.description ?: "") ||
         userRelation != (operator?.userRelation ?: "") ||
         relationships != initialRelationships
@@ -158,7 +175,7 @@ fun OperatorEditScreen(
     Box(modifier = modifier.fillMaxSize()) {
     Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
         TopBar(
-            title = if (isNew) "新建干员" else operator!!.name,
+            title = if (isNew) "新建干员" else operator?.name ?: name,
             onBack = requestBack,
             onSave = onSave
         )
@@ -208,8 +225,8 @@ fun OperatorEditScreen(
                 }
                 Spacer(modifier = Modifier.height(12.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    ToggleItem("自动发布动态", checked = autoPost, onCheckedChange = { autoPost = it })
-                    ToggleItem("允许主动私聊", checked = allowChat, onCheckedChange = { allowChat = it })
+                    ToggleItem("允许动态互动", checked = autoPost, onCheckedChange = { autoPost = it })
+                    ToggleItem("允许主动发私聊", checked = allowChat, onCheckedChange = { allowChat = it })
                 }
             }
 
@@ -250,13 +267,48 @@ fun OperatorEditScreen(
             Spacer(modifier = Modifier.height(12.dp))
             SectionCard {
                 SectionTitle("私聊人设")
-                PromptField(title = "私聊人设", value = privatePrompt, onValueChange = { privatePrompt = it }, placeholder = "输入该干员的私聊性格描述...")
+                PromptSlotBar(
+                    selected = privateSlot,
+                    onSelect = { slot ->
+                        savePromptSlot("private", privateSlot, privatePrompt)
+                        privateSlot = slot
+                        privatePrompt = loadPromptSlot("private", slot, if (slot == 1) operator?.privatePrompt ?: "" else "")
+                    }
+                )
+                PromptField(title = "私聊人设 ${privateSlot}号", value = privatePrompt, onValueChange = { privatePrompt = it }, placeholder = "输入该干员的私聊性格描述...")
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            SectionCard {
+                SectionTitle("记忆注入（仅私聊）")
+                Text(
+                    "只会拼入该角色的私聊提示词。不要写太多太详细，否则会增加消耗，也可能影响正常回复。适合简单记录你们的关系、特殊剧情或阶段性设定。",
+                    fontSize = 12.sp,
+                    color = TextSecondary,
+                    lineHeight = 18.sp,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                FullscreenTextField(
+                    title = "记忆注入（仅私聊）",
+                    value = memoryInjection,
+                    onValueChange = { memoryInjection = it },
+                    placeholder = "例：用户曾经救过她一次；两人私下约定互称某个称呼；当前正在进行某段特殊剧情。",
+                    minHeight = 100.dp
+                )
             }
 
             Spacer(modifier = Modifier.height(12.dp))
             SectionCard {
                 SectionTitle("群聊人设")
-                PromptField(title = "群聊人设", value = groupPrompt, onValueChange = { groupPrompt = it }, placeholder = "输入该干员的群聊性格描述...")
+                PromptSlotBar(
+                    selected = groupSlot,
+                    onSelect = { slot ->
+                        savePromptSlot("group", groupSlot, groupPrompt)
+                        groupSlot = slot
+                        groupPrompt = loadPromptSlot("group", slot, if (slot == 1) operator?.groupPrompt ?: "" else "")
+                    }
+                )
+                PromptField(title = "群聊人设 ${groupSlot}号", value = groupPrompt, onValueChange = { groupPrompt = it }, placeholder = "输入该干员的群聊性格描述...")
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -609,6 +661,26 @@ private fun PromptField(title: String, value: String, onValueChange: (String) ->
 }
 
 @Composable
+private fun PromptSlotBar(selected: Int, onSelect: (Int) -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        (1..3).forEach { slot ->
+            val active = slot == selected
+            Text(
+                text = "${slot}号",
+                fontSize = 13.sp,
+                color = if (active) Color.White else Primary,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(if (active) Primary else PrimaryContainer)
+                    .clickable { onSelect(slot) }
+                    .padding(horizontal = 14.dp, vertical = 7.dp)
+            )
+        }
+    }
+}
+
+@Composable
 private fun RelationshipEditItem(
     opName: String, rel: RelationshipEntity, allOperators: List<OperatorEntity>,
     onUpdate: (RelationshipEntity) -> Unit, onDelete: () -> Unit
@@ -743,6 +815,7 @@ private fun typeName(type: RelationshipType): String {
     if (type == RelationshipType.COMRADE) return "战友"
     if (type == RelationshipType.TEAMMATE) return "队友"
     if (type == RelationshipType.RIVAL) return "对手"
+    if (type == RelationshipType.LOVE_RIVAL) return "情敌"
     if (type == RelationshipType.CRUSH) return "暗恋对象"
     if (type == RelationshipType.LOVER) return "恋人"
     if (type == RelationshipType.FAMILY) return "家人"

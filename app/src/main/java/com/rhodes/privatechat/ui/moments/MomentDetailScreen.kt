@@ -183,7 +183,7 @@ private fun MomentDetailCard(
                                 withStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = Primary)) { append(reply.operatorName) }
                                 if (reply.replyToName.isNotBlank()) {
                                     withStyle(SpanStyle(color = TextTertiary)) { append(" 回复 ") }
-                                    withStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = Primary)) { append(reply.replyToName) }
+                                    withStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = AccentOrange)) { append("@${reply.replyToName}") }
                                 }
                                 append("：${reply.content}")
                             }, fontSize = 13.sp, color = TextPrimary, modifier = Modifier.weight(1f, fill = false))

@@ -1,6 +1,5 @@
 package com.rhodes.privatechat.ui.dispatch
 
-import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -29,8 +28,6 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 
-private const val TAG = "Dispatch"
-
 @Composable
 fun DispatchProgressScreen(
     viewModel: MainViewModel,
@@ -56,13 +53,15 @@ fun DispatchProgressScreen(
 
     // 加载派遣记录（含等待 AI 生成）
     LaunchedEffect(dispatchId) {
-        Log.i(TAG, "[ProgressScreen] 开始加载 dispatchId=$dispatchId")
         // 轮询等待记录出现（AI 生成中 status="generating"）
         var rec = viewModel.repository.getDispatch(dispatchId)
         var waitSec = 0
         while (rec == null) { delay(1000); waitSec++; rec = viewModel.repository.getDispatch(dispatchId); if (waitSec > 30) { done = true; errorMsg = "派遣加载超时"; return@LaunchedEffect } }
-        val r = rec!!
-        Log.d(TAG, "[ProgressScreen] 记录已加载 status=${r.status} task=${r.taskType} segs=${r.totalSegments} logLen=${r.logChain.length}")
+        val r = rec ?: run {
+            done = true
+            errorMsg = "派遣记录不存在或已删除"
+            return@LaunchedEffect
+        }
         taskType = r.taskType
         budget = r.budget
         interval = r.segmentInterval
@@ -70,7 +69,6 @@ fun DispatchProgressScreen(
         loaded = true
         // 等待 AI 生成完成（status 变为 active 或 cancelled）
         if (r.status == "generating") {
-            Log.d(TAG, "[ProgressScreen] 等待AI生成完成...")
             var genSec = 0
             while (true) {
                 delay(1000); genSec++
@@ -78,11 +76,13 @@ fun DispatchProgressScreen(
                 if (updated.status != "generating") { rec = updated; break }
                 if (genSec > 120) { done = true; errorMsg = "AI 生成超时，请重试"; return@LaunchedEffect }
             }
-            Log.i(TAG, "[ProgressScreen] AI生成完成 status=${rec?.status}")
         }
-        val finalRec = rec!!
+        val finalRec = rec ?: run {
+            done = true
+            errorMsg = "派遣记录不存在或已删除"
+            return@LaunchedEffect
+        }
         if (finalRec.status == "cancelled" || finalRec.status == "finished") {
-            Log.d(TAG, "[ProgressScreen] 已结束 status=${finalRec.status}，直接显示")
             done = true; visibleCount = totalSeg
             netProfit = finalRec.netProfit; items = finalRec.items
             // 检测AI生成失败：cancelled + 无段落 + 无收益 = AI生成失败
@@ -98,7 +98,6 @@ fun DispatchProgressScreen(
         startTime = finalRec.startTime
         interval = finalRec.segmentInterval
         totalSeg = finalRec.totalSegments
-        Log.i(TAG, "[ProgressScreen] 开始监控派遣 startTime=$startTime interval=${interval}ms totalSeg=$totalSeg")
 
         fun parseSegmentsFromLog(log: String): List<Map<String, Any?>> {
             if (log.isBlank()) return emptyList()
@@ -137,7 +136,6 @@ fun DispatchProgressScreen(
         val initialSegments = parseSegmentsFromLog(finalRec.logChain)
         segments = initialSegments.toMutableList()
         totalSeg = maxOf(totalSeg, initialSegments.size)
-        Log.i(TAG, "[ProgressScreen] 初始段落数=${initialSegments.size}")
 
         // 定时检查 DB 中新增的段落 + 按时间解锁
         val waitStartedAt = System.currentTimeMillis()
@@ -157,7 +155,6 @@ fun DispatchProgressScreen(
                     segments = parseSegmentsFromLog(currentRec.logChain)
                     visibleCount = segments.size
                 }
-                Log.i(TAG, "[ProgressScreen] 派遣已结束 status=${currentRec.status}")
                 break
             }
 
@@ -165,7 +162,6 @@ fun DispatchProgressScreen(
             val newSegments = parseSegmentsFromLog(currentRec.logChain)
             if (newSegments.size > segments.size) {
                 segments = newSegments
-                Log.d(TAG, "[ProgressScreen] 检测到新段落: ${newSegments.size}")
             }
             totalSeg = maxOf(currentRec.totalSegments, newSegments.size)
 
@@ -174,11 +170,9 @@ fun DispatchProgressScreen(
             val unlockedCount = (elapsed / (currentRec.segmentInterval.coerceAtLeast(1L))).toInt().coerceIn(1, totalSeg.coerceAtLeast(1))
             if (unlockedCount > visibleCount) {
                 visibleCount = unlockedCount
-                Log.d(TAG, "[ProgressScreen] 解锁新段落 visible=$visibleCount/$totalSeg")
             }
 
             if (unlockedCount >= totalSeg) {
-                Log.i(TAG, "[ProgressScreen] 所有段落已解锁，执行finishDispatch")
                 viewModel.finishDispatch(dispatchId)
             }
             delay(3000)

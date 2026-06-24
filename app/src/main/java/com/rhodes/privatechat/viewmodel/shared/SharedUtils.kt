@@ -1,10 +1,11 @@
 package com.rhodes.privatechat.viewmodel.shared
 
-import android.util.Log
 import com.rhodes.privatechat.shared.model.AnchorType
 import com.rhodes.privatechat.shared.model.MemoryAnchor
 import com.rhodes.privatechat.shared.model.RelationshipType
 import com.rhodes.privatechat.shared.model.AiMessage
+import com.rhodes.privatechat.shared.model.WorldEvent
+import com.rhodes.privatechat.shared.model.WorldEventType
 import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.shared.memory.AnchorSourcePolicy
 import com.rhodes.privatechat.shared.network.AIService
@@ -18,7 +19,7 @@ class SharedUtils(
     private val operatorsProvider: () -> List<com.rhodes.privatechat.shared.model.Operator> = { emptyList() }
 ) {
     companion object {
-        const val DEBUG = true
+        const val DEBUG = false
     }
 
     // === AI 调用 ===
@@ -53,24 +54,6 @@ class SharedUtils(
 
     fun logAiCall(tag: String, prompt: String, response: String, allMessages: List<AiMessage>? = null) {
         if (!DEBUG) return
-        val aiTag = "AI调试输出"
-        Log.d(aiTag, "╔══════════════════════════════════════════════")
-        Log.d(aiTag, "║ [$tag]")
-        Log.d(aiTag, "╠══ SYSTEM PROMPT ════════════════════════════")
-        prompt.lines().forEach { Log.d(aiTag, "║ $it") }
-        if (allMessages != null && allMessages.size > 1) {
-            Log.d(aiTag, "╠══ CHAT HISTORY (${allMessages.size - 1}条) ═══")
-            for ((i, msg) in allMessages.withIndex()) {
-                if (i == 0) continue
-                val label = if (msg.role == "user") "用户" else "AI"
-                val preview = msg.content.take(200)
-                Log.d(aiTag, "║ [$label] $preview")
-                if (msg.content.length > 200) Log.d(aiTag, "║   ...(共${msg.content.length}字)")
-            }
-        }
-        Log.d(aiTag, "╠══ RESPONSE ════════════════════════════════")
-        response.lines().forEach { Log.d(aiTag, "║ $it") }
-        Log.d(aiTag, "╚══════════════════════════════════════════════")
     }
 
     fun logMemoryContext(
@@ -351,10 +334,26 @@ class SharedUtils(
             repository.getRecentWorldEvents(limit)
         }
         if (events.isEmpty()) return "无"
-        return events.joinToString("\n") { event ->
-            val who = event.actorName.ifBlank { event.actorId.ifBlank { "罗德岛" } }
-            "- ${anchorTimeLabel(MemoryAnchor(sessionId = event.sourceId, operatorId = event.actorId, type = AnchorType.EVENT, content = event.content, createdAt = event.createdAt))} $who：${event.content.take(100)}"
+        return events.joinToString("\n") { event -> formatWorldEventForPrompt(event, 100) }
+    }
+
+    fun formatWorldEventForPrompt(event: WorldEvent, contentLimit: Int = 120): String {
+        val time = anchorTimeLabel(MemoryAnchor(sessionId = event.sourceId, operatorId = event.actorId, type = AnchorType.EVENT, content = event.content, createdAt = event.createdAt))
+        val actor = event.actorName.ifBlank { event.actorId.ifBlank { "罗德岛" } }
+        val target = event.targetName.ifBlank { event.targetId.ifBlank { "无" } }
+        val actorKind = if (event.actorId == "user") "用户" else if (event.actorId.startsWith("group_")) "群聊" else "干员"
+        val typeLabel = when (event.type) {
+            WorldEventType.MOMENT_POSTED -> if (event.actorId == "user") "用户动态" else "干员动态"
+            WorldEventType.COMMENT_POSTED -> if (event.actorId == "user") "用户评论" else "干员评论"
+            WorldEventType.GROUP_TOPIC -> "群聊话题"
+            WorldEventType.PRIVATE_TRIGGER -> "私信触发"
+            WorldEventType.STATUS_CHANGED -> "状态变化"
+            WorldEventType.DIARY_WRITTEN -> "日记"
+            WorldEventType.DISPATCH_EVENT -> "派遣事件"
+            WorldEventType.MAHJONG_EVENT -> "麻将事件"
+            else -> event.type
         }
+        return "- $time [事件类型:$typeLabel][发起者:$actor][发起者身份:$actorKind][目标:$target] ${event.content.take(contentLimit)}"
     }
 
     suspend fun buildUnconsumedEventContextForOperator(
@@ -367,10 +366,7 @@ class SharedUtils(
         val events = repository.getUnconsumedWorldEventsForOperator(operatorId, operatorName, consumer, limit)
         if (events.isEmpty()) return "无"
         if (markConsumed) events.forEach { repository.markWorldEventConsumed(it.id, consumer) }
-        return events.joinToString("\n") { event ->
-            val who = event.actorName.ifBlank { event.actorId.ifBlank { "罗德岛" } }
-            "- ${anchorTimeLabel(MemoryAnchor(sessionId = event.sourceId, operatorId = event.actorId, type = AnchorType.EVENT, content = event.content, createdAt = event.createdAt))} $who：${event.content.take(120)}"
-        }
+        return events.joinToString("\n") { event -> formatWorldEventForPrompt(event, 120) }
     }
 
     suspend fun buildUnconsumedEventContextForGroup(
@@ -383,10 +379,7 @@ class SharedUtils(
         val events = repository.getUnconsumedWorldEventsForGroup(groupId, memberIds, memberNames, limit)
         if (events.isEmpty()) return "无"
         if (markConsumed) events.forEach { repository.markWorldEventConsumed(it.id, "group:$groupId") }
-        return events.joinToString("\n") { event ->
-            val who = event.actorName.ifBlank { event.actorId.ifBlank { "罗德岛" } }
-            "- ${anchorTimeLabel(MemoryAnchor(sessionId = event.sourceId, operatorId = event.actorId, type = AnchorType.EVENT, content = event.content, createdAt = event.createdAt))} $who：${event.content.take(120)}"
-        }
+        return events.joinToString("\n") { event -> formatWorldEventForPrompt(event, 120) }
     }
 
     @Suppress("unused")
@@ -475,6 +468,7 @@ class SharedUtils(
         RelationshipType.COMRADE -> "战友"
         RelationshipType.TEAMMATE -> "队友"
         RelationshipType.RIVAL -> "对手"
+        RelationshipType.LOVE_RIVAL -> "情敌"
         RelationshipType.CRUSH -> "暗恋"
         RelationshipType.LOVER -> "恋人"
         RelationshipType.FAMILY -> "家人"
@@ -502,6 +496,7 @@ class SharedUtils(
         RelationshipType.COMRADE -> "${aName}是${bName}的【战友】"
         RelationshipType.TEAMMATE -> "${aName}是${bName}的【队友】"
         RelationshipType.RIVAL -> "${aName}是${bName}的【对手】"
+        RelationshipType.LOVE_RIVAL -> "${aName}是${bName}的【情敌】"
         RelationshipType.CRUSH -> "${aName}是${bName}的【暗恋对象】"
         RelationshipType.LOVER -> "${aName}是${bName}的【恋人】"
         RelationshipType.FAMILY -> "${aName}是${bName}的【家人】"

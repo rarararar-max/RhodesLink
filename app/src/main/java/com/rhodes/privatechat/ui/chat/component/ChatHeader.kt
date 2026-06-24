@@ -1,6 +1,7 @@
 package com.rhodes.privatechat.ui.chat.component
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -31,14 +32,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.rhodes.privatechat.ui.common.OperatorAvatarImage
+import com.rhodes.privatechat.ui.common.ThemedDropdownMenu
 import com.rhodes.privatechat.ui.theme.*
 
 /** 供 ChatDropdownMenuItem 使用的菜单关闭回调 */
@@ -71,11 +75,12 @@ fun ChatHeader(
 
     Column {
         Row(
-            modifier = Modifier.fillMaxWidth().statusBarsPadding().background(Surface)
-                .padding(horizontal = 4.dp, vertical = 6.dp),
+            modifier = Modifier.fillMaxWidth().statusBarsPadding()
+                .background(Brush.horizontalGradient(listOf(HeaderStart.copy(alpha = 0.96f), HeaderEnd.copy(alpha = 0.96f))))
+                .padding(horizontal = 6.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onBack) {
+            IconButton(onClick = onBack, modifier = Modifier.clip(CircleShape).background(Card.copy(alpha = 0.48f))) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary)
             }
 
@@ -88,25 +93,24 @@ fun ChatHeader(
                     ) { Icon(Icons.Default.Groups, null, tint = Color.White, modifier = Modifier.size(18.dp)) }
                 } else {
                     AsyncImage(model = avatarUri, contentDescription = null,
-                        modifier = Modifier.size(34.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+                        modifier = Modifier.size(34.dp).clip(CircleShape).border(1.dp, StrokeStrong, CircleShape), contentScale = ContentScale.Crop)
                 }
             } else {
-                OperatorAvatarImage(avatarUri = avatarUri, name = title, modifier = Modifier.size(34.dp))
+                OperatorAvatarImage(avatarUri = avatarUri, name = title, modifier = Modifier.size(34.dp).border(1.dp, StrokeStrong, CircleShape))
             }
 
             Spacer(modifier = Modifier.width(8.dp))
 
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(title, fontSize = if (showGroupIcon) 16.sp else 17.sp,
+                    Text(title, modifier = Modifier.weight(1f, fill = false), fontSize = if (showGroupIcon) 16.sp else 17.sp,
                         fontWeight = if (showGroupIcon) FontWeight.SemiBold else FontWeight.Bold,
-                        color = TextPrimary)
+                        color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     if (!showGroupIcon) {
                         Spacer(modifier = Modifier.width(6.dp))
                         val modeLabel = when (mode) { "online" -> "🟢"; "director" -> "🎬"; else -> "🏠" }
                         val modeHint = when (mode) { "online" -> "线上"; "director" -> "导演"; else -> "线下" }
-                        Text(modeLabel, fontSize = 13.sp)
-                        Text(modeHint, fontSize = 11.sp, color = Primary, fontWeight = FontWeight.Medium)
+                        Text("$modeLabel $modeHint", fontSize = 11.sp, color = Primary, fontWeight = FontWeight.Medium, modifier = Modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(999.dp)).background(Primary.copy(alpha = 0.12f)).border(1.dp, Primary.copy(alpha = 0.18f), androidx.compose.foundation.shape.RoundedCornerShape(999.dp)).padding(horizontal = 7.dp, vertical = 2.dp))
                         if (isLoading) {
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("输入中...", fontSize = 13.sp, color = Primary, fontStyle = FontStyle.Italic)
@@ -114,22 +118,22 @@ fun ChatHeader(
                     }
                 }
                 if (subtitleText.isNotBlank()) {
-                    Text(subtitleText, fontSize = 11.sp, color = TextSecondary)
+                    Text(subtitleText, fontSize = 11.sp, color = TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
 
             Box {
-                IconButton(onClick = { showMenu = true }) {
+                IconButton(onClick = { showMenu = true }, modifier = Modifier.clip(CircleShape).background(Card.copy(alpha = 0.38f))) {
                     Icon(Icons.Default.MoreVert, null, tint = TextPrimary)
                 }
-                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }, containerColor = Surface) {
+                ThemedDropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                     CompositionLocalProvider(LocalDismissMenu provides { showMenu = false }) {
                         menuContent()
                     }
                 }
             }
         }
-        HorizontalDivider(color = Divider)
+        HorizontalDivider(color = Stroke)
     }
 }
 

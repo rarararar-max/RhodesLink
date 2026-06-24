@@ -17,7 +17,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         val shouldDropSavedState = consumeDropSavedStateFlag()
         super.onCreate(if (shouldDropSavedState) null else savedInstanceState)
-        com.rhodes.privatechat.util.DebugLogger.log("Lifecycle", "onCreate savedInstanceState=${savedInstanceState != null} dropped=$shouldDropSavedState")
         val settings: SettingsRepository by inject(SettingsRepository::class.java)
         isDarkMode = settings.darkMode
         window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
@@ -31,27 +30,6 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-    override fun onPause() {
-        super.onPause()
-        com.rhodes.privatechat.util.DebugLogger.log("Lifecycle", "onPause")
-    }
-    override fun onStop() {
-        super.onStop()
-        com.rhodes.privatechat.util.DebugLogger.log("Lifecycle", "onStop")
-    }
-    override fun onDestroy() {
-        super.onDestroy()
-        com.rhodes.privatechat.util.DebugLogger.log("Lifecycle", "onDestroy")
-    }
-    override fun onRestart() {
-        super.onRestart()
-        com.rhodes.privatechat.util.DebugLogger.log("Lifecycle", "onRestart")
-    }
-    override fun onResume() {
-        super.onResume()
-        com.rhodes.privatechat.util.DebugLogger.log("Lifecycle", "onResume")
-    }
-
     private fun consumeDropSavedStateFlag(): Boolean {
         val prefs = getSharedPreferences("rhodes_runtime", Context.MODE_PRIVATE)
         val shouldDrop = prefs.getBoolean("drop_saved_state_once", false)

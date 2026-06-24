@@ -26,6 +26,7 @@ data class OperatorExport(
     val intimacy: Int = 0,
     val privatePrompt: String = "",
     val groupPrompt: String = "",
+    val memoryInjection: String = "",
     val userRelation: String = "",
     val lmb: Int = 10000,
     val attack: Float = 0.5f,

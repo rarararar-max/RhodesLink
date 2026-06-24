@@ -8,6 +8,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import android.widget.Toast
 import cafe.adriel.voyager.core.screen.Screen
 import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.currentOrThrow
@@ -100,8 +101,7 @@ data class ChatOperator(val operatorId: String) : Screen {
             if (operator != null) {
                 try {
                     viewModel.chatViewModel.selectOperatorSync(operator)
-                } catch (e: Exception) {
-                    android.util.Log.e("RHODES_CHAT_TRACE", "[AppScreens] selectOperatorSync.ERROR op=$operatorId err=${e.message}", e)
+                } catch (_: Exception) {
                 }
                 ready = true
             }
@@ -211,7 +211,6 @@ data object MomentsRoute : Screen {
     override fun Content() {
         val navigator = LocalNavigator.currentOrThrow
         val viewModel: MainViewModel = koinViewModel()
-        android.util.Log.d("MainVM", "** [DBG] ** MomentsRoute: VM=${System.identityHashCode(viewModel)}")
         com.rhodes.privatechat.ui.moments.MomentsScreen(
             viewModel = viewModel,
             onBack = { navigator.pop() },
@@ -352,13 +351,19 @@ data object MahjongSelectRoute : Screen {
         val navigator = LocalNavigator.currentOrThrow
         val viewModel: MainViewModel = koinViewModel()
         val settings: SettingsRepository = koinInject()
+        val context = androidx.compose.ui.platform.LocalContext.current
         val userLmb = settings.lmb
         val operators by viewModel.operators.collectAsState()
         var savedGame by remember { mutableStateOf<GameState?>(null) }
         LaunchedEffect(Unit) {
             viewModel.loadMahjongSave { save ->
                 if (save != null) {
-                    try { savedGame = GameSerializer.deserialize(save.saveJson) } catch (_: Exception) {}
+                    try {
+                        val game = GameSerializer.deserialize(save.saveJson)
+                        if (game.isValidMahjongGame()) savedGame = game else viewModel.deleteMahjongSave()
+                    } catch (_: Exception) {
+                        viewModel.deleteMahjongSave()
+                    }
                 }
             }
         }
@@ -370,31 +375,46 @@ data object MahjongSelectRoute : Screen {
             onBack = { navigator.pop() },
             savedGame = savedGame,
             onResume = { game ->
-                val replayData = GameStateCreateParams(
-                    opIds = game.players.filter { !it.isHuman }.map { it.opId },
-                    opNames = game.players.filter { !it.isHuman }.map { it.name },
-                    styles = game.players.filter { !it.isHuman }.map { Triple(it.attack, it.defense, it.meldPref) },
-                    userId = game.players.find { it.isHuman }!!.opId,
-                    userName = game.players.find { it.isHuman }!!.name,
-                    assistantId = game.assistantOpId,
-                    matchMode = game.matchMode
-                )
-                navigator.replace(MahjongGameRoute(game, replayData))
+                val replayData = game.toReplayDataOrNull()
+                if (replayData == null) {
+                    viewModel.deleteMahjongSave()
+                    savedGame = null
+                    Toast.makeText(context, "旧麻将存档不兼容，已清理，请重新开局", Toast.LENGTH_SHORT).show()
+                } else {
+                    navigator.replace(MahjongGameRoute(game, replayData))
+                }
             },
             onStart = { game ->
-                val replayData = GameStateCreateParams(
-                    opIds = game.players.filter { !it.isHuman }.map { it.opId },
-                    opNames = game.players.filter { !it.isHuman }.map { it.name },
-                    styles = game.players.filter { !it.isHuman }.map { Triple(it.attack, it.defense, it.meldPref) },
-                    userId = game.players.find { it.isHuman }!!.opId,
-                    userName = game.players.find { it.isHuman }!!.name,
-                    assistantId = game.assistantOpId,
-                    matchMode = game.matchMode
-                )
-                navigator.replace(MahjongGameRoute(game, replayData))
+                val replayData = game.toReplayDataOrNull()
+                if (replayData == null) {
+                    Toast.makeText(context, "麻将牌局数据异常，请重新选择对手", Toast.LENGTH_SHORT).show()
+                } else {
+                    navigator.replace(MahjongGameRoute(game, replayData))
+                }
             }
         )
     }
+}
+
+private fun GameState.isValidMahjongGame(): Boolean = toReplayDataOrNull() != null
+
+private fun GameState.toReplayDataOrNull(): GameStateCreateParams? {
+    val opponents = players.filter { !it.isHuman }
+    val human = players.firstOrNull { it.isHuman } ?: return null
+    if (players.size != 4 || opponents.size != 3) return null
+    if (opponents.any { it.opId.isBlank() || it.name.isBlank() }) return null
+    if (human.opId.isBlank() || human.name.isBlank()) return null
+    if (assistantOpId.isBlank()) return null
+    normalizeTurn()
+    return GameStateCreateParams(
+        opIds = opponents.map { it.opId },
+        opNames = opponents.map { it.name },
+        styles = opponents.map { Triple(it.attack, it.defense, it.meldPref) },
+        userId = human.opId,
+        userName = human.name,
+        assistantId = assistantOpId,
+        matchMode = matchMode
+    )
 }
 
 data class MahjongGameRoute(

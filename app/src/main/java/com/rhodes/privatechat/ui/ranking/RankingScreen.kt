@@ -96,7 +96,7 @@ fun RankingScreen(
                 Text("排名", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.width(40.dp))
                 Text("干员", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.weight(1f))
                 Text("消息数", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.width(48.dp), textAlign = TextAlign.Center)
-                Text("好感+", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.width(40.dp), textAlign = TextAlign.Center)
+                Text("好感", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.width(40.dp), textAlign = TextAlign.Center)
             }
 
             LazyColumn {
@@ -111,7 +111,7 @@ fun RankingScreen(
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(entry.senderName, fontSize = 14.sp, modifier = Modifier.weight(1f), color = TextPrimary)
                         Text("${entry.cnt}", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, modifier = Modifier.width(48.dp), textAlign = TextAlign.Center)
-                        Text("+$dailyIntimacy", fontSize = 13.sp, color = Color(0xFFFF9800), modifier = Modifier.width(40.dp), textAlign = TextAlign.Center)
+                        Text(formatIntimacyDelta(dailyIntimacy), fontSize = 13.sp, color = Color(0xFFFF9800), modifier = Modifier.width(40.dp), textAlign = TextAlign.Center)
                     }
                     HorizontalDivider(color = BG)
                 }
@@ -123,3 +123,7 @@ fun RankingScreen(
 
 private fun rankText(i: Int) = when (i) { 0 -> "🥇"; 1 -> "🥈"; 2 -> "🥉"; else -> "#${i + 1}" }
 private fun rankColor(i: Int) = when (i) { 0 -> Color(0xFFFFD700); 1 -> Color(0xFFC0C0C0); 2 -> Color(0xFFCD7F32); else -> TextSecondary }
+private fun formatIntimacyDelta(value: Int): String = when {
+    value > 0 -> "+$value"
+    else -> value.toString()
+}

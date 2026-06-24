@@ -19,6 +19,7 @@ class OperatorViewModel(
     fun saveOperator(
         id: String, name: String, title: String = "", description: String,
         privatePrompt: String = "", groupPrompt: String = "",
+        memoryInjection: String = "",
         userRelation: String = "", avatarUri: String = "",
         autoPost: Boolean = true, allowChat: Boolean = true,
         relationships: List<Relationship> = emptyList(),
@@ -37,6 +38,7 @@ class OperatorViewModel(
                     intimacy = existing?.intimacy ?: 0,
                     privatePrompt = if (privatePrompt.isNotBlank()) privatePrompt else existing?.privatePrompt ?: "",
                     groupPrompt = if (groupPrompt.isNotBlank()) groupPrompt else existing?.groupPrompt ?: "",
+                    memoryInjection = memoryInjection,
                     userRelation = if (userRelation.isNotBlank()) userRelation else existing?.userRelation ?: "",
                     avatarUri = if (avatarUri.isNotBlank()) avatarUri else existing?.avatarUri ?: "",
                     lmb = existing?.lmb ?: 10000,

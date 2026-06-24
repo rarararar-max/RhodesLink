@@ -24,7 +24,7 @@ class MomentsViewModel(
     private val getUserProfile: () -> UserProfile
 ) {
     companion object {
-        const val DEBUG = true
+        const val DEBUG = false
     }
 
     private val likeMutex = Mutex()
@@ -68,8 +68,13 @@ class MomentsViewModel(
     suspend fun getMomentBadgeSuspend(): Int {
         val lastSeenMoment = settings.lastSeenMomentId
         val recent = withContext(Dispatchers.IO) { repository.getMomentsPaged(100, 0) }
-        val momentBadge = recent.count { it.id > lastSeenMoment && !it.isUserPost }
-        return momentBadge + getUnreadCommentCountSuspend()
+        return recent.count { it.id > lastSeenMoment && !it.isUserPost }
+    }
+
+    suspend fun hasNewMomentsSince(latestLoadedId: Long): Boolean {
+        if (latestLoadedId <= 0L) return false
+        val latest = withContext(Dispatchers.IO) { repository.getMomentsPaged(1, 0).firstOrNull()?.id ?: 0L }
+        return latest > latestLoadedId
     }
 
     suspend fun getUnreadCommentCountSuspend(): Int {

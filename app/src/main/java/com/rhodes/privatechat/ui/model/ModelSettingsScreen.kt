@@ -36,12 +36,12 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     val ctx = LocalContext.current
 
     val providerIds = providers.keys.toList()
-    val providerNames = providerIds.map { providers[it]!!.name }
+    val providerNames = providerIds.map { providers.getValue(it).name }
     val savedProvider = settings.provider.takeIf { it in providers } ?: "deepseek"
 
     var selectedProvider by remember { mutableIntStateOf(providerIds.indexOf(savedProvider).coerceAtLeast(0)) }
-    val currentProviderId = providerIds[selectedProvider]
-    val currentConfig = providers[currentProviderId]!!
+    val currentProviderId = providerIds.getOrElse(selectedProvider) { "deepseek" }
+    val currentConfig = providers[currentProviderId] ?: providers.getValue("deepseek")
 
     val savedModel = settings.modelName
     var selectedModelIdx by remember {

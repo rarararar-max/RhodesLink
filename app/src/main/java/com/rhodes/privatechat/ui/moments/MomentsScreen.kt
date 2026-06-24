@@ -65,7 +65,9 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
     var replyParentName by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
     val prevCount = remember { mutableIntStateOf(0) }
+    var scrollToTopAfterPost by remember { mutableStateOf(false) }
     var unreadMsgCount by remember { mutableIntStateOf(0) }
+    var hasNewMoments by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { unreadMsgCount = viewModel.getUnreadCommentCountSuspend() }
     val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(lifecycleOwner) {
@@ -73,8 +75,11 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
         while (true) {
             delay(30_000)
             if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
-                viewModel.refreshMomentsNow()
                 unreadMsgCount = viewModel.getUnreadCommentCountSuspend()
+                val latestLoadedId = moments.firstOrNull()?.id ?: 0L
+                if (viewModel.hasNewMomentsSince(latestLoadedId)) {
+                    hasNewMoments = true
+                }
             }
         }
     }
@@ -87,6 +92,10 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
     }
 
     LaunchedEffect(moments.size) {
+        if (scrollToTopAfterPost && moments.isNotEmpty()) {
+            listState.animateScrollToItem(0)
+            scrollToTopAfterPost = false
+        }
         prevCount.intValue = moments.size
     }
 
@@ -108,6 +117,19 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
             IconButton(onClick = { showPost = true }) { Icon(Icons.Default.Create, "发动态", tint = Primary) }
         }
         HorizontalDivider(color = Divider)
+        if (hasNewMoments) {
+            TextButton(
+                onClick = {
+                    viewModel.refreshMomentsNow()
+                    hasNewMoments = false
+                    scrollToTopAfterPost = true
+                },
+                modifier = Modifier.fillMaxWidth().background(SurfaceVariant)
+            ) {
+                Text("有新动态，点击刷新", fontSize = 13.sp, color = Primary, fontWeight = FontWeight.SemiBold)
+            }
+            HorizontalDivider(color = Divider)
+        }
         LazyColumn(state = listState) {
                 if (moments.isEmpty()) { item { Box(Modifier.fillMaxWidth().fillParentMaxHeight(), contentAlignment = Alignment.Center) { Text("暂无动态\n点击右上角催发生成动态", fontSize = 14.sp, color = TextTertiary, textAlign = TextAlign.Center) } } }
                 items(moments, key = { it.id }) { moment ->
@@ -132,7 +154,7 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
             }
     }
     }
-    if (showPost) PostDialog(operators = viewModel.operators.collectAsState().value, onDismiss = { showPost = false }, onPost = { content, mentioned -> viewModel.postUserMoment(content, mentioned); showPost = false })
+    if (showPost) PostDialog(operators = viewModel.operators.collectAsState().value, onDismiss = { showPost = false }, onPost = { content, mentioned -> scrollToTopAfterPost = true; viewModel.postUserMoment(content, mentioned); showPost = false })
 
     // Reply dialog at screen level
     // Reply dialog - with key to prevent flash
@@ -241,7 +263,7 @@ private fun MomentCardWithInteraction(moment: MomentEntity, viewModel: MainViewM
                                         withStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = Primary)) { append(reply.operatorName) }
                                         if (reply.replyToName.isNotBlank()) {
                                             withStyle(SpanStyle(color = TextTertiary)) { append(" 回复 ") }
-                                            withStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = Primary)) { append(reply.replyToName) }
+                                            withStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = AccentOrange)) { append("@${reply.replyToName}") }
                                         }
                                         append("：${reply.content}")
                                     }, fontSize = 13.sp, color = TextPrimary, modifier = Modifier.weight(1f, fill = false))

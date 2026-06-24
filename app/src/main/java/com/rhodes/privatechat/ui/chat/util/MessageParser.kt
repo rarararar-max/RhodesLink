@@ -80,9 +80,12 @@ object MessageParser {
             }
             val result = arr.mapIndexedNotNull { idx, el ->
                 val obj = el.jsonObject
-                val name = obj["speaker"]?.jsonPrimitive?.content ?: obj["sender"]?.jsonPrimitive?.content ?: obj["name"]?.jsonPrimitive?.content ?: return@mapIndexedNotNull null
-                val content = obj["message"]?.jsonPrimitive?.content ?: obj["content"]?.jsonPrimitive?.content ?: obj["text"]?.jsonPrimitive?.content ?: return@mapIndexedNotNull null
-                val msgType = obj["type"]?.jsonPrimitive?.content ?: "dialogue"
+                val rawName = obj["speaker"]?.jsonPrimitive?.content ?: obj["sender"]?.jsonPrimitive?.content ?: obj["name"]?.jsonPrimitive?.content ?: return@mapIndexedNotNull null
+                val rawContent = obj["message"]?.jsonPrimitive?.content ?: obj["content"]?.jsonPrimitive?.content ?: obj["text"]?.jsonPrimitive?.content ?: return@mapIndexedNotNull null
+                val normalized = normalizeGroupBubble(rawName, obj["type"]?.jsonPrimitive?.content ?: "dialogue", rawContent)
+                val name = normalized.first
+                val msgType = normalized.second
+                val content = normalized.third
                 if (content.isBlank()) return@mapIndexedNotNull null
                 if (isOnline && (msgType == "narration" || name == "旁白")) return@mapIndexedNotNull null
                 val uid = msg.id * 1000 + idx
@@ -96,7 +99,7 @@ object MessageParser {
             }
             result
         } catch (_: Exception) {
-            listOf(ChatUiMessage(msg.id, msg.senderName, Gray100, msg.content, msg.timestamp,
+            listOf(ChatUiMessage(msg.id, msg.senderName, Gray100, safeDisplayText(msg.content), msg.timestamp,
                 avatarUri = senderAvatar(msg.senderName), mode = msg.mode, originalMessageId = msg.id))
         }
     }
@@ -110,8 +113,7 @@ object MessageParser {
     ): List<ChatUiMessage> {
         val (emotion, segments) = parsePrivateJson(msg.content)
         if (emotion == null || segments.isEmpty()) {
-            // JSON 解析失败，作为普通文本
-            return listOf(ChatUiMessage(msg.id, aiName, Primary, msg.content, msg.timestamp,
+            return listOf(ChatUiMessage(msg.id, aiName, Primary, safeDisplayText(msg.content), msg.timestamp,
                 avatarUri = aiAvatarUri, mode = msg.mode, emotion = msg.emotion,
                 activity = msg.activity, location = msg.location, originalMessageId = msg.id))
         }
@@ -154,7 +156,12 @@ object MessageParser {
             if (segments.isEmpty()) {
                 val dialogue = obj["dialogue"]?.jsonPrimitive?.content
                 if (!dialogue.isNullOrBlank()) {
-                    emotion to listOf(com.rhodes.privatechat.network.Segment(type = "dialogue", content = dialogue))
+                    if (looksLikeJson(dialogue)) {
+                        val nested = parsePrivateJson(dialogue)
+                        if (nested.second.isNotEmpty()) nested else emotion to listOf(com.rhodes.privatechat.network.Segment(type = "dialogue", content = dialogue))
+                    } else {
+                        emotion to listOf(com.rhodes.privatechat.network.Segment(type = "dialogue", content = dialogue))
+                    }
                 } else {
                     emotion to segments
                 }
@@ -218,6 +225,48 @@ object MessageParser {
             }
         }
         return if (segments.isEmpty()) null to emptyList() else emotion to segments
+    }
+
+    private fun normalizeGroupBubble(name: String, type: String, content: String): Triple<String, String, String> {
+        val stripped = stripSpeakerPrefix(content)
+        var finalName = name.trim().ifBlank { "旁白" }
+        var finalType = if (type.equals("narration", true) || type == "旁白") "narration" else "dialogue"
+        var finalContent = stripped.second.trim().ifBlank { content.trim() }
+        if (stripped.first.isNotBlank() && finalName == "旁白") finalName = stripped.first
+        if (finalName == "旁白") finalType = "narration"
+        if (finalType == "narration") finalName = "旁白"
+        if (finalType == "dialogue" && looksNarrationLike(finalContent)) {
+            finalName = "旁白"
+            finalType = "narration"
+        }
+        return Triple(finalName, finalType, finalContent)
+    }
+
+    private fun stripSpeakerPrefix(content: String): Pair<String, String> {
+        val idx = listOf(content.indexOf('：'), content.indexOf(':')).filter { it in 1..12 }.minOrNull() ?: return "" to content
+        val prefix = content.substring(0, idx).trim(' ', '“', '”', '"')
+        val rest = content.substring(idx + 1).trim()
+        return prefix to rest
+    }
+
+    private fun looksNarrationLike(content: String): Boolean {
+        val text = content.take(80)
+        return listOf("牌桌上", "气氛", "众人", "看向", "走到", "坐在", "站在", "叹了口气", "笑了笑", "皱了皱", "沉默了").any { text.contains(it) }
+    }
+
+    private fun safeDisplayText(content: String): String {
+        val parsed = parsePrivateJson(content)
+        parsed.second.firstOrNull { it.type == "dialogue" }?.content?.takeIf { it.isNotBlank() }?.let { return it }
+        parsed.second.firstOrNull()?.content?.takeIf { it.isNotBlank() }?.let { return it }
+        extractStringFieldLenient(content, "dialogue")?.takeIf { it.isNotBlank() && !looksLikeJson(it) }?.let { return it }
+        extractStringFieldLenient(content, "content")?.takeIf { it.isNotBlank() && !looksLikeJson(it) }?.let { return it }
+        extractStringFieldLenient(content, "message")?.takeIf { it.isNotBlank() && !looksLikeJson(it) }?.let { return it }
+        return if (looksLikeJson(content)) "[消息格式异常，已隐藏原始结构]" else content.ifBlank { "[消息解析失败]" }
+    }
+
+    private fun looksLikeJson(content: String): Boolean {
+        val t = content.trim()
+        return (t.startsWith("{") || t.startsWith("[")) && (t.contains("segments") || t.contains("dialogue") || t.contains("content") || t.contains("message"))
     }
 
     private fun extractArrayBlock(raw: String, key: String): String? {

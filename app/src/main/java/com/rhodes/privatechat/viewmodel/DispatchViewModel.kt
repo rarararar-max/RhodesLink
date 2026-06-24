@@ -1,6 +1,5 @@
 package com.rhodes.privatechat.viewmodel
 
-import android.util.Log
 import com.rhodes.privatechat.shared.model.AnchorType
 import com.rhodes.privatechat.shared.model.DispatchRecord
 import com.rhodes.privatechat.shared.model.DispatchEnd
@@ -30,6 +29,13 @@ import java.util.concurrent.ConcurrentHashMap
 private const val TAG = "Dispatch"
 private const val MAX_DISPATCH_LOG_CHARS = 20_000
 private val json = Json { ignoreUnknownKeys = true }
+
+private object Log {
+    fun d(tag: String, message: String) = Unit
+    fun i(tag: String, message: String) = Unit
+    fun w(tag: String, message: String) = Unit
+    fun e(tag: String, message: String) = Unit
+}
 
 class DispatchViewModel(
     private val repository: ChatRepository,

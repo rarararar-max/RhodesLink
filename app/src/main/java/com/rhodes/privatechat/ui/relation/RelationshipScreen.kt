@@ -219,6 +219,7 @@ private fun relationshipLabel(type: RelationshipType): Pair<String, Color> {
     if (type == RelationshipType.COMRADE) return "战友" to Color(0xFF9E9E9E)
     if (type == RelationshipType.TEAMMATE) return "队友" to Color(0xFF9E9E9E)
     if (type == RelationshipType.RIVAL) return "对手" to Color(0xFFEF4444)
+    if (type == RelationshipType.LOVE_RIVAL) return "情敌" to Color(0xFFD81B60)
     if (type == RelationshipType.CRUSH) return "暗恋对象" to Color(0xFFF48FB1)
     if (type == RelationshipType.LOVER) return "恋人" to Color(0xFFE91E63)
     return "陌生" to Color(0xFFBDBDBD)
@@ -246,6 +247,7 @@ private fun relDesc(operatorName: String, rel: RelationshipEntity): String {
     if (t == RelationshipType.COMRADE) return "${rel.relatedOperatorName}的【战友】"
     if (t == RelationshipType.TEAMMATE) return "${rel.relatedOperatorName}的【队友】"
     if (t == RelationshipType.RIVAL) return "${rel.relatedOperatorName}的【对手】"
+    if (t == RelationshipType.LOVE_RIVAL) return "${rel.relatedOperatorName}的【情敌】"
     if (t == RelationshipType.CRUSH) return "${rel.relatedOperatorName}的【暗恋对象】"
     if (t == RelationshipType.LOVER) return "${rel.relatedOperatorName}的【恋人】"
     if (t == RelationshipType.FAMILY) return "${rel.relatedOperatorName}的【家人】"
@@ -340,7 +342,7 @@ private fun complementType(type: RelationshipType): RelationshipType? = when (ty
     RelationshipType.MENTOR -> RelationshipType.STUDENT
     RelationshipType.STUDENT -> RelationshipType.MENTOR
     RelationshipType.FRIEND, RelationshipType.CLOSE_FRIEND, RelationshipType.COMRADE,
-    RelationshipType.TEAMMATE, RelationshipType.RIVAL, RelationshipType.LOVER,
+    RelationshipType.TEAMMATE, RelationshipType.RIVAL, RelationshipType.LOVE_RIVAL, RelationshipType.LOVER,
     RelationshipType.FAMILY -> type
     RelationshipType.GUARDIAN -> RelationshipType.FAMILY
     RelationshipType.CRUSH -> null

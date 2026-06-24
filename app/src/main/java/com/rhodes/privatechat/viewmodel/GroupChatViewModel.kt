@@ -56,7 +56,7 @@ class GroupChatViewModel(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     companion object {
-        const val DEBUG = true
+        const val DEBUG = false
         private const val CHAT_PAGE_SIZE = 50L
         /** 静态共享，避免不同 ViewModel 实例干扰 */
         private val globalAutoChatGenerations = ConcurrentHashMap<String, Long>()
@@ -548,7 +548,7 @@ class GroupChatViewModel(
                     )
                 )
                 val systemPrompt = sharedUtils.compactTemplate(sharedUtils.applyTemplate(grpTpl, grpReplacements))
-                val apiMessages = mutableListOf(AiMessage("system", systemPrompt))
+                var finalSystemPrompt = systemPrompt
                 val historyLimit = settings.historyMessages
                 val activeNames = activeMembers.map { it.name }.toSet() + "我" + "系统"
                 val allHistory = repository.getMessagesSync(groupSessionId).let { msgs ->
@@ -559,11 +559,11 @@ class GroupChatViewModel(
                 if (!isAuto && allHistory.lastOrNull()?.isMe == true) {
                     allHistory.removeAt(allHistory.lastIndex)
                 }
-                for (msg in allHistory) {
-                    val role = if (msg.isMe) "user" else "assistant"
-                    val content = if (msg.isMe) "用户：${msg.content}" else msg.content
-                    apiMessages.add(AiMessage(role, content))
+                val historyBlock = allHistory.takeLast(12).joinToString("\n") { formatGroupHistoryForPrompt(it) }
+                if (historyBlock.isNotBlank()) {
+                    finalSystemPrompt += "\n\n【最近群聊，仅供理解上下文，禁止模仿格式】\n$historyBlock\n【最近群聊结束】\n你当前回复仍必须只输出 JSON 数组。"
                 }
+                val apiMessages = mutableListOf(AiMessage("system", finalSystemPrompt))
                 if (!isAuto) {
                     val userMsg = if (autoSpeak) "（群聊已空闲一段时间，干员们自然地闲聊起来，无需等待用户发言。）" else text
                     apiMessages.add(AiMessage("user", "用户：$userMsg"))
@@ -592,12 +592,15 @@ class GroupChatViewModel(
                     sharedUtils.trackTokens("group", requestMessages, rawBase)
                     if (DEBUG) sharedUtils.logAiCall("GroupChat", promptText, rawBase, requestMessages)
                     val results = extractGroupResults(rawBase)
-                    filtered = results.filter { it.message.isNotBlank() && it.speaker.trim() in validSpeakers }
-                        .map { it.copy(speaker = it.speaker.trim()) }
+                    filtered = normalizeGroupResults(results, validSpeakers, mode)
                     if (filtered.isEmpty() && attempt == 0) {
                         requestMessages = apiMessages + AiMessage(
                             "user",
-                            "上一次输出无法使用。请重新输出严格 JSON 数组；speaker 只能从这些名字中选择：${validSpeakers.joinToString("、")}。不要输出不在名单里的角色，不要输出解释。"
+                            if (mode == "online") {
+                                "上一次输出没有任何可显示的线上发言。请重新输出严格 JSON 数组；speaker 只能从这些名字中选择：${activeMembers.joinToString("、") { it.name }}。type 必须是 dialogue，message 只能是纯文字台词。不要旁白、动作、神态、场景描写，不要输出解释。"
+                            } else {
+                                "上一次输出无法使用。请重新输出严格 JSON 数组；speaker 只能从这些名字中选择：${validSpeakers.joinToString("、")}。不要输出不在名单里的角色，不要输出解释。"
+                            }
                         )
                     }
                 }
@@ -662,7 +665,7 @@ class GroupChatViewModel(
                         sharedUtils.buildUnconsumedEventContextForGroup(groupSessionId, activeMembers.map { it.id }, activeMembers.map { it.name }, settings.eventContextCount, markConsumed = true)
                     }
                 }
-                if (filtered.isNotEmpty()) markGroupUnreadIfNotCurrent(groupSessionId)
+                if (filtered.isNotEmpty()) markGroupUnreadIfNotCurrent(groupSessionId, visibleGroupMessageCount(filtered, mode))
                 val gc = sessionMessageCounter.merge(groupSessionId, 1) { old, inc -> old + inc } ?: 1
                 if (gc >= settings.summaryThreshold && groupSessionId.isNotBlank()) {
                     val gs = repository.getSession(groupSessionId)
@@ -705,8 +708,67 @@ class GroupChatViewModel(
                 if (groupAiJobs[groupSessionId] == coroutineContext[Job]) groupAiJobs.remove(groupSessionId)
                 if (mutexLocked) mutexFor(groupSessionId).unlock()
             }
+            }
         }
     }
+
+    private fun formatGroupHistoryForPrompt(msg: ChatMessage): String {
+        if (msg.isMe) return "用户：${msg.content.take(500)}"
+        if (msg.type == "system") return "系统：${msg.content.take(300)}"
+        if (msg.type != "ai_json") return "${msg.senderName}：${msg.content.take(500)}"
+        return try {
+            val items = extractGroupResults(msg.content).take(8)
+            if (items.isNotEmpty()) {
+                items.joinToString("\n") { r -> if (r.type == "narration" || r.speaker == "旁白") "旁白：${r.message.take(300)}" else "${r.speaker}：${r.message.take(300)}" }
+            } else "群聊回复：[上一条消息格式异常]"
+        } catch (_: Exception) {
+            "群聊回复：[上一条消息格式异常]"
+        }
+    }
+
+    private fun formatGroupMessageForMemory(msg: ChatMessage, limit: Int): String {
+        if (msg.isMe) return "用户：${msg.content.take(limit)}"
+        if (msg.type == "system") return "系统：${msg.content.take(limit)}"
+        if (msg.type != "ai_json") return "${msg.senderName}：${msg.content.take(limit)}"
+        return try {
+            val items = extractGroupResults(msg.content).take(8)
+            if (items.isNotEmpty()) {
+                items.joinToString("\n") { r ->
+                    if (r.type == "narration" || r.speaker == "旁白") "旁白：${r.message.take(limit)}" else "${r.speaker}：${r.message.take(limit)}"
+                }
+            } else "群聊回复：[格式异常]"
+        } catch (_: Exception) {
+            "群聊回复：[格式异常]"
+        }
+    }
+
+    private fun normalizeGroupResults(results: List<GroupMsgResult>, validSpeakers: Set<String>, mode: String): List<GroupMsgResult> {
+        return results.mapNotNull { raw ->
+            val stripped = stripSpeakerPrefix(raw.message)
+            var speaker = raw.speaker.trim().ifBlank { stripped.first.ifBlank { "旁白" } }
+            var message = stripped.second.ifBlank { raw.message }.trim()
+            var type = if (raw.type.equals("narration", true) || raw.type == "旁白") "narration" else "dialogue"
+            if (stripped.first.isNotBlank() && stripped.first in validSpeakers) speaker = stripped.first
+            if (speaker == "旁白") type = "narration"
+            if (type == "narration") speaker = "旁白"
+            if (type == "dialogue" && looksNarrationLike(message)) {
+                speaker = "旁白"
+                type = "narration"
+            }
+            if (mode == "online" && type == "narration") return@mapNotNull null
+            if (message.isBlank() || speaker !in validSpeakers) return@mapNotNull null
+            GroupMsgResult(speaker = speaker, message = message, type = type)
+        }
+    }
+
+    private fun stripSpeakerPrefix(content: String): Pair<String, String> {
+        val idx = listOf(content.indexOf('：'), content.indexOf(':')).filter { it in 1..12 }.minOrNull() ?: return "" to content
+        return content.substring(0, idx).trim(' ', '“', '”', '"') to content.substring(idx + 1).trim()
+    }
+
+    private fun looksNarrationLike(content: String): Boolean {
+        val text = content.take(80)
+        return listOf("牌桌上", "气氛", "众人", "看向", "走到", "坐在", "站在").any { text.contains(it) }
     }
 
     private fun estimateTokens(content: String): Int {
@@ -723,6 +785,9 @@ class GroupChatViewModel(
             unhideSession(groupSessionId)
         }
     }
+
+    private fun visibleGroupMessageCount(items: List<GroupMsgResult>, mode: String): Int =
+        items.count { mode != "online" || (it.type != "narration" && it.speaker != "旁白") }.coerceAtLeast(1)
 
     private fun classifyGroupError(e: Exception): String = when {
         e.message?.contains("401") == true || e.message?.contains("api key", true) == true -> "API Key 无效或已过期，请在设置中检查"
@@ -777,7 +842,7 @@ class GroupChatViewModel(
             val msgs = repository.getMessagesInRange(dayBegin.time, dayEnd.time)
                 .filter { it.sessionId == groupSessionId }
             if (msgs.size <= 1) return
-            val text = msgs.joinToString("\n") { "${it.senderName}：${it.content.take(60)}" }
+            val text = msgs.joinToString("\n") { formatGroupMessageForMemory(it, 60) }
             val dateStr = sharedUtils.beijingSdf("yyyy年MM月dd日").format(dayBegin)
             val prompt = "请总结${dateStr}「${groupName}」的聊天记录，生成50-150字的每日摘要。直接输出纯文本。\n${text}"
             val content = withTimeout(15_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Memory") }.trim()
@@ -796,10 +861,26 @@ class GroupChatViewModel(
     private suspend fun generateGroupShortTermSummary(groupSessionId: String, groupName: String) {
         try {
             if (!consumeAutoAiBudget("group_short_summary")) return
-            val msgs = repository.getMessagesSync(groupSessionId).takeLast(settings.summaryRetain.coerceAtLeast(5))
+            val retain = settings.summaryRetain.coerceAtLeast(5)
+            val window = (settings.summaryThreshold + retain).coerceAtLeast(retain + 3)
+            val source = repository.getMessagesSync(groupSessionId).takeLast(window)
+            val msgs = if (source.size > retain) source.dropLast(retain) else source
             if (msgs.size <= 2) return
-            val text = msgs.joinToString("\n") { "${it.senderName}：${it.content.take(120)}" }
-            val prompt = "请总结群聊「${groupName}」最近发生的对话，保留话题、参与者态度、未解决事项。输出80-180字纯文本，不要编造。\n$text"
+            val text = msgs.joinToString("\n") { formatGroupMessageForMemory(it, 120) }
+            val oldSummary = repository.getShortTermMemory(groupSessionId)?.content?.takeIf { it.isNotBlank() } ?: "无"
+            val prompt = """请融合群聊「${groupName}」的已有摘要和新增对话，生成一份连续短期摘要。输出80-180字纯文本，不要编造。
+
+要求：
+- 保留主要话题、参与者态度、关系变化、未解决事项和下次可接的话茬。
+- 已有摘要中已经稳定成立的内容可以压缩保留，不要重复流水账。
+- 如果新增对话与已有摘要冲突，以新增对话为准。
+- 不要出现“摘要”“系统记录”等机制词。
+
+已有摘要：
+$oldSummary
+
+新增对话：
+$text"""
             val content = withTimeout(20_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "GroupMemory") }.trim()
             if (content.isNotBlank()) {
                 repository.saveMemory(com.rhodes.privatechat.shared.model.Memory(

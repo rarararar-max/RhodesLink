@@ -17,6 +17,8 @@ object DatabaseCompatibility {
         if (!dbFile.exists()) return
         try {
             SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+                val memoryColumnsBefore = existingColumns(db, "memory_anchors")
+                val needsMemoryAnchorReset = memoryAnchorCompatibilityColumns.any { it.first !in memoryColumnsBefore }
                 val userVersion = db.rawQuery("PRAGMA user_version", null).use { cursor ->
                     if (cursor.moveToFirst()) cursor.getInt(0) else 0
                 }
@@ -33,6 +35,11 @@ object DatabaseCompatibility {
                 } else if (!isDerivedDataCleaned(context)) {
                     ensureOperatorsCompatibility(db)
                     clearDerivedTables(db)
+                }
+
+                ensureCompatibilitySchema(db)
+                if (needsMemoryAnchorReset && tableExists(db, "memory_anchors")) {
+                    db.execSQL("DELETE FROM memory_anchors")
                 }
 
                 advanceUserVersionIfSchemaComplete(db, userVersion)

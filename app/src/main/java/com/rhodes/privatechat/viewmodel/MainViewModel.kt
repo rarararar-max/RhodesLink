@@ -80,6 +80,7 @@ data class WorldLogEntry(val time: Long, val title: String, val detail: String =
 private enum class MomentTriggerType { MANUAL, AUTO, EVENT }
 private const val MAX_WORLD_CHAIN_DEPTH = 3
 private const val MOMENT_PAGE_SIZE = 20
+private const val STATUS_REFRESH_INTERVAL_MS = 15 * 60 * 1000L
 
 class MainViewModel(
     application: Application,
@@ -656,11 +657,10 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         if (!force && !settings.autoStatusRefresh) return
         val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
         val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
-        val currentChatOpId = chatViewModel.selectedOperator.value?.id
         val dispatchedOpIds = repository.getActiveDispatches().flatMap {
             it.operatorIds.split(",").map(String::trim).filter(String::isNotBlank)
         }.toSet()
-        val allOps = _operators.value.filter { it.id != currentChatOpId && it.id !in dispatchedOpIds }
+        val allOps = _operators.value.filter { it.id !in dispatchedOpIds }
 
         // 深夜强制
         if (hour in 22..23 || hour in 0..4) {
@@ -673,8 +673,18 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         val emotions = settings.parseStatusPool(settings.statusEmotionPool, settings.defaultStatusEmotions)
 
         var locCount = mutableMapOf<String, Int>()
+        val now = System.currentTimeMillis()
 
         for (op in allOps) {
+            if (!force) {
+                val session = repository.getSessionByOperator(op.id)
+                if (session != null) {
+                    val lastUserMsgTime = repository.getLastUserMessageTime(session.id)
+                    val lastTalkTime = maxOf(lastUserMsgTime ?: 0L, session.lastTime)
+                    if (now - lastTalkTime < STATUS_REFRESH_INTERVAL_MS) continue
+                }
+            }
+
             var loc = locations.random()
             val cnt = locCount.getOrDefault(loc, 0)
             if (cnt >= 10) loc = locations.firstOrNull() ?: "宿舍"

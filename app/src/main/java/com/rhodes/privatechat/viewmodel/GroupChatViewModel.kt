@@ -751,7 +751,9 @@ class GroupChatViewModel(
             if (stripped.first.isNotBlank() && stripped.first in validSpeakers) speaker = stripped.first
             if (speaker == "旁白") type = "narration"
             if (type == "narration") speaker = "旁白"
+            if (type == "narration" && containsFirstPersonNarration(message)) return@mapNotNull null
             if (type == "dialogue" && looksNarrationLike(message)) {
+                if (containsFirstPersonNarration(message)) return@mapNotNull null
                 speaker = "旁白"
                 type = "narration"
             }
@@ -768,7 +770,12 @@ class GroupChatViewModel(
 
     private fun looksNarrationLike(content: String): Boolean {
         val text = content.take(80)
-        return listOf("牌桌上", "气氛", "众人", "看向", "走到", "坐在", "站在").any { text.contains(it) }
+        return listOf("牌桌上", "气氛", "众人", "看向", "走到", "坐在", "站在", "抬手", "转身", "垂眸", "低头", "环顾", "风", "灯光").any { text.contains(it) }
+    }
+
+    private fun containsFirstPersonNarration(content: String): Boolean {
+        val text = content.take(120)
+        return listOf("我", "我们", "咱们", "俺", "咱").any { text.contains(it) }
     }
 
     private fun estimateTokens(content: String): Int {

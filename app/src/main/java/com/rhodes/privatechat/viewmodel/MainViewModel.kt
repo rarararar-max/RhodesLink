@@ -148,7 +148,7 @@ class MainViewModel(
         sessionMessageCounter,
         memoryVectorService,
         visionGateway,
-        { title, content -> com.rhodes.privatechat.notification.RhodesNotificationCenter.show(application, title, content) },
+        { title, content, sessionId -> com.rhodes.privatechat.notification.RhodesNotificationCenter.show(application, title, content, sessionId, isGroup = true) },
         { reason -> tryConsumeAutoAiBudget(reason) }
     )
 

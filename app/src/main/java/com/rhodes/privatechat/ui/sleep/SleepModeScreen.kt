@@ -29,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,9 +50,11 @@ import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.R
 import com.rhodes.privatechat.audio.LocalAudioController
 import com.rhodes.privatechat.audio.RecordedAudio
+import com.rhodes.privatechat.ui.theme.TextPrimary
 import com.rhodes.privatechat.shared.call.CallState
 import com.rhodes.privatechat.shared.model.AiMessage
 import com.rhodes.privatechat.shared.model.Operator
+import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.shared.voice.AsrGateway
 import com.rhodes.privatechat.shared.voice.AsrRequest
 import com.rhodes.privatechat.shared.voice.TtsGateway
@@ -60,6 +63,7 @@ import com.rhodes.privatechat.viewmodel.MainViewModel
 import com.rhodes.privatechat.viewmodel.shared.SleepPrompts
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.koin.compose.koinInject
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -77,6 +81,7 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
     val activity = context as? Activity
     val scope = rememberCoroutineScope()
     val audio = remember { LocalAudioController(context) }
+    val settings: SettingsRepository = koinInject()
     val turns = remember { mutableStateListOf<Pair<String, String>>() }
     val startedAt = remember { System.currentTimeMillis() }
 
@@ -91,19 +96,39 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
     var sleepStartedAt by rememberSaveable { mutableStateOf(0L) }
     var totalRestMillis by rememberSaveable { mutableStateOf(0L) }
     var alarmTargetAt by rememberSaveable { mutableStateOf(0L) }
-    var alarmHour by rememberSaveable { mutableStateOf(7) }
-    var alarmMinute by rememberSaveable { mutableStateOf(30) }
+    var alarmHour by rememberSaveable { mutableStateOf(settings.sleepAlarmHour) }
+    var alarmMinute by rememberSaveable { mutableStateOf(settings.sleepAlarmMinute) }
     var alarmRinging by rememberSaveable { mutableStateOf(false) }
     var showAlarmDialog by rememberSaveable { mutableStateOf(false) }
     var showSettingsDialog by rememberSaveable { mutableStateOf(false) }
-    var fixedWakeText by rememberSaveable { mutableStateOf("时间到了。该醒了，我在这里。") }
+    var fixedWakeText by rememberSaveable { mutableStateOf(settings.sleepFixedWakeText) }
+    var inactivityMinutes by rememberSaveable { mutableStateOf(settings.sleepInactivityMinutes) }
+    var dimAfterSeconds by rememberSaveable { mutableStateOf(settings.sleepDimAfterSeconds) }
+    var snoozeMinutes by rememberSaveable { mutableStateOf(settings.sleepSnoozeMinutes) }
+    var lastEffectiveUserSpeechAt by rememberSaveable { mutableStateOf(System.currentTimeMillis()) }
+    var wakeAttempt by remember { mutableStateOf(0) }
+    var hasEnded by rememberSaveable { mutableStateOf(false) }
+    var userSpeechDetected by rememberSaveable { mutableStateOf(false) }
+    var level by remember { mutableFloatStateOf(0f) }
+
+    fun saveSettings() {
+        settings.sleepAlarmHour = alarmHour
+        settings.sleepAlarmMinute = alarmMinute
+        settings.sleepFixedWakeText = fixedWakeText
+        settings.sleepInactivityMinutes = inactivityMinutes
+        settings.sleepDimAfterSeconds = dimAfterSeconds
+        settings.sleepSnoozeMinutes = snoozeMinutes
+    }
 
     fun stopRecordingSafe(): RecordedAudio? = runCatching { audio.stopRecording() }.getOrNull()
     fun finish() {
+        if (hasEnded) return
+        hasEnded = true
         if (recording) stopRecordingSafe()
         recording = false
         audio.stopPlayback()
         audio.setSpeakerEnabled(false)
+        saveSettings()
         onBack()
     }
 
@@ -135,6 +160,7 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
                     return@launch
                 }
                 transcript = text
+                lastEffectiveUserSpeechAt = System.currentTimeMillis()
                 turns += "用户" to text
                 val prompt = buildString {
                     append(operator.privatePrompt.ifBlank { operator.description })
@@ -155,20 +181,45 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
     }
 
     fun triggerWake() {
-        if (alarmRinging) return
+        if (alarmRinging || hasEnded) return
         if (sleepStartedAt > 0L) totalRestMillis += System.currentTimeMillis() - sleepStartedAt
         sleepStartedAt = 0L
         dimmed = false
         alarmRinging = true
+        wakeAttempt += 1
         visualState = SleepVisualState.WakingUp
         inputMode = SleepInputMode.Manual
         transcript = "叫醒时间到了。"
         scope.launch {
-            val wakeText = fixedWakeText.ifBlank { "时间到了。该醒了，我在这里。" }.take(120)
-            aiReply = wakeText
-            turns += operator.name to wakeText
-            speak(wakeText)
+            val wakeText = if (wakeAttempt <= 2) {
+                try {
+                    val prompt = buildString {
+                        append(operator.privatePrompt.ifBlank { operator.description })
+                        append("\n\n")
+                        append(SleepPrompts.WAKE)
+                        append("\n当前时间：${formatClockTime(System.currentTimeMillis())}")
+                        append("\n用户已休息：${formatDuration(totalRestMillis)}")
+                        if (wakeAttempt > 1) append("\n提示：这是第${wakeAttempt}次叫醒，可以稍微更直接一点。")
+                        append("\n请用角色身份输出一句适合 TTS 播放的叫醒台词：")
+                    }
+                    viewModel.chatViewModel.sharedChatForFeature(listOf(AiMessage("system", prompt))).trim().take(120)
+                        .ifBlank { fixedWakeText }
+                } catch (_: Exception) { fixedWakeText }
+            } else fixedWakeText
+            val finalWake = wakeText.take(120)
+            aiReply = finalWake
+            turns += operator.name to finalWake
+            speak(finalWake)
         }
+    }
+
+    fun snooze() {
+        alarmRinging = false
+        sleepStartedAt = System.currentTimeMillis()
+        alarmTargetAt = System.currentTimeMillis() + snoozeMinutes * 60_000L
+        visualState = SleepVisualState.Sleeping
+        inputMode = SleepInputMode.Sleeping
+        transcript = "再睡${snoozeMinutes}分钟。"
     }
 
     BackHandler { finish() }
@@ -192,16 +243,45 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
         while (true) {
             currentTimeText = formatClockTime(System.currentTimeMillis())
             val target = alarmTargetAt
-            if (target > 0L && System.currentTimeMillis() >= target) triggerWake()
+            if (target > 0L && System.currentTimeMillis() >= target && !alarmRinging) triggerWake()
             delay(1000L)
         }
     }
 
-    LaunchedEffect(inputMode, callState) {
+    LaunchedEffect(recording) {
+        while (recording) {
+            level = audio.getCurrentRecordingLevel()
+            if (level > 0.12f) userSpeechDetected = true
+            delay(100)
+        }
+        level = 0f
+    }
+
+    LaunchedEffect(inputMode, recording, callState, userSpeechDetected) {
         while (inputMode == SleepInputMode.Auto) {
             if (!recording && callState != CallState.Thinking && callState != CallState.AiSpeaking) {
+                userSpeechDetected = false
                 recording = audio.startRecording()
-                transcript = if (recording) "自动监听中...说完后点“结束并发送”。" else "录音启动失败"
+                transcript = if (recording) "自动监听中..." else "录音启动失败"
+            }
+            if (recording && userSpeechDetected && audio.hasRecordingBeenSilent(1200L)) {
+                recording = false
+                stopRecordingSafe()?.let { processAudio(it) }
+            }
+            delay(180)
+        }
+    }
+
+    LaunchedEffect(inputMode, lastEffectiveUserSpeechAt, callState) {
+        while (inputMode == SleepInputMode.Auto) {
+            val idleLongEnough = System.currentTimeMillis() - lastEffectiveUserSpeechAt >= inactivityMinutes * 60 * 1000L
+            if (idleLongEnough && callState != CallState.Thinking && callState != CallState.AiSpeaking) {
+                if (recording) stopRecordingSafe()
+                recording = false
+                userSpeechDetected = false
+                inputMode = SleepInputMode.Sleeping
+                transcript = "你应该已经睡着了。"
+                visualState = SleepVisualState.FallingAsleep
             }
             delay(1000L)
         }
@@ -213,11 +293,21 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
             visualState = SleepVisualState.Sleeping
             inputMode = SleepInputMode.Sleeping
             if (sleepStartedAt == 0L) sleepStartedAt = System.currentTimeMillis()
-            delay(60_000L)
+            delay(dimAfterSeconds * 1000L)
             if (visualState == SleepVisualState.Sleeping) dimmed = true
         } else if (visualState == SleepVisualState.WakingUp) {
             delay(1800L)
             visualState = SleepVisualState.Idle
+        }
+    }
+
+    LaunchedEffect(alarmRinging, wakeAttempt) {
+        if (alarmRinging && !hasEnded) {
+            delay(300_000L)
+            if (alarmRinging && wakeAttempt < 3 && !hasEnded) {
+                alarmRinging = false
+                triggerWake()
+            }
         }
     }
 
@@ -254,15 +344,12 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
                 Text(aiReply, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                 Text(transcript, color = Color(0xFFD8E2EE), fontSize = 13.sp)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SleepButton(primaryButtonText(visualState, recording, callState), Modifier.weight(1f)) {
+                    SleepButton(primaryButtonText(visualState, recording, callState), Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Color(0xAA2563EB))) {
                         when {
                             visualState == SleepVisualState.Sleeping -> visualState = SleepVisualState.WakingUp
-                            recording -> {
-                                recording = false
-                                stopRecordingSafe()?.let { processAudio(it) }
-                            }
+                            recording -> { recording = false; stopRecordingSafe()?.let { processAudio(it) } }
                             callState == CallState.AiSpeaking -> audio.stopPlayback()
-                            else -> recording = audio.startRecording().also { if (!it) Toast.makeText(context, "无法开始录音，请检查麦克风权限", Toast.LENGTH_SHORT).show() }
+                            else -> recording = audio.startRecording().also { if (!it) Toast.makeText(context, "无法开始录音", Toast.LENGTH_SHORT).show() }
                         }
                     }
                     SleepButton(if (inputMode == SleepInputMode.Auto) "关闭自动" else "自动陪睡", Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Color(0xAA334155))) {
@@ -293,7 +380,7 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
                     OutlinedTextField(alarmMinute.toString(), { alarmMinute = it.toIntOrNull()?.coerceIn(0, 59) ?: alarmMinute }, label = { Text("分钟") })
                 }
             },
-            confirmButton = { TextButton(onClick = { alarmTargetAt = buildNextAlarmMillis(alarmHour, alarmMinute); showAlarmDialog = false }) { Text("设置") } },
+            confirmButton = { TextButton(onClick = { alarmTargetAt = buildNextAlarmMillis(alarmHour, alarmMinute); settings.sleepAlarmHour = alarmHour; settings.sleepAlarmMinute = alarmMinute; showAlarmDialog = false }) { Text("设置") } },
             dismissButton = { TextButton(onClick = { alarmTargetAt = 0L; showAlarmDialog = false }) { Text("取消闹钟") } }
         )
     }
@@ -301,8 +388,19 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
     if (showSettingsDialog) {
         AlertDialog(
             onDismissRequest = { showSettingsDialog = false },
-            title = { Text("叫醒词") },
-            text = { OutlinedTextField(fixedWakeText, { fixedWakeText = it }, modifier = Modifier.fillMaxWidth(), minLines = 2) },
+            title = { Text("陪睡设置") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("叫醒词", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    OutlinedTextField(fixedWakeText, { fixedWakeText = it }, modifier = Modifier.fillMaxWidth(), minLines = 2)
+                    Text("自动入睡（分钟）", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    OutlinedTextField(inactivityMinutes.toString(), { inactivityMinutes = it.toIntOrNull()?.coerceIn(1, 60) ?: inactivityMinutes }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                    Text("黑屏延迟（秒）", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    OutlinedTextField(dimAfterSeconds.toString(), { dimAfterSeconds = it.toIntOrNull()?.coerceIn(10, 600) ?: dimAfterSeconds }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                    Text("再睡时长（分钟）", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    OutlinedTextField(snoozeMinutes.toString(), { snoozeMinutes = it.toIntOrNull()?.coerceIn(1, 30) ?: snoozeMinutes }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                }
+            },
             confirmButton = { TextButton(onClick = { showSettingsDialog = false }) { Text("保存") } },
             dismissButton = { TextButton(onClick = { showSettingsDialog = false }) { Text("取消") } }
         )
@@ -358,6 +456,18 @@ private fun buildNextAlarmMillis(hour: Int, minute: Int): Long {
         set(Calendar.HOUR_OF_DAY, hour); set(Calendar.MINUTE, minute); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
         if (timeInMillis <= now.timeInMillis + 60_000L) add(Calendar.DAY_OF_YEAR, 1)
     }.timeInMillis
+}
+
+private fun formatDuration(durationMillis: Long): String {
+    val minutes = (durationMillis / 60_000L).coerceAtLeast(0L)
+    if (minutes == 0L) return "不到1分钟"
+    val hours = minutes / 60
+    val restMinutes = minutes % 60
+    return when {
+        hours > 0 && restMinutes > 0 -> "${hours}小时${restMinutes}分钟"
+        hours > 0 -> "${hours}小时"
+        else -> "${restMinutes}分钟"
+    }
 }
 
 private fun sleepIdleFrames() = listOf(R.drawable.sleep_idle_001, R.drawable.sleep_idle_002, R.drawable.sleep_idle_003, R.drawable.sleep_idle_004, R.drawable.sleep_idle_005, R.drawable.sleep_idle_006, R.drawable.sleep_idle_007, R.drawable.sleep_idle_008, R.drawable.sleep_idle_009, R.drawable.sleep_idle_010, R.drawable.sleep_idle_011, R.drawable.sleep_idle_012, R.drawable.sleep_idle_013, R.drawable.sleep_idle_014)

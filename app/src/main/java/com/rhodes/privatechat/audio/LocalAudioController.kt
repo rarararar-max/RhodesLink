@@ -21,6 +21,9 @@ class LocalAudioController(private val context: Context) {
     private var recordingThread: Thread? = null
     private val pcmChunks = mutableListOf<ByteArray>()
     private val pcmLock = Any()
+    @Volatile private var currentRecordingLevel = 0f
+    @Volatile private var currentRecordingBytes = 0
+    @Volatile private var lastSpeechAt = 0L
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var audioFocusRequest: AudioFocusRequest? = null
 
@@ -39,16 +42,26 @@ class LocalAudioController(private val context: Context) {
                 error("AudioRecord init failed")
             }
             synchronized(pcmLock) { pcmChunks.clear() }
+            currentRecordingLevel = 0f
+            currentRecordingBytes = 0
             recorder = audioRecord
             recordingFile = file
             startedAt = System.currentTimeMillis()
+            lastSpeechAt = startedAt
             isRecording = true
             audioRecord.startRecording()
             recordingThread = thread(name = "rhodes-audio-record") {
                 val buffer = ByteArray(bufferSize)
                 while (isRecording) {
                     val read = audioRecord.read(buffer, 0, buffer.size)
-                    if (read > 0) synchronized(pcmLock) { pcmChunks += buffer.copyOf(read) }
+                    if (read > 0) {
+                        val chunk = buffer.copyOf(read)
+                        val average = averageAbsPcm16(chunk)
+                        currentRecordingLevel = (average / 4000f).coerceIn(0f, 1f)
+                        currentRecordingBytes += read
+                        if (average > RECORD_SPEECH_THRESHOLD) lastSpeechAt = System.currentTimeMillis()
+                        synchronized(pcmLock) { pcmChunks += chunk }
+                    }
                 }
             }
             true
@@ -120,6 +133,15 @@ class LocalAudioController(private val context: Context) {
         audioManager.mode = if (enabled) AudioManager.MODE_IN_COMMUNICATION else AudioManager.MODE_NORMAL
     }
 
+    fun hasRecordingBeenSilent(silenceMs: Long = 1000L): Boolean {
+        if (!isRecording) return true
+        return System.currentTimeMillis() - lastSpeechAt >= silenceMs
+    }
+
+    fun getCurrentRecordingLevel(): Float = currentRecordingLevel
+
+    fun getRecordingDebugInfo(): String = "recording=$isRecording level=${"%.2f".format(currentRecordingLevel)} bytes=$currentRecordingBytes lastSpeechAgoMs=${System.currentTimeMillis() - lastSpeechAt}"
+
     private fun stopRecordingInternal() {
         isRecording = false
         recordingThread?.join(500L)
@@ -161,9 +183,24 @@ class LocalAudioController(private val context: Context) {
         writeAscii(36, "data"); writeIntLe(40, pcm.size); pcm.copyInto(output, destinationOffset = WAV_HEADER_SIZE)
         return output
     }
+
+    private fun averageAbsPcm16(bytes: ByteArray): Int {
+        if (bytes.size < 2) return 0
+        var sum = 0L
+        var count = 0
+        var index = 0
+        while (index + 1 < bytes.size) {
+            val sample = ((bytes[index + 1].toInt() shl 8) or (bytes[index].toInt() and 0xff)).toShort().toInt()
+            sum += kotlin.math.abs(sample)
+            count++
+            index += 2
+        }
+        return if (count == 0) 0 else (sum / count).toInt()
+    }
 }
 
 private const val RECORD_SAMPLE_RATE = 16_000
 private const val WAV_HEADER_SIZE = 44
+private const val RECORD_SPEECH_THRESHOLD = 550
 
 data class RecordedAudio(val path: String, val durationMs: Long)

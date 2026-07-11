@@ -849,7 +849,8 @@ ${recentDialogues}
 
     private fun notifyIfBackground(title: String, content: String) {
         if (!RhodesAppVisibility.isForeground) {
-            RhodesNotificationCenter.show(getApplication(), title, content.take(120))
+            val session = _currentSession.value
+            RhodesNotificationCenter.show(getApplication(), title, content.take(120), sessionId = session?.id, isGroup = false)
         }
     }
 

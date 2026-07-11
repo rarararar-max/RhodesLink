@@ -629,6 +629,31 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = getString("tts_default_voice_id", "")
         set(value) = putString("tts_default_voice_id", value)
 
+    // === 陪睡设置 ===
+    var sleepAlarmHour: Int
+        get() = settings.getInt("sleep_alarm_hour", 7)
+        set(value) = settings.putInt("sleep_alarm_hour", value.coerceIn(0, 23))
+
+    var sleepAlarmMinute: Int
+        get() = settings.getInt("sleep_alarm_minute", 30)
+        set(value) = settings.putInt("sleep_alarm_minute", value.coerceIn(0, 59))
+
+    var sleepFixedWakeText: String
+        get() = settings.getString("sleep_fixed_wake_text", "时间到了。该醒了，我在这里。")
+        set(value) = settings.putString("sleep_fixed_wake_text", value)
+
+    var sleepInactivityMinutes: Int
+        get() = settings.getInt("sleep_inactivity_minutes", 5).coerceIn(1, 60)
+        set(value) = settings.putInt("sleep_inactivity_minutes", value.coerceIn(1, 60))
+
+    var sleepDimAfterSeconds: Int
+        get() = settings.getInt("sleep_dim_after_seconds", 60).coerceIn(10, 600)
+        set(value) = settings.putInt("sleep_dim_after_seconds", value.coerceIn(10, 600))
+
+    var sleepSnoozeMinutes: Int
+        get() = settings.getInt("sleep_snooze_minutes", 5).coerceIn(1, 30)
+        set(value) = settings.putInt("sleep_snooze_minutes", value.coerceIn(1, 30))
+
     // === 清理设置 ===
     var cleanDaysMessages: Int
         get() = settings.getInt("clean_days_messages", 30).coerceIn(0, 3650)

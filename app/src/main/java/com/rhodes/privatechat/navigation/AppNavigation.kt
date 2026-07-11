@@ -1,5 +1,7 @@
 package com.rhodes.privatechat.navigation
 
+import android.content.Intent
+import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
@@ -34,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -200,8 +203,34 @@ private fun SettingsTabContent(navigator: Navigator) {
 
 @Composable
 fun AppNavigation() {
+    val context = LocalContext.current
+    val activity = context as? Activity
+
     Navigator(MainScreen()) { navigator ->
         BackHandler(enabled = navigator.lastItem !is MainScreen) { navigator.pop() }
+
+        LaunchedEffect(Unit) {
+            val intent = activity?.intent ?: return@LaunchedEffect
+            val sessionId = intent.getStringExtra("nav_session_id") ?: return@LaunchedEffect
+            val isGroup = intent.getBooleanExtra("nav_is_group", false)
+            if (sessionId.isBlank()) return@LaunchedEffect
+            delay(800)
+            try {
+                val viewModel = org.koin.core.context.GlobalContext.get().get<MainViewModel>()
+                val sessions = viewModel.allSessions.value
+                val session = sessions.find { it.id == sessionId }
+                if (session != null) {
+                    if (isGroup) {
+                        navigator.push(GroupChatRoute(session.operatorName.ifBlank { "群聊" }, session.id))
+                    } else {
+                        val op = viewModel.operators.value.find { it.id == session.operatorId }
+                        if (op != null) navigator.push(ChatOperator(op.id))
+                    }
+                }
+            } catch (_: Exception) {}
+            activity?.intent?.removeExtra("nav_session_id")
+        }
+
         SlideTransition(navigator)
     }
 }

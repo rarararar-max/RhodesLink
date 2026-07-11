@@ -27,9 +27,13 @@ object RhodesNotificationCenter {
         manager.createNotificationChannel(channel)
     }
 
-    fun show(context: Context, title: String, content: String) {
+    fun show(context: Context, title: String, content: String, sessionId: String? = null, isGroup: Boolean = false) {
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            if (sessionId != null) {
+                putExtra("nav_session_id", sessionId)
+                putExtra("nav_is_group", isGroup)
+            }
         }
         val pendingIntent = PendingIntent.getActivity(
             context, 0, intent,

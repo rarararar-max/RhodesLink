@@ -56,7 +56,7 @@ class GroupChatViewModel(
     private val sessionMessageCounter: ConcurrentHashMap<String, Int>,
     private val memoryVectorService: MemoryVectorService? = null,
     private val visionGateway: VisionGateway? = null,
-    private val showNotification: (String, String) -> Unit = { _, _ -> },
+    private val showNotification: (String, String, String?) -> Unit = { _, _, _ -> },
     private val consumeAutoAiBudget: (String) -> Boolean = { true }
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -646,7 +646,7 @@ class GroupChatViewModel(
                         senderName = groupName, content = storedContent,
                         type = "ai_json", mode = mode, isMe = false
                     ))
-                    notifyIfBackground(groupName, filtered.firstOrNull()?.let { "${it.speaker}：${it.message}" } ?: "群聊有新消息")
+                    notifyIfBackground(groupName, filtered.firstOrNull()?.let { "${it.speaker}：${it.message}" } ?: "群聊有新消息", groupSessionId)
                     for (r in filtered) {
                         val anchorOp = if (r.speaker == "旁白" || r.speaker == "系统") null
                         else opsByName[r.speaker]
@@ -901,9 +901,9 @@ class GroupChatViewModel(
         }
     }
 
-    private fun notifyIfBackground(title: String, content: String) {
+    private fun notifyIfBackground(title: String, content: String, sessionId: String?) {
         if (!RhodesAppVisibility.isForeground) {
-            showNotification(title, content.take(120))
+            showNotification(title, content.take(120), sessionId)
         }
     }
 

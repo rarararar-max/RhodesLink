@@ -27,6 +27,9 @@ SELECT * FROM memory_anchors WHERE operatorId = ? AND type = ? AND isPrivate = ?
 getAnchorCount:
 SELECT COUNT(*) FROM memory_anchors;
 
+getAllAnchorsForBackup:
+SELECT * FROM memory_anchors ORDER BY createdAt DESC;
+
 insertAnchor:
 INSERT OR REPLACE INTO memory_anchors(sessionId, operatorId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);

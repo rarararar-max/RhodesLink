@@ -1,0 +1,24 @@
+CREATE TABLE IF NOT EXISTS memory_batches (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    ownerType TEXT NOT NULL,
+    ownerId TEXT NOT NULL,
+    sourceKind TEXT NOT NULL,
+    targetLevel TEXT NOT NULL,
+    inputCount INTEGER NOT NULL DEFAULT 0,
+    outputCount INTEGER NOT NULL DEFAULT 0,
+    windowStart INTEGER NOT NULL DEFAULT 0,
+    windowEnd INTEGER NOT NULL DEFAULT 0,
+    promptVersion TEXT NOT NULL DEFAULT 'v1',
+    status TEXT NOT NULL DEFAULT 'done',
+    createdAt INTEGER NOT NULL DEFAULT 0
+);
+
+getMemoryBatchesByOwner:
+SELECT * FROM memory_batches WHERE ownerType = ? AND ownerId = ? ORDER BY createdAt DESC;
+
+insertMemoryBatch:
+INSERT OR REPLACE INTO memory_batches(ownerType, ownerId, sourceKind, targetLevel, inputCount, outputCount, windowStart, windowEnd, promptVersion, status, createdAt)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+deleteMemoryBatchesByOwner:
+DELETE FROM memory_batches WHERE ownerType = ? AND ownerId = ?;

@@ -55,6 +55,9 @@ SELECT COUNT(*) FROM world_events WHERE type = ? AND createdAt >= ? AND chainDep
 getWorldEventCount:
 SELECT COUNT(*) FROM world_events;
 
+getAllWorldEventsForBackup:
+SELECT * FROM world_events ORDER BY createdAt DESC;
+
 getWorldEvent:
 SELECT * FROM world_events WHERE id = ?;
 

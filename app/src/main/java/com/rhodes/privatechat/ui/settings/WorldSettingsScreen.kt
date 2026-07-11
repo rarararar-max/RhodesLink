@@ -44,7 +44,7 @@ fun WorldSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     var worldSchedulerEnabled by remember { mutableStateOf(settings.worldSchedulerEnabled) }
     var tabIndex by remember { mutableIntStateOf(0) }
     val worldEnabled = autoEnabled && worldSchedulerEnabled
-    val tabs = listOf("总览", "自动行为", "状态库", "事件联动", "动态评论", "群聊私聊")
+    val tabs = listOf("总览", "每日动态")
     SaveableSettingsScaffold(
         title = "自动与世界",
         onBack = onBack,
@@ -59,11 +59,7 @@ fun WorldSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp).imePadding().navigationBarsPadding()) {
             when (tabIndex) {
                 0 -> WorldGeneralTab(settings, autoEnabled, worldSchedulerEnabled, onAuto = { autoEnabled = it }, onWorld = { worldSchedulerEnabled = it })
-                1 -> WorldAutoBehaviorTab(settings, autoEnabled, worldEnabled)
-                2 -> WorldStatusPoolTab(settings)
-                3 -> WorldEventTab(settings, worldEnabled)
-                4 -> WorldMomentCommentTab(settings, autoEnabled, worldEnabled)
-                5 -> WorldGroupPrivateTab(settings, worldEnabled)
+                1 -> WorldDailyMomentTab(settings, autoEnabled)
             }
             Spacer(Modifier.height(12.dp))
         }
@@ -109,12 +105,21 @@ private fun StatusPoolField(label: String, value: String, placeholder: String, o
 
 @Composable
 private fun WorldGeneralTab(settings: SettingsRepository, autoEnabled: Boolean, worldSchedulerEnabled: Boolean, onAuto: (Boolean) -> Unit, onWorld: (Boolean) -> Unit) {
-    InfoCard("自动世界怎么运作？", "先打开“后台自动 AI”，角色才会自己发动态、评论、写日记或主动聊天。打开“大世界运行”后，这些事情还会互相影响：动态可能引发评论，评论可能唤起群聊，群聊话题又可能成为新的事件。")
+    InfoCard("自动功能已简化", "后台现在只保留“每日自动动态”。角色不会主动私聊你，不会自动写日记，也不会因为动态、评论、群聊或状态变化继续触发新的大世界事件。")
     SettingsSectionTitle("总开关")
-    SettingsSwitchCard("后台自动 AI", "总开关。关闭后，角色不会自己发动态、评论、写日记、主动私聊或自动群聊；你手动聊天和手动生成不受影响。", autoEnabled) { onAuto(it); settings.autoAiEnabled = it }
-    SettingsSwitchCard("大世界运行", "控制“事件带动事件”。关闭后，角色仍可按基础规则自动发内容，但动态、评论、群聊、状态之间不会互相触发。", worldSchedulerEnabled, enabled = autoEnabled) { onWorld(it); settings.worldSchedulerEnabled = it }
-    SettingsParamSlider(settings, "daily_auto_ai_limit", "每日后台 AI 预算", 40, 0f..500f, "所有后台自动行为每天最多消耗多少次 AI 调用。设 0 等同于关闭后台自动 AI；用户主动聊天、催发动态、偷看/重新生成日记不计入。建议 30-50。", step = 5f, enabled = autoEnabled)
-    SettingsParamSlider(settings, "tick_auto_ai_limit", "单轮后台 AI 预算", 3, 0f..50f, "每 15 分钟周期内最多触发几次后台 AI，防止动态、评论、私聊连环触发。建议 3-5。", step = 1f, enabled = autoEnabled)
+    SettingsSwitchCard("后台自动 AI", "控制每日自动动态。关闭后，每日固定动态也不会自动生成；你手动聊天和手动生成不受影响。", autoEnabled) { onAuto(it); settings.autoAiEnabled = it }
+    SettingsParamSlider(settings, "daily_auto_ai_limit", "每日后台 AI 预算", 40, 0f..500f, "每日自动动态最多消耗多少次 AI 调用。设 0 等同于关闭后台自动 AI。建议 30-50。", step = 5f, enabled = autoEnabled)
+}
+
+@Composable
+private fun WorldDailyMomentTab(settings: SettingsRepository, autoEnabled: Boolean) {
+    SettingsSectionTitle("每日固定动态")
+    SettingsSwitchCard("每日自动动态", "开启后，每天按每人每日自动动态上限为有动态权限的角色补动态。不依赖大世界事件。", settings.dailyAutoMomentEnabled, enabled = autoEnabled) { settings.dailyAutoMomentEnabled = it }
+    SettingsParamSlider(settings, "daily_moment_target", "每人每日自动动态上限", 2, 0f..10f, "每天每个有动态权限的角色最多自动发几条动态。0=不自动发动态；用户主动点击催发动态不受此限制。建议 1-3。", step = 1f, enabled = autoEnabled)
+    SettingsParamSlider(settings, "moment_min_chars", "动态最少字数", 50, 20f..300f, "每条动态最少写几个字。建议 20-50。", step = 5f, pairKey = "moment_max_chars", isMinSide = true, enabled = autoEnabled)
+    SettingsParamSlider(settings, "moment_max_chars", "动态最多字数", 200, 80f..500f, "每条动态最多写几个字。建议 150-250。", step = 5f, pairKey = "moment_min_chars", isMinSide = false, enabled = autoEnabled)
+    SettingsParamSlider(settings, "moment_anchor_count", "动态参考记忆", 3, 0f..10f, "生成动态时最多参考几条公开记忆。建议 3-5。", step = 1f, enabled = autoEnabled)
+    SettingsParamSlider(settings, "moment_recent_post_count", "近期动态参考", 3, 0f..10f, "参考该干员最近几条动态，避免连续重复话题。建议 2-3。", step = 1f, enabled = autoEnabled)
 }
 
 @Composable

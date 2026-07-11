@@ -11,6 +11,7 @@ import com.rhodes.privatechat.shared.model.GoogleGenerationRequest
 import com.rhodes.privatechat.shared.model.GoogleContent
 import com.rhodes.privatechat.shared.model.GooglePart
 import com.rhodes.privatechat.shared.model.GoogleGenerateResponse
+import com.rhodes.privatechat.shared.model.ResponseFormat
 import com.rhodes.privatechat.shared.model.Segment
 import com.rhodes.privatechat.shared.model.SummaryResponse
 import io.ktor.client.HttpClient
@@ -241,7 +242,8 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         providerId: String = "deepseek",
         modelName: String = "deepseek-chat",
         customUrl: String = "",
-        temperature: Double = 0.95
+        temperature: Double = 0.95,
+        jsonMode: Boolean = false
     ): ChatResult {
         val config = providers[providerId] ?: providers["deepseek"]!!
         val model = modelName
@@ -258,7 +260,8 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                 model = model,
                 messages = messages,
                 stream = false,
-                temperature = temperature
+                temperature = temperature,
+                response_format = if (jsonMode && supportsJsonMode(config.id)) ResponseFormat("json_object") else null
             )
             val response: HttpResponse = client.post(url) {
                 contentType(ContentType.Application.Json)
@@ -325,13 +328,14 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         customUrl: String = "",
         temperature: Double = 0.95,
         maxRetries: Int = 3,
-        logTag: String = "Chat"
+        logTag: String = "Chat",
+        jsonMode: Boolean = false
     ): OfflineModeResponse {
         var lastRaw = ""
         var requestError: Exception? = null
         for (attempt in 1..maxRetries) {
             try {
-                val result = chat(apiKey, messages, providerId, modelName, customUrl, temperature)
+                val result = chat(apiKey, messages, providerId, modelName, customUrl, temperature, jsonMode)
                 lastRaw = result.content
                 break
             } catch (e: CancellationException) {
@@ -426,4 +430,8 @@ class AIService(private val client: HttpClient = createHttpClient()) {
             }
         }
     }.flowOn(Dispatchers.Default)
+
+    private fun supportsJsonMode(providerId: String): Boolean = providerId in setOf(
+        "deepseek", "ali", "zhipu", "siliconflow", "openai_compat", "custom"
+    )
 }

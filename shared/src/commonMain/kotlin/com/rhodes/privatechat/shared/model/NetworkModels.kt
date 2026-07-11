@@ -9,7 +9,13 @@ data class ChatCompletionRequest(
     val messages: List<AiMessage>,
     val stream: Boolean = true,
     val temperature: Double = 0.95,
-    val max_tokens: Int? = null
+    val max_tokens: Int? = null,
+    val response_format: ResponseFormat? = null
+)
+
+@Serializable
+data class ResponseFormat(
+    val type: String
 )
 
 @Serializable

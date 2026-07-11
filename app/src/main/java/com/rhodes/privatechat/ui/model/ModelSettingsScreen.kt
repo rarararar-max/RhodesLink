@@ -6,6 +6,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -51,6 +52,21 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     var customModelName by remember { mutableStateOf(savedModel) }
     var customUrl by remember { mutableStateOf(settings.customUrl) }
     var apiKey by remember { mutableStateOf(settings.apiKey) }
+    var visionBaseUrl by remember { mutableStateOf(settings.visionBaseUrl) }
+    var visionModelName by remember { mutableStateOf(settings.visionModelName) }
+    var visionApiKey by remember { mutableStateOf(settings.visionApiKey) }
+    var vectorProviderMode by remember { mutableStateOf(settings.vectorProviderMode) }
+    var vectorProvider by remember { mutableStateOf(settings.vectorProvider) }
+    var vectorBaseUrl by remember { mutableStateOf(settings.vectorBaseUrl) }
+    var vectorModelName by remember { mutableStateOf(settings.vectorModelName) }
+    var vectorApiKey by remember { mutableStateOf(settings.vectorApiKey) }
+    var asrBaseUrl by remember { mutableStateOf(settings.asrBaseUrl) }
+    var asrModelName by remember { mutableStateOf(settings.asrModelName) }
+    var asrApiKey by remember { mutableStateOf(settings.asrApiKey) }
+    var ttsBaseUrl by remember { mutableStateOf(settings.ttsBaseUrl) }
+    var ttsModelName by remember { mutableStateOf(settings.ttsModelName) }
+    var ttsApiKey by remember { mutableStateOf(settings.ttsApiKey) }
+    var ttsDefaultVoiceId by remember { mutableStateOf(settings.ttsDefaultVoiceId) }
     var showKey by remember { mutableStateOf(false) }
     var errorText by remember { mutableStateOf("") }
     var showUnsavedDialog by remember { mutableStateOf(false) }
@@ -58,7 +74,11 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     val isCustom = currentProviderId == "custom"
     val modelOptions = if (isCustom) listOf("自填") else currentConfig.models + "自填"
     val currentModelName = if (isCustom || selectedModelIdx >= currentConfig.models.size) customModelName.trim() else currentConfig.models[selectedModelIdx].trim()
-    val hasChanges = currentProviderId != settings.provider || currentModelName != settings.modelName || customUrl.trim() != settings.customUrl || apiKey.trim() != settings.apiKey
+    val hasChanges = currentProviderId != settings.provider || currentModelName != settings.modelName || customUrl.trim() != settings.customUrl || apiKey.trim() != settings.apiKey ||
+        visionBaseUrl.trim() != settings.visionBaseUrl || visionModelName.trim() != settings.visionModelName || visionApiKey.trim() != settings.visionApiKey ||
+        vectorProviderMode != settings.vectorProviderMode || vectorProvider != settings.vectorProvider || vectorBaseUrl.trim() != settings.vectorBaseUrl || vectorModelName.trim() != settings.vectorModelName || vectorApiKey.trim() != settings.vectorApiKey ||
+        asrBaseUrl.trim() != settings.asrBaseUrl || asrModelName.trim() != settings.asrModelName || asrApiKey.trim() != settings.asrApiKey ||
+        ttsBaseUrl.trim() != settings.ttsBaseUrl || ttsModelName.trim() != settings.ttsModelName || ttsApiKey.trim() != settings.ttsApiKey || ttsDefaultVoiceId.trim() != settings.ttsDefaultVoiceId
 
     fun validateSettings(): String? {
         val modelName = if (isCustom || selectedModelIdx >= currentConfig.models.size) {
@@ -87,6 +107,21 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             settings.modelName = modelName
             settings.customUrl = customUrl.trim()
             settings.apiKey = apiKey.trim()
+            settings.visionBaseUrl = visionBaseUrl.trim()
+            settings.visionModelName = visionModelName.trim()
+            settings.visionApiKey = visionApiKey.trim()
+            settings.vectorProviderMode = vectorProviderMode
+            settings.vectorProvider = vectorProvider
+            settings.vectorBaseUrl = vectorBaseUrl.trim()
+            settings.vectorModelName = vectorModelName.trim()
+            settings.vectorApiKey = vectorApiKey.trim()
+            settings.asrBaseUrl = asrBaseUrl.trim()
+            settings.asrModelName = asrModelName.trim()
+            settings.asrApiKey = asrApiKey.trim()
+            settings.ttsBaseUrl = ttsBaseUrl.trim()
+            settings.ttsModelName = ttsModelName.trim()
+            settings.ttsApiKey = ttsApiKey.trim()
+            settings.ttsDefaultVoiceId = ttsDefaultVoiceId.trim()
             errorText = ""
             true
         }
@@ -147,6 +182,44 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 Text(errorText, fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
             }
             Spacer(Modifier.height(12.dp))
+
+            SettingsSection("识图模型") {
+                LabeledField("API 地址") { TextInput(visionBaseUrl, { visionBaseUrl = it }, ctx) }
+                Spacer(Modifier.height(10.dp))
+                LabeledField("模型名") { TextInput(visionModelName, { visionModelName = it }, ctx, placeholder = "qwen3-vl-plus") }
+                Spacer(Modifier.height(10.dp))
+                LabeledField("API Key（空则复用聊天 API Key）") { SecretInput(visionApiKey, { visionApiKey = it }, ctx, showKey) }
+            }
+
+            SettingsSection("向量模型") {
+                DropDown("模式", listOf("本地兜底", "第三方向量模型"), if (vectorProviderMode == "third_party") 1 else 0) { vectorProviderMode = if (it == 1) "third_party" else "local" }
+                Spacer(Modifier.height(10.dp))
+                DropDown("接口类型", listOf("阿里百炼", "OpenAI 兼容"), if (vectorProvider == "ali") 0 else 1) { vectorProvider = if (it == 0) "ali" else "openai" }
+                Spacer(Modifier.height(10.dp))
+                LabeledField("API 地址") { TextInput(vectorBaseUrl, { vectorBaseUrl = it }, ctx) }
+                Spacer(Modifier.height(10.dp))
+                LabeledField("模型名") { TextInput(vectorModelName, { vectorModelName = it }, ctx, placeholder = "text-embedding-v4") }
+                Spacer(Modifier.height(10.dp))
+                LabeledField("API Key（空则复用聊天 API Key）") { SecretInput(vectorApiKey, { vectorApiKey = it }, ctx, showKey) }
+            }
+
+            SettingsSection("语音识别 ASR") {
+                LabeledField("WebSocket 地址") { TextInput(asrBaseUrl, { asrBaseUrl = it }, ctx) }
+                Spacer(Modifier.height(10.dp))
+                LabeledField("模型配置") { TextInput(asrModelName, { asrModelName = it }, ctx, placeholder = "realtime|transcription") }
+                Spacer(Modifier.height(10.dp))
+                LabeledField("API Key（空则复用聊天 API Key）") { SecretInput(asrApiKey, { asrApiKey = it }, ctx, showKey) }
+            }
+
+            SettingsSection("文字转语音 TTS") {
+                LabeledField("WebSocket 地址") { TextInput(ttsBaseUrl, { ttsBaseUrl = it }, ctx) }
+                Spacer(Modifier.height(10.dp))
+                LabeledField("模型名") { TextInput(ttsModelName, { ttsModelName = it }, ctx, placeholder = "speech-2.8-hd") }
+                Spacer(Modifier.height(10.dp))
+                LabeledField("默认音色ID") { TextInput(ttsDefaultVoiceId, { ttsDefaultVoiceId = it }, ctx, placeholder = "角色未填写时使用") }
+                Spacer(Modifier.height(10.dp))
+                LabeledField("API Key（空则复用聊天 API Key）") { SecretInput(ttsApiKey, { ttsApiKey = it }, ctx, showKey) }
+            }
         }
     }
     }
@@ -186,6 +259,32 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
 
 @Composable private fun PasteBtn(ctx: Context, onPaste: (String) -> Unit) {
     OutlinedButton(onClick = { (ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager)?.primaryClip?.getItemAt(0)?.text?.toString()?.let { onPaste(it) } }, modifier = Modifier.height(48.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = Primary)) { Icon(Icons.Default.ContentPaste, null, modifier = Modifier.size(16.dp)) }
+}
+
+@Composable private fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Surface(color = Card, shape = RoundedCornerShape(12.dp), tonalElevation = 0.dp, modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
+        Column(Modifier.padding(14.dp)) {
+            Text(title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+            Spacer(Modifier.height(12.dp))
+            content()
+        }
+    }
+}
+
+@Composable private fun TextInput(value: String, onChange: (String) -> Unit, ctx: Context, placeholder: String = "") {
+    Row {
+        OutlinedTextField(value = value, onValueChange = onChange, modifier = Modifier.weight(1f), singleLine = true, shape = RoundedCornerShape(8.dp), colors = fieldColors(), placeholder = { if (placeholder.isNotBlank()) Text(placeholder, fontSize = 13.sp, color = TextTertiary) })
+        Spacer(Modifier.width(4.dp))
+        PasteBtn(ctx) { onChange(it) }
+    }
+}
+
+@Composable private fun SecretInput(value: String, onChange: (String) -> Unit, ctx: Context, show: Boolean) {
+    Row {
+        OutlinedTextField(value = value, onValueChange = onChange, modifier = Modifier.weight(1f), singleLine = true, visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(), shape = RoundedCornerShape(8.dp), colors = fieldColors())
+        Spacer(Modifier.width(4.dp))
+        PasteBtn(ctx) { onChange(it) }
+    }
 }
 
 @Composable private fun fieldColors() = OutlinedTextFieldDefaults.colors(focusedBorderColor = Primary, unfocusedBorderColor = Divider)

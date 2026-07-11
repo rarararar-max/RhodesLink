@@ -63,7 +63,7 @@ class RelationshipRepository(private val wrapper: DatabaseWrapper) {
         val queue = ArrayDeque<Pair<String, Int>>()
         queue.addLast(centerId to 0)
         val result = mutableListOf(BfsNode(centerId, "", 0, ""))
-        db.operatorsQueries.getOperator(centerId) { id, name, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ ->
+            db.operatorsQueries.getOperator(centerId) { id, name, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ ->
             name
         }.executeAsOneOrNull()?.let { result[0] = result[0].copy(operatorName = it) }
         while (queue.isNotEmpty() && result.size < 15) {
@@ -80,7 +80,7 @@ class RelationshipRepository(private val wrapper: DatabaseWrapper) {
             for (rel in getReverseRelationships(currentId)) {
                 if (rel.operatorId in visited) continue
                 visited.add(rel.operatorId)
-                val name = db.operatorsQueries.getOperator(rel.operatorId) { _, name, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ -> name }.executeAsOneOrNull() ?: rel.operatorId
+                val name = db.operatorsQueries.getOperator(rel.operatorId) { _, name, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ -> name }.executeAsOneOrNull() ?: rel.operatorId
                 result.add(BfsNode(rel.operatorId, name, depth + 1, currentId, rel.type, true))
                 queue.addLast(rel.operatorId to depth + 1)
                 if (result.size >= 15) break

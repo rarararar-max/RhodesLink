@@ -46,6 +46,23 @@ SELECT senderName, COUNT(*) AS cnt FROM chat_messages WHERE isMe = 0 AND senderN
 getMessagesInRange:
 SELECT * FROM chat_messages WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp ASC;
 
+searchMessagesInSession:
+SELECT * FROM chat_messages
+WHERE sessionId = ? AND content LIKE ?
+ORDER BY timestamp DESC, id DESC
+LIMIT ?;
+
+getMessagesBySessionInRange:
+SELECT * FROM chat_messages
+WHERE sessionId = ? AND timestamp BETWEEN ? AND ?
+ORDER BY timestamp ASC, id ASC;
+
+getMessageDatesBySession:
+SELECT DISTINCT strftime('%Y-%m-%d', timestamp / 1000, 'unixepoch', 'localtime') AS day
+FROM chat_messages
+WHERE sessionId = ?
+ORDER BY day DESC;
+
 insertMessage:
 INSERT OR REPLACE INTO chat_messages(id, sessionId, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);

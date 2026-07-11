@@ -155,6 +155,12 @@ class WorldEventRepository(private val wrapper: DatabaseWrapper) {
         }
     }
 
+    suspend fun getAllWorldEventsForBackup(): List<WorldEvent> = withContext(Dispatchers.Default) {
+        db.worldEventsQueries.getAllWorldEventsForBackup().executeAsList().map { row ->
+            mapEvent(row.id, row.type, row.actorId, row.actorName, row.targetId, row.targetName, row.source, row.sourceId, row.content, row.createdAt, row.expiresAt, row.consumedBy, row.originType, row.chainDepth, row.rootEventId)
+        }
+    }
+
     suspend fun deleteExpiredWorldEvents(cutoff: Long) = withContext(Dispatchers.Default) {
         try {
             db.worldEventsQueries.deleteExpiredWorldEvents(cutoff)

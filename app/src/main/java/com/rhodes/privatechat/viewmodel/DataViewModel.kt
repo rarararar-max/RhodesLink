@@ -123,4 +123,63 @@ class DataViewModel(
         )
         return ExportHelper.exportToFile(context, payload, "rhodes_chat_${sessionId}_${System.currentTimeMillis()}.json")
     }
+
+    suspend fun exportFullBackup(context: android.content.Context, operators: List<com.rhodes.privatechat.shared.model.Operator>): java.io.File {
+        val sessions = repository.getAllSessionsSync()
+        val allMessages = sessions.flatMap { repository.getMessagesSync(it.id) }
+        val allRels = operators.flatMap { op -> repository.getRelationships(op.id) }
+        val payload = ExportPayload(
+            version = 2,
+            type = "full_backup",
+            operators = operators.map { OperatorExport.fromEntity(it) },
+            relationships = allRels.map { RelationshipExport.fromEntity(it) },
+            sessions = sessions.map { SessionExport.fromEntity(it) },
+            messages = allMessages.map { MessageExport.fromEntity(it) },
+            memories = repository.getAllMemoriesForBackup(),
+            anchors = repository.getAllAnchorsForBackup(),
+            moments = repository.getAllMomentsSync(),
+            momentLikes = repository.getAllLikesForBackup(),
+            momentComments = repository.getAllCommentsForBackup(),
+            diaries = repository.getAllDiariesForBackup(),
+            worldEvents = repository.getAllWorldEventsForBackup(),
+            settings = exportSettingsSnapshot()
+        )
+        return ExportHelper.exportToFile(context, payload, "rhodes_full_backup_${System.currentTimeMillis()}.json")
+    }
+
+    fun importFullBackup(payload: ExportPayload) {
+        if (payload.type != "full_backup") return
+        scope.launch(Dispatchers.IO) {
+            payload.operators.orEmpty().forEach { repository.insertOperator(it.toEntity()) }
+            payload.relationships.orEmpty().forEach { repository.insertRelationship(it.toEntity()) }
+            payload.sessions.orEmpty().forEach { repository.insertSession(it.toEntity()) }
+            payload.messages.orEmpty().forEach { repository.sendMessage(it.sessionId, it.toEntity()) }
+            payload.memories.orEmpty().forEach { repository.saveMemory(it) }
+            payload.anchors.orEmpty().forEach { repository.saveAnchor(it) }
+            payload.moments.orEmpty().forEach { repository.insertMoment(it) }
+            payload.momentLikes.orEmpty().forEach { repository.insertLike(it) }
+            payload.momentComments.orEmpty().forEach { repository.insertComment(it) }
+            payload.diaries.orEmpty().forEach { repository.insertDiary(it) }
+            payload.worldEvents.orEmpty().forEach { repository.insertWorldEvent(it) }
+            importSettingsSnapshot(payload.settings.orEmpty())
+        }
+    }
+
+    private fun exportSettingsSnapshot(): Map<String, String> = mapOf(
+        "user_name" to settings.userName,
+        "user_gender" to settings.userGender,
+        "user_signature" to settings.userSignature,
+        "hidden_ids" to settings.hiddenIds.joinToString(","),
+        "daily_summary_date" to settings.dailySummaryDate,
+        "world_log_json" to settings.worldLogJson
+    )
+
+    private fun importSettingsSnapshot(values: Map<String, String>) {
+        values["user_name"]?.let { settings.userName = it }
+        values["user_gender"]?.let { settings.userGender = it }
+        values["user_signature"]?.let { settings.userSignature = it }
+        values["hidden_ids"]?.let { settings.hiddenIds = it.split(",").filter { id -> id.isNotBlank() }.toSet() }
+        values["daily_summary_date"]?.let { settings.dailySummaryDate = it }
+        values["world_log_json"]?.let { settings.worldLogJson = it }
+    }
 }

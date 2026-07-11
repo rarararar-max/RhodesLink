@@ -9,6 +9,9 @@ CREATE TABLE IF NOT EXISTS moment_likes (
 getLikes:
 SELECT * FROM moment_likes WHERE momentId = ?;
 
+getAllLikesForBackup:
+SELECT * FROM moment_likes ORDER BY createdAt DESC;
+
 getLikesFlow:
 SELECT * FROM moment_likes WHERE momentId = ?;
 

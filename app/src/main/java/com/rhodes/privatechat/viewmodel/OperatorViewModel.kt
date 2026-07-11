@@ -25,6 +25,9 @@ class OperatorViewModel(
         relationships: List<Relationship> = emptyList(),
         activityLevel: Float = 0.5f,
         gender: String = "",
+        voiceName: String = "",
+        voiceSpeed: String = "",
+        voicePitch: String = "",
         onComplete: () -> Unit = {}
     ) {
         scope.launch {
@@ -45,7 +48,10 @@ class OperatorViewModel(
                     attack = existing?.attack ?: 0.5f,
                     defense = existing?.defense ?: 0.5f,
                     meldPref = existing?.meldPref ?: "medium",
-                    activityLevel = activityLevel
+                    activityLevel = activityLevel,
+                    voiceName = voiceName.ifBlank { existing?.voiceName ?: "" },
+                    voiceSpeed = voiceSpeed.ifBlank { existing?.voiceSpeed ?: "" },
+                    voicePitch = voicePitch.ifBlank { existing?.voicePitch ?: "" }
                 )
                 repository.insertOperator(op)
                 repository.syncOperatorAvatar(id, op.avatarUri)

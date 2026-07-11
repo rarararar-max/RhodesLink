@@ -33,10 +33,6 @@ class WorldScheduler(
         scope.launch {
             try {
                 cleanupExpiredEvents()
-                maybeTriggerMoment()
-                maybeRefreshAutoGroups()
-                maybeTriggerProactivePrivateEvents()
-                maybeGenerateDailyDiaries()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

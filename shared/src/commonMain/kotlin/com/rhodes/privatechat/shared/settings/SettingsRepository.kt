@@ -260,7 +260,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putBoolean("auto_ai_enabled", value)
 
     var worldSchedulerEnabled: Boolean
-        get() = getBoolean("world_scheduler_enabled", true)
+        get() = getBoolean("world_scheduler_enabled", false)
         set(value) = putBoolean("world_scheduler_enabled", value)
 
     var dailyAutoMomentEnabled: Boolean
@@ -268,23 +268,23 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putBoolean("daily_auto_moment_enabled", value)
 
     var idleProactiveChatEnabled: Boolean
-        get() = getBoolean("idle_proactive_chat_enabled", true)
+        get() = getBoolean("idle_proactive_chat_enabled", false)
         set(value) = putBoolean("idle_proactive_chat_enabled", value)
 
     var autoMomentEnabled: Boolean
-        get() = getBoolean("auto_moment_enabled", true)
+        get() = getBoolean("auto_moment_enabled", false)
         set(value) = putBoolean("auto_moment_enabled", value)
 
     var worldAutoGroupEnabled: Boolean
-        get() = getBoolean("world_auto_group_enabled", true)
+        get() = getBoolean("world_auto_group_enabled", false)
         set(value) = putBoolean("world_auto_group_enabled", value)
 
     var worldProactiveChatEnabled: Boolean
-        get() = getBoolean("world_proactive_chat_enabled", true)
+        get() = getBoolean("world_proactive_chat_enabled", false)
         set(value) = putBoolean("world_proactive_chat_enabled", value)
 
     var autoDiaryEnabled: Boolean
-        get() = getBoolean("auto_diary_enabled", true)
+        get() = getBoolean("auto_diary_enabled", false)
         set(value) = putBoolean("auto_diary_enabled", value)
 
     var dailyWorldEventLimit: Int
@@ -565,6 +565,70 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = getBoolean("dark_mode", true)
         set(value) = settings.putBoolean("dark_mode", value)
 
+    var vectorProviderMode: String
+        get() = getString("vector_provider_mode", "local")
+        set(value) = putString("vector_provider_mode", value)
+
+    var vectorProvider: String
+        get() = getString("vector_provider", "ali")
+        set(value) = putString("vector_provider", value)
+
+    var vectorModelName: String
+        get() = getString("vector_model_name", "text-embedding-v4")
+        set(value) = putString("vector_model_name", value)
+
+    var vectorBaseUrl: String
+        get() = getString("vector_base_url", "")
+        set(value) = putString("vector_base_url", value)
+
+    var vectorApiKey: String
+        get() = getString("vector_api_key", "")
+        set(value) = putString("vector_api_key", value)
+
+    var visionProvider: String
+        get() = getString("vision_provider", "ali")
+        set(value) = putString("vision_provider", value)
+
+    var visionModelName: String
+        get() = getString("vision_model_name", "qwen3-vl-plus")
+        set(value) = putString("vision_model_name", value)
+
+    var visionBaseUrl: String
+        get() = getString("vision_base_url", "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation")
+        set(value) = putString("vision_base_url", value)
+
+    var visionApiKey: String
+        get() = getString("vision_api_key", "")
+        set(value) = putString("vision_api_key", value)
+
+    var asrModelName: String
+        get() = getString("asr_model_name", "qwen3.5-omni-flash-realtime|qwen3-asr-flash-realtime")
+        set(value) = putString("asr_model_name", value)
+
+    var asrBaseUrl: String
+        get() = getString("asr_base_url", "wss://dashscope.aliyuncs.com/api-ws/v1/realtime")
+        set(value) = putString("asr_base_url", value)
+
+    var asrApiKey: String
+        get() = getString("asr_api_key", "")
+        set(value) = putString("asr_api_key", value)
+
+    var ttsModelName: String
+        get() = getString("tts_model_name", "speech-2.8-hd")
+        set(value) = putString("tts_model_name", value)
+
+    var ttsBaseUrl: String
+        get() = getString("tts_base_url", "")
+        set(value) = putString("tts_base_url", value)
+
+    var ttsApiKey: String
+        get() = getString("tts_api_key", "")
+        set(value) = putString("tts_api_key", value)
+
+    var ttsDefaultVoiceId: String
+        get() = getString("tts_default_voice_id", "")
+        set(value) = putString("tts_default_voice_id", value)
+
     // === 清理设置 ===
     var cleanDaysMessages: Int
         get() = settings.getInt("clean_days_messages", 30).coerceIn(0, 3650)
@@ -721,9 +785,20 @@ class SettingsRepository(private val settings: ObservableSettings) {
         putString(key, value)
     }
 
+    fun getPromptTemplateVersion(type: String, mode: String = ""): Int {
+        val key = if (mode.isNotBlank()) "prompt_${type}_${mode}_version" else "prompt_${type}_version"
+        return getInt(key, 0)
+    }
+
+    fun putPromptTemplateVersion(type: String, mode: String, version: Int) {
+        val key = if (mode.isNotBlank()) "prompt_${type}_${mode}_version" else "prompt_${type}_version"
+        putInt(key, version)
+    }
+
     fun removePromptTemplate(type: String, mode: String = "") {
         val key = if (mode.isNotBlank()) "prompt_${type}_${mode}" else "prompt_$type"
         remove(key)
+        remove(if (mode.isNotBlank()) "prompt_${type}_${mode}_version" else "prompt_${type}_version")
     }
 
     fun getMomentCount(operatorId: String, date: String): Int =
@@ -803,6 +878,10 @@ class SettingsRepository(private val settings: ObservableSettings) {
     fun putLong(key: String, value: Long) = synchronized(draftLock) {
         if (draftActive) draftValues[key] = value else settings.putLong(key, value)
     }
+
+    fun getSessionRestartAt(sessionId: String): Long = getLong("session_restart_at_$sessionId", 0L)
+
+    fun putSessionRestartAt(sessionId: String, value: Long) = putLong("session_restart_at_$sessionId", value)
 
     fun getStringSet(key: String, default: Set<String> = emptySet()): Set<String> {
         val json = safeGetString(key, "")

@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -43,6 +44,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -178,12 +180,13 @@ private fun MessageBubble(
     onContinue: (() -> Unit)?,
     onSenderClick: ((String) -> Unit)?,
 ) {
+    val archivedAlpha = if (message.isArchived) 0.45f else 1f
     if (message.isSystem) {
         if (message.isNarration) {
             // 旁白：屏幕居中，圆角矩形半透明气泡，文字左对齐，支持长按撤回
             val context = LocalContext.current
             var showNarrationMenu by remember { mutableStateOf(false) }
-            Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp).combinedClickable(onLongClick = { showNarrationMenu = true }, onClick = {}), contentAlignment = Alignment.Center) {
+            Box(modifier = Modifier.fillMaxWidth().alpha(archivedAlpha).padding(horizontal = 12.dp, vertical = 6.dp).combinedClickable(onLongClick = { showNarrationMenu = true }, onClick = {}), contentAlignment = Alignment.Center) {
                 Box(modifier = Modifier.fillMaxWidth(0.9f).clip(RoundedCornerShape(16.dp)).background(Card.copy(alpha = 0.88f)).border(1.dp, Stroke, RoundedCornerShape(16.dp)).padding(horizontal = 16.dp, vertical = 8.dp)) {
                     Text(message.content, fontSize = 14.sp, color = TextPrimary, fontStyle = FontStyle.Italic, textAlign = TextAlign.Start, lineHeight = 20.sp)
                 }
@@ -202,7 +205,7 @@ private fun MessageBubble(
         } else {
             // 系统消息：居中
             Text(message.content, fontSize = 12.sp, color = TextTertiary,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp, vertical = 6.dp),
+                modifier = Modifier.fillMaxWidth().alpha(archivedAlpha).padding(horizontal = 32.dp, vertical = 6.dp),
                 textAlign = TextAlign.Center)
         }
         return
@@ -214,7 +217,7 @@ private fun MessageBubble(
     val bubbleColor = if (isMe) BubbleMine else BubbleOther
     val bubbleShape = if (isMe) RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp) else RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp)
 
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp)) {
+    Column(modifier = Modifier.fillMaxWidth().alpha(archivedAlpha).padding(horizontal = 12.dp, vertical = 2.dp)) {
         if (showTime) {
             Text(formatChatTime(message.timestamp), fontSize = 12.sp, color = TextTertiary,
                 modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), textAlign = TextAlign.Center)
@@ -254,10 +257,20 @@ private fun MessageBubble(
                         .background(if (isMe) Brush.linearGradient(listOf(BubbleMine, BubbleMineEnd)) else Brush.linearGradient(listOf(bubbleColor, bubbleColor)))
                         .border(1.dp, if (isMe) Primary.copy(alpha = 0.20f) else Stroke, bubbleShape)
                         .padding(horizontal = if (onSenderClick != null) 12.dp else 14.dp, vertical = if (onSenderClick != null) 8.dp else 10.dp)) {
-                        Text(message.content.ifEmpty { if (isMe) "" else "..." },
-                            fontSize = if (onSenderClick != null) 15.sp else 16.sp,
-                            color = if (isMe) TextPrimary else TextPrimary,
-                            fontWeight = FontWeight.Normal)
+                        if (message.imageUri.isNotBlank()) {
+                            Column {
+                                AsyncImage(model = message.imageUri, contentDescription = "图片消息", modifier = Modifier.fillMaxWidth().heightIn(max = 220.dp).clip(RoundedCornerShape(10.dp)), contentScale = ContentScale.Crop)
+                                if (message.content.isNotBlank()) {
+                                    Spacer(Modifier.height(6.dp))
+                                    Text(message.content, fontSize = if (onSenderClick != null) 15.sp else 16.sp, color = TextPrimary, fontWeight = FontWeight.Normal)
+                                }
+                            }
+                        } else {
+                            Text(message.content.ifEmpty { if (isMe) "" else "..." },
+                                fontSize = if (onSenderClick != null) 15.sp else 16.sp,
+                                color = if (isMe) TextPrimary else TextPrimary,
+                                fontWeight = FontWeight.Normal)
+                        }
                     }
                 }
 

@@ -20,13 +20,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Assignment
 import androidx.compose.material.icons.filled.AutoFixHigh
-import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.filled.SendToMobile
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Casino
+import androidx.compose.material.icons.filled.Bedtime
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -60,12 +60,12 @@ fun FeaturesScreen(
     diaryBadge: Int = 0,
     onMoments: () -> Unit = {},
     onDiary: () -> Unit = {},
-    onWorldLog: () -> Unit = {},
     onRanking: () -> Unit = {},
     onImpressions: () -> Unit = {},
     onDispatch: () -> Unit = {},
     onTokenStats: () -> Unit = {},
     onGameRoom: () -> Unit = {},
+    onSleep: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier.fillMaxSize().background(BG)) {
@@ -79,7 +79,6 @@ fun FeaturesScreen(
             }
             Spacer(Modifier.height(8.dp))
             WechatListGroup {
-                FeatureButton(FeatureEntry(Icons.Default.Public, "世界运行日志", "查看今天自动发生了什么", iconColor = Color(0xFF576B95)), onClick = onWorldLog)
                 FeatureButton(FeatureEntry(Icons.AutoMirrored.Filled.SendToMobile, "干员派遣", "组建小队执行任务", iconColor = Color(0xFF8B5CF6)), onClick = onDispatch)
             }
             Spacer(Modifier.height(8.dp))
@@ -87,6 +86,7 @@ fun FeaturesScreen(
                 FeatureButton(FeatureEntry(Icons.Default.EmojiEvents, "聊天排行榜", "昨日聊天数据排名", iconColor = Color(0xFFFFB300)), onClick = onRanking)
                 FeatureButton(FeatureEntry(Icons.Default.BarChart, "消费统计", "Token消耗分析", iconColor = Color(0xFF00BCD4)), onClick = onTokenStats)
                 FeatureButton(FeatureEntry(Icons.Default.Casino, "游戏室", "麻将、斗地主、跑得快", iconColor = Color(0xFFFF8F00)), onClick = onGameRoom)
+                FeatureButton(FeatureEntry(Icons.Default.Bedtime, "陪睡", "凯尔希陪睡语音模式", iconColor = Color(0xFF7C4DFF)), onClick = onSleep)
             }
         }
     }

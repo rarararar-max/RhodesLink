@@ -22,5 +22,8 @@ data class Operator(
     val attack: Float = 0.5f,
     val defense: Float = 0.5f,
     val meldPref: String = "medium",
-    val activityLevel: Float = 0.5f
+    val activityLevel: Float = 0.5f,
+    val voiceName: String = "",
+    val voiceSpeed: String = "",
+    val voicePitch: String = ""
 )

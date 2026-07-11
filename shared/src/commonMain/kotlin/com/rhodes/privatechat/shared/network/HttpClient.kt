@@ -1,6 +1,7 @@
 package com.rhodes.privatechat.shared.network
 
 import io.ktor.client.HttpClient
+import io.ktor.client.HttpClientConfig
 import io.ktor.client.engine.HttpClientEngine
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
@@ -22,4 +23,20 @@ fun createHttpClient(): HttpClient = HttpClient(createPlatformEngine()) {
         connectTimeoutMillis = 15_000
         socketTimeoutMillis = 60_000
     }
+}
+
+fun createHttpClient(block: HttpClientConfig<*>.() -> Unit): HttpClient = HttpClient(createPlatformEngine()) {
+    install(ContentNegotiation) {
+        json(Json {
+            ignoreUnknownKeys = true
+            isLenient = true
+            encodeDefaults = true
+        })
+    }
+    install(HttpTimeout) {
+        requestTimeoutMillis = 60_000
+        connectTimeoutMillis = 15_000
+        socketTimeoutMillis = 60_000
+    }
+    block()
 }

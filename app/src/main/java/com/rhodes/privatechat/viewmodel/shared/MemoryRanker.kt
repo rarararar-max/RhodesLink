@@ -4,8 +4,6 @@ import com.rhodes.privatechat.shared.model.AnchorType
 import com.rhodes.privatechat.shared.model.MemoryAnchor
 import com.rhodes.privatechat.shared.memory.AnchorSourcePolicy
 
-enum class MemorySurface { PRIVATE_CHAT, GROUP_CHAT, MOMENT, COMMENT, DIARY }
-
 object MemoryRanker {
     fun pick(
         anchors: List<MemoryAnchor>,

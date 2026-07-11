@@ -1,0 +1,17 @@
+CREATE TABLE IF NOT EXISTS memory_links (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    parentMemoryId INTEGER NOT NULL,
+    childMemoryId INTEGER NOT NULL,
+    linkType TEXT NOT NULL DEFAULT 'merge',
+    createdAt INTEGER NOT NULL DEFAULT 0
+);
+
+getMemoryLinksByParent:
+SELECT * FROM memory_links WHERE parentMemoryId = ? ORDER BY id ASC;
+
+insertMemoryLink:
+INSERT OR REPLACE INTO memory_links(parentMemoryId, childMemoryId, linkType, createdAt)
+VALUES (?, ?, ?, ?);
+
+deleteMemoryLinksByParent:
+DELETE FROM memory_links WHERE parentMemoryId = ?;

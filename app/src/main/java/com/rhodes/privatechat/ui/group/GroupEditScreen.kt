@@ -184,14 +184,6 @@ fun GroupEditScreen(
                     }
                     Switch(checked = idleAutoChat, onCheckedChange = { idleAutoChat = it }, colors = SwitchDefaults.colors(checkedThumbColor = Primary, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
                 }
-                Spacer(Modifier.height(10.dp))
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("大世界事件唤起", fontSize = 14.sp, color = TextPrimary)
-                        Text("开启后，有动态、评论等事件时才围绕话题聊几轮。", fontSize = 11.sp, color = TextSecondary)
-                    }
-                    Switch(checked = eventAutoChat, onCheckedChange = { eventAutoChat = it }, colors = SwitchDefaults.colors(checkedThumbColor = Primary, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
-                }
             }
 
             Spacer(modifier = Modifier.height(12.dp))

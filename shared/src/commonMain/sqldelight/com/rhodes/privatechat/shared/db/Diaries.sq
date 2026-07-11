@@ -25,6 +25,9 @@ SELECT DISTINCT date FROM diaries WHERE operatorId = ? ORDER BY date DESC;
 getCount:
 SELECT COUNT(*) FROM diaries;
 
+getAllDiariesForBackup:
+SELECT * FROM diaries ORDER BY date DESC, id DESC;
+
 insertDiary:
 INSERT OR REPLACE INTO diaries(operatorId, operatorName, content, date, createdAt)
 VALUES (?, ?, ?, ?, ?);

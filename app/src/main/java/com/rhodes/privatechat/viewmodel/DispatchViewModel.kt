@@ -56,7 +56,7 @@ class DispatchViewModel(
 
     private fun compactLogChain(log: String): String {
         if (log.length <= MAX_DISPATCH_LOG_CHARS) return log
-        val head = log.take(4_000).trimEnd()
+        val head = log.take(6_000).trimEnd()
         val tail = log.takeLast(MAX_DISPATCH_LOG_CHARS - head.length - 80).trimStart()
         return "$head\n\n【日志已压缩，省略中间过长内容】\n\n$tail"
     }
@@ -101,7 +101,7 @@ ${profiles}
 
 【写作要求】
 - ${dMn}~${dMx}字，第三人称叙事，承接前情，剧情连贯
-- 本轮必须出现一个具体事件：遭遇敌人、发现遗迹、天气突变、物资丢失、队员争执等
+- 鼓励出现一个具体事件（遭遇敌人、发现遗迹、天气突变等），也可延续上一轮的张力（追踪、等待、谈判中）
 - 所有成员必须被提及，名字和人设必须与前文一致
 
 【人称约束】
@@ -161,21 +161,27 @@ ${profiles}
                     return@launch
                 }
 
-                // 1. 先扣预算（防止崩溃后记录残留但预算未扣）
-                if (!settings.trySpendLmb(budget)) {
-                    Log.w(TAG, "[startDispatch] 余额不足，取消")
-                    return@launch
-                }
-                DebugLogger.log("Dispatch", "已扣除预算: id=$id, budget=$budget, 余额=${settings.lmb}")
-
-                // 2. 插入 generating 记录，立即导航
+                // 1. 先插入 generating 记录（确保记录存在，防止扣费后崩溃无记录）
                 repository.insertDispatch(DispatchRecord(
                     id = id, taskType = task, durationHours = duration,
                     budget = budget, netProfit = 0, operatorIds = operatorIds.joinToString(","),
                     logChain = "", status = "generating", startTime = dispatchStartTime,
                     totalSegments = totalSeg, segmentInterval = interval, items = "[]"
                 ))
-                Log.d(TAG, "[startDispatch] 已插入generating记录，导航到进度页")
+                Log.d(TAG, "[startDispatch] 已插入generating记录")
+
+                // 2. 再扣预算（记录已存在，即使后续崩溃也可以通过记录退款）
+                if (!settings.trySpendLmb(budget)) {
+                    Log.w(TAG, "[startDispatch] 余额不足，取消并清除记录")
+                    repository.getDispatch(id)?.let { d ->
+                        repository.insertDispatch(d.copy(status = "cancelled", endTime = System.currentTimeMillis(), netProfit = 0))
+                    }
+                    return@launch
+                }
+                DebugLogger.log("Dispatch", "已扣除预算: id=$id, budget=$budget, 余额=${settings.lmb}")
+
+                // 3. 导航到进度页
+                Log.d(TAG, "[startDispatch] 导航到进度页")
                 onSuccess()
 
                 // 3. 更新干员状态
@@ -250,7 +256,7 @@ ${profiles}
                 val memberIds = updated.operatorIds.split(",").map { it.trim() }.filter { it.isNotBlank() }
                 val memberNames = memberIds.mapNotNull { id -> allOps.find { it.id == id || it.name == id }?.name }.take(3).joinToString("、")
                 for (opId in memberIds) {
-                    repository.saveAnchor(AnchorSourcePolicy.buildAnchor(source = AnchorSourcePolicy.DISPATCH, sourceName = updated.taskType, sourceActor = memberNames, sourceTarget = profile.nickname, operatorId = opId, type = AnchorType.EVENT, content = "${updated.taskType}任务完成，${memberNames}带回${items}，净收益${netProfit}龙门币", importance = AnchorSourcePolicy.MEDIUM, sessionId = "anchor_${System.currentTimeMillis()}", createdAt = System.currentTimeMillis(), expiresAt = MemoryPolicy.anchorExpiresAt(settings, AnchorType.EVENT)))
+                    repository.saveAnchor(AnchorSourcePolicy.buildAnchor(source = AnchorSourcePolicy.DISPATCH, sourceName = updated.taskType, sourceActor = memberNames, sourceTarget = profile.nickname, operatorId = opId, type = AnchorType.EVENT, content = "${updated.taskType}任务完成，${memberNames}带回${items}，净收益${netProfit}龙门币", importance = AnchorSourcePolicy.MEDIUM, sessionId = "dispatch:${dispatchId}", createdAt = System.currentTimeMillis(), expiresAt = MemoryPolicy.anchorExpiresAt(settings, AnchorType.EVENT)))
                 }
             } finally {
                 finishingIds.remove(dispatchId)
@@ -278,10 +284,10 @@ ${profiles}
 小队成员：${names}（共${memberCount}人，所有成员必须在结局中提及归队情况）
 
 【完整日志摘要】
-${dispatch.logChain.take(500)}
+${dispatch.logChain.take(800)}
 
 【最近过程片段】
-${dispatch.logChain.takeLast(900)}
+${dispatch.logChain.takeLast(1500)}
 
 【成员档案】
 ${profiles}

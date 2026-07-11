@@ -35,6 +35,12 @@ class DiaryRepository(private val wrapper: DatabaseWrapper) {
         }.executeAsList()
     }
 
+    suspend fun getAllDiariesForBackup(): List<Diary> = withContext(Dispatchers.Default) {
+        db.diariesQueries.getAllDiariesForBackup { id, opId, opName, content, date, createdAt ->
+            Diary(id, opId, opName, content, date, createdAt)
+        }.executeAsList()
+    }
+
     suspend fun getDiaryDates(operatorId: String): List<String> = withContext(Dispatchers.Default) {
         db.diariesQueries.getDiaryDates(operatorId).executeAsList()
     }

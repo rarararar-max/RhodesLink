@@ -33,6 +33,12 @@ class MemoryRepository(private val wrapper: DatabaseWrapper) {
         }.executeAsList()
     }
 
+    suspend fun getAllMemoriesForBackup(): List<Memory> = withContext(Dispatchers.Default) {
+        db.memoriesQueries.getAllMemoriesForBackup() { id, sid, opId, type, content, keywords, preferences, taboos, createdAt, expiresAt ->
+            Memory(id, sid, opId, try { MemoryType.valueOf(type) } catch (_: Exception) { MemoryType.SHORT_TERM }, content, keywords, preferences, taboos, createdAt, expiresAt)
+        }.executeAsList()
+    }
+
     suspend fun getLatestDaily(): Memory? = withContext(Dispatchers.Default) {
         db.memoriesQueries.getLatestDaily() { id, sid, opId, type, content, keywords, preferences, taboos, createdAt, expiresAt ->
             Memory(id, sid, opId, try { MemoryType.valueOf(type) } catch (_: Exception) { MemoryType.DAILY }, content, keywords, preferences, taboos, createdAt, expiresAt)

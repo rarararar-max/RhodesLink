@@ -12,18 +12,39 @@ import kotlinx.datetime.Clock
 
 class OperatorRepository(private val wrapper: DatabaseWrapper) {
 
-    private val db: RhodesDatabase get() = wrapper.database
+    private val db: RhodesDatabase get() = wrapper.database
+
+    private fun mapOperator(
+        id: String,
+        name: String,
+        title: String,
+        description: String,
+        gender: String,
+        avatarUri: String,
+        location: String,
+        activity: String,
+        emotion: String,
+        intimacy: Long,
+        privatePrompt: String,
+        groupPrompt: String,
+        memoryInjection: String,
+        userRelation: String,
+        lmb: Long,
+        attack: Double,
+        defense: Double,
+        meldPref: String,
+        activityLevel: Double,
+        voiceName: String,
+        voiceSpeed: String,
+        voicePitch: String
+    ) = Operator(id, name, title, description, gender, avatarUri, location, activity, emotion, intimacy.toInt(), privatePrompt, groupPrompt, memoryInjection, userRelation, lmb.toInt(), attack.toFloat(), defense.toFloat(), meldPref, activityLevel.toFloat(), voiceName, voiceSpeed, voicePitch)
 
     // --- Operators ---
     val allOperators: Flow<List<Operator>> =
-        db.operatorsQueries.getAllOperators { id, name, title, description, gender, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, memoryInjection, userRelation, lmb, attack, defense, meldPref, activityLevel ->
-            Operator(id, name, title, description, gender, avatarUri, location, activity, emotion, intimacy.toInt(), privatePrompt, groupPrompt, memoryInjection, userRelation, lmb.toInt(), attack.toFloat(), defense.toFloat(), meldPref, activityLevel.toFloat())
-        }.asFlow().mapToList(Dispatchers.Default)
+        db.operatorsQueries.getAllOperators(::mapOperator).asFlow().mapToList(Dispatchers.Default)
 
     suspend fun getOperator(id: String): Operator? = withContext(Dispatchers.Default) {
-        db.operatorsQueries.getOperator(id) { id_, name, title, description, gender, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, memoryInjection, userRelation, lmb, attack, defense, meldPref, activityLevel ->
-            Operator(id_, name, title, description, gender, avatarUri, location, activity, emotion, intimacy.toInt(), privatePrompt, groupPrompt, memoryInjection, userRelation, lmb.toInt(), attack.toFloat(), defense.toFloat(), meldPref, activityLevel.toFloat())
-        }.executeAsOneOrNull()
+        db.operatorsQueries.getOperator(id, ::mapOperator).executeAsOneOrNull()
     }
 
     fun avatarRes(id: String): Int {
@@ -66,9 +87,7 @@ class OperatorRepository(private val wrapper: DatabaseWrapper) {
         val count = db.operatorsQueries.getCount().executeAsOne()
         if (count > 0L) {
             if (count == presetOperators.size.toLong()) {
-                db.operatorsQueries.getOperator("amiya") { id, name, title, description, gender, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, memoryInjection, userRelation, lmb, attack, defense, meldPref, activityLevel ->
-                    Operator(id, name, title, description, gender, avatarUri, location, activity, emotion, intimacy.toInt(), privatePrompt, groupPrompt, memoryInjection, userRelation, lmb.toInt(), attack.toFloat(), defense.toFloat(), meldPref, activityLevel.toFloat())
-                }.executeAsOneOrNull()?.let { first ->
+                db.operatorsQueries.getOperator("amiya", ::mapOperator).executeAsOneOrNull()?.let { first ->
                     if (first.privatePrompt.isBlank()) {
                         presetOperators.forEach { op ->
                             db.operatorsQueries.updatePrompts(op.privatePrompt, op.groupPrompt, op.id)
@@ -81,14 +100,12 @@ class OperatorRepository(private val wrapper: DatabaseWrapper) {
             return@withContext
         }
         presetOperators.forEach { op ->
-            db.operatorsQueries.insertOperator(op.id, op.name, op.title, op.description, op.gender, op.avatarUri, op.location, op.activity, op.emotion, op.intimacy.toLong(), op.privatePrompt, op.groupPrompt, op.memoryInjection, op.userRelation, op.lmb.toLong(), op.attack.toDouble(), op.defense.toDouble(), op.meldPref, op.activityLevel.toDouble())
+            db.operatorsQueries.insertOperator(op.id, op.name, op.title, op.description, op.gender, op.avatarUri, op.location, op.activity, op.emotion, op.intimacy.toLong(), op.privatePrompt, op.groupPrompt, op.memoryInjection, op.userRelation, op.lmb.toLong(), op.attack.toDouble(), op.defense.toDouble(), op.meldPref, op.activityLevel.toDouble(), op.voiceName, op.voiceSpeed, op.voicePitch)
         }
     }
 
     suspend fun getAllOperatorsSync(): List<Operator> = withContext(Dispatchers.Default) {
-        db.operatorsQueries.getAllOperators { id, name, title, description, gender, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, memoryInjection, userRelation, lmb, attack, defense, meldPref, activityLevel ->
-            Operator(id, name, title, description, gender, avatarUri, location, activity, emotion, intimacy.toInt(), privatePrompt, groupPrompt, memoryInjection, userRelation, lmb.toInt(), attack.toFloat(), defense.toFloat(), meldPref, activityLevel.toFloat())
-        }.executeAsList()
+        db.operatorsQueries.getAllOperators(::mapOperator).executeAsList()
     }
 
     private val presetOperators = listOf(
@@ -244,7 +261,7 @@ class OperatorRepository(private val wrapper: DatabaseWrapper) {
     suspend fun deleteOperator(id: String) = withContext(Dispatchers.Default) { db.operatorsQueries.deleteOperator(id) }
 
     suspend fun updateOperator(op: Operator) = withContext(Dispatchers.Default) {
-        db.operatorsQueries.updateOperator(op.name, op.title, op.description, op.gender, op.avatarUri, op.location, op.activity, op.emotion, op.intimacy.toLong(), op.privatePrompt, op.groupPrompt, op.memoryInjection, op.userRelation, op.lmb.toLong(), op.attack.toDouble(), op.defense.toDouble(), op.meldPref, op.activityLevel.toDouble(), op.id)
+        db.operatorsQueries.updateOperator(op.name, op.title, op.description, op.gender, op.avatarUri, op.location, op.activity, op.emotion, op.intimacy.toLong(), op.privatePrompt, op.groupPrompt, op.memoryInjection, op.userRelation, op.lmb.toLong(), op.attack.toDouble(), op.defense.toDouble(), op.meldPref, op.activityLevel.toDouble(), op.voiceName, op.voiceSpeed, op.voicePitch, op.id)
     }
 
     suspend fun updateIntimacy(id: String, intimacy: Int) = withContext(Dispatchers.Default) {
@@ -252,7 +269,7 @@ class OperatorRepository(private val wrapper: DatabaseWrapper) {
     }
 
     suspend fun insertOperator(op: Operator) = withContext(Dispatchers.Default) {
-        db.operatorsQueries.insertOperator(op.id, op.name, op.title, op.description, op.gender, op.avatarUri, op.location, op.activity, op.emotion, op.intimacy.toLong(), op.privatePrompt, op.groupPrompt, op.memoryInjection, op.userRelation, op.lmb.toLong(), op.attack.toDouble(), op.defense.toDouble(), op.meldPref, op.activityLevel.toDouble())
+        db.operatorsQueries.insertOperator(op.id, op.name, op.title, op.description, op.gender, op.avatarUri, op.location, op.activity, op.emotion, op.intimacy.toLong(), op.privatePrompt, op.groupPrompt, op.memoryInjection, op.userRelation, op.lmb.toLong(), op.attack.toDouble(), op.defense.toDouble(), op.meldPref, op.activityLevel.toDouble(), op.voiceName, op.voiceSpeed, op.voicePitch)
     }
 }
 

@@ -12,7 +12,6 @@ object DatabaseCompatibility {
     private const val DERIVED_CLEAN_KEY = "derived_data_cleaned_for_1_05"
 
     fun prepareBeforeOpen(context: Context) {
-        clearTransientDataOnVersionUpgrade(context)
         val dbFile = context.getDatabasePath(DB_NAME)
         if (!dbFile.exists()) return
         try {
@@ -26,7 +25,6 @@ object DatabaseCompatibility {
 
                 if (userVersion < TARGET_VERSION && hasPartialCompatibilityArtifacts) {
                     ensureCompatibilitySchema(db)
-                    clearDerivedTables(db)
                     if (tableExists(db, "diaries")) {
                         db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS idx_diaries_operator_date ON diaries(operatorId, date)")
                     }
@@ -34,14 +32,9 @@ object DatabaseCompatibility {
                     db.execSQL("PRAGMA user_version = $targetVersion")
                 } else if (!isDerivedDataCleaned(context)) {
                     ensureOperatorsCompatibility(db)
-                    clearDerivedTables(db)
                 }
 
                 ensureCompatibilitySchema(db)
-                if (needsMemoryAnchorReset && tableExists(db, "memory_anchors")) {
-                    db.execSQL("DELETE FROM memory_anchors")
-                }
-
                 advanceUserVersionIfSchemaComplete(db, userVersion)
             }
         } catch (e: Exception) {
@@ -70,37 +63,6 @@ object DatabaseCompatibility {
         if ("memoryInjection" in opColumns) {
             db.execSQL("PRAGMA user_version = $TARGET_VERSION")
         }
-    }
-
-    private fun clearTransientDataOnVersionUpgrade(context: Context) {
-        try {
-            val prefs = context.getSharedPreferences("rhodes_runtime", Context.MODE_PRIVATE)
-            if (prefs.getBoolean("transient_clear_done_1_07", false)) return
-            val pkgInfo = context.packageManager.getPackageInfo(context.packageName, 0)
-            val currentVersion = pkgInfo.versionCode
-            val voyagerPrefs = context.getSharedPreferences("voyager_state", Context.MODE_PRIVATE)
-            val voyagerLast = voyagerPrefs.getInt("last_version", 0)
-            val lastVersion = prefs.getInt("last_app_version", 0).coerceAtLeast(voyagerLast)
-            if (lastVersion > 0 && currentVersion != lastVersion) {
-                val dbFile = context.getDatabasePath(DB_NAME)
-                if (dbFile.exists()) {
-                    SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
-                        val transientTables = listOf(
-                            "chat_messages", "memories", "memory_anchors", "world_events",
-                            "moments", "moment_likes", "moment_comments", "diaries",
-                            "dispatch_records", "mahjong_saves"
-                        )
-                        for (table in transientTables) {
-                            if (tableExists(db, table)) db.execSQL("DELETE FROM $table")
-                        }
-                    }
-                }
-            }
-            prefs.edit()
-                .putInt("last_app_version", currentVersion)
-                .putBoolean("transient_clear_done_1_07", true)
-                .apply()
-        } catch (_: Exception) { }
     }
 
     private fun ensureCompatibilitySchema(db: SQLiteDatabase) {
@@ -200,24 +162,6 @@ object DatabaseCompatibility {
         val worldColumns = existingColumns(db, "world_events")
         val compatibilityMemoryColumns = memoryAnchorCompatibilityColumns.map { it.first }
         return memoryColumns.any { it in compatibilityMemoryColumns } || worldColumns.isNotEmpty()
-    }
-
-    private fun clearDerivedTables(db: SQLiteDatabase) {
-        val tables = listOf(
-            "moment_likes",
-            "moment_comments",
-            "moments",
-            "diaries",
-            "memories",
-            "memory_anchors",
-            "world_events",
-            "dispatch_records"
-        )
-        for (table in tables) {
-            if (tableExists(db, table)) {
-                db.execSQL("DELETE FROM $table")
-            }
-        }
     }
 
     private val memoryAnchorCompatibilityColumns = listOf(

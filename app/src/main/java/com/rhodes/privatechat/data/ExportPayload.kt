@@ -5,6 +5,13 @@ import com.rhodes.privatechat.shared.model.Relationship
 import com.rhodes.privatechat.shared.model.RelationshipType
 import com.rhodes.privatechat.shared.model.ChatSession
 import com.rhodes.privatechat.shared.model.ChatMessage
+import com.rhodes.privatechat.shared.model.Diary
+import com.rhodes.privatechat.shared.model.Memory
+import com.rhodes.privatechat.shared.model.MemoryAnchor
+import com.rhodes.privatechat.shared.model.Moment
+import com.rhodes.privatechat.shared.model.MomentComment
+import com.rhodes.privatechat.shared.model.MomentLike
+import com.rhodes.privatechat.shared.model.WorldEvent
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -14,8 +21,17 @@ data class ExportPayload(
     val timestamp: Long = System.currentTimeMillis(),
     val operators: List<OperatorExport>? = null,
     val relationships: List<RelationshipExport>? = null,
+    val sessions: List<SessionExport>? = null,
     val session: SessionExport? = null,
-    val messages: List<MessageExport>? = null
+    val messages: List<MessageExport>? = null,
+    val memories: List<Memory>? = null,
+    val anchors: List<MemoryAnchor>? = null,
+    val moments: List<Moment>? = null,
+    val momentLikes: List<MomentLike>? = null,
+    val momentComments: List<MomentComment>? = null,
+    val diaries: List<Diary>? = null,
+    val worldEvents: List<WorldEvent>? = null,
+    val settings: Map<String, String>? = null
 )
 
 @Serializable

@@ -111,6 +111,9 @@ fun OperatorEditScreen(
     var groupSlot by remember { mutableIntStateOf(settings.getInt("operator_prompt_slot_${initialOpKey}_group", 1).coerceIn(1, 3)) }
     var description by remember { mutableStateOf(operator?.description ?: "") }
     var userRelation by remember { mutableStateOf(operator?.userRelation ?: "") }
+    var voiceName by remember { mutableStateOf(operator?.voiceName ?: "") }
+    var voiceSpeed by remember { mutableStateOf(operator?.voiceSpeed ?: "") }
+    var voicePitch by remember { mutableStateOf(operator?.voicePitch ?: "") }
     var relationships by remember { mutableStateOf<List<RelationshipEntity>>(emptyList()) }
     var initialRelationships by remember { mutableStateOf<List<RelationshipEntity>>(emptyList()) }
     var showAddPicker by remember { mutableStateOf(false) }
@@ -154,6 +157,9 @@ fun OperatorEditScreen(
             relationships = relationships,
             activityLevel = activity,
             gender = gender,
+            voiceName = voiceName,
+            voiceSpeed = voiceSpeed,
+            voicePitch = voicePitch,
             onComplete = { onBack() }
         )
     }
@@ -169,6 +175,9 @@ fun OperatorEditScreen(
         memoryInjection != (operator?.memoryInjection ?: "") ||
         description != (operator?.description ?: "") ||
         userRelation != (operator?.userRelation ?: "") ||
+        voiceName != (operator?.voiceName ?: "") ||
+        voiceSpeed != (operator?.voiceSpeed ?: "") ||
+        voicePitch != (operator?.voicePitch ?: "") ||
         relationships != initialRelationships
     val requestBack = { if (hasUnsavedChanges) showUnsavedConfirm = true else onBack() }
 
@@ -245,6 +254,49 @@ fun OperatorEditScreen(
                         Spacer(modifier = Modifier.width(6.dp))
                         Text("上传头像")
                     }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            SectionCard {
+                SectionTitle("语音音色")
+                Text("语音通话、陪睡和 TTS 会使用这里填写的音色ID。未填写音色ID的角色不能发起语音通话。", fontSize = 12.sp, color = TextSecondary, lineHeight = 18.sp)
+                Spacer(modifier = Modifier.height(10.dp))
+                LabeledField("音色ID") {
+                    OutlinedTextField(
+                        value = voiceName,
+                        onValueChange = { voiceName = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = fieldColors(),
+                        singleLine = true,
+                        placeholder = { Text("如：male-qn-qingse", fontSize = 13.sp, color = TextTertiary) }
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                LabeledField("语速") {
+                    OutlinedTextField(
+                        value = voiceSpeed,
+                        onValueChange = { voiceSpeed = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = fieldColors(),
+                        singleLine = true,
+                        placeholder = { Text("1.0", fontSize = 13.sp, color = TextTertiary) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                LabeledField("音高") {
+                    OutlinedTextField(
+                        value = voicePitch,
+                        onValueChange = { voicePitch = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = fieldColors(),
+                        singleLine = true,
+                        placeholder = { Text("可选", fontSize = 13.sp, color = TextTertiary) }
+                    )
                 }
             }
 

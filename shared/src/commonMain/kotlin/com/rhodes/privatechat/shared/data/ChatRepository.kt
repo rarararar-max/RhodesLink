@@ -32,6 +32,7 @@ class ChatRepository(wrapper: DatabaseWrapper, settings: SettingsRepository? = n
     val mahjong = MahjongRepository(wrapper)
     val cleanup = CleanupRepository(wrapper)
     val worldEvents = WorldEventRepository(wrapper)
+    val memoryV2 = MemoryV2Repository(wrapper)
 
     // --- Backward-compatible forwarding methods ---
     val allOperators: Flow<List<Operator>> get() = operators.allOperators
@@ -76,11 +77,15 @@ class ChatRepository(wrapper: DatabaseWrapper, settings: SettingsRepository? = n
     suspend fun getMessageCountPerSender() = messages.getMessageCountPerSender()
     suspend fun getMessageCountPerSenderSince(since: Long) = messages.getMessageCountPerSenderSince(since)
     suspend fun getMessagesInRange(start: Long, end: Long) = messages.getMessagesInRange(start, end)
+    suspend fun searchMessagesInSession(sessionId: String, keyword: String, limit: Long = 200) = messages.searchMessagesInSession(sessionId, keyword, limit)
+    suspend fun getMessagesBySessionInRange(sessionId: String, start: Long, end: Long) = messages.getMessagesBySessionInRange(sessionId, start, end)
+    suspend fun getMessageDatesBySession(sessionId: String) = messages.getMessageDatesBySession(sessionId)
 
     suspend fun getShortTermMemory(sessionId: String) = memories.getShortTermMemory(sessionId)
     suspend fun getLongTermImpression(operatorId: String) = memories.getLongTermImpression(operatorId)
     suspend fun saveMemory(memory: Memory) = memories.saveMemory(memory)
     suspend fun getAllLongTermImpressions() = memories.getAllLongTermImpressions()
+    suspend fun getAllMemoriesForBackup() = memories.getAllMemoriesForBackup()
     suspend fun getLatestDaily() = memories.getLatestDaily()
     suspend fun getLatestDailyBySession(sessionId: String) = memories.getLatestDailyBySession(sessionId)
     suspend fun getLatestPrivateDaily(operatorId: String) = memories.getLatestPrivateDaily(operatorId)
@@ -94,6 +99,7 @@ class ChatRepository(wrapper: DatabaseWrapper, settings: SettingsRepository? = n
     suspend fun getPublicAnchors(operatorId: String) = anchors.getPublicAnchors(operatorId)
     suspend fun getAnchors(operatorId: String) = anchors.getAnchors(operatorId)
     suspend fun getAnchorCount() = anchors.getAnchorCount()
+    suspend fun getAllAnchorsForBackup() = anchors.getAllAnchorsForBackup()
     suspend fun deleteOldAnchors(cutoff: Long) = anchors.deleteOldAnchors(cutoff)
     suspend fun deleteAnchorsBySession(sessionId: String) = anchors.deleteAnchorsBySession(sessionId)
     suspend fun deleteAnchorsByOperator(operatorId: String) = anchors.deleteAnchorsByOperator(operatorId)
@@ -112,6 +118,8 @@ class ChatRepository(wrapper: DatabaseWrapper, settings: SettingsRepository? = n
     suspend fun insertMoment(moment: Moment) = moments.insertMoment(moment)
     fun getAllMoments() = moments.getAllMoments()
     suspend fun getAllMomentsSync() = moments.getAllMomentsSync()
+    suspend fun getAllLikesForBackup() = moments.getAllLikesForBackup()
+    suspend fun getAllCommentsForBackup() = moments.getAllCommentsForBackup()
     fun getLikesFlow(momentId: Long) = moments.getLikesFlow(momentId)
     fun getComments(momentId: Long) = moments.getComments(momentId)
     suspend fun insertLike(like: MomentLike) = moments.insertLike(like)
@@ -142,6 +150,7 @@ class ChatRepository(wrapper: DatabaseWrapper, settings: SettingsRepository? = n
     suspend fun getAllDiaryEntries(operatorId: String) = diaries.getAllDiaryEntries(operatorId)
     suspend fun getDiaryDates(operatorId: String) = diaries.getDiaryDates(operatorId)
     suspend fun getDiaryCount() = diaries.getDiaryCount()
+    suspend fun getAllDiariesForBackup() = diaries.getAllDiariesForBackup()
     suspend fun deleteOldDiaries(cutoff: Long) = diaries.deleteOldDiaries(cutoff)
 
     suspend fun getActiveDispatches() = dispatches.getActiveDispatches()
@@ -169,8 +178,23 @@ class ChatRepository(wrapper: DatabaseWrapper, settings: SettingsRepository? = n
     suspend fun countChainedWorldEventsByTypeSince(type: String, since: Long) = worldEvents.countChainedWorldEventsByTypeSince(type, since)
     suspend fun markWorldEventConsumed(eventId: Long, consumer: String) = worldEvents.markWorldEventConsumed(eventId, consumer)
     suspend fun getWorldEventCount() = worldEvents.getWorldEventCount()
+    suspend fun getAllWorldEventsForBackup() = worldEvents.getAllWorldEventsForBackup()
     suspend fun deleteExpiredWorldEvents(cutoff: Long) = worldEvents.deleteExpiredWorldEvents(cutoff)
     suspend fun deleteAllWorldEvents() = worldEvents.deleteAllWorldEvents()
+
+    // --- Memory v2 ---
+    suspend fun insertMemoryItem(item: MemoryItem) = memoryV2.insertMemoryItem(item)
+    suspend fun insertMemorySource(source: MemorySourceItem) = memoryV2.insertSource(source)
+    suspend fun saveMemoryBatch(batch: MemoryBatch) = memoryV2.saveBatch(batch)
+    suspend fun getMemoryItemsByLevel(ownerType: String, ownerId: String, level: MemoryLevel) = memoryV2.getMemoryItemsByLevel(ownerType, ownerId, level)
+    suspend fun getActiveMemoryItemsByLevel(ownerType: String, ownerId: String, level: MemoryLevel, now: Long) = memoryV2.getActiveMemoryItemsByLevel(ownerType, ownerId, level, now)
+    suspend fun getMemoryItemsByOwner(ownerType: String, ownerId: String) = memoryV2.getMemoryItemsByOwner(ownerType, ownerId)
+    suspend fun getMemoryItemsByType(ownerType: String, ownerId: String, type: String) = memoryV2.getMemoryItemsByType(ownerType, ownerId, type)
+    suspend fun getActiveMemoryItemByContent(ownerType: String, ownerId: String, level: MemoryLevel, type: String, content: String) = memoryV2.getActiveMemoryItemByContent(ownerType, ownerId, level, type, content)
+    suspend fun markMemorySourceProcessedL1(id: Long) = memoryV2.markSourceProcessedL1(id)
+    suspend fun markMemorySourceProcessedVector(id: Long) = memoryV2.markSourceProcessedVector(id)
+    suspend fun updateMemoryItemVectorId(id: Long, vectorId: String, updatedAt: Long) = memoryV2.updateMemoryItemVectorId(id, vectorId, updatedAt)
+    suspend fun archiveMemoryItemsByLevel(ownerType: String, ownerId: String, level: MemoryLevel, updatedAt: Long) = memoryV2.archiveMemoryItemsByLevel(ownerType, ownerId, level, updatedAt)
 
     suspend fun syncOperatorAvatar(operatorId: String, avatarUri: String) {
         val session = sessions.getSessionByOperator(operatorId)

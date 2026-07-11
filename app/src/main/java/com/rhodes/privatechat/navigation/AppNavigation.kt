@@ -165,12 +165,12 @@ private fun FeaturesTabContent(navigator: Navigator) {
         diaryBadge = diaryBadge,
         onMoments = { viewModel.markMomentsSeen(); momentBadge = 0; navigator.push(MomentsRoute) },
         onDiary = { navigator.push(DiaryRoute) },
-        onWorldLog = { navigator.push(WorldLogRoute) },
         onRanking = { navigator.push(RankingRoute) },
         onImpressions = { navigator.push(ImpressionsRoute) },
         onDispatch = { navigator.push(DispatchRoute) },
         onTokenStats = { navigator.push(TokenStatsRoute) },
-        onGameRoom = { navigator.push(GameRoomRoute) }
+        onGameRoom = { navigator.push(GameRoomRoute) },
+        onSleep = { navigator.push(SleepRoute) }
     )
 }
 
@@ -186,7 +186,6 @@ private fun SettingsTabContent(navigator: Navigator) {
         onAppearance = { navigator.push(AppearanceSettingsRoute) },
         onModel = { navigator.push(ModelSettingsRoute) },
         onChatParams = { navigator.push(ChatSettingsRoute) },
-        onWorld = { navigator.push(WorldSettingsRoute) },
         onStory = { navigator.push(StorySettingsRoute) },
         onDataManage = { navigator.push(DataManagementRoute) },
         onPermissions = { navigator.push(PermissionsRoute) },

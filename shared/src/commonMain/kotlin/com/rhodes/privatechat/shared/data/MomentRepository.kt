@@ -30,6 +30,18 @@ class MomentRepository(private val wrapper: DatabaseWrapper) {
         }.executeAsList()
     }
 
+    suspend fun getAllLikesForBackup(): List<MomentLike> = withContext(Dispatchers.Default) {
+        db.momentLikesQueries.getAllLikesForBackup { id, mId, opId, opName, createdAt ->
+            MomentLike(id, mId, opId, opName, createdAt)
+        }.executeAsList()
+    }
+
+    suspend fun getAllCommentsForBackup(): List<MomentComment> = withContext(Dispatchers.Default) {
+        db.momentCommentsQueries.getAllCommentsForBackup { id, mId, opId, opName, content, parentCommentId, replyToName, createdAt, isRead ->
+            MomentComment(id, mId, opId, opName, content, parentCommentId, replyToName, createdAt, isRead != 0L)
+        }.executeAsList()
+    }
+
     fun getLikesFlow(momentId: Long): Flow<List<MomentLike>> =
         db.momentLikesQueries.getLikesFlow(momentId) { id, mId, opId, opName, createdAt ->
             MomentLike(id, mId, opId, opName, createdAt)

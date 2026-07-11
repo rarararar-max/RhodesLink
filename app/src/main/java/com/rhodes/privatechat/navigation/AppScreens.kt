@@ -115,7 +115,62 @@ data class ChatOperator(val operatorId: String) : Screen {
                 operator = operator,
                 onBack = { navigator.pop() },
                 onEditOperator = { navigator.push(EditOperator(operator.id)) },
-                onViewStatus = { navigator.push(OperatorDetailRoute(operator.id)) }
+                onViewStatus = { navigator.push(OperatorDetailRoute(operator.id)) },
+                onViewHistory = { navigator.push(ChatHistoryRoute(operator.id)) },
+                onVoiceCall = { navigator.push(VoiceCallRoute(operator.id)) }
+            )
+        }
+    }
+}
+
+data class VoiceCallRoute(val operatorId: String) : Screen {
+    @Composable
+    override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        val viewModel: MainViewModel = koinViewModel()
+        val operators by viewModel.operators.collectAsState()
+        val operator = remember(operators, operatorId) { operators.find { it.id == operatorId } }
+        if (operator != null) {
+            com.rhodes.privatechat.ui.call.VoiceCallScreen(viewModel = viewModel, operator = operator, onBack = { navigator.pop() })
+        }
+    }
+}
+
+data object SleepRoute : Screen {
+    @Composable
+    override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        val viewModel: MainViewModel = koinViewModel()
+        val operators by viewModel.operators.collectAsState()
+        val kaltsit = remember(operators) { operators.find { it.id == "kaltsit" || it.name == "凯尔希" } }
+        val context = androidx.compose.ui.platform.LocalContext.current
+        LaunchedEffect(kaltsit) {
+            if (operators.isNotEmpty() && kaltsit == null) {
+                android.widget.Toast.makeText(context, "未找到凯尔希角色", android.widget.Toast.LENGTH_SHORT).show()
+                navigator.pop()
+            } else if (kaltsit != null && kaltsit.voiceName.isBlank()) {
+                android.widget.Toast.makeText(context, "请先在凯尔希角色编辑页面填写音色ID", android.widget.Toast.LENGTH_SHORT).show()
+                navigator.pop()
+            }
+        }
+        if (kaltsit != null && kaltsit.voiceName.isNotBlank()) {
+            com.rhodes.privatechat.ui.sleep.SleepModeScreen(viewModel = viewModel, operator = kaltsit, onBack = { navigator.pop() })
+        }
+    }
+}
+
+data class ChatHistoryRoute(val operatorId: String) : Screen {
+    @Composable
+    override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        val viewModel: MainViewModel = koinViewModel()
+        val operators by viewModel.operators.collectAsState()
+        val operator = remember(operators, operatorId) { operators.find { it.id == operatorId } }
+        if (operator != null) {
+            com.rhodes.privatechat.ui.chat.ChatHistoryScreen(
+                viewModel = viewModel,
+                operatorName = operator.name,
+                onBack = { navigator.pop() }
             )
         }
     }
@@ -261,14 +316,6 @@ data object DiaryRoute : Screen {
     override fun Content() {
         val navigator = LocalNavigator.currentOrThrow
         com.rhodes.privatechat.ui.diary.DiaryScreen(viewModel = koinViewModel(), onBack = { navigator.pop() })
-    }
-}
-
-data object WorldLogRoute : Screen {
-    @Composable
-    override fun Content() {
-        val navigator = LocalNavigator.currentOrThrow
-        com.rhodes.privatechat.ui.world.WorldLogScreen(viewModel = koinViewModel(), onBack = { navigator.pop() })
     }
 }
 
@@ -587,14 +634,6 @@ data object ChatSettingsRoute : Screen {
     override fun Content() {
         val navigator = LocalNavigator.currentOrThrow
         com.rhodes.privatechat.ui.chatsettings.ChatSettingsScreen(onBack = { navigator.pop() }, onPromptEditor = { navigator.push(PromptEditorRoute) })
-    }
-}
-
-data object WorldSettingsRoute : Screen {
-    @Composable
-    override fun Content() {
-        val navigator = LocalNavigator.currentOrThrow
-        com.rhodes.privatechat.ui.settings.WorldSettingsScreen(onBack = { navigator.pop() })
     }
 }
 

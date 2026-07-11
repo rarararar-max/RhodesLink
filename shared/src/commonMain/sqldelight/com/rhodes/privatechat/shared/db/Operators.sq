@@ -17,7 +17,10 @@ CREATE TABLE IF NOT EXISTS operators (
     attack REAL NOT NULL DEFAULT 0.5,
     defense REAL NOT NULL DEFAULT 0.5,
     meldPref TEXT NOT NULL DEFAULT 'medium',
-    activityLevel REAL NOT NULL DEFAULT 0.5
+    activityLevel REAL NOT NULL DEFAULT 0.5,
+    voiceName TEXT NOT NULL DEFAULT '',
+    voiceSpeed TEXT NOT NULL DEFAULT '',
+    voicePitch TEXT NOT NULL DEFAULT ''
 );
 
 getAllOperators:
@@ -33,11 +36,11 @@ getCount:
 SELECT COUNT(*) FROM operators;
 
 insertOperator:
-INSERT OR REPLACE INTO operators(id, name, title, description, gender, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, memoryInjection, userRelation, lmb, attack, defense, meldPref, activityLevel)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO operators(id, name, title, description, gender, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, memoryInjection, userRelation, lmb, attack, defense, meldPref, activityLevel, voiceName, voiceSpeed, voicePitch)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 updateOperator:
-UPDATE operators SET name = ?, title = ?, description = ?, gender = ?, avatarUri = ?, location = ?, activity = ?, emotion = ?, intimacy = ?, privatePrompt = ?, groupPrompt = ?, memoryInjection = ?, userRelation = ?, lmb = ?, attack = ?, defense = ?, meldPref = ?, activityLevel = ?
+UPDATE operators SET name = ?, title = ?, description = ?, gender = ?, avatarUri = ?, location = ?, activity = ?, emotion = ?, intimacy = ?, privatePrompt = ?, groupPrompt = ?, memoryInjection = ?, userRelation = ?, lmb = ?, attack = ?, defense = ?, meldPref = ?, activityLevel = ?, voiceName = ?, voiceSpeed = ?, voicePitch = ?
 WHERE id = ?;
 
 updateIntimacy:
@@ -53,8 +56,8 @@ deleteOperator:
 DELETE FROM operators WHERE id = ?;
 
 insertAllOperators:
-INSERT OR REPLACE INTO operators(id, name, title, description, gender, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, memoryInjection, userRelation, lmb, attack, defense, meldPref, activityLevel)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO operators(id, name, title, description, gender, avatarUri, location, activity, emotion, intimacy, privatePrompt, groupPrompt, memoryInjection, userRelation, lmb, attack, defense, meldPref, activityLevel, voiceName, voiceSpeed, voicePitch)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 deleteAllOperators:
 DELETE FROM operators;

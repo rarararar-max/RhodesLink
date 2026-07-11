@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <cache-path name="exports" path="exports/" />
+    <cache-path name="camera_cache" path="camera/" />
+    <files-path name="chat_images" path="chat_images/" />
+    <files-path name="voice_files" path="voice/" />
 </paths>

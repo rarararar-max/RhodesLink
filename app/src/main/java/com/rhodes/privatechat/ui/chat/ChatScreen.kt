@@ -68,6 +68,10 @@ import com.rhodes.privatechat.ui.common.softTextFieldColors
 import com.rhodes.privatechat.shared.model.Operator
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.util.ChatTrace
+import com.rhodes.privatechat.MainActivity
+import com.rhodes.privatechat.audio.LocalAudioController
+import com.rhodes.privatechat.shared.voice.AsrGateway
+import com.rhodes.privatechat.shared.voice.AsrRequest
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import org.koin.compose.koinInject
 import kotlinx.coroutines.launch
@@ -84,6 +88,7 @@ fun ChatScreen(
     viewModel: MainViewModel, onBack: () -> Unit,
     operator: Operator,
     onEditOperator: () -> Unit = {}, onViewStatus: () -> Unit = {},
+    onViewHistory: () -> Unit = {}, onVoiceCall: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val settings: SettingsRepository = koinInject()
@@ -93,6 +98,8 @@ fun ChatScreen(
     val inputText by viewModel.inputText.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val currentMode by viewModel.currentMode.collectAsState()
+    val sessionRestartAt by viewModel.sessionRestartAt.collectAsState()
+    val scrollToMessageId by viewModel.scrollToMessageId.collectAsState()
     val currentOp by viewModel.selectedOperator.collectAsState()
     val displayOp = currentOp ?: operator
     val listState = rememberLazyListState()
@@ -102,14 +109,15 @@ fun ChatScreen(
     val focusManager = LocalFocusManager.current
 
     // 使用 MessageParser 将原始消息转换为统一 UI 模型
-    val messages = remember(rawMessages, op, userProfile) {
+    val messages = remember(rawMessages, op, userProfile, sessionRestartAt) {
         try {
             val parsed = MessageParser.parse(
                 messages = rawMessages,
                 isGroup = false,
                 aiName = op.name,
                 aiAvatarUri = op.avatarUri,
-                userAvatarUri = userProfile.avatarUri
+                userAvatarUri = userProfile.avatarUri,
+                restartAt = sessionRestartAt
             )
             val safeParsed = if (parsed.isEmpty() && rawMessages.isNotEmpty()) {
                 rawMessages.map { raw ->
@@ -150,6 +158,15 @@ fun ChatScreen(
         ChatTrace.d("ChatScreen", "op=${op.id} raw=${rawMessages.size} parsed=${messages.size} loading=$isLoading")
     }
 
+    androidx.compose.runtime.LaunchedEffect(scrollToMessageId, messages.size) {
+        val target = scrollToMessageId ?: return@LaunchedEffect
+        val index = messages.indexOfFirst { it.originalMessageId == target }
+        if (index >= 0) {
+            listState.scrollToItem(index)
+            viewModel.consumeChatScrollTarget()
+        }
+    }
+
     var bgUri by remember { mutableStateOf<String?>(settings.getString("bg_${op.id}", "")) }
     var cropTarget by remember { mutableStateOf<Uri?>(null) }
     val bgPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -167,6 +184,9 @@ fun ChatScreen(
     var showClearConfirm by rememberSaveable { mutableStateOf(false) }
     val showModePicker = remember { mutableStateOf(false) }
     var showPropShop by rememberSaveable { mutableStateOf(false) }
+    var pendingImageUri by rememberSaveable { mutableStateOf("") }
+    var recordingVoice by rememberSaveable { mutableStateOf(false) }
+    val audioController = remember { LocalAudioController(context) }
     val scope = rememberCoroutineScope()
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -182,14 +202,17 @@ fun ChatScreen(
                 avatarUri = displayOp.avatarUri,
                 mode = currentMode,
                 isLoading = isLoading,
-                subtitleText = "${displayOp.location.compactHeaderPart(8)} | ${displayOp.activity.compactHeaderPart(8)} | ${displayOp.emotion.compactHeaderPart(6)}",
+                subtitleText = "",
                 onBack = onBack,
                 menuContent = {
                     ChatDropdownMenuItem(text = { Text("更换背景图") }, onClick = { bgPicker.launch("image/*") })
                     if (bgUri != null) ChatDropdownMenuItem(text = { Text("恢复默认背景") }, onClick = { showBgReset = true })
                     ChatDropdownMenuItem(text = { Text("编辑干员") }, onClick = { onEditOperator() })
-
-                    ChatDropdownMenuItem(text = { Text("清除聊天记录") }, onClick = { showClearConfirm = true })
+                    ChatDropdownMenuItem(text = { Text("语音通话") }, onClick = {
+                        if (op.voiceName.isBlank()) Toast.makeText(context, "请先在角色编辑页面填写音色ID", Toast.LENGTH_SHORT).show() else onVoiceCall()
+                    })
+                    ChatDropdownMenuItem(text = { Text("聊天记录") }, onClick = { onViewHistory() })
+                    ChatDropdownMenuItem(text = { Text("重新开始会话") }, onClick = { showClearConfirm = true })
                 }
             )
 
@@ -209,11 +232,28 @@ fun ChatScreen(
                 )
 
                 val hypnosisRounds by viewModel.hypnosisRounds.collectAsState()
+                if (pendingImageUri.isNotBlank()) {
+                    Row(modifier = Modifier.fillMaxWidth().background(ElevatedSurface.copy(alpha = 0.96f)).padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        AsyncImage(model = pendingImageUri, contentDescription = "待发送图片", modifier = Modifier.size(72.dp).clip(RoundedCornerShape(10.dp)), contentScale = ContentScale.Crop)
+                        Spacer(Modifier.width(10.dp))
+                        Text("图片待发送", fontSize = 13.sp, color = TextSecondary, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { pendingImageUri = "" }) { Text("移除", color = ErrorRed) }
+                    }
+                }
                 ChatInputBar(
                     text = inputText,
                     onTextChange = { viewModel.updateInputText(it) },
-                    onSend = { viewModel.sendMessage() },
+                    onSend = {
+                        if (pendingImageUri.isNotBlank()) {
+                            val imageUri = pendingImageUri
+                            pendingImageUri = ""
+                            viewModel.chatViewModel.sendImageMessage(imageUri, MainActivity.imageForModel(imageUri), inputText)
+                        } else {
+                            viewModel.sendMessage()
+                        }
+                    },
                     enabled = !isLoading,
+                    forceSendEnabled = pendingImageUri.isNotBlank(),
                     currentMode = currentMode,
                     onModeChange = { viewModel.setMode(it) },
                     placeholder = if (hypnosisRounds > 0) "催眠中 · 剩余${hypnosisRounds}轮" else "消息...",
@@ -226,6 +266,30 @@ fun ChatScreen(
                     showModePicker = showModePicker,
                     menuItems = {
                         MenuChip("切换模式", Primary) { showModePicker.value = true }
+                        MenuChip("相册", Primary) { MainActivity.pickImage { pendingImageUri = it } }
+                        MenuChip("拍照", Primary) { MainActivity.takePhoto { pendingImageUri = it } }
+                        MenuChip(if (recordingVoice) "停止录音" else "录音", if (recordingVoice) ErrorRed else Primary) {
+                            if (!recordingVoice) {
+                                recordingVoice = audioController.startRecording()
+                                if (!recordingVoice) Toast.makeText(context, "无法开始录音，请检查麦克风权限", Toast.LENGTH_SHORT).show()
+                            } else {
+                                recordingVoice = false
+                                val recorded = audioController.stopRecording()
+                                if (recorded == null) {
+                                    Toast.makeText(context, "录音为空", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    scope.launch {
+                                        try {
+                                            val asr: AsrGateway = org.koin.core.context.GlobalContext.get().get()
+                                            val text = asr.transcribe(AsrRequest(audioController.readPcmFromWav(recorded.path))).text
+                                            if (text.isBlank()) Toast.makeText(context, "没有识别到文字", Toast.LENGTH_SHORT).show() else viewModel.updateInputText(text)
+                                        } catch (e: Exception) {
+                                            Toast.makeText(context, "语音识别失败：${e.message?.take(40) ?: "未知错误"}", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         MenuChip("查看状态", Primary) { onViewStatus() }
                         MenuChip("使用道具", AccentOrange) { showPropShop = true }
                     }
@@ -238,7 +302,7 @@ fun ChatScreen(
     if (showBgReset) {
         ThemedAlertDialog("恢复默认背景", "将移除当前背景图", { showBgReset = false }, "确认", { bgUri = null; settings.remove("bg_${op.id}"); showBgReset = false })
     }
-    if (showClearConfirm) ThemedAlertDialog("清除聊天记录", "将清除与${op.name}的全部聊天记录，此操作不可撤销。", { showClearConfirm = false }, "确认清除", { viewModel.clearMessages(); showClearConfirm = false }, danger = true)
+    if (showClearConfirm) ThemedAlertDialog("重新开始会话", "旧聊天不会删除，会在页面中变成浅灰色；后续回复默认只参考新的会话内容。", { showClearConfirm = false }, "确认开始", { viewModel.restartSession(); showClearConfirm = false }, danger = false)
     if (showPropShop) {
         PropShopDialog(viewModel = viewModel, context = context, scope = scope, onDismiss = { showPropShop = false })
     }

@@ -42,7 +42,10 @@ class AnchorRepository(private val wrapper: DatabaseWrapper, private val setting
                 mapAnchor(id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom)
             }.executeAsList()
             val normalized = normalize(anchor.content)
-            existing.any { normalize(it.content) == normalized }
+            existing.any { old ->
+                val oldNorm = normalize(old.content)
+                oldNorm == normalized || isNearDuplicate(anchor.type, oldNorm, normalized)
+            }
         } catch (e: Exception) {
             Log.e("AnchorRepository", "检查重复锚点失败", e)
             false
@@ -57,6 +60,19 @@ class AnchorRepository(private val wrapper: DatabaseWrapper, private val setting
         .replace("。", "")
         .replace("！", "")
         .replace("？", "")
+
+    private fun isNearDuplicate(type: AnchorType, oldValue: String, newValue: String): Boolean {
+        if (oldValue.length < 6 || newValue.length < 6) return false
+        if (type != AnchorType.PREFERENCE && type != AnchorType.TABOO && type != AnchorType.PLAN) return false
+        val short = if (oldValue.length <= newValue.length) oldValue else newValue
+        val long = if (oldValue.length > newValue.length) oldValue else newValue
+        if (long.contains(short)) return true
+        val oldChars = oldValue.toSet()
+        val newChars = newValue.toSet()
+        val overlap = oldChars.intersect(newChars).size
+        val base = minOf(oldChars.size, newChars.size).coerceAtLeast(1)
+        return overlap.toDouble() / base >= 0.82
+    }
 
     suspend fun getPublicAnchors(operatorId: String): List<MemoryAnchor> = withContext(Dispatchers.Default) {
         try {
@@ -127,6 +143,12 @@ class AnchorRepository(private val wrapper: DatabaseWrapper, private val setting
             Log.e("AnchorRepository", "获取锚点数量失败", e)
             0
         }
+    }
+
+    suspend fun getAllAnchorsForBackup(): List<MemoryAnchor> = withContext(Dispatchers.Default) {
+        db.memoryAnchorsQueries.getAllAnchorsForBackup { id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom ->
+            mapAnchor(id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom)
+        }.executeAsList()
     }
     suspend fun deleteOldAnchors(cutoff: Long) = withContext(Dispatchers.Default) {
         try {

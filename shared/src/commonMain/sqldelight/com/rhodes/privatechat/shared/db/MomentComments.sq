@@ -13,6 +13,9 @@ CREATE TABLE IF NOT EXISTS moment_comments (
 getComments:
 SELECT * FROM moment_comments WHERE momentId = ? ORDER BY createdAt ASC;
 
+getAllCommentsForBackup:
+SELECT * FROM moment_comments ORDER BY createdAt ASC;
+
 getInboxComments:
 SELECT * FROM moment_comments WHERE operatorId != 'user' AND createdAt > ? AND (momentId IN (SELECT id FROM moments WHERE operatorId = 'user') OR replyToName = ?) ORDER BY createdAt DESC;
 

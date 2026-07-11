@@ -1,4 +1,4 @@
-package com.rhodes.privatechat.ui.chat.component
+﻿package com.rhodes.privatechat.ui.chat.component
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
@@ -80,6 +80,7 @@ fun ChatInputBar(
     onGenerateSuggestions: ((callback: (List<String>) -> Unit) -> Unit)? = null,
     menuItems: @Composable (() -> Unit)? = null,
     showModePicker: androidx.compose.runtime.MutableState<Boolean> = remember { mutableStateOf(false) },
+    forceSendEnabled: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     var showInspire by remember { mutableStateOf(false) }
@@ -171,12 +172,12 @@ fun ChatInputBar(
             }
             IconButton(
                 onClick = { onSend(tfValue.text) },
-                enabled = enabled && text.isNotBlank(),
+                enabled = enabled && (text.isNotBlank() || forceSendEnabled),
                 modifier = Modifier.size(36.dp).clip(CircleShape)
-                    .background(if (text.isNotBlank() && enabled) Brush.linearGradient(listOf(Primary, Blue400)) else Brush.linearGradient(listOf(Color.Transparent, Color.Transparent)))
+                    .background(if ((text.isNotBlank() || forceSendEnabled) && enabled) Brush.linearGradient(listOf(Primary, Blue400)) else Brush.linearGradient(listOf(Color.Transparent, Color.Transparent)))
             ) {
                 Icon(Icons.AutoMirrored.Filled.Send, "发送",
-                    tint = if (text.isNotBlank() && enabled) OnPrimary else TextSecondary,
+                    tint = if ((text.isNotBlank() || forceSendEnabled) && enabled) OnPrimary else TextSecondary,
                     modifier = Modifier.size(18.dp))
             }
         }

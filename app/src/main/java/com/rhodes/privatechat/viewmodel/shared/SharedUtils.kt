@@ -46,7 +46,7 @@ class SharedUtils(
         logAiCall("→$logTag", prompt, "(requesting with retry...)", messages)
         val result = aiService.chatWithRetry(
             settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl,
-            temperature = temp, logTag = logTag
+            temperature = temp, logTag = logTag, jsonMode = true
         )
         if (DEBUG) logAiCall("←$logTag", prompt, result.toString(), messages)
         return result
@@ -148,7 +148,8 @@ class SharedUtils(
         val memoryInjection = listOf(
             map["LONG_TERM_IMPRESSION"]?.let { "长期印象：$it" },
             map["USER_PREFS"],
-            map["MEMORY_ANCHORS"]?.let { "近期关键记忆：\n$it" },
+            map["MEMORY_ANCHORS"]?.let { "最近记住的事：\n$it" },
+            map["MEMORY_V2_CONTEXT"]?.let { "你了解到的相关情况：\n$it" },
             map["SOURCE_AWARE_MEMORIES"]?.let { "记忆来源：\n$it" },
             map["SHARED_MEMORIES"]?.let { "关系共享记忆：\n$it" },
             map["DAILY_SUMMARY"]?.let { "昨日摘要：$it" },
@@ -162,6 +163,7 @@ class SharedUtils(
             map["SOURCE_AWARE_MEMORIES"], map["GROUP_UNCONSUMED_EVENTS"]
         ).filterNotNull().filter { it.isNotBlank() }.joinToString("\n")
         map.putIfAbsent("MEMORY_INJECTION", memoryInjection.ifBlank { "无" })
+        map.putIfAbsent("MEMORY_V2_CONTEXT", "无")
         map.putIfAbsent("GROUP_INJECTION", groupInjection.ifBlank { "无" })
         map.putIfAbsent("INJECTION", map["MEMORY_INJECTION"].orEmpty())
         map.putIfAbsent("GROUP_RELATION_HINTS", map["RELATION_HINTS"].orEmpty())

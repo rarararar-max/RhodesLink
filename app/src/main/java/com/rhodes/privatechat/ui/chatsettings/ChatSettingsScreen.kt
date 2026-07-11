@@ -135,7 +135,7 @@ private fun PrivateTab(settings: SettingsRepository) {
 
 @Composable
 private fun GroupTab(settings: SettingsRepository) {
-    Text("群聊有两种自动方式：空闲自动聊天按时间一直聊；大世界事件唤起只在有动态、评论等事件时聊几轮。具体群是否启用，请到权限管理或群聊编辑页设置。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
+    Text("群聊自动聊天只在你为该群开启“空闲自动聊天”后生效，并且到达设定时间才会触发。具体群是否启用，请到权限管理或群聊编辑页设置。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
     Spacer(Modifier.height(8.dp))
     SectionTitle("消息长度")
     ParamSlider(settings, "group_msg_min", "每条消息最小字数", 10, 5f..50f, "群聊里每名干员每次说话最少写几个字。建议10-20字，太少了说话没内容。")
@@ -148,12 +148,7 @@ private fun GroupTab(settings: SettingsRepository) {
     Spacer(Modifier.height(12.dp)); SectionTitle("空闲自动聊天")
     ParamSlider(settings, "group_chat_min_interval", "空闲最小间隔(秒)", 60, 5f..600f, "开启群的空闲自动聊天后，AI干员自己聊起来的最短等待时间。建议60秒以上，太快容易刷屏。", step = 5f)
     ParamSlider(settings, "group_chat_max_interval", "空闲最大间隔(秒)", 180, 30f..900f, "开启群的空闲自动聊天后，AI干员自己聊起来的最长等待时间。建议180-300秒。", step = 10f)
-    ParamSlider(settings, "group_auto_max_rounds", "空闲连续轮数", 20, 1f..300f, "空闲自动聊天最多连续聊多少轮。只影响空闲自动，不影响大世界事件唤起。建议10-30，太高容易刷屏。", step = 1f)
-
-    Spacer(Modifier.height(12.dp)); SectionTitle("大世界事件唤起")
-    ParamSlider(settings, "event_group_rounds", "事件唤起轮数", 2, 1f..10f, "群被大世界事件唤起后连续聊几轮，聊完停止。建议1-3。", step = 1f)
-    ParamSlider(settings, "event_group_cooldown_minutes", "同群冷却(分钟)", 45, 1f..240f, "同一个群被世界事件唤起后的冷却时间。建议30-60分钟。", step = 5f)
-    ParamSlider(settings, "event_max_groups_per_trigger", "每次最多唤起群数", 1, 1f..5f, "一次世界触发最多叫醒几个群。建议1，避免所有群一起热闹。", step = 1f)
+    ParamSlider(settings, "group_auto_max_rounds", "空闲连续轮数", 20, 1f..300f, "空闲自动聊天最多连续聊多少轮。建议10-30，太高容易刷屏。", step = 1f)
 
     Spacer(Modifier.height(12.dp)); SectionTitle("群聊旁白(线上/线下/导演)")
     ParamSlider(settings, "group_nar_seg_min", "最少旁白段数", 1, 1f..10f, "群聊里环境描写最少出现几次。线上模式会过滤旁白。建议1-2段就好。")

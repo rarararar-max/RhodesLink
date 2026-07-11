@@ -10,6 +10,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 /**
  * 将 ChatMessage 列表转换为 ChatUiMessage 列表。
@@ -34,7 +35,8 @@ object MessageParser {
         senderAvatar: (String) -> String = { "" },
         aiName: String = "",
         aiAvatarUri: String = "",
-        userAvatarUri: String = ""
+        userAvatarUri: String = "",
+        restartAt: Long = 0L
     ): List<ChatUiMessage> {
         ChatTrace.d("Parser", "start isGroup=$isGroup rawCount=${messages.size} ids=${ChatTrace.ids(messages.map { it.id })}")
         val parsed = messages.flatMap { msg ->
@@ -42,16 +44,17 @@ object MessageParser {
                 val mode = msg.mode
                 val isOnline = mode == "online"
                 val result = when {
-                    msg.type == "ai_json" && isGroup -> parseGroupAiJson(msg, isOnline, senderColor, senderAvatar)
-                    msg.type == "ai_json" && !isGroup -> parsePrivateAiJson(msg, isOnline, aiName, aiAvatarUri)
+                    msg.type == "ai_json" && isGroup -> parseGroupAiJson(msg, isOnline, senderColor, senderAvatar, restartAt)
+                    msg.type == "ai_json" && !isGroup -> parsePrivateAiJson(msg, isOnline, aiName, aiAvatarUri, restartAt)
+                    msg.type == "image" -> listOf(imageMsg(msg, if (msg.isMe) userAvatarUri else if (isGroup) senderAvatar(msg.senderName) else aiAvatarUri, if (isGroup) senderColor(msg.senderName) else Primary, restartAt))
                     msg.type == "system" || msg.senderName == "系统" || msg.senderName == "" ->
-                        listOf(systemMsg(msg))
+                        listOf(systemMsg(msg, restartAt))
                     msg.type == "narration" ->
-                        if (isOnline) emptyList() else listOf(narrationMsg(msg))
+                        if (isOnline) emptyList() else listOf(narrationMsg(msg, restartAt))
                     msg.isMe ->
-                        listOf(userMsg(msg, userAvatarUri))
+                        listOf(userMsg(msg, userAvatarUri, restartAt))
                     else ->
-                        listOf(otherMsg(msg, if (isGroup) senderColor(msg.senderName) else Primary, if (isGroup) senderAvatar(msg.senderName) else aiAvatarUri))
+                        listOf(otherMsg(msg, if (isGroup) senderColor(msg.senderName) else Primary, if (isGroup) senderAvatar(msg.senderName) else aiAvatarUri, restartAt))
                 }
                 ChatTrace.d("Parser", "msg id=${msg.id} type=${msg.type} out=${result.size}")
                 result
@@ -64,12 +67,32 @@ object MessageParser {
         return parsed
     }
 
+    private fun imageMsg(msg: ChatMessageEntity, avatarUri: String, color: Color, restartAt: Long): ChatUiMessage {
+        val root = runCatching { json.parseToJsonElement(msg.content).jsonObject }.getOrNull()
+        val imageUri = root?.get("imageUri")?.jsonPrimitive?.contentOrNull.orEmpty()
+        val caption = root?.get("caption")?.jsonPrimitive?.contentOrNull.orEmpty()
+        return ChatUiMessage(
+            id = msg.id,
+            senderName = msg.senderName,
+            senderColor = color,
+            content = caption,
+            timestamp = msg.timestamp,
+            isMe = msg.isMe,
+            avatarUri = avatarUri,
+            mode = msg.mode,
+            isArchived = isArchived(msg, restartAt),
+            imageUri = imageUri,
+            originalMessageId = msg.id
+        )
+    }
+
     /** 群聊 ai_json：解析 JSON 数组 [{speaker, message, type}] */
     private fun parseGroupAiJson(
         msg: ChatMessageEntity,
         isOnline: Boolean,
         senderColor: (String) -> Color,
-        senderAvatar: (String) -> String
+        senderAvatar: (String) -> String,
+        restartAt: Long
     ): List<ChatUiMessage> {
         return try {
             val root = json.parseToJsonElement(msg.content)
@@ -91,10 +114,10 @@ object MessageParser {
                 val uid = msg.id * 1000 + idx
                 if (msgType == "narration" || name == "旁白") {
                     ChatUiMessage(uid, "旁白", TextTertiary, content, msg.timestamp,
-                        isSystem = true, isNarration = true, mode = msg.mode, originalMessageId = msg.id, segmentIndex = idx)
+                        isSystem = true, isNarration = true, mode = msg.mode, isArchived = isArchived(msg, restartAt), originalMessageId = msg.id, segmentIndex = idx)
                 } else {
                     ChatUiMessage(uid, name, senderColor(name), content, msg.timestamp,
-                        avatarUri = senderAvatar(name), mode = msg.mode, originalMessageId = msg.id, segmentIndex = idx)
+                        avatarUri = senderAvatar(name), mode = msg.mode, isArchived = isArchived(msg, restartAt), originalMessageId = msg.id, segmentIndex = idx)
                 }
             }
             result
@@ -109,13 +132,14 @@ object MessageParser {
         msg: ChatMessageEntity,
         isOnline: Boolean,
         aiName: String,
-        aiAvatarUri: String
+        aiAvatarUri: String,
+        restartAt: Long
     ): List<ChatUiMessage> {
         val (emotion, segments) = parsePrivateJson(msg.content)
         if (emotion == null || segments.isEmpty()) {
             return listOf(ChatUiMessage(msg.id, aiName, Primary, safeDisplayText(msg.content), msg.timestamp,
                 avatarUri = aiAvatarUri, mode = msg.mode, emotion = msg.emotion,
-                activity = msg.activity, location = msg.location, originalMessageId = msg.id))
+                activity = msg.activity, location = msg.location, isArchived = isArchived(msg, restartAt), originalMessageId = msg.id))
         }
         ChatTrace.d("Parser.PrivateJson", "id=${msg.id} segments=${segments.size} mode=${msg.mode}")
         val result = mutableListOf<ChatUiMessage>()
@@ -129,7 +153,7 @@ object MessageParser {
                 if (!isOnline) {
                     result.add(ChatUiMessage(
                         msg.id * 1000 + segIdx, "旁白", TextTertiary, seg.content, msg.timestamp,
-                        isSystem = true, isNarration = true, mode = msg.mode, originalMessageId = msg.id, segmentIndex = segIdx
+                        isSystem = true, isNarration = true, mode = msg.mode, isArchived = isArchived(msg, restartAt), originalMessageId = msg.id, segmentIndex = segIdx
                     ))
                 }
             } else {
@@ -137,6 +161,7 @@ object MessageParser {
                     msg.id * 1000 + segIdx, aiName, Primary, seg.content, msg.timestamp,
                     avatarUri = aiAvatarUri, mode = msg.mode,
                     emotion = emotion, activity = msg.activity, location = msg.location,
+                    isArchived = isArchived(msg, restartAt),
                     originalMessageId = msg.id, segmentIndex = segIdx
                 ))
             }
@@ -351,25 +376,27 @@ object MessageParser {
         .replace("\\t", "\t")
         .replace("\\\\", "\\")
 
-    private fun systemMsg(msg: ChatMessageEntity) = ChatUiMessage(
+    private fun systemMsg(msg: ChatMessageEntity, restartAt: Long) = ChatUiMessage(
         msg.id, msg.senderName, Gray100, msg.content, msg.timestamp,
-        isSystem = true, mode = msg.mode, originalMessageId = msg.id
+        isSystem = true, mode = msg.mode, isArchived = isArchived(msg, restartAt), originalMessageId = msg.id
     )
 
-    private fun narrationMsg(msg: ChatMessageEntity) = ChatUiMessage(
+    private fun narrationMsg(msg: ChatMessageEntity, restartAt: Long) = ChatUiMessage(
         msg.id, "旁白", TextTertiary, msg.content, msg.timestamp,
-        isSystem = true, isNarration = true, mode = msg.mode, originalMessageId = msg.id
+        isSystem = true, isNarration = true, mode = msg.mode, isArchived = isArchived(msg, restartAt), originalMessageId = msg.id
     )
 
-    private fun userMsg(msg: ChatMessageEntity, userAvatarUri: String) = ChatUiMessage(
+    private fun userMsg(msg: ChatMessageEntity, userAvatarUri: String, restartAt: Long) = ChatUiMessage(
         msg.id, "我", Primary, msg.content, msg.timestamp,
-        isMe = true, avatarUri = userAvatarUri, mode = msg.mode, originalMessageId = msg.id
+        isMe = true, avatarUri = userAvatarUri, mode = msg.mode, isArchived = isArchived(msg, restartAt), originalMessageId = msg.id
     )
 
-    private fun otherMsg(msg: ChatMessageEntity, color: Color, avatarUri: String) = ChatUiMessage(
+    private fun otherMsg(msg: ChatMessageEntity, color: Color, avatarUri: String, restartAt: Long) = ChatUiMessage(
         msg.id, msg.senderName, color, msg.content, msg.timestamp,
         avatarUri = avatarUri, mode = msg.mode,
         emotion = msg.emotion, activity = msg.activity, location = msg.location,
-        originalMessageId = msg.id
+        isArchived = isArchived(msg, restartAt), originalMessageId = msg.id
     )
+
+    private fun isArchived(msg: ChatMessageEntity, restartAt: Long): Boolean = restartAt > 0L && msg.timestamp < restartAt
 }

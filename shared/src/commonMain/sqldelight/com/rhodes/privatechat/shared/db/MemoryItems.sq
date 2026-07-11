@@ -1,0 +1,72 @@
+CREATE TABLE IF NOT EXISTS memory_items (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    ownerType TEXT NOT NULL,
+    ownerId TEXT NOT NULL,
+    memoryLevel TEXT NOT NULL,
+    memoryType TEXT NOT NULL,
+    sourceKind TEXT NOT NULL,
+    sourceRefId TEXT NOT NULL DEFAULT '',
+    sessionId TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL,
+    nickname TEXT NOT NULL DEFAULT '',
+    importance INTEGER NOT NULL DEFAULT 0,
+    privacy TEXT,
+    unmetNeed INTEGER NOT NULL DEFAULT 0,
+    location TEXT,
+    emotionValence TEXT NOT NULL DEFAULT 'neutral',
+    eventTime TEXT,
+    createdAt INTEGER NOT NULL DEFAULT 0,
+    updatedAt INTEGER NOT NULL DEFAULT 0,
+    expiresAt INTEGER NOT NULL DEFAULT 9223372036854775807,
+    status TEXT NOT NULL DEFAULT 'active',
+    scheduledTime TEXT,
+    action TEXT NOT NULL DEFAULT '',
+    careType TEXT NOT NULL DEFAULT '',
+    rawJson TEXT NOT NULL DEFAULT '',
+    vectorId TEXT NOT NULL DEFAULT ''
+);
+
+getMemoryItemsByOwner:
+SELECT * FROM memory_items WHERE ownerType = ? AND ownerId = ? ORDER BY createdAt DESC;
+
+getMemoryItemsByLevel:
+SELECT * FROM memory_items WHERE ownerType = ? AND ownerId = ? AND memoryLevel = ? ORDER BY createdAt DESC;
+
+getActiveMemoryItemsByLevel:
+SELECT * FROM memory_items
+WHERE ownerType = ? AND ownerId = ? AND memoryLevel = ? AND status = 'active' AND expiresAt > ?
+ORDER BY importance DESC, createdAt DESC;
+
+getMemoryItemsByType:
+SELECT * FROM memory_items WHERE ownerType = ? AND ownerId = ? AND memoryType = ? ORDER BY createdAt DESC;
+
+getActiveMemoryItemByContent:
+SELECT * FROM memory_items
+WHERE ownerType = ? AND ownerId = ? AND memoryLevel = ? AND memoryType = ? AND content = ? AND status = 'active'
+ORDER BY updatedAt DESC LIMIT 1;
+
+getMemoryItemsForBatch:
+SELECT * FROM memory_items WHERE ownerType = ? AND ownerId = ? AND memoryLevel = ? AND createdAt BETWEEN ? AND ? ORDER BY createdAt ASC;
+
+insertMemoryItem:
+INSERT OR REPLACE INTO memory_items(ownerType, ownerId, memoryLevel, memoryType, sourceKind, sourceRefId, sessionId, content, nickname, importance, privacy, unmetNeed, location, emotionValence, eventTime, createdAt, updatedAt, expiresAt, status, scheduledTime, action, careType, rawJson, vectorId)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+getLastInsertedMemoryItemId:
+SELECT last_insert_rowid();
+
+updateMemoryItemVectorId:
+UPDATE memory_items SET vectorId = ?, updatedAt = ? WHERE id = ?;
+
+archiveMemoryItemsByLevel:
+UPDATE memory_items SET status = 'archived', updatedAt = ?
+WHERE ownerType = ? AND ownerId = ? AND memoryLevel = ? AND status = 'active';
+
+deleteMemoryItem:
+DELETE FROM memory_items WHERE id = ?;
+
+deleteMemoryItemsByOwner:
+DELETE FROM memory_items WHERE ownerType = ? AND ownerId = ?;
+
+deleteExpiredMemoryItems:
+DELETE FROM memory_items WHERE expiresAt < ?;

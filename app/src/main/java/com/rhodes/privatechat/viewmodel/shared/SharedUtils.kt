@@ -6,6 +6,7 @@ import com.rhodes.privatechat.shared.model.RelationshipType
 import com.rhodes.privatechat.shared.model.AiMessage
 import com.rhodes.privatechat.shared.model.WorldEvent
 import com.rhodes.privatechat.shared.model.WorldEventType
+import android.util.Log
 import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.shared.memory.AnchorSourcePolicy
 import com.rhodes.privatechat.shared.network.AIService

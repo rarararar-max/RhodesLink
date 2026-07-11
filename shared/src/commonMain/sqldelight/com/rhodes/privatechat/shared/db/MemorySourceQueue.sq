@@ -29,3 +29,6 @@ UPDATE memory_source_queue SET processedVector = 1 WHERE id = ?;
 
 deleteMemorySourcesByOwner:
 DELETE FROM memory_source_queue WHERE ownerType = ? AND ownerId = ?;
+
+deleteProcessedMemorySourcesBefore:
+DELETE FROM memory_source_queue WHERE processedL1 = 1 AND createdAt < ?;

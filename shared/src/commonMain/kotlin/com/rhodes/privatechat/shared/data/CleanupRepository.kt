@@ -15,6 +15,10 @@ class CleanupRepository(private val wrapper: DatabaseWrapper) {
         val now = Clock.System.now().toEpochMilliseconds()
         db.memoryAnchorsQueries.deleteExpiredAnchors(now)
         db.memoriesQueries.deleteExpired(now)
+        db.memoryItemsQueries.deleteExpiredMemoryItems(now)
+        db.vectorMemoriesQueries.deleteExpiredVectorMemories(now)
+        // Extraction sources are temporary work records, not another permanent chat archive.
+        db.memorySourceQueueQueries.deleteProcessedMemorySourcesBefore(now - 30L * 86_400_000L)
         db.worldEventsQueries.deleteExpiredWorldEvents(now)
     }
 }

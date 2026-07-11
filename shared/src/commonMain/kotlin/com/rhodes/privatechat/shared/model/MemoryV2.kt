@@ -27,6 +27,12 @@ data class MemoryItem(
     val scheduledTime: String? = null,
     val action: String = "",
     val careType: String = "",
+    val topicKey: String = "",
+    val sourceActor: String = "",
+    val sourceTarget: String = "",
+    val lastUsedAt: Long = 0L,
+    val usedCount: Int = 0,
+    val confidence: Double = 0.8,
     val rawJson: String = "",
     val vectorId: String = ""
 )

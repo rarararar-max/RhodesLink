@@ -22,6 +22,12 @@ CREATE TABLE IF NOT EXISTS memory_items (
     scheduledTime TEXT,
     action TEXT NOT NULL DEFAULT '',
     careType TEXT NOT NULL DEFAULT '',
+    topicKey TEXT NOT NULL DEFAULT '',
+    sourceActor TEXT NOT NULL DEFAULT '',
+    sourceTarget TEXT NOT NULL DEFAULT '',
+    lastUsedAt INTEGER NOT NULL DEFAULT 0,
+    usedCount INTEGER NOT NULL DEFAULT 0,
+    confidence REAL NOT NULL DEFAULT 0.8,
     rawJson TEXT NOT NULL DEFAULT '',
     vectorId TEXT NOT NULL DEFAULT ''
 );
@@ -49,8 +55,8 @@ getMemoryItemsForBatch:
 SELECT * FROM memory_items WHERE ownerType = ? AND ownerId = ? AND memoryLevel = ? AND createdAt BETWEEN ? AND ? ORDER BY createdAt ASC;
 
 insertMemoryItem:
-INSERT OR REPLACE INTO memory_items(ownerType, ownerId, memoryLevel, memoryType, sourceKind, sourceRefId, sessionId, content, nickname, importance, privacy, unmetNeed, location, emotionValence, eventTime, createdAt, updatedAt, expiresAt, status, scheduledTime, action, careType, rawJson, vectorId)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO memory_items(ownerType, ownerId, memoryLevel, memoryType, sourceKind, sourceRefId, sessionId, content, nickname, importance, privacy, unmetNeed, location, emotionValence, eventTime, createdAt, updatedAt, expiresAt, status, scheduledTime, action, careType, topicKey, sourceActor, sourceTarget, lastUsedAt, usedCount, confidence, rawJson, vectorId)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 getLastInsertedMemoryItemId:
 SELECT last_insert_rowid();
@@ -61,6 +67,12 @@ UPDATE memory_items SET vectorId = ?, updatedAt = ? WHERE id = ?;
 archiveMemoryItemsByLevel:
 UPDATE memory_items SET status = 'archived', updatedAt = ?
 WHERE ownerType = ? AND ownerId = ? AND memoryLevel = ? AND status = 'active';
+
+archiveMemoryItem:
+UPDATE memory_items SET status = 'archived', updatedAt = ? WHERE id = ?;
+
+markMemoryItemUsed:
+UPDATE memory_items SET lastUsedAt = ?, usedCount = usedCount + 1, updatedAt = ? WHERE id = ?;
 
 deleteMemoryItem:
 DELETE FROM memory_items WHERE id = ?;

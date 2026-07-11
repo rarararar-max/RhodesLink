@@ -30,6 +30,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -263,6 +264,9 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                 temperature = temperature,
                 response_format = if (jsonMode && supportsJsonMode(config.id)) ResponseFormat("json_object") else null
             )
+            val requestJson = json.encodeToString(requestBody)
+            println("[AISearch] >>> 请求URL=$url model=$model")
+            println("[AISearch] >>> 请求体=${requestJson}")
             val response: HttpResponse = client.post(url) {
                 contentType(ContentType.Application.Json)
                 header("Authorization", "Bearer $apiKey")
@@ -273,6 +277,7 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                 throw Exception("API error ${response.status.value}: $errorBody")
             }
             val responseBody = response.bodyAsText()
+            println("[AISearch] <<< 响应体=${responseBody}")
             val completion = json.decodeFromString<NonStreamResponse>(responseBody)
             val content = completion.choices?.firstOrNull()?.message?.content ?: ""
             val inputTokens = completion.usage?.promptTokens ?: 0
@@ -337,10 +342,12 @@ class AIService(private val client: HttpClient = createHttpClient()) {
             try {
                 val result = chat(apiKey, messages, providerId, modelName, customUrl, temperature, jsonMode)
                 lastRaw = result.content
-                break
+                println("[AISearch] 解析内容 attempt=$attempt len=${lastRaw.length}")
+                if (lastRaw.isNotBlank()) break
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                println("[AISearch] 重试失败 attempt=$attempt/$maxRetries err=${e.toString().take(200)}")
                 requestError = e
                 if (attempt < maxRetries) {
                     kotlinx.coroutines.delay(500L * attempt)
@@ -348,7 +355,10 @@ class AIService(private val client: HttpClient = createHttpClient()) {
             }
         }
 
-        if (lastRaw.isBlank()) throw requestError ?: Exception("AI请求失败")
+        if (lastRaw.isBlank()) {
+            println("[AISearch] 全部${maxRetries}次失败 lastErr=${requestError.toString().take(200)}")
+            throw requestError ?: Exception("AI请求失败")
+        }
 
         repeat(maxRetries) { index ->
             try {

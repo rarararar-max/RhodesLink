@@ -178,6 +178,38 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = settings.getBoolean("unified_memory_enabled", true)
         set(value) = settings.putBoolean("unified_memory_enabled", value)
 
+    var summaryCursorEnabled: Boolean
+        get() = getBoolean("summary_cursor_enabled", true)
+        set(value) = putBoolean("summary_cursor_enabled", value)
+
+    var memoryV2Enabled: Boolean
+        get() = getBoolean("memory_v2_enabled", true)
+        set(value) = putBoolean("memory_v2_enabled", value)
+
+    var momentMemoryV2Enabled: Boolean
+        get() = getBoolean("moment_memory_v2_enabled", true)
+        set(value) = putBoolean("moment_memory_v2_enabled", value)
+
+    var globalPublicMemoryEnabled: Boolean
+        get() = getBoolean("global_public_memory_enabled", true)
+        set(value) = putBoolean("global_public_memory_enabled", value)
+
+    var globalPublicMemoryCount: Int
+        get() = getInt("global_public_memory_count", 5).coerceIn(0, 20)
+        set(value) = putInt("global_public_memory_count", value.coerceIn(0, 20))
+
+    var memoryV2PromoteL1Threshold: Int
+        get() = getInt("memory_v2_promote_l1_threshold", 20).coerceIn(5, 200)
+        set(value) = putInt("memory_v2_promote_l1_threshold", value.coerceIn(5, 200))
+
+    var memoryV2PromoteL2Threshold: Int
+        get() = getInt("memory_v2_promote_l2_threshold", 10).coerceIn(3, 100)
+        set(value) = putInt("memory_v2_promote_l2_threshold", value.coerceIn(3, 100))
+
+    var memoryPinMinImportance: Int
+        get() = getInt("memory_pin_min_importance", 70).coerceIn(0, 100)
+        set(value) = putInt("memory_pin_min_importance", value.coerceIn(0, 100))
+
     var autoImpressionUpdateEnabled: Boolean
         get() = settings.getBoolean("auto_impression_update_enabled", true)
         set(value) = settings.putBoolean("auto_impression_update_enabled", value)
@@ -907,6 +939,10 @@ class SettingsRepository(private val settings: ObservableSettings) {
     fun getSessionRestartAt(sessionId: String): Long = getLong("session_restart_at_$sessionId", 0L)
 
     fun putSessionRestartAt(sessionId: String, value: Long) = putLong("session_restart_at_$sessionId", value)
+
+    fun getSummaryCursor(sessionId: String): Long = getLong("summary_cursor_session_$sessionId", 0L)
+
+    fun putSummaryCursor(sessionId: String, value: Long) = putLong("summary_cursor_session_$sessionId", value)
 
     fun getStringSet(key: String, default: Set<String> = emptySet()): Set<String> {
         val json = safeGetString(key, "")

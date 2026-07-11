@@ -10,7 +10,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -48,7 +53,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
-fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () -> Unit, onEditGroup: (String) -> Unit, groupId: String = "", modifier: Modifier = Modifier, onOperatorClick: (String) -> Unit = {}) {
+fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () -> Unit, onEditGroup: (String) -> Unit, groupId: String = "", modifier: Modifier = Modifier, onOperatorClick: (String) -> Unit = {}, onViewHistory: (String) -> Unit = {}) {
     val settings: SettingsRepository = koinInject()
     val listState = rememberLazyListState()
     val ctx = LocalContext.current
@@ -89,7 +94,10 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
 
     DisposableEffect(groupId) {
         if (groupId.isNotBlank()) viewModel.setCurrentGroup(groupId)
-        onDispose { viewModel.clearCurrentGroup() }
+        onDispose {
+            audioController.release()
+            viewModel.clearCurrentGroup()
+        }
     }
 
     // Sender 颜色映射
@@ -139,15 +147,40 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                 title = groupName,
                 avatarUri = groupSession?.avatarUri ?: "",
                 mode = currentMode,
-                subtitleText = "${if (currentMode == "online") "线上" else if (currentMode == "offline") "线下" else "导演"} · ${groupMessages.size}条消息",
+                subtitleText = "${groupMessages.size}条消息",
                 showGroupIcon = true,
                 onBack = onBack,
+                onModeClick = { showModePicker.value = true },
                 menuContent = {
-                    ChatDropdownMenuItem(text = { Text("编辑群聊") }, onClick = { onEditGroup(groupId) })
-                    ChatDropdownMenuItem(text = { Text("更换背景图") }, onClick = { bgPicker.launch("image/*") })
-                    if (bgUri != null) ChatDropdownMenuItem(text = { Text("恢复默认背景") }, onClick = { showBgReset = true })
-
-                    ChatDropdownMenuItem(text = { Text("重新开始群聊") }, onClick = { showClearConfirm = true })
+                    ChatDropdownMenuItem(
+                        text = { Text("聊天记录") },
+                        leadingIcon = { Icon(Icons.Default.DateRange, null, tint = TextPrimary) },
+                        onClick = { onViewHistory(groupId) }
+                    )
+                    HorizontalDivider(color = Stroke)
+                    ChatDropdownMenuItem(
+                        text = { Text("编辑群聊") },
+                        leadingIcon = { Icon(Icons.Default.Edit, null, tint = TextPrimary) },
+                        onClick = { onEditGroup(groupId) }
+                    )
+                    ChatDropdownMenuItem(
+                        text = { Text("更换背景图") },
+                        leadingIcon = { Icon(Icons.Default.Image, null, tint = TextPrimary) },
+                        onClick = { bgPicker.launch("image/*") }
+                    )
+                    if (bgUri != null) {
+                        ChatDropdownMenuItem(
+                            text = { Text("恢复默认背景") },
+                            leadingIcon = { Icon(Icons.Default.Restore, null, tint = TextTertiary) },
+                            onClick = { showBgReset = true }
+                        )
+                    }
+                    HorizontalDivider(color = Stroke)
+                    ChatDropdownMenuItem(
+                        text = { Text("重新开始群聊") },
+                        leadingIcon = { Icon(Icons.Default.Refresh, null, tint = ErrorRed) },
+                        onClick = { showClearConfirm = true }
+                    )
                 }
             )
 
@@ -161,7 +194,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                     onLoadOlder = { viewModel.loadOlderGroupMessages() },
                     isLoadingOlder = isLoadingOlder,
                     hasMore = hasMoreMessages,
-                    forceScrollToLatest = true,
+                    forceScrollToLatest = false,
                     modifier = Modifier.weight(1f)
                 )
 

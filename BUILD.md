@@ -116,6 +116,12 @@ chmod +x gradlew
 2. 检查 Android 版本是否满足最低要求（Android 8.0+）
 3. 启用"未知来源"安装权限
 
+## 数据库迁移规则
+
+添加 `.sqm` 迁移文件或修改 `TARGET_VERSION` 时，必须同步更新 `DatabaseCompatibility.android.kt` 中的 `advanceUserVersionIfSchemaComplete()` 检查条件，确保它能检测本次迁移新增的字段/表。
+
+如果新增字段由 `DatabaseCompatibility.ensureCompatibilitySchema()` 提前补齐，则 `.sqm` 必须是 `SELECT 1 WHERE 0;`（no-op），由兼容层全权负责。
+
 ## 文件说明
 
 | 文件 | 说明 |

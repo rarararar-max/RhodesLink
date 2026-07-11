@@ -172,6 +172,32 @@ private fun MemoryTab(settings: SettingsRepository) {
     Spacer(modifier = Modifier.height(12.dp))
     ParamSlider(settings, "clean_days", "记忆过期天数", 30, 0f..365f, "AI对你的对话总结和印象保留多少天。0=不自动过期；太短AI容易忘记，太长旧印象会长期生效。建议30天。", step = 5f)
     Spacer(modifier = Modifier.height(12.dp))
+    SectionTitle("记忆生成")
+    SettingsSwitchCard(
+        title = "摘要游标",
+        subtitle = "只总结上次以后新增的消息，避免旧聊天被反复总结",
+        tip = "开启后系统会记录每个会话已经总结到哪条消息，下一次只处理新增消息。建议开启。关闭后会退回旧逻辑。",
+        checked = settings.summaryCursorEnabled,
+        onCheckedChange = { settings.summaryCursorEnabled = it }
+    )
+    SettingsSwitchCard(
+        title = "Memory V2 分层记忆",
+        subtitle = "把聊天提取成 L1/L2/L3 结构化记忆，并写入向量库",
+        tip = "开启后私聊和群聊会把有价值信息沉淀为结构化记忆。会额外消耗少量AI额度。建议开启。",
+        checked = settings.memoryV2Enabled,
+        onCheckedChange = { settings.memoryV2Enabled = it }
+    )
+    SettingsSwitchCard(
+        title = "动态/评论进入 Memory V2",
+        subtitle = "用户动态和评论会进入公开记忆，便于后续私聊自然提起",
+        tip = "开启后，用户发的动态和评论会被提取为公开事件记忆。动态默认全员可见。",
+        checked = settings.momentMemoryV2Enabled,
+        onCheckedChange = { settings.momentMemoryV2Enabled = it }
+    )
+    ParamSlider(settings, "memory_v2_promote_l1_threshold", "L1 合并为 L2 阈值", 20, 5f..100f, "同一干员的 L1 记忆达到多少条后，合并成中期 L2 记忆。越小越频繁消耗额度，建议20。", step = 1f)
+    ParamSlider(settings, "memory_v2_promote_l2_threshold", "L2 合并为 L3 阈值", 10, 3f..50f, "同一干员的 L2 记忆达到多少条后，合并成长期 L3 记忆。建议10。", step = 1f)
+    ParamSlider(settings, "memory_pin_min_importance", "关键记忆 Pin 阈值", 70, 0f..100f, "Memory V2 记忆重要度达到多少后，额外生成关键记忆提醒。越低越容易生成锚点，越高越干净。建议70。", step = 5f)
+    Spacer(modifier = Modifier.height(12.dp))
     SectionTitle("记忆注入")
     var distinguishPrivateMemory by remember { mutableStateOf(settings.distinguishPrivateMemory) }
     Row(
@@ -211,6 +237,15 @@ private fun MemoryTab(settings: SettingsRepository) {
         }, colors = SwitchDefaults.colors(checkedThumbColor = Blue400, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
     }
     Spacer(modifier = Modifier.height(8.dp))
+    SettingsSwitchCard(
+        title = "全局公开记忆池",
+        subtitle = "动态、评论等公开内容可被任意干员私聊按话题召回",
+        tip = "开启后用户动态和评论会进入 global/public 公开池。私聊时会按当前话题召回相关公开信息。建议开启。",
+        checked = settings.globalPublicMemoryEnabled,
+        onCheckedChange = { settings.globalPublicMemoryEnabled = it }
+    )
+    ParamSlider(settings, "global_public_memory_count", "全局公开召回数量", 5, 0f..20f, "每次私聊最多额外召回多少条公开动态/评论/世界事件。设0可关闭公开池注入。建议3-5条。", step = 1f)
+    Spacer(modifier = Modifier.height(8.dp))
     ParamSlider(settings, "private_anchor_count", "私聊锚点数量", 5, 0f..20f, "每次私聊最多给AI看的关键记忆数量。越高聊天越有连续性，也越消耗AI额度。建议5-8条。", step = 1f)
     ParamSlider(settings, "private_shared_memory_count", "关系共享记忆", 3, 0f..20f, "私聊时，当前干员可能通过关系网「听说」其他干员的公开记忆。数值越高，能参考的关系记忆越多。只传公开记忆，不会直接泄露私聊秘密。设0可关闭。建议1-3条。", step = 1f)
     ParamSlider(settings, "private_group_context_count", "私聊群聊回顾", 2, 0f..10f, "私聊时最多回顾该干员最近参与过的群聊摘要数量。设0就不回顾群聊内容。建议1-2条。", step = 1f)
@@ -218,6 +253,29 @@ private fun MemoryTab(settings: SettingsRepository) {
     ParamSlider(settings, "moment_anchor_count", "动态参考记忆", 3, 0f..10f, "生成动态时最多参考几条公开记忆。设太多动态总是围绕旧事，设太少动态内容容易空洞。建议3-5条。", step = 1f)
     ParamSlider(settings, "comment_context_count", "评论上下文条数", 5, 0f..20f, "AI回复评论时最多回看几条评论区上下文。建议3-5条，多了消耗额度。", step = 1f)
     ParamSlider(settings, "diary_anchor_count", "日记参考记忆", 5, 0f..20f, "生成日记时最多参考几条关键记忆。建议3-5条，多了日记易成流水账。", step = 1f)
+}
+
+@Composable
+private fun SettingsSwitchCard(title: String, subtitle: String, tip: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    var value by remember { mutableStateOf(checked) }
+    Row(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Card).padding(12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(title, fontSize = 13.sp, color = TextPrimary)
+                HelpButton(tip)
+            }
+            Text(subtitle, fontSize = 11.sp, color = TextSecondary)
+        }
+        Switch(checked = value, onCheckedChange = {
+            value = it
+            onCheckedChange(it)
+        }, colors = SwitchDefaults.colors(checkedThumbColor = Blue400, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
+    }
+    Spacer(modifier = Modifier.height(8.dp))
 }
 
 // ── Tab 3: 通用 ──

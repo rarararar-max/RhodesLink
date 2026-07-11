@@ -25,6 +25,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -70,6 +71,10 @@ fun VoiceCallScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
     var userSpeechDetected by rememberSaveable { mutableStateOf(false) }
     var level by remember { mutableFloatStateOf(0f) }
     var turns by rememberSaveable { mutableStateOf(listOf<Pair<String, String>>()) }
+
+    DisposableEffect(audio) {
+        onDispose { audio.release() }
+    }
 
     suspend fun synthesizeAndPlay(tts: TtsGateway, text: String) {
         val parts = splitTtsSentences(text)
@@ -139,7 +144,9 @@ fun VoiceCallScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
     Column(Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
         Row(Modifier.fillMaxWidth().background(Surface).padding(8.dp)) {
             IconButton(onClick = {
-                if (recording) { recording = false; audio.stopRecording() }; audio.stopPlayback(); onBack()
+                recording = false
+                audio.release()
+                onBack()
             }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Text("与${operator.name}通话", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, modifier = Modifier.padding(top = 12.dp))
         }

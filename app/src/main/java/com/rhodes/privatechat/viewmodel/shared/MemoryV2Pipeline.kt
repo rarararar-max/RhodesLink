@@ -8,6 +8,7 @@ import com.rhodes.privatechat.shared.model.Moment
 import com.rhodes.privatechat.shared.model.MemoryBatch
 import com.rhodes.privatechat.shared.model.MemoryItem
 import com.rhodes.privatechat.shared.model.MemoryLevel
+import com.rhodes.privatechat.shared.model.MemoryLink
 import com.rhodes.privatechat.shared.model.MemorySourceItem
 import com.rhodes.privatechat.shared.model.MemorySourceKind
 import com.rhodes.privatechat.shared.network.AIService
@@ -19,9 +20,11 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.jsonPrimitive
 
 class MemoryV2Pipeline(
@@ -72,7 +75,7 @@ class MemoryV2Pipeline(
             ))
         }
         if (sourceId > 0) repository.markMemorySourceProcessedL1(sourceId)
-        maybePromotePrivateMemory(operatorId, thresholdL1 = 20, thresholdL2 = 10)
+        maybePromotePrivateMemory(operatorId, thresholdL1 = settings.memoryV2PromoteL1Threshold, thresholdL2 = settings.memoryV2PromoteL2Threshold)
     }
 
     suspend fun ingestGroupChat(groupId: String, groupName: String, messages: List<ChatMessage>) {
@@ -106,6 +109,7 @@ class MemoryV2Pipeline(
             ))
         }
         if (sourceId > 0) repository.markMemorySourceProcessedL1(sourceId)
+        maybePromoteOwnerMemory("group", groupId, MemorySourceKind.GROUP_CHAT, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
     }
 
     suspend fun ingestMoment(moment: Moment, contextGroup: String = "") {
@@ -138,6 +142,7 @@ class MemoryV2Pipeline(
             ))
         }
         if (sourceId > 0) repository.markMemorySourceProcessedL1(sourceId)
+        maybePromoteOwnerMemory("operator", moment.operatorId, MemorySourceKind.MOMENT, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
     }
 
     suspend fun ingestMomentComment(comment: MomentComment, momentId: Long) {
@@ -170,13 +175,20 @@ class MemoryV2Pipeline(
             ))
         }
         if (sourceId > 0) repository.markMemorySourceProcessedL1(sourceId)
+        maybePromoteOwnerMemory("operator", comment.operatorId, MemorySourceKind.MOMENT_COMMENT, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
     }
 
     suspend fun maybePromotePrivateMemory(operatorId: String, thresholdL1: Int, thresholdL2: Int) {
+        maybePromoteOwnerMemory("operator", operatorId, MemorySourceKind.PRIVATE_CHAT, thresholdL1, thresholdL2)
+    }
+
+    private suspend fun maybePromoteOwnerMemory(ownerType: String, ownerId: String, sourceKind: MemorySourceKind, thresholdL1: Int, thresholdL2: Int) {
         val now = System.currentTimeMillis()
-        val l1Items = repository.getActiveMemoryItemsByLevel("operator", operatorId, MemoryLevel.L1, now)
-        if (l1Items.size >= thresholdL1) {
-            val prompt = buildLevelPrompt(MemoryV2PromptTemplates.L2, l1Items)
+        val l1Items = repository.getActiveMemoryItemsByLevel(ownerType, ownerId, MemoryLevel.L1, now)
+        val l1Topic = pickPromotionTopic(l1Items, thresholdL1)
+        if (l1Topic != null) {
+            val selected = l1Topic.items
+            val prompt = buildLevelPrompt(MemoryV2PromptTemplates.L2, selected)
             val raw = withTimeout(15_000) {
                 aiService.chat(
                     settings.apiKey,
@@ -187,28 +199,31 @@ class MemoryV2Pipeline(
                     temperature = settings.aiTemperature
                 ).content
             }
-            val l2Items = parseMemoryItems(raw, "operator", operatorId, MemoryLevel.L2, MemorySourceKind.PRIVATE_CHAT)
+            val l2Items = parseMemoryItems(raw, ownerType, ownerId, MemoryLevel.L2, sourceKind)
+                .map { withPromotionMeta(it, l1Topic.topicKey, selected, MemoryLevel.L2) }
             if (l2Items.isNotEmpty()) {
-                saveMemoryItems(l2Items)
-                repository.archiveMemoryItemsByLevel("operator", operatorId, MemoryLevel.L1, System.currentTimeMillis())
+                val saved = saveMemoryItems(l2Items)
+                if (saved.isNotEmpty()) linkAndArchiveParents(saved, selected, "merge_l1_to_l2")
                 repository.saveMemoryBatch(MemoryBatch(
-                    ownerType = "operator",
-                    ownerId = operatorId,
-                    sourceKind = MemorySourceKind.PRIVATE_CHAT,
+                    ownerType = ownerType,
+                    ownerId = ownerId,
+                    sourceKind = sourceKind,
                     targetLevel = MemoryLevel.L2,
-                    inputCount = l1Items.size,
-                    outputCount = l2Items.size,
-                    windowStart = l1Items.minOfOrNull { it.createdAt } ?: System.currentTimeMillis(),
-                    windowEnd = l1Items.maxOfOrNull { it.createdAt } ?: System.currentTimeMillis(),
+                    inputCount = selected.size,
+                    outputCount = saved.size,
+                    windowStart = selected.minOfOrNull { it.createdAt } ?: System.currentTimeMillis(),
+                    windowEnd = selected.maxOfOrNull { it.createdAt } ?: System.currentTimeMillis(),
                     promptVersion = "memory_v2_l2_v1",
                     createdAt = System.currentTimeMillis()
                 ))
             }
         }
 
-        val l2Items = repository.getActiveMemoryItemsByLevel("operator", operatorId, MemoryLevel.L2, now)
-        if (l2Items.size >= thresholdL2) {
-            val prompt = buildLevelPrompt(MemoryV2PromptTemplates.L3, l2Items)
+        val l2Items = repository.getActiveMemoryItemsByLevel(ownerType, ownerId, MemoryLevel.L2, now)
+        val l2Topic = pickPromotionTopic(l2Items, thresholdL2, requireStable = true)
+        if (l2Topic != null) {
+            val selected = l2Topic.items
+            val prompt = buildLevelPrompt(MemoryV2PromptTemplates.L3, selected)
             val raw = withTimeout(15_000) {
                 aiService.chat(
                     settings.apiKey,
@@ -219,19 +234,20 @@ class MemoryV2Pipeline(
                     temperature = settings.aiTemperature
                 ).content
             }
-            val l3Items = parseMemoryItems(raw, "operator", operatorId, MemoryLevel.L3, MemorySourceKind.PRIVATE_CHAT)
+            val l3Items = parseMemoryItems(raw, ownerType, ownerId, MemoryLevel.L3, sourceKind)
+                .map { withPromotionMeta(it, l2Topic.topicKey, selected, MemoryLevel.L3) }
             if (l3Items.isNotEmpty()) {
-                saveMemoryItems(l3Items)
-                repository.archiveMemoryItemsByLevel("operator", operatorId, MemoryLevel.L2, System.currentTimeMillis())
+                val saved = saveMemoryItems(l3Items)
+                if (saved.isNotEmpty()) linkAndArchiveParents(saved, selected, "merge_l2_to_l3")
                 repository.saveMemoryBatch(MemoryBatch(
-                    ownerType = "operator",
-                    ownerId = operatorId,
-                    sourceKind = MemorySourceKind.PRIVATE_CHAT,
+                    ownerType = ownerType,
+                    ownerId = ownerId,
+                    sourceKind = sourceKind,
                     targetLevel = MemoryLevel.L3,
-                    inputCount = l2Items.size,
-                    outputCount = l3Items.size,
-                    windowStart = l2Items.minOfOrNull { it.createdAt } ?: System.currentTimeMillis(),
-                    windowEnd = l2Items.maxOfOrNull { it.createdAt } ?: System.currentTimeMillis(),
+                    inputCount = selected.size,
+                    outputCount = saved.size,
+                    windowStart = selected.minOfOrNull { it.createdAt } ?: System.currentTimeMillis(),
+                    windowEnd = selected.maxOfOrNull { it.createdAt } ?: System.currentTimeMillis(),
                     promptVersion = "memory_v2_l3_v1",
                     createdAt = System.currentTimeMillis()
                 ))
@@ -241,9 +257,9 @@ class MemoryV2Pipeline(
 
     suspend fun buildPrivateMemoryContext(operatorId: String, limitL1: Int, limitL2: Int, limitL3: Int): String {
         val now = System.currentTimeMillis()
-        val l1 = repository.getActiveMemoryItemsByLevel("operator", operatorId, MemoryLevel.L1, now).take(limitL1)
-        val l2 = repository.getActiveMemoryItemsByLevel("operator", operatorId, MemoryLevel.L2, now).take(limitL2)
-        val l3 = repository.getActiveMemoryItemsByLevel("operator", operatorId, MemoryLevel.L3, now).take(limitL3)
+        val l1 = repository.getActiveMemoryItemsByLevel("operator", operatorId, MemoryLevel.L1, now).rankForPrompt().take(limitL1)
+        val l2 = repository.getActiveMemoryItemsByLevel("operator", operatorId, MemoryLevel.L2, now).rankForPrompt().take(limitL2)
+        val l3 = repository.getActiveMemoryItemsByLevel("operator", operatorId, MemoryLevel.L3, now).rankForPrompt().take(limitL3)
         return buildString {
             if (l3.isNotEmpty()) {
                 append("【长期记忆】\n")
@@ -258,6 +274,26 @@ class MemoryV2Pipeline(
                 l1.forEach { append("- ").append(it.content).append('\n') }
             }
         }.trim()
+    }
+
+    private fun List<MemoryItem>.rankForPrompt(): List<MemoryItem> {
+        val now = System.currentTimeMillis()
+        return filter { it.content.isNotBlank() && it.expiresAt > now && it.status == "active" }
+            .distinctBy { normalizeForDedup(it.memoryType, it.content) }
+            .sortedWith(
+                compareByDescending<MemoryItem> { levelPromptWeight(it.memoryLevel) }
+                    .thenByDescending { it.importance }
+                    .thenByDescending { it.confidence }
+                    .thenBy { it.lastUsedAt.coerceAtLeast(0L) }
+                    .thenBy { it.usedCount }
+                    .thenByDescending { it.createdAt }
+            )
+    }
+
+    private fun levelPromptWeight(level: MemoryLevel): Int = when (level) {
+        MemoryLevel.L3 -> 300
+        MemoryLevel.L2 -> 200
+        MemoryLevel.L1 -> 100
     }
 
     private fun formatPrivateMessage(msg: ChatMessage): String {
@@ -391,6 +427,12 @@ class MemoryV2Pipeline(
                     scheduledTime = scheduledTime,
                     action = action,
                     careType = careType,
+                    topicKey = if (level == MemoryLevel.L1) topicKey(type, content) else "",
+                    sourceActor = nickname,
+                    sourceTarget = ownerId,
+                    lastUsedAt = 0L,
+                    usedCount = 0,
+                    confidence = if (level == MemoryLevel.L1) 0.8 else 0.85,
                     rawJson = obj.toString(),
                     createdAt = System.currentTimeMillis(),
                     updatedAt = System.currentTimeMillis()
@@ -401,7 +443,8 @@ class MemoryV2Pipeline(
         }
     }
 
-    private suspend fun saveMemoryItems(items: List<MemoryItem>) {
+    private suspend fun saveMemoryItems(items: List<MemoryItem>): List<MemoryItem> {
+        val saved = mutableListOf<MemoryItem>()
         items.forEach { item ->
             val existing = repository.getActiveMemoryItemByContent(
                 ownerType = item.ownerType,
@@ -412,8 +455,25 @@ class MemoryV2Pipeline(
             )
             if (existing != null) return@forEach
             val id = repository.insertMemoryItem(item)
-            if (id > 0) saveMemoryItemToVector(id, item)
+            if (id > 0) {
+                val withId = item.copy(id = id)
+                saveMemoryItemToVector(id, withId)
+                saved += withId
+            }
         }
+        return saved
+    }
+
+    private suspend fun linkAndArchiveParents(children: List<MemoryItem>, parents: List<MemoryItem>, linkType: String) {
+        val now = System.currentTimeMillis()
+        for (child in children) {
+            for (parent in parents) {
+                if (child.id > 0 && parent.id > 0) {
+                    repository.insertMemoryLink(MemoryLink(parentMemoryId = parent.id, childMemoryId = child.id, linkType = linkType, createdAt = now))
+                }
+            }
+        }
+        parents.forEach { if (it.id > 0) repository.archiveMemoryItem(it.id, now) }
     }
 
     private suspend fun saveMemoryItemToVector(id: Long, item: MemoryItem) {
@@ -470,9 +530,90 @@ class MemoryV2Pipeline(
     }
 
     private fun defaultPrivacy(sourceKind: MemorySourceKind): String = when (sourceKind) {
-        MemorySourceKind.PRIVATE_CHAT -> "private"
+        MemorySourceKind.PRIVATE_CHAT -> "shared"
         MemorySourceKind.GROUP_CHAT, MemorySourceKind.MOMENT, MemorySourceKind.MOMENT_COMMENT, MemorySourceKind.WORLD_EVENT -> "public"
         else -> "shared"
+    }
+
+    private data class PromotionTopic(val topicKey: String, val items: List<MemoryItem>)
+
+    private fun pickPromotionTopic(items: List<MemoryItem>, threshold: Int, requireStable: Boolean = false): PromotionTopic? {
+        if (items.size < threshold) return null
+        val grouped = items
+            .filter { it.content.isNotBlank() && it.importance >= 20 }
+            .groupBy { topicKey(it.memoryType, it.content) }
+            .mapValues { (_, values) -> values.sortedByDescending { promotionItemScore(it) } }
+            .filterValues { values -> values.size >= topicThreshold(threshold, values) }
+        if (grouped.isEmpty()) return null
+        val picked = grouped.maxByOrNull { (_, values) -> values.sumOf { it.importance } + values.size * 10 } ?: return null
+        val selected = picked.value.take(12)
+        if (requireStable && !isStableEnoughForL3(selected)) return null
+        return PromotionTopic(picked.key, selected)
+    }
+
+    private fun topicThreshold(baseThreshold: Int, values: List<MemoryItem>): Int {
+        val strong = values.any { it.importance >= 80 || it.unmetNeed || it.memoryType == "agreement_commitment" || it.memoryType == "care_reminder" }
+        return if (strong) 2 else (baseThreshold / 3).coerceIn(3, baseThreshold)
+    }
+
+    private fun promotionItemScore(item: MemoryItem): Long {
+        val ageDays = ((System.currentTimeMillis() - item.createdAt).coerceAtLeast(0L) / 86_400_000L).coerceAtMost(30L)
+        val recency = 30L - ageDays
+        return item.importance * 100L + recency
+    }
+
+    private fun isStableEnoughForL3(items: List<MemoryItem>): Boolean {
+        if (items.size < 3 && items.none { it.importance >= 85 }) return false
+        val times = items.map { it.createdAt }.filter { it > 0 }
+        val span = if (times.size >= 2) (times.maxOrNull() ?: 0L) - (times.minOrNull() ?: 0L) else 0L
+        val stableType = items.any { it.memoryType in stableMemoryTypes }
+        return stableType && (span >= 3L * 86_400_000L || items.size >= 4 || items.any { it.importance >= 90 })
+    }
+
+    private fun topicKey(memoryType: String, content: String): String {
+        val typeGroup = when (memoryType) {
+            "preference_expression" -> "preference"
+            "agreement_commitment", "care_reminder", "intent_wish" -> "plan"
+            "emotion_state", "behavior_state", "physiological_state" -> "state"
+            "evaluation_opinion", "self_cognition_statement" -> "relation"
+            "external_knowledge" -> "knowledge"
+            else -> "event"
+        }
+        val tokens = content
+            .replace(Regex("""[\s，。！？；,.!?;：:\"'“”‘’【】\[\]（）()]"""), "")
+            .windowed(2, 1, partialWindows = false)
+            .filterNot { token -> commonTopicNoise.any { token.contains(it) } }
+            .take(8)
+            .joinToString("")
+            .take(24)
+        return "$typeGroup:${tokens.ifBlank { memoryType }}"
+    }
+
+    private fun withPromotionMeta(item: MemoryItem, topicKey: String, parents: List<MemoryItem>, targetLevel: MemoryLevel): MemoryItem {
+        val meta = buildJsonObject {
+            put("topic_key", topicKey)
+            put("evidence_count", parents.size)
+            put("evidence_ids", parents.map { it.id }.filter { it > 0 }.joinToString(","))
+            put("promoted_to", targetLevel.name)
+            put("source_levels", parents.map { it.memoryLevel.name }.distinct().joinToString(","))
+            put("last_evidence_at", parents.maxOfOrNull { it.createdAt } ?: item.createdAt)
+            put("source_kinds", parents.map { it.sourceKind.name }.distinct().joinToString(","))
+        }.toString()
+        val maxImportance = maxOf(item.importance, parents.maxOfOrNull { it.importance } ?: item.importance)
+        val privacy = if (parents.any { it.privacy == "private" }) "shared" else item.privacy
+        return item.copy(
+            importance = maxImportance.coerceIn(0, 100),
+            privacy = privacy,
+            topicKey = topicKey,
+            sourceActor = parents.firstOrNull()?.sourceActor ?: item.sourceActor,
+            sourceTarget = parents.firstOrNull()?.sourceTarget ?: item.sourceTarget,
+            lastUsedAt = 0L,
+            usedCount = 0,
+            confidence = (0.8 + parents.size * 0.02).coerceAtMost(0.95),
+            rawJson = meta,
+            createdAt = System.currentTimeMillis(),
+            updatedAt = System.currentTimeMillis(),
+        )
     }
 
     private companion object {
@@ -484,5 +625,7 @@ class MemoryV2Pipeline(
         val allowedPrivacy = setOf("public", "private", "shared")
         val allowedEmotionValence = setOf("positive", "neutral", "negative", "mixed")
         val allowedCareTypes = setOf("comfort", "remind", "celebrate", "accompany", "none")
+        val stableMemoryTypes = setOf("preference_expression", "agreement_commitment", "care_reminder", "evaluation_opinion", "self_cognition_statement")
+        val commonTopicNoise = setOf("用户", "今天", "昨天", "最近", "表示", "觉得", "希望", "提到", "自己", "没有", "可以")
     }
 }

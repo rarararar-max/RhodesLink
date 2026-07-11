@@ -53,6 +53,10 @@ import com.rhodes.privatechat.shared.model.AiMessage
 import com.rhodes.privatechat.shared.model.OfflineModeResponse
 import com.rhodes.privatechat.shared.vector.MemoryVectorService
 import com.rhodes.privatechat.shared.vector.VectorMemory
+import com.rhodes.privatechat.viewmodel.shared.MemoryIngestor
+import com.rhodes.privatechat.viewmodel.shared.MemoryContextBuilder
+import com.rhodes.privatechat.viewmodel.shared.MemoryV2Pipeline
+import com.rhodes.privatechat.viewmodel.shared.UnifiedMemoryContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -116,6 +120,9 @@ class MainViewModel(
         private val _globalMomentStatus = MutableStateFlow(MomentGenerateStatus())
     }
     private val memoryVectorService: MemoryVectorService? = try { org.koin.core.context.GlobalContext.get().get() } catch (_: Exception) { null }
+    private val memoryV2Pipeline = MemoryV2Pipeline(repository, settings, sharedUtils.aiService, memoryVectorService) { getUserProfile().nickname }
+    private val memoryIngestor = MemoryIngestor(repository, settings, memoryV2Pipeline, memoryVectorService)
+    private val memoryContextBuilder = MemoryContextBuilder(settings, memoryVectorService)
     private val visionGateway: com.rhodes.privatechat.shared.modelgateway.VisionGateway? = try { org.koin.core.context.GlobalContext.get().get() } catch (_: Exception) { null }
     val dataViewModel = DataViewModel(repository, settings, viewModelScope)
     val mahjongViewModel = MahjongViewModel(repository, settings, sharedUtils, viewModelScope) { appState.operators.value }
@@ -525,9 +532,22 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         val anchors = repository.getAnchors(op.id)
         val analysisBlock = if (isDualModel() && analysisGuidance.isNotBlank()) "【AI分析指导】\n${analysisGuidance}\n" else ""
         val pickedAnchors = sharedUtils.pickAnchorsForSurface(anchors, settings.privateAnchorCount, MemorySurface.PRIVATE_CHAT)
+        val v2Memories = memoryV2Pipeline.buildPrivateMemoryContext(op.id, limitL1 = 1, limitL2 = 2, limitL3 = 2).ifBlank { "无" }
+        val vectorMemories = memoryContextBuilder.privateVectorContext(op.id, eventContext.ifBlank { op.name })
+        val legacyAnchorLines = if (v2Memories == "无" && vectorMemories == "无") {
+            pickedAnchors.joinToString("\n") { "- ${anchorTimeLabel(it)} ${it.content}" }
+        } else ""
+        val unifiedMemory = UnifiedMemoryContext.mergeBlocks(
+            sharedUtils.contextBlockLimit(2),
+            v2Memories,
+            vectorMemories,
+            sharedMemories,
+            eventContext,
+            legacyAnchorLines,
+        )
         DebugLogger.log(
             "Memory/Inject",
-            "主动消息记忆注入: op=${op.id}, short=${shortTerm != null}, long=${longTerm != null}, anchors=${pickedAnchors.size}, sharedLines=${sharedMemories.lines().filter { it.isNotBlank() }.size}, daily=${repository.getLatestDaily() != null}"
+            "主动消息记忆注入: op=${op.id}, short=${shortTerm != null}, long=${longTerm != null}, unified=${unifiedMemory != "无"}, anchors=${pickedAnchors.size}, sharedLines=${sharedMemories.lines().filter { it.isNotBlank() }.size}"
         )
         val replacements = mapOf(
             "CURRENT_TIME" to now,
@@ -554,12 +574,12 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                     append("已知禁忌：${it.split(",").map { it.trim() }.joinToString("、")}\n")
                 }
             },
-            "MEMORY_ANCHORS" to pickedAnchors.joinToString("\n") { "- ${anchorTimeLabel(it)} ${it.content}" }.ifBlank { "暂无特别事件" },
+            "MEMORY_ANCHORS" to unifiedMemory,
             "UNCONSUMED_EVENTS" to eventContext.ifBlank { "无" },
             "RECENT_SOCIAL_EVENTS" to eventContext.ifBlank { "无" },
             "EVENT_TRIGGERED_PRIVATE_CONTEXT" to eventContext.ifBlank { "无" },
             "SHARED_MEMORIES" to sharedMemories.ifBlank { "无" },
-            "DAILY_SUMMARY" to (repository.getLatestPrivateDaily(op.id)?.content ?: "无"),
+            "DAILY_SUMMARY" to "无",
             "SHORT_TERM_SUMMARY" to (shortTerm?.content ?: "无"),
             "USER_RELATION" to (op.userRelation.ifBlank { "未知" }),
             // 主动消息只发一句话（1段台词，无旁白）
@@ -906,7 +926,6 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                     expiresAt = MemoryPolicy.anchorExpiresAt(settings, finalType)
                 )
             }
-            repository.saveAnchors(anchors)
             anchors.forEach { a -> DebugLogger.log("Memory/Anchor", "摘要锚点(Main): op=${a.operatorId}, type=${a.type}, private=${a.isPrivate}, content=${a.content.take(40)}") }
             // 保留条数限制
             val retain = settings.summaryRetain
@@ -1248,6 +1267,9 @@ ${summaries}
     fun stopAutoGroupChat(groupId: String) = groupChatViewModel.stopAutoGroupChat(groupId)
     fun stopAllAutoGroupChats() = groupChatViewModel.stopAllAutoGroupChats()
     fun refreshAutoGroupChats() = groupChatViewModel.refreshAutoGroupChats()
+    suspend fun getGroupMessageDates(groupId: String) = groupChatViewModel.getGroupMessageDates(groupId)
+    suspend fun getGroupMessagesByDate(groupId: String, date: String) = groupChatViewModel.getGroupMessagesByDate(groupId, date)
+    suspend fun searchGroupMessages(groupId: String, keyword: String) = groupChatViewModel.searchGroupMessages(groupId, keyword)
     fun cancelDispatch(dispatchId: String) = dispatchViewModel.cancelDispatch(dispatchId)
 
     private suspend fun recoverDispatches() = dispatchViewModel.recoverDispatches()
@@ -1302,12 +1324,26 @@ ${summaries}
     private suspend fun buildMomentMemoryContext(op: Operator, mentionUser: Boolean): MomentMemoryContext {
         val anchors = repository.getAnchors(op.id)
         val picked = sharedUtils.pickAnchorsForSurface(anchors, settings.momentAnchorCount, MemorySurface.MOMENT)
+        val v2Memories = memoryV2Pipeline.buildPrivateMemoryContext(op.id, limitL1 = 2, limitL2 = 3, limitL3 = 2).ifBlank { "无" }
+        val vectorMemories = memoryContextBuilder.privateVectorContext(op.id, op.name)
+        val legacyMemories = if (v2Memories == "无" && vectorMemories == "无") {
+            picked.joinToString("\n") { "- ${anchorTimeLabel(it)} ${it.content}" }
+        } else ""
+        val memories = UnifiedMemoryContext.mergeBlocks(
+            sharedUtils.contextBlockLimit(),
+            v2Memories,
+            vectorMemories,
+            legacyMemories,
+        )
+        val sourceAware = if (legacyMemories.isNotBlank()) {
+            sharedUtils.buildSourceAwareMemoryContext(anchors, settings.momentAnchorCount, MemorySurface.MOMENT)
+        } else "无"
         return MomentMemoryContext(
             impression = repository.getLongTermImpression(op.id)?.content ?: "无",
             chatSummary = repository.getPrivateChatSummary(op.id)?.take(160) ?: repository.getShortTermMemory("session_${op.id}")?.content?.take(160) ?: "无",
-            memories = sharedUtils.trimContextBlock(picked.joinToString("\n") { "- ${anchorTimeLabel(it)} ${it.content}" }.ifBlank { "无" }, sharedUtils.contextBlockLimit()),
-            sourceAwareMemories = sharedUtils.trimContextBlock(sharedUtils.buildSourceAwareMemoryContext(anchors, settings.momentAnchorCount, MemorySurface.MOMENT), sharedUtils.contextBlockLimit()),
-            privateDaily = repository.getLatestPrivateDaily(op.id)?.content ?: "无"
+            memories = memories,
+            sourceAwareMemories = sharedUtils.trimContextBlock(sourceAware, sharedUtils.contextBlockLimit()),
+            privateDaily = "无"
         ).let { ctx ->
             if (mentionUser) ctx else ctx.copy(impression = "无", chatSummary = "无", privateDaily = "无")
         }
@@ -1337,7 +1373,7 @@ ${summaries}
                     else -> 0.4
                 },
                 tags = anchor.type.name,
-                visibility = if (anchor.isPrivate) "private" else "public",
+                visibility = if (anchor.isPrivate) "private" else if (anchor.source == AnchorSourcePolicy.MOMENT || anchor.source == AnchorSourcePolicy.COMMENT) "public" else "shared",
                 createdAt = anchor.createdAt,
                 expiresAt = anchor.expiresAt
             ))
@@ -1348,11 +1384,14 @@ ${summaries}
 
     private suspend fun buildCommenterMemoryContext(operatorId: String, surface: MemorySurface, query: String): Pair<String, String> {
         val anchors = repository.getAnchors(operatorId)
-        val picked = sharedUtils.pickAnchorsForSurface(anchors, settings.commentMemoryCount, surface, query)
-            .joinToString("\n") { "- ${it.content}" }
-            .ifBlank { "无" }
-        val sourceAware = sharedUtils.buildSourceAwareMemoryContext(anchors, settings.commentMemoryCount, surface, query)
-        return picked to sourceAware
+        val vector = memoryContextBuilder.privateVectorContext(operatorId, query)
+        val legacy = if (vector == "无") {
+            sharedUtils.pickAnchorsForSurface(anchors, settings.commentMemoryCount, surface, query)
+                .joinToString("\n") { "- ${it.content}" }
+        } else ""
+        val memory = UnifiedMemoryContext.mergeBlocks(sharedUtils.contextBlockLimit(), vector, legacy)
+        val sourceAware = if (legacy.isNotBlank()) sharedUtils.buildSourceAwareMemoryContext(anchors, settings.commentMemoryCount, surface, query) else "无"
+        return memory to sourceAware
     }
 
     suspend fun generateAllMoments(target: Int = 1, dateKey: String = "", force: Boolean = false, onProgress: (String) -> Unit = {}) {
@@ -1768,36 +1807,12 @@ ${summaries}
                     parentCommentId
             } else 0L
             repository.insertComment(MomentComment(momentId = momentId, operatorId = operatorId, operatorName = operatorName, content = cleanContent, parentCommentId = rootParentId, replyToName = replyToName, createdAt = System.currentTimeMillis(), isRead = operatorId == "user"))
+            if (operatorId == "user") {
+                memoryIngestor.ingestMomentComment(MomentComment(momentId = momentId, operatorId = operatorId, operatorName = operatorName, content = cleanContent, parentCommentId = rootParentId, replyToName = replyToName, createdAt = System.currentTimeMillis(), isRead = true))
+            }
             Log.d("RHODES_MOMENT", "commentOnMoment: 评论已写入")
             refreshMomentCommentCount(momentId)
             DebugLogger.log("Moment/DB", "评论已写入DB, momentId=$momentId")
-            // 创建评论锚点（仅动态发布者 + 被回复者，不扩散到全干员）
-            if (operatorId == "user") {
-                val moment = _moments.value.find { it.id == momentId }
-                val targetName = if (parentCommentId > 0 && replyToName.isNotBlank()) "回复了${replyToName}" else "评论了${moment?.operatorName ?: ""}的动态"
-                val anchorTargets = mutableSetOf<String>()
-                if (moment != null) anchorTargets.add(moment.operatorId)
-                if (parentCommentId > 0 && replyToName.isNotBlank()) anchorTargets.add(replyToName)
-                for (anchorOpId in anchorTargets) {
-                    val realOp = _operators.value.find { it.name == anchorOpId || it.id == anchorOpId }
-                    if (realOp != null) {
-                        saveAnchorWithVector(AnchorSourcePolicy.buildAnchor(
-                            source = AnchorSourcePolicy.COMMENT,
-                            sourceName = "${moment?.operatorName ?: "动态"}的动态",
-                            sourceActor = getUserProfile().nickname,
-                            sourceTarget = realOp.name,
-                            operatorId = realOp.id,
-                            type = AnchorType.EVENT,
-                            content = "$targetName：${content.take(40)}",
-                            importance = AnchorSourcePolicy.STRONG,
-                            sessionId = "moment_${momentId}",
-                            createdAt = System.currentTimeMillis(),
-                            expiresAt = MemoryPolicy.anchorExpiresAt(settings, AnchorType.EVENT)
-                        ))
-                    }
-                }
-            }
-
             if (operatorId != "user") return@launch
             val moment = _moments.value.find { it.id == momentId } ?: return@launch
             val userName = getUserProfile().nickname
@@ -1955,29 +1970,11 @@ ${summaries}
             val moment = Moment(operatorId = "user", operatorName = userName, content = content, isUserPost = true, mentionedOperatorIds = mentionedOps.joinToString(","), createdAt = System.currentTimeMillis())
             val momentId = repository.insertMoment(moment)
             DebugLogger.log("Moment/DB", "动态已写入DB, id=$momentId")
+            memoryIngestor.ingestMoment(moment.copy(id = momentId))
             refreshMomentsNow()
-            // 创建动态锚点：被@的干员必定记住，再补随机围观干员。
             val mentionedOperators = mentionedOps.mapNotNull { resolveMentionedOperator(it) }.distinctBy { it.id }
             val mentionedIds = mentionedOperators.map { it.id }
             DebugLogger.log("Moment/Mention", "解析@角色: raw=${mentionedOps.joinToString("|")}, resolved=${mentionedOperators.joinToString("、") { it.name }}")
-            val randomObservers = _operators.value.filter { it.id != "user" && it.id !in mentionedIds }.shuffled().take(settings.momentUserPostObserverCount).map { it.id }
-            val anchorOps = mentionedIds + randomObservers
-            for (opId in anchorOps.distinct()) {
-                val opName = _operators.value.find { it.id == opId }?.name ?: opId
-                saveAnchorWithVector(AnchorSourcePolicy.buildAnchor(
-                    source = AnchorSourcePolicy.MOMENT,
-                    sourceName = "${userName}的动态",
-                    sourceActor = userName,
-                    sourceTarget = opName,
-                    operatorId = opId,
-                    type = AnchorType.EVENT,
-                    content = if (opId in mentionedIds) "在动态中提到了${opName}：${content.take(60)}" else "发布动态：${content.take(60)}",
-                    importance = if (opId in mentionedIds) AnchorSourcePolicy.STRONG else AnchorSourcePolicy.WEAK,
-                    sessionId = "moment_${momentId}",
-                    createdAt = System.currentTimeMillis(),
-                    expiresAt = MemoryPolicy.anchorExpiresAt(settings, AnchorType.EVENT)
-                ))
-            }
 
             // 用户主动发布/@触发的互动不消耗自动预算，也不受 autoAiEnabled 总开关限制。
             val eligibleOps = _operators.value.filter { it.name != userName && settings.getOperatorDynPermission(it.id) }
@@ -2211,9 +2208,22 @@ ${summaries}
                     .mapNotNull { repository.getShortTermMemory(it.id)?.content?.let { c -> "- ${it.operatorName}：${c.take(80)}" } }
                     .take(settings.diaryGroupSummaryCount)
                     .joinToString("\n").ifBlank { "无" }
-                val recentMemories = sharedUtils.pickAnchorsForSurface(repository.getAnchors(operatorId), settings.diaryAnchorCount, MemorySurface.DIARY)
-                    .joinToString("\n") { "- ${it.content}" }.ifBlank { "无" }
-                val sourceAwareMemories = sharedUtils.buildSourceAwareMemoryContext(repository.getAnchors(operatorId), settings.diaryAnchorCount, MemorySurface.DIARY)
+                val diaryAnchors = repository.getAnchors(operatorId)
+                val diaryV2Memories = memoryV2Pipeline.buildPrivateMemoryContext(operatorId, limitL1 = 3, limitL2 = 4, limitL3 = 3).ifBlank { "无" }
+                val diaryVectorMemories = memoryContextBuilder.privateVectorContext(operatorId, "日记 回顾 ${op.name}")
+                val legacyDiaryMemories = if (diaryV2Memories == "无" && diaryVectorMemories == "无") {
+                    sharedUtils.pickAnchorsForSurface(diaryAnchors, settings.diaryAnchorCount, MemorySurface.DIARY)
+                        .joinToString("\n") { "- ${it.content}" }
+                } else ""
+                val recentMemories = UnifiedMemoryContext.mergeBlocks(
+                    sharedUtils.contextBlockLimit(2),
+                    diaryV2Memories,
+                    diaryVectorMemories,
+                    legacyDiaryMemories,
+                )
+                val sourceAwareMemories = if (legacyDiaryMemories.isNotBlank()) {
+                    sharedUtils.buildSourceAwareMemoryContext(diaryAnchors, settings.diaryAnchorCount, MemorySurface.DIARY)
+                } else "无"
                 val worldEvents = sharedUtils.buildWorldEventContext(operatorId, op.name, 8)
                 val unconsumedEvents = sharedUtils.buildUnconsumedEventContextForOperator(operatorId, op.name, "diary:$operatorId", settings.eventContextCount, markConsumed = false)
                 val diaryTpl = getPromptTemplate("diary")

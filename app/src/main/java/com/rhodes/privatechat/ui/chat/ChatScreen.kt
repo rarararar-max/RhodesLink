@@ -28,14 +28,22 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Phone
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -189,6 +197,10 @@ fun ChatScreen(
     val audioController = remember { LocalAudioController(context) }
     val scope = rememberCoroutineScope()
 
+    DisposableEffect(audioController) {
+        onDispose { audioController.release() }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
     Box(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding().clickable(
         interactionSource = remember { MutableInteractionSource() },
@@ -204,15 +216,37 @@ fun ChatScreen(
                 isLoading = isLoading,
                 subtitleText = "",
                 onBack = onBack,
+                onModeClick = { showModePicker.value = true },
                 menuContent = {
-                    ChatDropdownMenuItem(text = { Text("更换背景图") }, onClick = { bgPicker.launch("image/*") })
-                    if (bgUri != null) ChatDropdownMenuItem(text = { Text("恢复默认背景") }, onClick = { showBgReset = true })
-                    ChatDropdownMenuItem(text = { Text("编辑干员") }, onClick = { onEditOperator() })
-                    ChatDropdownMenuItem(text = { Text("语音通话") }, onClick = {
-                        if (op.voiceName.isBlank()) Toast.makeText(context, "请先在角色编辑页面填写音色ID", Toast.LENGTH_SHORT).show() else onVoiceCall()
-                    })
-                    ChatDropdownMenuItem(text = { Text("聊天记录") }, onClick = { onViewHistory() })
-                    ChatDropdownMenuItem(text = { Text("重新开始会话") }, onClick = { showClearConfirm = true })
+                    ChatDropdownMenuItem(
+                        text = { Text("聊天记录") },
+                        leadingIcon = { Icon(Icons.Default.DateRange, null, tint = TextPrimary) },
+                        onClick = { onViewHistory() }
+                    )
+                    HorizontalDivider(color = Stroke)
+                    ChatDropdownMenuItem(
+                        text = { Text("编辑干员") },
+                        leadingIcon = { Icon(Icons.Default.Edit, null, tint = TextPrimary) },
+                        onClick = { onEditOperator() }
+                    )
+                    ChatDropdownMenuItem(
+                        text = { Text("更换背景图") },
+                        leadingIcon = { Icon(Icons.Default.Image, null, tint = TextPrimary) },
+                        onClick = { bgPicker.launch("image/*") }
+                    )
+                    if (bgUri != null) {
+                        ChatDropdownMenuItem(
+                            text = { Text("恢复默认背景") },
+                            leadingIcon = { Icon(Icons.Default.Restore, null, tint = TextTertiary) },
+                            onClick = { showBgReset = true }
+                        )
+                    }
+                    HorizontalDivider(color = Stroke)
+                    ChatDropdownMenuItem(
+                        text = { Text("重新开始会话") },
+                        leadingIcon = { Icon(Icons.Default.Refresh, null, tint = ErrorRed) },
+                        onClick = { showClearConfirm = true }
+                    )
                 }
             )
 
@@ -227,7 +261,7 @@ fun ChatScreen(
                     onLoadOlder = { viewModel.loadOlderMessages() },
                     isLoadingOlder = isLoadingOlder,
                     hasMore = hasMoreMessages,
-                    forceScrollToLatest = true,
+                    forceScrollToLatest = false,
                     modifier = Modifier.weight(1f)
                 )
 
@@ -265,10 +299,11 @@ fun ChatScreen(
                     onGenerateSuggestions = { callback -> viewModel.generateInspirations(callback) },
                     showModePicker = showModePicker,
                     menuItems = {
-                        MenuChip("切换模式", Primary) { showModePicker.value = true }
-                        MenuChip("相册", Primary) { MainActivity.pickImage { pendingImageUri = it } }
-                        MenuChip("拍照", Primary) { MainActivity.takePhoto { pendingImageUri = it } }
-                        MenuChip(if (recordingVoice) "停止录音" else "录音", if (recordingVoice) ErrorRed else Primary) {
+                        MenuChip("🔄 模式", Primary) { showModePicker.value = true }
+                        MenuChip("🎒 道具", AccentOrange) { showPropShop = true }
+                        MenuChip("🖼 相册", Primary) { MainActivity.pickImage { pendingImageUri = it } }
+                        MenuChip("📷 拍照", Primary) { MainActivity.takePhoto { pendingImageUri = it } }
+                        MenuChip(if (recordingVoice) "⏹ 录音" else "🎤 输入", if (recordingVoice) ErrorRed else Primary) {
                             if (!recordingVoice) {
                                 recordingVoice = audioController.startRecording()
                                 if (!recordingVoice) Toast.makeText(context, "无法开始录音，请检查麦克风权限", Toast.LENGTH_SHORT).show()
@@ -290,8 +325,10 @@ fun ChatScreen(
                                 }
                             }
                         }
-                        MenuChip("查看状态", Primary) { onViewStatus() }
-                        MenuChip("使用道具", AccentOrange) { showPropShop = true }
+                        MenuChip("📞 通话", AccentOrange) {
+                            if (op.voiceName.isBlank()) Toast.makeText(context, "请先在角色编辑页面填写音色ID", Toast.LENGTH_SHORT).show() else onVoiceCall()
+                        }
+                        MenuChip("📊 状态", Primary) { onViewStatus() }
                     }
                 )
             }

@@ -111,6 +111,10 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
     var userSpeechDetected by rememberSaveable { mutableStateOf(false) }
     var level by remember { mutableFloatStateOf(0f) }
 
+    DisposableEffect(audio) {
+        onDispose { audio.release() }
+    }
+
     fun saveSettings() {
         settings.sleepAlarmHour = alarmHour
         settings.sleepAlarmMinute = alarmMinute

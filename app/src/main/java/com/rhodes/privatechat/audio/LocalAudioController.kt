@@ -128,6 +128,17 @@ class LocalAudioController(private val context: Context) {
         abandonPlaybackFocus()
     }
 
+    /** Releases recording, playback, audio focus, and transient in-memory buffers on screen exit. */
+    fun release() {
+        stopRecordingInternal()
+        synchronized(pcmLock) { pcmChunks.clear() }
+        recordingFile = null
+        currentRecordingLevel = 0f
+        currentRecordingBytes = 0
+        stopPlayback()
+        setSpeakerEnabled(false)
+    }
+
     fun setSpeakerEnabled(enabled: Boolean) {
         @Suppress("DEPRECATION") audioManager.isSpeakerphoneOn = enabled
         audioManager.mode = if (enabled) AudioManager.MODE_IN_COMMUNICATION else AudioManager.MODE_NORMAL

@@ -2,6 +2,7 @@ package com.rhodes.privatechat.ui.chat.component
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -69,6 +70,7 @@ fun ChatHeader(
     subtitleText: String = "",
     showGroupIcon: Boolean = false,
     onBack: () -> Unit,
+    onModeClick: (() -> Unit)? = null,
     menuContent: @Composable () -> Unit = {},
 ) {
     var showMenu by remember { mutableStateOf(false) }
@@ -106,15 +108,18 @@ fun ChatHeader(
                     Text(title, modifier = Modifier.weight(1f, fill = false), fontSize = if (showGroupIcon) 16.sp else 17.sp,
                         fontWeight = if (showGroupIcon) FontWeight.SemiBold else FontWeight.Bold,
                         color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (!showGroupIcon) {
-                        Spacer(modifier = Modifier.width(6.dp))
-                        val modeLabel = when (mode) { "online" -> "🟢"; "director" -> "🎬"; else -> "🏠" }
-                        val modeHint = when (mode) { "online" -> "线上"; "director" -> "导演"; else -> "线下" }
-                        Text("$modeLabel $modeHint", fontSize = 11.sp, color = Primary, fontWeight = FontWeight.Medium, modifier = Modifier.clip(androidx.compose.foundation.shape.RoundedCornerShape(999.dp)).background(Primary.copy(alpha = 0.12f)).border(1.dp, Primary.copy(alpha = 0.18f), androidx.compose.foundation.shape.RoundedCornerShape(999.dp)).padding(horizontal = 7.dp, vertical = 2.dp))
-                        if (isLoading) {
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("输入中...", fontSize = 13.sp, color = Primary, fontStyle = FontStyle.Italic)
-                        }
+                    Spacer(modifier = Modifier.width(6.dp))
+                    val modeLabel = when (mode) { "online" -> "🟢"; "director" -> "🎬"; else -> "🏠" }
+                    val modeHint = when (mode) { "online" -> "线上"; "director" -> "导演"; else -> "线下" }
+                    val modeModifier = Modifier
+                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(999.dp))
+                        .background(Primary.copy(alpha = 0.12f))
+                        .then(if (onModeClick != null) Modifier.clickable { onModeClick() } else Modifier)
+                        .padding(horizontal = 7.dp, vertical = 2.dp)
+                    Text("$modeLabel $modeHint", fontSize = 11.sp, color = Primary, fontWeight = FontWeight.Medium, modifier = modeModifier)
+                    if (isLoading && !showGroupIcon) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("输入中...", fontSize = 13.sp, color = Primary, fontStyle = FontStyle.Italic)
                     }
                 }
                 if (subtitleText.isNotBlank()) {

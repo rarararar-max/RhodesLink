@@ -97,7 +97,7 @@ data class ChatOperator(val operatorId: String) : Screen {
         val operators by viewModel.operators.collectAsState()
         val operator = remember(operators, operatorId) { operators.find { it.id == operatorId } }
         var ready by remember { mutableStateOf(false) }
-        LaunchedEffect(operatorId) {
+        LaunchedEffect(operatorId, operator) {
             if (operator != null) {
                 try {
                     viewModel.chatViewModel.selectOperatorSync(operator)
@@ -119,6 +119,10 @@ data class ChatOperator(val operatorId: String) : Screen {
                 onViewHistory = { navigator.push(ChatHistoryRoute(operator.id)) },
                 onVoiceCall = { navigator.push(VoiceCallRoute(operator.id)) }
             )
+        } else {
+            androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                androidx.compose.material3.Text(if (operators.isEmpty()) "正在加载角色..." else "角色不存在或已删除")
+            }
         }
     }
 }
@@ -132,6 +136,10 @@ data class VoiceCallRoute(val operatorId: String) : Screen {
         val operator = remember(operators, operatorId) { operators.find { it.id == operatorId } }
         if (operator != null) {
             com.rhodes.privatechat.ui.call.VoiceCallScreen(viewModel = viewModel, operator = operator, onBack = { navigator.pop() })
+        } else {
+            androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                androidx.compose.material3.Text(if (operators.isEmpty()) "正在加载角色..." else "角色不存在或已删除")
+            }
         }
     }
 }
@@ -166,7 +174,17 @@ data class ChatHistoryRoute(val operatorId: String) : Screen {
         val viewModel: MainViewModel = koinViewModel()
         val operators by viewModel.operators.collectAsState()
         val operator = remember(operators, operatorId) { operators.find { it.id == operatorId } }
-        if (operator != null) {
+        var ready by remember { mutableStateOf(false) }
+        LaunchedEffect(operator) {
+            if (operator != null) {
+                try {
+                    viewModel.chatViewModel.selectOperatorSync(operator)
+                } catch (_: Exception) {
+                }
+                ready = true
+            }
+        }
+        if (ready && operator != null) {
             com.rhodes.privatechat.ui.chat.ChatHistoryScreen(
                 viewModel = viewModel,
                 operatorName = operator.name,
@@ -191,7 +209,22 @@ data class GroupChatRoute(val name: String, val groupId: String) : Screen {
                 viewModel.clearCurrentGroup()
                 val op = viewModel.findOperatorByName(operatorName)
                 if (op != null) navigator.push(ChatOperator(op.id))
-            }
+            },
+            onViewHistory = { groupId -> navigator.push(GroupChatHistoryRoute(groupId, name)) }
+        )
+    }
+}
+
+data class GroupChatHistoryRoute(val groupId: String, val groupName: String) : Screen {
+    @Composable
+    override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        val viewModel: MainViewModel = koinViewModel()
+        com.rhodes.privatechat.ui.group.GroupChatHistoryScreen(
+            viewModel = viewModel,
+            groupName = groupName,
+            groupId = groupId,
+            onBack = { navigator.pop() }
         )
     }
 }

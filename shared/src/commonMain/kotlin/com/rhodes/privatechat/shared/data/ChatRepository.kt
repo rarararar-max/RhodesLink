@@ -195,6 +195,10 @@ class ChatRepository(wrapper: DatabaseWrapper, settings: SettingsRepository? = n
     suspend fun markMemorySourceProcessedVector(id: Long) = memoryV2.markSourceProcessedVector(id)
     suspend fun updateMemoryItemVectorId(id: Long, vectorId: String, updatedAt: Long) = memoryV2.updateMemoryItemVectorId(id, vectorId, updatedAt)
     suspend fun archiveMemoryItemsByLevel(ownerType: String, ownerId: String, level: MemoryLevel, updatedAt: Long) = memoryV2.archiveMemoryItemsByLevel(ownerType, ownerId, level, updatedAt)
+    suspend fun archiveMemoryItem(id: Long, updatedAt: Long) = memoryV2.archiveMemoryItem(id, updatedAt)
+    suspend fun markMemoryItemUsed(id: Long, now: Long) = memoryV2.markMemoryItemUsed(id, now)
+    suspend fun insertMemoryLink(link: MemoryLink) = memoryV2.insertMemoryLink(link)
+    suspend fun getMemoryLinksByParent(parentMemoryId: Long) = memoryV2.getMemoryLinksByParent(parentMemoryId)
 
     suspend fun syncOperatorAvatar(operatorId: String, avatarUri: String) {
         val session = sessions.getSessionByOperator(operatorId)

@@ -8,6 +8,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -66,6 +68,7 @@ import com.rhodes.privatechat.ui.common.softTextFieldColors
  * @param menuItems 菜单面板内容（切换模式、重启聊天、道具等）
  * @param showModePicker 外部控制的模式选择器状态（父组件可通过此触发模式选择对话框）
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ChatInputBar(
     text: String,
@@ -121,7 +124,7 @@ fun ChatInputBar(
         if (menuItems != null) {
             AnimatedVisibility(visible = showMenu, enter = slideInVertically(initialOffsetY = { it }), exit = slideOutVertically(targetOffsetY = { it })) {
                 Column(modifier = Modifier.fillMaxWidth().background(ElevatedSurface).padding(12.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         MenuChip("( )", Primary) {
                             val pos = tfValue.selection.start
                             val newText = tfValue.text.substring(0, pos) + "()" + tfValue.text.substring(pos)

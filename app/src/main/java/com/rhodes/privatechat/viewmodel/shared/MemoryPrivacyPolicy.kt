@@ -43,6 +43,12 @@ object MemoryPrivacyPolicy {
                 ownerId = ownerId,
                 writeGlobalPublic = false,
             )
+            MemorySourceKind.MANUAL_MEMORY -> MemoryVisibility(
+                privacy = if (sensitive) "private" else "shared",
+                ownerType = ownerType,
+                ownerId = ownerId,
+                writeGlobalPublic = false,
+            )
         }
     }
 

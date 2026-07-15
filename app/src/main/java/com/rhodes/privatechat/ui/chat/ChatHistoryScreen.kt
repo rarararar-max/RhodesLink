@@ -168,6 +168,17 @@ private fun HistoryMessageItem(msg: ChatMessage, onClick: () -> Unit) {
 private fun historyTime(timestamp: Long): String = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(timestamp))
 
 private fun historyPreview(msg: ChatMessage): String {
+    if (msg.type == "image") {
+        return try {
+            val el = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }.parseToJsonElement(msg.content)
+            val obj = el as? kotlinx.serialization.json.JsonObject ?: return "[图片]"
+            val caption = obj["caption"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }.orEmpty()
+            val summary = obj["visionSummary"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }.orEmpty()
+            if (caption.isNotBlank()) "[图片] $caption"
+            else if (summary.isNotBlank()) "[图片] ${summary.take(40)}"
+            else "[图片]"
+        } catch (_: Exception) { "[图片]" }
+    }
     if (msg.type != "ai_json") return msg.content
     return Regex("\\\"(?:content|message|dialogue)\\\"\\s*:\\s*\\\"([^\\\"]{1,120})\\\"")
         .findAll(msg.content)

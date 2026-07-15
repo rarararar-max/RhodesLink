@@ -9,9 +9,25 @@ CREATE TABLE IF NOT EXISTS memory_links (
 getMemoryLinksByParent:
 SELECT * FROM memory_links WHERE parentMemoryId = ? ORDER BY id ASC;
 
+getChildMemoryIds:
+SELECT childMemoryId FROM memory_links WHERE parentMemoryId = ?;
+
 insertMemoryLink:
 INSERT OR REPLACE INTO memory_links(parentMemoryId, childMemoryId, linkType, createdAt)
 VALUES (?, ?, ?, ?);
 
 deleteMemoryLinksByParent:
 DELETE FROM memory_links WHERE parentMemoryId = ?;
+
+deleteMemoryLinksByChild:
+DELETE FROM memory_links WHERE childMemoryId = ?;
+
+deleteMemoryLinksForOwnerPrivateSource:
+DELETE FROM memory_links
+WHERE parentMemoryId IN (SELECT id FROM memory_items WHERE ownerType = ? AND ownerId = ? AND (sourceKind = 'PRIVATE_CHAT' OR (sourceKind = 'MANUAL_MEMORY' AND privacy = 'private')))
+   OR childMemoryId IN (SELECT id FROM memory_items WHERE ownerType = ? AND ownerId = ? AND (sourceKind = 'PRIVATE_CHAT' OR (sourceKind = 'MANUAL_MEMORY' AND privacy = 'private')));
+
+deleteOrphanedMemoryLinks:
+DELETE FROM memory_links
+WHERE parentMemoryId NOT IN (SELECT id FROM memory_items)
+   OR childMemoryId NOT IN (SELECT id FROM memory_items);

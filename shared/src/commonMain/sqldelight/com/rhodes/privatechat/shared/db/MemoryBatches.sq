@@ -22,3 +22,6 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 deleteMemoryBatchesByOwner:
 DELETE FROM memory_batches WHERE ownerType = ? AND ownerId = ?;
+
+deletePrivateMemoryBatchesByOwner:
+DELETE FROM memory_batches WHERE ownerType = ? AND ownerId = ? AND sourceKind = 'PRIVATE_CHAT';

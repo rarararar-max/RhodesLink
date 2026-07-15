@@ -4,6 +4,8 @@ import com.rhodes.privatechat.shared.db.DatabaseWrapper
 import com.rhodes.privatechat.shared.model.*
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 data class BfsNode(
     val operatorId: String,
@@ -19,7 +21,7 @@ data class SenderCount(
     val cnt: Long
 )
 
-class ChatRepository(wrapper: DatabaseWrapper, settings: SettingsRepository? = null) {
+class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRepository? = null) {
     val operators = OperatorRepository(wrapper)
     val sessions = SessionRepository(wrapper)
     val messages = MessageRepository(wrapper)
@@ -33,6 +35,7 @@ class ChatRepository(wrapper: DatabaseWrapper, settings: SettingsRepository? = n
     val cleanup = CleanupRepository(wrapper)
     val worldEvents = WorldEventRepository(wrapper)
     val memoryV2 = MemoryV2Repository(wrapper)
+    val sharedExperiences = SharedExperienceRepository(wrapper)
 
     // --- Backward-compatible forwarding methods ---
     val allOperators: Flow<List<Operator>> get() = operators.allOperators
@@ -82,17 +85,95 @@ class ChatRepository(wrapper: DatabaseWrapper, settings: SettingsRepository? = n
     suspend fun getMessageDatesBySession(sessionId: String) = messages.getMessageDatesBySession(sessionId)
 
     suspend fun getShortTermMemory(sessionId: String) = memories.getShortTermMemory(sessionId)
+    suspend fun clearSessionPreview(sessionId: String, timestamp: Long) = messages.clearSessionPreview(sessionId, timestamp)
     suspend fun getLongTermImpression(operatorId: String) = memories.getLongTermImpression(operatorId)
     suspend fun saveMemory(memory: Memory) = memories.saveMemory(memory)
+    suspend fun replaceShortTermMemory(memory: Memory) = memories.replaceShortTermMemory(memory)
+    suspend fun replaceLongTermImpression(memory: Memory) = memories.replaceLongTermImpression(memory)
     suspend fun getAllLongTermImpressions() = memories.getAllLongTermImpressions()
     suspend fun getAllMemoriesForBackup() = memories.getAllMemoriesForBackup()
     suspend fun getLatestDaily() = memories.getLatestDaily()
     suspend fun getLatestDailyBySession(sessionId: String) = memories.getLatestDailyBySession(sessionId)
     suspend fun getLatestPrivateDaily(operatorId: String) = memories.getLatestPrivateDaily(operatorId)
+    suspend fun getDailyBySessionAndDate(sessionId: String, dateKey: String) = memories.getDailyBySessionAndDate(sessionId, dateKey)
+    suspend fun replaceDailyBySessionAndDate(memory: Memory, dateKey: String) = memories.replaceDailyBySessionAndDate(memory, dateKey)
     suspend fun enforceMemoryRetain(sessionId: String, keepCount: Int) = memories.enforceMemoryRetain(sessionId, keepCount)
     suspend fun deleteAllImpressions() = memories.deleteAllImpressions()
     suspend fun deleteMemoriesBySession(sessionId: String) = memories.deleteMemoriesBySession(sessionId)
     suspend fun deleteMemoriesByOperator(operatorId: String) = memories.deleteMemoriesByOperator(operatorId)
+    suspend fun deleteLongTermByOperator(operatorId: String) = memories.deleteLongTermByOperator(operatorId)
+    suspend fun deleteMemoryV2BySession(sessionId: String) = memoryV2.deleteBySession(sessionId)
+    suspend fun deleteMemoryV2ByOwnerAndSourceKind(ownerType: String, ownerId: String, sourceKind: MemorySourceKind) = memoryV2.deleteByOwnerAndSourceKind(ownerType, ownerId, sourceKind)
+    suspend fun deleteMemoryItemsBySession(sessionId: String) = memoryV2.deleteMemoryItemsBySession(sessionId)
+    suspend fun deleteMemoryV2BySource(sourceKind: MemorySourceKind, sourceRefId: String) = memoryV2.deleteBySource(sourceKind, sourceRefId)
+    suspend fun saveSharedExperience(experience: SharedExperience, participants: List<String>) = sharedExperiences.saveIfAbsent(experience, participants)
+    suspend fun deleteSharedExperiencesBySource(sourceKind: String, sourceRefId: String) = sharedExperiences.deleteBySource(sourceKind, sourceRefId)
+
+    /** Removes a session and every derived record that can make its content reappear in recall. */
+    suspend fun purgeSessionData(sessionId: String) = withContext(Dispatchers.Default) {
+        val db = wrapper.database
+        db.transaction {
+            db.chatMessagesQueries.deleteSessionMessages(sessionId)
+            db.memoriesQueries.deleteMemoriesBySession(sessionId)
+            db.memoryAnchorsQueries.deleteAnchorsBySession(sessionId)
+            db.memoryItemsQueries.deleteMemoryItemsBySession(sessionId)
+            db.memorySourceQueueQueries.deleteMemorySourcesBySession(sessionId)
+            db.vectorMemoriesQueries.deleteVectorMemoriesBySourceId(sessionId)
+            db.memoryLinksQueries.deleteOrphanedMemoryLinks()
+        }
+    }
+
+    /** Removes an operator's private and derived state before deleting the operator row. */
+    suspend fun purgeOperatorData(operatorId: String) = withContext(Dispatchers.Default) {
+        val db = wrapper.database
+        // Public copies live in the global vector partition, so remove them before their raw rows.
+        val operatorMoments = moments.getMomentsByOperator(operatorId)
+        val comments = buildList {
+            db.momentCommentsQueries.getCommentsByOperator(operatorId) { id, momentId, opId, opName, content, parentCommentId, replyToName, createdAt, isRead ->
+                MomentComment(id, momentId, opId, opName, content, parentCommentId, replyToName, createdAt, isRead != 0L)
+            }.executeAsList().forEach { add(it) }
+            operatorMoments.forEach { moment ->
+                db.momentCommentsQueries.getComments(moment.id) { id, momentId, opId, opName, content, parentCommentId, replyToName, createdAt, isRead ->
+                    MomentComment(id, momentId, opId, opName, content, parentCommentId, replyToName, createdAt, isRead != 0L)
+                }.executeAsList().forEach { add(it) }
+            }
+        }.distinctBy { it.id }
+        operatorMoments.forEach { memoryV2.deleteBySource(MemorySourceKind.MOMENT, it.id.toString()) }
+        comments.forEach { memoryV2.deleteBySource(MemorySourceKind.MOMENT_COMMENT, it.id.toString()) }
+        db.transaction {
+            db.memoriesQueries.deleteMemoriesByOperator(operatorId)
+            db.memoryAnchorsQueries.deleteAnchorsByOperator(operatorId)
+            db.memoryItemsQueries.deleteMemoryItemsByOwner("operator", operatorId)
+            db.memoryBatchesQueries.deleteMemoryBatchesByOwner("operator", operatorId)
+            db.memorySourceQueueQueries.deleteMemorySourcesByOwner("operator", operatorId)
+            db.vectorMemoriesQueries.deleteVectorMemoriesByOwner("operator", operatorId)
+            db.relationshipsQueries.deleteByOperatorAnyDirection(operatorId, operatorId)
+            db.memoryLinksQueries.deleteOrphanedMemoryLinks()
+        }
+        // Moments/comments are public source records and must not survive a deleted operator.
+        moments.deleteMomentsByOperator(operatorId)
+    }
+
+    /** Erases one operator's entire private relationship while preserving public content. */
+    suspend fun erasePrivateRelationship(operatorId: String, sessionId: String, systemMessageId: Long, mode: String, now: Long): List<String> = withContext(Dispatchers.Default) {
+        val db = wrapper.database
+        val vectorIds = memoryV2.getMemoryItemsByOwner("operator", operatorId)
+            .filter { it.sourceKind == MemorySourceKind.PRIVATE_CHAT || it.sourceKind == MemorySourceKind.MANUAL_MEMORY && it.privacy == "private" }
+            .map { it.vectorId }.filter { it.isNotBlank() }
+        db.transaction {
+            db.chatMessagesQueries.deleteSessionMessages(sessionId)
+            db.memoriesQueries.deleteMemoriesBySession(sessionId)
+            db.memoriesQueries.deleteLongTermByOperator(operatorId)
+            db.memoryAnchorsQueries.deleteAnchorsBySession(sessionId)
+            db.memoryLinksQueries.deleteMemoryLinksForOwnerPrivateSource("operator", operatorId, "operator", operatorId)
+            db.memoryBatchesQueries.deletePrivateMemoryBatchesByOwner("operator", operatorId)
+            db.memoryItemsQueries.deletePrivateRelationshipMemoryItems("operator", operatorId)
+            db.memorySourceQueueQueries.deletePrivateRelationshipSources("operator", operatorId)
+            db.vectorMemoriesQueries.deleteVectorMemoriesBySourceId(sessionId)
+            db.chatMessagesQueries.insertMessage(systemMessageId, sessionId, "", "系统", "已清空与该角色的私聊关系记录和私密记忆，现在开始新的会话。", "system", mode, "", "", "", "", "", 0L, now, 0L)
+        }
+        vectorIds
+    }
 
     suspend fun saveAnchor(anchor: MemoryAnchor) = anchors.saveAnchor(anchor)
     suspend fun saveAnchors(anchors: List<MemoryAnchor>) = this.anchors.saveAnchors(anchors)
@@ -136,6 +217,7 @@ class ChatRepository(wrapper: DatabaseWrapper, settings: SettingsRepository? = n
     suspend fun getLikeCount(momentId: Long) = moments.getLikeCount(momentId)
     suspend fun getLike(momentId: Long, operatorId: String) = moments.getLike(momentId, operatorId)
     suspend fun getMomentsPaged(limit: Int, offset: Int) = moments.getMomentsPaged(limit, offset)
+    suspend fun getMomentsBefore(createdAt: Long, id: Long, limit: Int) = moments.getMomentsBefore(createdAt, id, limit)
     suspend fun getInboxComments(cutoff: Long, userName: String) = moments.getInboxComments(cutoff, userName)
     suspend fun getUnreadCommentCount(cutoff: Long, userName: String) = moments.getUnreadCommentCount(cutoff, userName)
     suspend fun getMomentsByOperator(operatorId: String) = moments.getMomentsByOperator(operatorId)
@@ -143,6 +225,7 @@ class ChatRepository(wrapper: DatabaseWrapper, settings: SettingsRepository? = n
     suspend fun deleteLike(momentId: Long, operatorId: String) = moments.deleteLike(momentId, operatorId)
     suspend fun getMoment(id: Long) = moments.getMoment(id)
     suspend fun deleteOldMoments(cutoff: Long) = moments.deleteOldMoments(cutoff)
+    suspend fun deleteMomentsByOperator(operatorId: String) = moments.deleteMomentsByOperator(operatorId)
 
     suspend fun insertDiary(diary: Diary) = diaries.insertDiary(diary)
     suspend fun getDiary(operatorId: String, date: String) = diaries.getDiary(operatorId, date)
@@ -189,16 +272,19 @@ class ChatRepository(wrapper: DatabaseWrapper, settings: SettingsRepository? = n
     suspend fun getMemoryItemsByLevel(ownerType: String, ownerId: String, level: MemoryLevel) = memoryV2.getMemoryItemsByLevel(ownerType, ownerId, level)
     suspend fun getActiveMemoryItemsByLevel(ownerType: String, ownerId: String, level: MemoryLevel, now: Long) = memoryV2.getActiveMemoryItemsByLevel(ownerType, ownerId, level, now)
     suspend fun getMemoryItemsByOwner(ownerType: String, ownerId: String) = memoryV2.getMemoryItemsByOwner(ownerType, ownerId)
+    suspend fun getAllMemoryItems() = memoryV2.getAllMemoryItems()
     suspend fun getMemoryItemsByType(ownerType: String, ownerId: String, type: String) = memoryV2.getMemoryItemsByType(ownerType, ownerId, type)
     suspend fun getActiveMemoryItemByContent(ownerType: String, ownerId: String, level: MemoryLevel, type: String, content: String) = memoryV2.getActiveMemoryItemByContent(ownerType, ownerId, level, type, content)
     suspend fun markMemorySourceProcessedL1(id: Long) = memoryV2.markSourceProcessedL1(id)
     suspend fun markMemorySourceProcessedVector(id: Long) = memoryV2.markSourceProcessedVector(id)
     suspend fun updateMemoryItemVectorId(id: Long, vectorId: String, updatedAt: Long) = memoryV2.updateMemoryItemVectorId(id, vectorId, updatedAt)
+    suspend fun clearAllMemoryItemVectorIds() = memoryV2.clearAllMemoryItemVectorIds()
     suspend fun archiveMemoryItemsByLevel(ownerType: String, ownerId: String, level: MemoryLevel, updatedAt: Long) = memoryV2.archiveMemoryItemsByLevel(ownerType, ownerId, level, updatedAt)
     suspend fun archiveMemoryItem(id: Long, updatedAt: Long) = memoryV2.archiveMemoryItem(id, updatedAt)
     suspend fun markMemoryItemUsed(id: Long, now: Long) = memoryV2.markMemoryItemUsed(id, now)
     suspend fun insertMemoryLink(link: MemoryLink) = memoryV2.insertMemoryLink(link)
     suspend fun getMemoryLinksByParent(parentMemoryId: Long) = memoryV2.getMemoryLinksByParent(parentMemoryId)
+    suspend fun deleteMemoryItem(id: Long) = memoryV2.deleteMemoryItem(id)
 
     suspend fun syncOperatorAvatar(operatorId: String, avatarUri: String) {
         val session = sessions.getSessionByOperator(operatorId)

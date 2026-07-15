@@ -1,6 +1,5 @@
 package com.rhodes.privatechat.viewmodel.shared
 
-import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.shared.model.Moment
 import com.rhodes.privatechat.shared.model.MomentComment
 import com.rhodes.privatechat.shared.settings.SettingsRepository
@@ -9,9 +8,7 @@ import com.rhodes.privatechat.shared.vector.VectorMemory
 import com.rhodes.privatechat.util.DebugLogger
 
 class MemoryIngestor(
-    private val repository: ChatRepository,
     private val settings: SettingsRepository,
-    private val memoryV2Pipeline: MemoryV2Pipeline,
     private val memoryVectorService: MemoryVectorService?,
 ) {
     suspend fun ingestMoment(moment: Moment) {
@@ -19,17 +16,10 @@ class MemoryIngestor(
             saveGlobalPublicVector(
                 sourceType = "moment",
                 sourceId = moment.id.toString(),
-                content = "${moment.operatorName}发布动态：${moment.content.take(240)}",
+                content = "${moment.operatorName}在${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).apply { timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai") }.format(java.util.Date(moment.createdAt))}发表公开动态：${moment.content.take(240)}",
                 importance = 0.7,
                 createdAt = moment.createdAt,
             )
-        }
-        if (settings.memoryV2Enabled && settings.momentMemoryV2Enabled) {
-            try {
-                memoryV2Pipeline.ingestMoment(moment)
-            } catch (e: Exception) {
-                DebugLogger.log("MemoryV2", "动态L1写入失败: ${e.message?.take(80)}")
-            }
         }
     }
 
@@ -38,17 +28,28 @@ class MemoryIngestor(
             saveGlobalPublicVector(
                 sourceType = "moment_comment",
                 sourceId = comment.id.takeIf { it > 0 }?.toString() ?: "${comment.momentId}_${comment.createdAt}",
-                content = "${comment.operatorName}评论动态：${comment.content.take(200)}",
+                content = "${comment.operatorName}在${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).apply { timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai") }.format(java.util.Date(comment.createdAt))}发表公开评论：${comment.content.take(200)}",
                 importance = 0.55,
                 createdAt = comment.createdAt,
             )
         }
-        if (settings.memoryV2Enabled && settings.momentMemoryV2Enabled) {
-            try {
-                memoryV2Pipeline.ingestMomentComment(comment, comment.momentId)
-            } catch (e: Exception) {
-                DebugLogger.log("MemoryV2", "评论L1写入失败: ${e.message?.take(80)}")
-            }
+    }
+
+    suspend fun ingestOperatorMomentComment(comment: MomentComment) {
+        val service = memoryVectorService ?: return
+        val clean = "${comment.operatorName}评论动态：${comment.content.take(200)}".trim()
+        if (clean.isBlank()) return
+        try {
+            service.saveMemory(VectorMemory(
+                id = "operator_comment_${comment.operatorId}_${comment.momentId}_${comment.createdAt}",
+                ownerType = "operator", ownerId = comment.operatorId,
+                sourceType = "moment_comment", sourceId = comment.id.toString(),
+                content = clean, importance = 0.45, tags = "COMMENT",
+                visibility = "public", createdAt = comment.createdAt,
+                expiresAt = MemoryPolicy.memoryExpiresAt(settings)
+            ))
+        } catch (e: Exception) {
+            DebugLogger.log("Vector/Save", "干员评论向量写入失败: ${e.message?.take(80)}")
         }
     }
 

@@ -108,6 +108,12 @@ class MomentRepository(private val wrapper: DatabaseWrapper) {
         }.executeAsList()
     }
 
+    suspend fun getMomentsBefore(createdAt: Long, id: Long, limit: Int): List<Moment> = withContext(Dispatchers.Default) {
+        db.momentsQueries.getMomentsBefore(createdAt, createdAt, id, limit.toLong()) { momentId, opId, opName, content, isUserPost, mentionedIds, likeCount, commentCount, timestamp ->
+            Moment(momentId, opId, opName, content, isUserPost != 0L, mentionedIds, likeCount.toInt(), commentCount.toInt(), timestamp)
+        }.executeAsList()
+    }
+
     suspend fun countMomentsByOperatorSince(operatorId: String, since: Long): Int = withContext(Dispatchers.Default) {
         db.momentsQueries.countMomentsByOperatorSince(operatorId, since).executeAsOne().toInt()
     }
@@ -121,4 +127,17 @@ class MomentRepository(private val wrapper: DatabaseWrapper) {
     }
 
     suspend fun deleteOldMoments(cutoff: Long) = withContext(Dispatchers.Default) { db.momentsQueries.deleteOldMoments(cutoff) }
+
+    suspend fun deleteMomentsByOperator(operatorId: String) = withContext(Dispatchers.Default) {
+        db.transaction {
+            val momentIds = db.momentsQueries.getMomentsByOperator(operatorId) { id, _, _, _, _, _, _, _, _ -> id }.executeAsList()
+            momentIds.forEach {
+                db.momentLikesQueries.deleteLikesByMoment(it)
+                db.momentCommentsQueries.deleteCommentsByMoment(it)
+            }
+            db.momentLikesQueries.deleteLikesByOperator(operatorId)
+            db.momentCommentsQueries.deleteCommentsByOperator(operatorId)
+            db.momentsQueries.deleteMomentsByOperator(operatorId)
+        }
+    }
 }

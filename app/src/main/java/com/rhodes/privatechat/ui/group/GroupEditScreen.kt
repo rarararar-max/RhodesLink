@@ -1,5 +1,6 @@
 package com.rhodes.privatechat.ui.group
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -126,6 +127,7 @@ fun GroupEditScreen(
         members.map { it.op.id } != initialMemberIds ||
         members.filter { it.muted }.map { it.op.id } != initialMutedIds
     val requestBack = { if (hasUnsavedChanges) showUnsavedConfirm = true else onBack() }
+    BackHandler { requestBack() }
 
     Box(modifier = modifier.fillMaxSize()) {
     Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
@@ -215,8 +217,10 @@ fun GroupEditScreen(
                             Spacer(modifier = Modifier.width(10.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(m.op.name, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
-                                Text(if (m.muted) "已禁言" else "正常", fontSize = 11.sp, color = if (m.muted) ErrorRed else TextSecondary)
+                                Text(if (m.muted) "不允许发言" else "允许发言", fontSize = 11.sp, color = if (m.muted) ErrorRed else TextSecondary)
                             }
+                            Text("允许发言", fontSize = 11.sp, color = TextSecondary)
+                            Spacer(modifier = Modifier.width(4.dp))
                             Switch(checked = !m.muted, onCheckedChange = { b -> members[i] = m.copy(muted = !b) }, colors = SwitchDefaults.colors(checkedThumbColor = Primary, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = ErrorRed, uncheckedTrackColor = ErrorRed.copy(alpha = 0.3f)), modifier = Modifier.size(32.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             IconButton(onClick = { members.removeAt(i) }, modifier = Modifier.size(28.dp)) { Icon(Icons.Default.Close, "移除", tint = TextTertiary, modifier = Modifier.size(16.dp)) }

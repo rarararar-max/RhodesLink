@@ -71,12 +71,13 @@ class OperatorViewModel(
 
     fun deleteOperator(operatorId: String) {
         scope.launch {
-            repository.deleteOperator(operatorId)
             val session = repository.getSessionByOperator(operatorId)
             if (session != null) {
-                repository.deleteSessionMessages(session.id)
+                repository.purgeSessionData(session.id)
                 repository.deleteSession(session.id)
             }
+            repository.purgeOperatorData(operatorId)
+            repository.deleteOperator(operatorId)
         }
     }
 

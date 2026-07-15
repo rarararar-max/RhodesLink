@@ -67,6 +67,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -87,6 +88,7 @@ fun OperatorEditScreen(
     viewModel: MainViewModel,
     operator: OperatorEntity?,
     onBack: () -> Unit,
+    onManageMemories: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -105,15 +107,12 @@ fun OperatorEditScreen(
     var avatarUri by remember { mutableStateOf(operator?.avatarUri ?: "") }
     var privatePrompt by remember { mutableStateOf(operator?.privatePrompt ?: "") }
     var groupPrompt by remember { mutableStateOf(operator?.groupPrompt ?: "") }
-    var memoryInjection by remember { mutableStateOf(operator?.memoryInjection ?: "") }
     val initialOpKey = operator?.id ?: name.lowercase()
     var privateSlot by remember { mutableIntStateOf(settings.getInt("operator_prompt_slot_${initialOpKey}_private", 1).coerceIn(1, 3)) }
     var groupSlot by remember { mutableIntStateOf(settings.getInt("operator_prompt_slot_${initialOpKey}_group", 1).coerceIn(1, 3)) }
     var description by remember { mutableStateOf(operator?.description ?: "") }
     var userRelation by remember { mutableStateOf(operator?.userRelation ?: "") }
     var voiceName by remember { mutableStateOf(operator?.voiceName ?: "") }
-    var voiceSpeed by remember { mutableStateOf(operator?.voiceSpeed ?: "") }
-    var voicePitch by remember { mutableStateOf(operator?.voicePitch ?: "") }
     var relationships by remember { mutableStateOf<List<RelationshipEntity>>(emptyList()) }
     var initialRelationships by remember { mutableStateOf<List<RelationshipEntity>>(emptyList()) }
     var showAddPicker by remember { mutableStateOf(false) }
@@ -130,6 +129,12 @@ fun OperatorEditScreen(
     fun activeSlotKey(type: String): String = "operator_prompt_slot_${opKey()}_${type}"
     fun loadPromptSlot(type: String, slot: Int, fallback: String): String = settings.getString(slotKey(type, slot), "")?.ifBlank { null } ?: fallback
     fun savePromptSlot(type: String, slot: Int, content: String) { settings.putString(slotKey(type, slot), content) }
+    var privateSlotDrafts by remember { mutableStateOf(mapOf(privateSlot to loadPromptSlot("private", privateSlot, operator?.privatePrompt.orEmpty()))) }
+    var groupSlotDrafts by remember { mutableStateOf(mapOf(groupSlot to loadPromptSlot("group", groupSlot, operator?.groupPrompt.orEmpty()))) }
+    var slotDirty by remember { mutableStateOf(false) }
+
+    LaunchedEffect(operator?.id, privateSlot) { privatePrompt = privateSlotDrafts[privateSlot] ?: loadPromptSlot("private", privateSlot, operator?.privatePrompt.orEmpty()) }
+    LaunchedEffect(operator?.id, groupSlot) { groupPrompt = groupSlotDrafts[groupSlot] ?: loadPromptSlot("group", groupSlot, operator?.groupPrompt.orEmpty()) }
 
     // 加载已有关系
     LaunchedEffect(operator) {
@@ -142,8 +147,10 @@ fun OperatorEditScreen(
     }
 
     val onSave: () -> Unit = {
-        savePromptSlot("private", privateSlot, privatePrompt)
-        savePromptSlot("group", groupSlot, groupPrompt)
+        privateSlotDrafts = privateSlotDrafts + (privateSlot to privatePrompt)
+        groupSlotDrafts = groupSlotDrafts + (groupSlot to groupPrompt)
+        privateSlotDrafts.forEach { (slot, content) -> savePromptSlot("private", slot, content) }
+        groupSlotDrafts.forEach { (slot, content) -> savePromptSlot("group", slot, content) }
         settings.putInt(activeSlotKey("private"), privateSlot)
         settings.putInt(activeSlotKey("group"), groupSlot)
         viewModel.saveOperator(
@@ -151,15 +158,13 @@ fun OperatorEditScreen(
             name = name, title = title,
             description = description.ifBlank { "${name}，罗德岛干员" },
             privatePrompt = privatePrompt, groupPrompt = groupPrompt,
-            memoryInjection = memoryInjection,
+            memoryInjection = operator?.memoryInjection.orEmpty(),
             userRelation = userRelation, avatarUri = avatarUri,
             autoPost = autoPost, allowChat = allowChat,
             relationships = relationships,
             activityLevel = activity,
             gender = gender,
             voiceName = voiceName,
-            voiceSpeed = voiceSpeed,
-            voicePitch = voicePitch,
             onComplete = { onBack() }
         )
     }
@@ -172,14 +177,13 @@ fun OperatorEditScreen(
         avatarUri != (operator?.avatarUri ?: "") ||
         privatePrompt != (operator?.privatePrompt ?: "") ||
         groupPrompt != (operator?.groupPrompt ?: "") ||
-        memoryInjection != (operator?.memoryInjection ?: "") ||
         description != (operator?.description ?: "") ||
         userRelation != (operator?.userRelation ?: "") ||
         voiceName != (operator?.voiceName ?: "") ||
-        voiceSpeed != (operator?.voiceSpeed ?: "") ||
-        voicePitch != (operator?.voicePitch ?: "") ||
-        relationships != initialRelationships
+        relationships != initialRelationships || slotDirty
     val requestBack = { if (hasUnsavedChanges) showUnsavedConfirm = true else onBack() }
+
+    BackHandler { requestBack() }
 
     Box(modifier = modifier.fillMaxSize()) {
     Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
@@ -274,29 +278,39 @@ fun OperatorEditScreen(
                     )
                 }
                 Spacer(modifier = Modifier.height(8.dp))
-                LabeledField("语速") {
-                    OutlinedTextField(
-                        value = voiceSpeed,
-                        onValueChange = { voiceSpeed = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp),
-                        colors = fieldColors(),
-                        singleLine = true,
-                        placeholder = { Text("1.0", fontSize = 13.sp, color = TextTertiary) },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
-                    )
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                LabeledField("音高") {
-                    OutlinedTextField(
-                        value = voicePitch,
-                        onValueChange = { voicePitch = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp),
-                        colors = fieldColors(),
-                        singleLine = true,
-                        placeholder = { Text("可选", fontSize = 13.sp, color = TextTertiary) }
-                    )
+                Button(
+                    onClick = {
+                        val testVoiceId = voiceName.ifBlank { "male-qn-qingse" }
+                        scope.launch {
+                            try {
+                                val settings = org.koin.java.KoinJavaComponent.get<com.rhodes.privatechat.shared.settings.SettingsRepository>(com.rhodes.privatechat.shared.settings.SettingsRepository::class.java)
+                                val key = settings.ttsApiKey.ifBlank { settings.apiKey }
+                                if (settings.ttsBaseUrl.isBlank() || key.isBlank()) {
+                                    android.widget.Toast.makeText(context, "请先在模型设置中配置 TTS", android.widget.Toast.LENGTH_SHORT).show()
+                                    return@launch
+                                }
+                                val audioBytes = com.rhodes.privatechat.shared.voice.createTtsGateway(settings.ttsBaseUrl, key, settings.ttsModelName)
+                                    .synthesize(com.rhodes.privatechat.shared.voice.TtsRequest("你好", testVoiceId)).audioBytes
+                                if (audioBytes != null && audioBytes.isNotEmpty()) {
+                                    val file = java.io.File(context.cacheDir, "tts_test_voice.mp3")
+                                    file.writeBytes(audioBytes)
+                                    android.media.MediaPlayer().apply {
+                                        setDataSource(file.absolutePath)
+                                        prepare()
+                                        start()
+                                        setOnCompletionListener { release(); file.delete() }
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                android.widget.Toast.makeText(context, "音色测试失败：${e.message?.take(40)}", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().height(44.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = com.rhodes.privatechat.ui.theme.Primary)
+                ) {
+                    androidx.compose.material3.Text("测试音色", color = androidx.compose.ui.graphics.Color.White)
                 }
             }
 
@@ -322,45 +336,36 @@ fun OperatorEditScreen(
                 PromptSlotBar(
                     selected = privateSlot,
                     onSelect = { slot ->
-                        savePromptSlot("private", privateSlot, privatePrompt)
+                        privateSlotDrafts = privateSlotDrafts + (privateSlot to privatePrompt)
+                        slotDirty = true
                         privateSlot = slot
-                        privatePrompt = loadPromptSlot("private", slot, if (slot == 1) operator?.privatePrompt ?: "" else "")
+                        privatePrompt = privateSlotDrafts[slot] ?: loadPromptSlot("private", slot, if (slot == 1) operator?.privatePrompt ?: "" else "")
                     }
                 )
-                PromptField(title = "私聊人设 ${privateSlot}号", value = privatePrompt, onValueChange = { privatePrompt = it }, placeholder = "输入该干员的私聊性格描述...")
+                PromptField(title = "私聊人设 ${privateSlot}号", value = privatePrompt, onValueChange = { privatePrompt = it; slotDirty = true }, placeholder = "输入该干员的私聊性格描述...")
             }
 
             Spacer(modifier = Modifier.height(12.dp))
-            SectionCard {
-                SectionTitle("记忆注入（仅私聊）")
-                Text(
-                    "只会拼入该角色的私聊提示词。不要写太多太详细，否则会增加消耗，也可能影响正常回复。适合简单记录你们的关系、特殊剧情或阶段性设定。",
-                    fontSize = 12.sp,
-                    color = TextSecondary,
-                    lineHeight = 18.sp,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-                FullscreenTextField(
-                    title = "记忆注入（仅私聊）",
-                    value = memoryInjection,
-                    onValueChange = { memoryInjection = it },
-                    placeholder = "例：用户曾经救过她一次；两人私下约定互称某个称呼；当前正在进行某段特殊剧情。",
-                    minHeight = 100.dp
-                )
+            if (!isNew) {
+                SectionCard {
+                    SectionTitle("角色记忆")
+                    Text("查看、删除或手动补充该角色的结构化记忆；记忆索引会随之同步。", fontSize = 12.sp, color = TextSecondary)
+                    TextButton(onClick = onManageMemories, modifier = Modifier.align(Alignment.End)) { Text("管理记忆", color = Primary) }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
             }
-
-            Spacer(modifier = Modifier.height(12.dp))
             SectionCard {
                 SectionTitle("群聊人设")
                 PromptSlotBar(
                     selected = groupSlot,
                     onSelect = { slot ->
-                        savePromptSlot("group", groupSlot, groupPrompt)
+                        groupSlotDrafts = groupSlotDrafts + (groupSlot to groupPrompt)
+                        slotDirty = true
                         groupSlot = slot
-                        groupPrompt = loadPromptSlot("group", slot, if (slot == 1) operator?.groupPrompt ?: "" else "")
+                        groupPrompt = groupSlotDrafts[slot] ?: loadPromptSlot("group", slot, if (slot == 1) operator?.groupPrompt ?: "" else "")
                     }
                 )
-                PromptField(title = "群聊人设 ${groupSlot}号", value = groupPrompt, onValueChange = { groupPrompt = it }, placeholder = "输入该干员的群聊性格描述...")
+                PromptField(title = "群聊人设 ${groupSlot}号", value = groupPrompt, onValueChange = { groupPrompt = it; slotDirty = true }, placeholder = "输入该干员的群聊性格描述...")
             }
 
             Spacer(modifier = Modifier.height(12.dp))

@@ -89,8 +89,16 @@ class LocalVectorStoreGateway(
         db.vectorMemoriesQueries.deleteVectorMemory(memoryId)
     }
 
+    override suspend fun deleteBySource(ownerType: String, ownerId: String, sourceId: String) {
+        db.vectorMemoriesQueries.deleteVectorMemoriesBySource(ownerType, ownerId, sourceId)
+    }
+
     override suspend fun clearOwnerMemory(ownerType: String, ownerId: String) {
         db.vectorMemoriesQueries.deleteVectorMemoriesByOwner(ownerType, ownerId)
+    }
+
+    override suspend fun clearAllMemories() {
+        db.vectorMemoriesQueries.deleteAllVectorMemories()
     }
 
     private fun keywordScore(query: String, content: String): Double {

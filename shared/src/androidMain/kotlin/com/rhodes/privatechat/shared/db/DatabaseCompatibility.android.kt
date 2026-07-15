@@ -26,7 +26,7 @@ object DatabaseCompatibility {
                 if (userVersion < TARGET_VERSION && hasPartialCompatibilityArtifacts) {
                     ensureCompatibilitySchema(db)
                     if (tableExists(db, "diaries")) {
-                        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS idx_diaries_operator_date ON diaries(operatorId, date)")
+                        db.execSQL("DROP INDEX IF EXISTS idx_diaries_operator_date")
                     }
                     val targetVersion = if (hasFullCompatibilitySchema(db)) TARGET_VERSION else userVersion
                     db.execSQL("PRAGMA user_version = $targetVersion")

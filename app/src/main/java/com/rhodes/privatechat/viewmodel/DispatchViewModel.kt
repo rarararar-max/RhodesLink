@@ -12,6 +12,8 @@ import com.rhodes.privatechat.shared.model.AiMessage
 import com.rhodes.privatechat.viewmodel.shared.AppStateHolder
 import com.rhodes.privatechat.viewmodel.shared.OperatorStateUpdater
 import com.rhodes.privatechat.shared.settings.SettingsRepository
+import com.rhodes.privatechat.shared.vector.MemoryVectorService
+import com.rhodes.privatechat.shared.vector.VectorMemory
 import com.rhodes.privatechat.viewmodel.shared.SharedUtils
 import com.rhodes.privatechat.viewmodel.shared.UserProfile
 import com.rhodes.privatechat.viewmodel.shared.MemoryPolicy
@@ -45,7 +47,8 @@ class DispatchViewModel(
     private val appState: AppStateHolder,
     private val scope: CoroutineScope,
     private val refreshAllOperatorStatus: suspend () -> Unit,
-    private val getUserProfile: () -> UserProfile
+    private val getUserProfile: () -> UserProfile,
+    private val memoryVectorService: MemoryVectorService? = null
 ) {
     /** 启动互斥锁（防止重复 startDispatch） */
     private val startingLock = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -86,6 +89,7 @@ class DispatchViewModel(
         repeat(3) { attempt ->
             try {
                 val dMn = settings.dispatchMinChars; val dMx = settings.dispatchMaxChars
+                val recentPlot = logChain.takeLast(900).ifBlank { logSummary.takeLast(300) }
                 val prompt = """
 你是罗德岛的战术记录员，也是冒险小说作家。为进行中的派遣行动续写故事。
 
@@ -94,7 +98,10 @@ class DispatchViewModel(
 【派遣信息】
 任务类型：${taskType}
 预算等级：${budgetLevel}（低预算事件倾向危险和损失，高预算倾向顺利和意外收获）
-前情提要：${logSummary.take(200)}
+任务总览：${logSummary.take(200)}
+
+【最近剧情】
+${recentPlot}
 
 【成员档案】
 ${profiles}
@@ -121,7 +128,9 @@ ${profiles}
                     DebugLogger.log("Dispatch/AI", "过程段丢弃: id=$dispatchId, status=${latest.status}, endTime=${latest.endTime}")
                     return false
                 }
-                val newLog = compactLogChain(latest.logChain + "\n\n【第${roundNum}轮】" + rawResult)
+                val cleanResult = cleanGeneratedText(rawResult, dMx + 80)
+                if (cleanResult.isBlank()) return false
+                val newLog = compactLogChain(latest.logChain + "\n\n【第${roundNum}轮】" + cleanResult)
                 repository.insertDispatch(latest.copy(logChain = newLog, status = "active"))
                 DebugLogger.log("Dispatch/AI", "过程段成功: id=$dispatchId, 第${roundNum}轮, ${rawResult.length}字")
                 return true
@@ -135,6 +144,11 @@ ${profiles}
         DebugLogger.log("Dispatch/AI", "过程段3次失败: id=$dispatchId")
         return false
     }
+
+    private fun cleanGeneratedText(raw: String, maxChars: Int): String = raw.trim()
+        .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
+        .removePrefix("下面是").removePrefix("作为AI")
+        .take(maxChars)
 
     fun startDispatch(id: String, task: String, duration: Int, budget: Int, operatorIds: List<String>, onSuccess: () -> Unit = {}) {
         if (!startingLock.compareAndSet(false, true)) { Log.w(TAG, "[startDispatch] 已在启动中，忽略重复调用 id=$id"); return }
@@ -256,7 +270,14 @@ ${profiles}
                 val memberIds = updated.operatorIds.split(",").map { it.trim() }.filter { it.isNotBlank() }
                 val memberNames = memberIds.mapNotNull { id -> allOps.find { it.id == id || it.name == id }?.name }.take(3).joinToString("、")
                 for (opId in memberIds) {
-                    repository.saveAnchor(AnchorSourcePolicy.buildAnchor(source = AnchorSourcePolicy.DISPATCH, sourceName = updated.taskType, sourceActor = memberNames, sourceTarget = profile.nickname, operatorId = opId, type = AnchorType.EVENT, content = "${updated.taskType}任务完成，${memberNames}带回${items}，净收益${netProfit}龙门币", importance = AnchorSourcePolicy.MEDIUM, sessionId = "dispatch:${dispatchId}", createdAt = System.currentTimeMillis(), expiresAt = MemoryPolicy.anchorExpiresAt(settings, AnchorType.EVENT)))
+                    val anchor = AnchorSourcePolicy.buildAnchor(source = AnchorSourcePolicy.DISPATCH, sourceName = updated.taskType, sourceActor = memberNames, sourceTarget = profile.nickname, operatorId = opId, type = AnchorType.EVENT, content = "${updated.taskType}任务完成，${memberNames}带回${items}，净收益${netProfit}龙门币", importance = AnchorSourcePolicy.MEDIUM, sessionId = "dispatch:${dispatchId}", createdAt = System.currentTimeMillis(), expiresAt = MemoryPolicy.anchorExpiresAt(settings, AnchorType.EVENT))
+                    repository.saveAnchor(anchor)
+                    memoryVectorService?.saveMemory(VectorMemory(
+                        id = "dispatch_${dispatchId}_${opId}", ownerType = "operator", ownerId = opId,
+                        sourceType = "dispatch", sourceId = dispatchId, content = anchor.content,
+                        importance = 0.6, tags = "EVENT,DISPATCH", visibility = "shared",
+                        createdAt = anchor.createdAt, expiresAt = anchor.expiresAt
+                    ))
                 }
             } finally {
                 finishingIds.remove(dispatchId)

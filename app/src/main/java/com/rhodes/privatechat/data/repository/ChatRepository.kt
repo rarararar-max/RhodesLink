@@ -52,6 +52,7 @@ class ChatRepository(
     suspend fun getLongTermImpression(operatorId: String): Memory? = shared.getLongTermImpression(operatorId)
 
     suspend fun saveMemory(memory: Memory) = shared.saveMemory(memory)
+    suspend fun replaceShortTermMemory(memory: Memory) = shared.replaceShortTermMemory(memory)
 
     suspend fun saveAnchor(anchor: MemoryAnchor) = shared.saveAnchor(anchor)
 
@@ -102,6 +103,7 @@ class ChatRepository(
     suspend fun getLike(momentId: Long, operatorId: String): MomentLike? = shared.getLike(momentId, operatorId)
 
     suspend fun getMomentsPaged(limit: Int, offset: Int): List<Moment> = shared.getMomentsPaged(limit, offset)
+    suspend fun getMomentsBefore(createdAt: Long, id: Long, limit: Int): List<Moment> = shared.getMomentsBefore(createdAt, id, limit)
 
     suspend fun getInboxComments(cutoff: Long, userName: String): List<MomentComment> = shared.getInboxComments(cutoff, userName)
 

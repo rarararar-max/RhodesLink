@@ -16,6 +16,7 @@ import com.rhodes.privatechat.shared.model.AiMessage
 import com.rhodes.privatechat.shared.model.GroupMsgResult
 import com.rhodes.privatechat.shared.modelgateway.VisionAnalyzeRequest
 import com.rhodes.privatechat.shared.modelgateway.VisionGateway
+import com.rhodes.privatechat.shared.modelgateway.createVisionGateway
 import com.rhodes.privatechat.shared.vector.MemoryVectorService
 import com.rhodes.privatechat.shared.vector.VectorMemory
 import com.rhodes.privatechat.notification.RhodesAppVisibility
@@ -42,6 +43,8 @@ import kotlinx.coroutines.sync.Mutex
 import java.util.concurrent.ConcurrentHashMap
 import java.io.IOException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.encodeToString
 import kotlinx.coroutines.withTimeout
 
@@ -66,13 +69,10 @@ class GroupChatViewModel(
     companion object {
         const val DEBUG = false
         private const val CHAT_PAGE_SIZE = 50L
-        /** 静态共享，避免不同 ViewModel 实例干扰 */
-        private val globalAutoChatGenerations = ConcurrentHashMap<String, Long>()
-        private val globalAutoGroupChatJobs = ConcurrentHashMap<String, Job>()
     }
 
-    private val autoChatGenerations get() = globalAutoChatGenerations
-    private val autoGroupChatJobs get() = globalAutoGroupChatJobs
+    private val autoChatGenerations = ConcurrentHashMap<String, Long>()
+    private val autoGroupChatJobs = ConcurrentHashMap<String, Job>()
 
     private val groupActivityCache = ConcurrentHashMap<String, String>()
     private val _groupMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
@@ -244,6 +244,7 @@ class GroupChatViewModel(
         scope.launch {
             val now = System.currentTimeMillis()
             settings.putSessionRestartAt(groupId, now)
+            settings.putSummaryCursor(groupId, 0L)
             if (_currentGroupId.value == groupId) _groupRestartAt.value = now
             repository.sendMessage(groupId, ChatMessage(
                 id = repository.getNextMessageId(),
@@ -262,7 +263,7 @@ class GroupChatViewModel(
         settings.remove("group_auto_$groupSessionId")
         settings.remove("group_event_auto_$groupSessionId")
         scope.launch {
-            repository.deleteSessionMessages(groupSessionId)
+            repository.purgeSessionData(groupSessionId)
             repository.deleteSession(groupSessionId)
             onComplete()
         }
@@ -440,21 +441,9 @@ class GroupChatViewModel(
                 val profile = getUserProfile()
                 val relContext = getGroupRelationshipContext(activeMembers)
                 val relationHints = if (relContext.isNotBlank()) relContext else "无"
-                val memberPrivateContext = if (!isAuto) {
-                    buildString {
-                        for (m in activeMembers) {
-                            val ctx = repository.getPrivateChatContext(m.id)
-                            if (ctx != null) append("- ${m.name}：${ctx}\n")
-                            else append("- ${m.name}：暂无特别的互动\n")
-                        }
-                    }.toString()
-                } else ""
+                // 群聊只使用公开记忆和群聊记录，避免私聊内容穿帮。
+                val memberPrivateContext = ""
                 val groupSummary = repository.getShortTermMemory(groupSessionId)?.content ?: ""
-                val longTermImpression = if (!isAuto && activeMembers.isNotEmpty()) {
-                    activeMembers.take(5).mapNotNull { m ->
-                        repository.getLongTermImpression(m.id)?.content?.let { "- ${m.name}对${profile.nickname}的印象：${it.take(100)}" }
-                    }.joinToString("\n").ifBlank { "成员们对${profile.nickname}尚无深入了解。" }
-                } else ""
                 val memberMemoryContext = if (settings.groupMemberMemoryCount > 0) {
                     buildString {
                         for (m in activeMembers) {
@@ -479,7 +468,6 @@ class GroupChatViewModel(
                 val legacyMemberMemory = if (groupVectorMemories == "无") memberMemoryContext else ""
                 val unifiedGroupMemory = UnifiedMemoryContext.mergeBlocks(
                     maxChars = sharedUtils.contextBlockLimit(2),
-                    longTermImpression,
                     legacyMemberMemory,
                     groupVectorMemories,
                     groupUnconsumedEvents
@@ -494,16 +482,16 @@ class GroupChatViewModel(
                     "群聊记忆注入: group=$groupName, mode=${if (isAuto) "auto/$mode" else mode}, members=${activeMembers.size}, relationHints=${relationHints != "无"}, privateCtxLines=${memberPrivateContext.lines().filter { it.isNotBlank() }.size}, unified=${unifiedGroupMemory != "无"}, summary=${groupSummary.isNotBlank()}, daily=${groupDailySummary != "无"}"
                 )
                 val memberProfiles = buildString {
-                    for (m in activeMembers.shuffled()) {
+                    for (m in activeMembers.sortedBy { it.id }) {
                         val key = "${groupSessionId}_${m.id}"
                         val act = groupActivityCache.computeIfAbsent(key) { "活跃${"%.1f".format(0.5 + Math.random() * 0.5)}" }
                         val titleStr = if (m.title.isBlank()) "" else "，${m.title}"
                         val genderStr = if (m.gender.isNotBlank()) "，${m.gender}" else ""
-                        append("${m.name}（${act}${genderStr}${titleStr}）：${m.groupPrompt.ifBlank { m.description }}\n")
+                        append("${m.name}（${act}${genderStr}${titleStr}）：${m.groupPrompt.ifBlank { m.privatePrompt.ifBlank { m.description } }}\n")
                     }
                 }
-                val userMessage = if (isAuto) "" else if (autoSpeak) "（群聊已空闲一段时间，干员们自然地闲聊起来，无需等待用户发言。）" else text
-                val grpTpl = getPromptTemplate("group", if (isAuto) "auto" else mode)
+                val userMessage = if (isAuto) "（用户没有新发言。请只根据最近群聊自然延续话题，不要替用户发言。）" else if (autoSpeak) "（群聊已空闲一段时间，干员们自然地闲聊起来，无需等待用户发言。）" else text
+                val grpTpl = getPromptTemplate("group", mode)
                 val userObserving = if (isAuto) when (mode) {
                     "offline" -> "用户坐在一旁，安静地听着大家的对话，没有插话。"
                     "director" -> "用户作为导演正在观察大家的表演，没有给出新指令。"
@@ -519,12 +507,12 @@ class GroupChatViewModel(
                     "AUTO_REASON" to (if (isAuto) "idle" else "manual"),
                     "AUTO_REASON_TEXT" to (if (isAuto) "群聊空闲自然闲聊。" else "用户主动发言。"),
                     "GROUP_RULES" to (session.rules.ifBlank { "无" }),
-                    "USER_NAME" to profile.nickname, "USER_GENDER" to profile.gender.ifBlank { "未知" },
+                    "USER_NAME" to profile.nickname, "USER_GENDER" to profile.gender.ifBlank { "未知" }, "USER_PREFS" to "仅使用公开场合已知的用户偏好；无则不特别提及。",
                     "USER_BIO" to profile.bio.ifBlank { "无" }, "RELATION_HINTS" to sharedUtils.trimContextBlock(relationHints, sharedUtils.contextBlockLimit()),
                     "MEMBER_PRIVATE_CONTEXT" to sharedUtils.trimContextBlock(memberPrivateContext, sharedUtils.contextBlockLimit()),
                     "SHORT_TERM_SUMMARY" to groupSummary, "GROUP_SUMMARY" to groupSummary,
                     "DAILY_SUMMARY" to groupDailySummary,
-                    "LONG_TERM_IMPRESSION" to unifiedGroupMemory,
+                    "LONG_TERM_IMPRESSION" to "无",
                     "SOURCE_AWARE_MEMORIES" to unifiedKnownFrom,
                     "GROUP_TRIGGER_EVENT" to "群聊自然延续",
                     "GROUP_RECENT_WORLD_EVENTS" to "无",
@@ -609,6 +597,7 @@ class GroupChatViewModel(
                 val validSpeakers = activeMembers.map { it.name }.toSet() + "旁白"
                 var rawBase = ""
                 var filtered: List<GroupMsgResult> = emptyList()
+                var firstPass: List<GroupMsgResult> = emptyList()
                 var requestMessages = apiMessages.toList()
                 repeat(2) { attempt ->
                     if (filtered.isNotEmpty()) return@repeat
@@ -617,14 +606,17 @@ class GroupChatViewModel(
                     sharedUtils.trackTokens("group", requestMessages, rawBase)
                     if (DEBUG) sharedUtils.logAiCall("GroupChat", promptText, rawBase, requestMessages)
                     val results = extractGroupResults(rawBase)
-                    filtered = normalizeGroupResults(results, validSpeakers, mode)
+                    val normalized = normalizeGroupResults(results, validSpeakers, mode)
+                    if (attempt == 0) firstPass = normalized
+                    filtered = if (attempt == 0) normalized else firstPass + normalized
+                    if (!hasRequiredGroupTurn(filtered, activeMembers.map { it.name }, mode)) filtered = emptyList()
                     if (filtered.isEmpty() && attempt == 0) {
                         requestMessages = apiMessages + AiMessage(
                             "user",
                             if (mode == "online") {
-                                "上一次输出没有任何可显示的线上发言。请重新输出严格 JSON 数组；speaker 只能从这些名字中选择：${activeMembers.joinToString("、") { it.name }}。type 必须是 dialogue，message 只能是纯文字台词。不要旁白、动作、神态、场景描写，不要输出解释。"
+                                "请只补充以下尚未发言成员的非空 dialogue：${missingMemberNames(firstPass, activeMembers.map { it.name }).joinToString("、")}。严格输出 JSON 数组；speaker 只能从名单中选择，message 必须是纯文字台词。不要重复已有发言、不要旁白、动作、神态、场景描写或解释。"
                             } else {
-                                "上一次输出无法使用。请重新输出严格 JSON 数组；speaker 只能从这些名字中选择：${validSpeakers.joinToString("、")}。不要输出不在名单里的角色，不要输出解释。"
+                                "请只补充以下尚未发言成员的台词：${missingMemberNames(firstPass, activeMembers.map { it.name }).joinToString("、")}。可为这些成员补充贴近其台词的旁白；严格输出 JSON 数组，不要重复已有成员发言、不要输出名单外角色或解释。"
                             }
                         )
                     }
@@ -636,24 +628,6 @@ class GroupChatViewModel(
                         type = "system", mode = mode, isMe = false
                     ))
                     markGroupUnreadIfNotCurrent(groupSessionId)
-                }
-                if (filtered.isNotEmpty()) {
-                    val missing = activeMembers.map { it.name }.filter { name -> filtered.none { it.speaker == name } }
-                    if (missing.isNotEmpty() && activeMembers.size <= 3) {
-                        val supplementPrompt = "上一轮群聊还缺少这些成员发言：${missing.joinToString("、")}。请只为缺席成员各补一条，严格输出JSON数组；speaker只能是缺席成员名，type为dialogue，message为纯文字台词，不要旁白，不要解释。"
-                        try {
-                            val supplementRaw = withTimeout(45_000) { sharedUtils.chat(apiMessages + AiMessage("user", supplementPrompt), "GroupChat") }.trim()
-                                .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
-                            sharedUtils.trackTokens("group", apiMessages + AiMessage("user", supplementPrompt), supplementRaw)
-                            val supplement = normalizeGroupResults(extractGroupResults(supplementRaw), missing.toSet(), mode)
-                            if (supplement.isNotEmpty()) {
-                                filtered = (filtered + supplement).distinctBy { it.speaker to it.message }
-                                DebugLogger.log("GroupChat", "补齐缺席成员: ${supplement.joinToString("、") { it.speaker }}")
-                            }
-                        } catch (e: Exception) {
-                            DebugLogger.log("GroupChat", "补齐缺席成员失败: ${e.message?.take(80)}")
-                        }
-                    }
                 }
                 if (filtered.isNotEmpty()) {
                     val aiMsgId = repository.getNextMessageId()
@@ -734,6 +708,7 @@ class GroupChatViewModel(
     }
 
     private fun formatGroupHistoryForPrompt(msg: ChatMessage): String {
+        if (msg.type == "image" && msg.isMe) return formatGroupImageForPrompt(msg)
         if (msg.isMe) return "用户：${msg.content.take(500)}"
         if (msg.type == "system") return "系统：${msg.content.take(300)}"
         if (msg.type != "ai_json") return "${msg.senderName}：${msg.content.take(500)}"
@@ -749,6 +724,7 @@ class GroupChatViewModel(
 
     private fun formatGroupMessageForMemory(msg: ChatMessage, limit: Int): String {
         if (msg.type == "system") return ""
+        if (msg.type == "image" && msg.isMe) return formatGroupImageForPrompt(msg).take(limit)
         if (!msg.isMe && msg.type != "ai_json") return ""
         if (msg.isMe) return "用户：${msg.content.take(limit)}"
         if (msg.type == "system") return "系统：${msg.content.take(limit)}"
@@ -807,52 +783,123 @@ class GroupChatViewModel(
         return (total * 1.2).toInt()
     }
 
-    fun sendGroupImageMessage(groupSessionId: String, groupName: String, imageUri: String, imageForModel: String?, caption: String, mode: String = "online", onMessageSent: () -> Unit = {}) {
-        if (groupSessionId.isBlank()) return
+    fun sendGroupImageMessage(groupSessionId: String, groupName: String, imageUri: String, imageForModel: String?, caption: String, mode: String = "online", onMessageSent: () -> Unit = {}, onResult: (Boolean) -> Unit = {}) {
+        if (groupSessionId.isBlank()) { onResult(false); return }
+        if (!isVisionConfigured()) {
+            _lastSendError.value = "图片聊天需要先设置识图模型，请在模型设置中填写识图地址、模型名和密钥。"
+            onResult(false)
+            return
+        }
+        if (imageForModel.isNullOrBlank()) {
+            _lastSendError.value = "无法读取这张图片，请重新选择后再试。"
+            onResult(false)
+            return
+        }
         scope.launch {
             try {
-                val imageJson = json.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), kotlinx.serialization.json.JsonObject(mapOf(
+                val id = repository.getNextMessageId()
+                val placeholderJson = json.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), kotlinx.serialization.json.JsonObject(mapOf(
                     "imageUri" to kotlinx.serialization.json.JsonPrimitive(imageUri),
-                    "caption" to kotlinx.serialization.json.JsonPrimitive(caption.trim())
+                    "caption" to kotlinx.serialization.json.JsonPrimitive(caption.trim()),
+                    "visionSummary" to kotlinx.serialization.json.JsonPrimitive("")
                 )))
                 repository.sendMessage(groupSessionId, ChatMessage(
-                    id = repository.getNextMessageId(),
+                    id = id,
                     sessionId = groupSessionId,
                     senderName = "我",
-                    content = imageJson,
+                    content = placeholderJson,
                     type = "image",
                     mode = mode,
                     isMe = true
                 ))
-                val visionText = if (imageForModel.isNullOrBlank()) {
-                    "[图片读取失败，无法进行识图]"
-                } else {
-                    try {
-                        visionGateway?.analyzeImage(VisionAnalyzeRequest(
-                            imageUrlOrBase64 = imageForModel,
-                            prompt = "请用中文结构化描述这张群聊图片中的主体、场景、文字、情绪和所有值得不同角色回应的细节。不要编造看不见的内容。"
-                        ))?.text?.take(2000).orEmpty().ifBlank { "[识图无结果]" }
-                    } catch (e: Exception) {
-                        DebugLogger.log("Vision", "群聊识图失败: ${e.message?.take(100)}")
-                        "[识图失败：${e.message?.take(80) ?: "未知错误"}]"
-                    }
+                // The message is safely persisted now. The composer must never wait for vision/AI work.
+                onMessageSent()
+                onResult(true)
+                val visionText = try {
+                    currentVisionGateway().analyzeImage(VisionAnalyzeRequest(
+                        imageUrlOrBase64 = imageForModel,
+                        prompt = """请分析这张图片，用以下 JSON 格式回答（只输出 JSON，不要 Markdown 标记）：
+{
+  "visibleSummary": "一句话描述画面中最重要的可见内容",
+  "userStateGuess": "基于画面的谨慎推测，不确定写 unknown",
+  "notableObjects": ["物体1", "物体2"],
+  "sceneQuality": "clear | dim | blurry | blocked | unknown",
+  "confidence": 0.0~1.0
+}
+要求：只描述确定看到的内容，不确定的字段填 unknown，不要编造看不见的内容，输出中文。"""
+                    ))?.text?.take(2000).orEmpty().ifBlank { throw IllegalStateException("没有识别到图片内容") }
+                } catch (e: Exception) {
+                    DebugLogger.log("Vision", "群聊识图失败: ${e.message?.take(100)}")
+                    val failedJson = json.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), kotlinx.serialization.json.JsonObject(mapOf(
+                        "imageUri" to kotlinx.serialization.json.JsonPrimitive(imageUri),
+                        "caption" to kotlinx.serialization.json.JsonPrimitive(caption.trim()),
+                        "visionSummary" to kotlinx.serialization.json.JsonPrimitive(""),
+                        "status" to kotlinx.serialization.json.JsonPrimitive("failed")
+                    )))
+                    repository.updateMessageContent(id, failedJson)
+                    _lastSendError.value = "图片识别失败，请检查识图模型设置后重试。"
+                    onResult(false)
+                    return@launch
                 }
+                val cleanText = visionText.trim().removePrefix("```json").removePrefix("```").trim().removeSuffix("```").trim()
+                val visionSummary = runCatching {
+                    json.parseToJsonElement(cleanText).jsonObject["visibleSummary"]?.jsonPrimitive?.content
+                }.getOrNull()?.take(500)
+                val imageJson = json.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), kotlinx.serialization.json.JsonObject(mapOf(
+                    "imageUri" to kotlinx.serialization.json.JsonPrimitive(imageUri),
+                    "caption" to kotlinx.serialization.json.JsonPrimitive(caption.trim()),
+                    "visionSummary" to kotlinx.serialization.json.JsonPrimitive(visionText.take(800))
+                )))
+                repository.updateMessageContent(id, imageJson)
                 val promptText = buildString {
                     append("用户在群聊中发送了一张图片。")
                     if (caption.isNotBlank()) append("\n用户附带文字：${caption.trim()}")
-                    append("\n视觉结构化分析：\n$visionText")
+                    append("\n【用户发送的图片分析】")
+                    append("\n画面内容：${visionSummary ?: visionText.take(500)}")
                     append("\n请所有在场成员根据自己的性格、关系和当前群聊氛围自然回应这张图片。")
                 }
-                saveVisionVectorMemory(groupSessionId, caption, visionText)
+                saveVisionVectorMemory(groupSessionId, caption, visionSummary ?: visionText)
                 // The image message above is the only user-visible record. The vision result is AI-only context.
-                sendGroupMessage(groupSessionId, groupName, promptText, mode, userMessageAlreadyStored = true, onMessageSent = onMessageSent)
+                sendGroupMessage(groupSessionId, groupName, promptText, mode, userMessageAlreadyStored = true)
             } catch (e: Exception) {
                 _lastSendError.value = classifyGroupError(e)
+                onResult(false)
             }
         }
     }
 
+    private fun hasRequiredGroupTurn(results: List<GroupMsgResult>, activeNames: List<String>, mode: String): Boolean {
+        // Narration placement is a style preference. Only real dialogue from every active member is blocking.
+        return activeNames.none { name -> results.none { it.speaker == name && it.type == "dialogue" && it.message.isNotBlank() } }
+    }
+
+    private fun missingMemberNames(results: List<GroupMsgResult>, activeNames: List<String>): List<String> =
+        activeNames.filter { name -> results.none { it.speaker == name && it.type == "dialogue" && it.message.isNotBlank() } }
+
+    private fun formatGroupImageForPrompt(msg: ChatMessage): String = try {
+        val obj = json.parseToJsonElement(msg.content).jsonObject
+        val caption = obj["caption"]?.jsonPrimitive?.content.orEmpty()
+        val rawSummary = obj["visionSummary"]?.jsonPrimitive?.content.orEmpty()
+        val cleanSummary = rawSummary.trim().removePrefix("```json").removePrefix("```").trim().removeSuffix("```").trim()
+        val summary = runCatching {
+            json.parseToJsonElement(cleanSummary).jsonObject["visibleSummary"]?.jsonPrimitive?.content
+        }.getOrNull() ?: rawSummary.take(200)
+        buildString {
+            append("用户发送图片")
+            if (summary.isNotBlank()) append("：$summary")
+            if (caption.isNotBlank()) append("；附言：$caption")
+        }
+    } catch (_: Exception) { "用户发送了一张图片" }
+
+    private fun isVisionConfigured(): Boolean =
+        settings.visionBaseUrl.isNotBlank() &&
+            settings.visionModelName.isNotBlank() &&
+            settings.visionApiKey.ifBlank { settings.apiKey }.isNotBlank()
+
+    private fun currentVisionGateway(): VisionGateway = createVisionGateway(settings)
+
     private suspend fun saveGroupAnchorToVector(anchor: MemoryAnchor, groupSessionId: String, groupName: String) {
+        repository.saveAnchor(anchor)
         val service = memoryVectorService ?: return
         val now = anchor.createdAt.takeIf { it > 0 } ?: System.currentTimeMillis()
         val importance = if (anchor.importance == AnchorSourcePolicy.WEAK) 0.25 else 0.6
@@ -1037,7 +1084,7 @@ $oldSummary
 $text"""
             val content = withTimeout(20_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "GroupMemory") }.trim()
             if (content.isNotBlank()) {
-                repository.saveMemory(com.rhodes.privatechat.shared.model.Memory(
+                repository.replaceShortTermMemory(com.rhodes.privatechat.shared.model.Memory(
                     sessionId = groupSessionId,
                     operatorId = groupSessionId,
                     type = com.rhodes.privatechat.shared.model.MemoryType.SHORT_TERM,
@@ -1045,7 +1092,6 @@ $text"""
                     createdAt = System.currentTimeMillis(),
                     expiresAt = MemoryPolicy.memoryExpiresAt(settings)
                 ))
-                repository.enforceMemoryRetain(groupSessionId, settings.summaryRetain.coerceAtLeast(1))
                 ingestGroupMemoryV2(groupSessionId, groupName, msgs)
                 if (settings.summaryCursorEnabled) msgs.maxOfOrNull { it.id }?.let { settings.putSummaryCursor(groupSessionId, it) }
                 DebugLogger.log("GroupChat", "群聊短期摘要已生成: $groupSessionId")

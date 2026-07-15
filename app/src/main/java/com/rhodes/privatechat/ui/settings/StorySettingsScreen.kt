@@ -40,12 +40,12 @@ fun StorySettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         icon = { Icon(Icons.AutoMirrored.Filled.MenuBook, null, tint = Primary) }
     ) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
-            StoryInfoCard("这里影响什么？", "每日动态参数控制角色每天固定发动态；日记只在你手动点击生成时才写；派遣参数只影响派遣故事文本长度，不影响收益、成功率或耗时。")
+            StoryInfoCard("这里影响什么？", "每日动态参数按北京时间自然日 00:00-23:59 统计；日记只在你手动点击生成时才写；派遣参数只影响派遣故事文本长度，不影响收益、成功率或耗时。")
             SettingsSectionTitle("每日动态")
             SettingsSwitchCard("后台自动 AI", "控制每日自动动态。关闭后，每日固定动态也不会自动生成；你手动聊天和手动生成不受影响。", autoEnabled) { autoEnabled = it; settings.autoAiEnabled = it }
             SettingsSwitchCard("每日自动动态", "开启后，每天按每人每日自动动态上限为有动态权限的角色补动态。", settings.dailyAutoMomentEnabled, enabled = autoEnabled) { settings.dailyAutoMomentEnabled = it }
-            SettingsParamSlider(settings, "daily_auto_ai_limit", "每日后台 AI 预算", 40, 0f..500f, "每日自动动态最多消耗多少次 AI 调用。设 0 等同于关闭后台自动 AI。建议30-50。", step = 5f, enabled = autoEnabled)
-            SettingsParamSlider(settings, "daily_moment_target", "每人每日自动动态上限", 2, 0f..10f, "每天每个有动态权限的角色最多自动发几条动态。0=不自动发动态；用户主动催发动态不受此限制。建议1-3。", step = 1f, enabled = autoEnabled)
+            SettingsParamSlider(settings, "daily_auto_ai_limit", "每日后台 AI 预算", 40, 0f..500f, "自动动态、自动评论等后台内容共用的每日 AI 调用预算。设0等同于关闭后台自动 AI。建议30-50。", step = 5f, enabled = autoEnabled)
+            SettingsParamSlider(settings, "daily_moment_target", "每人每日自动动态上限", 2, 0f..3f, "每天每个有动态权限的角色最多自动发几条动态。0=不自动发动态；用户主动催发动态不受此限制。建议1-3。", step = 1f, enabled = autoEnabled)
             SettingsParamSlider(settings, "moment_min_chars", "动态最少字数", 50, 20f..300f, "每条动态最少写几个字。建议20-50。", step = 5f, pairKey = "moment_max_chars", isMinSide = true, enabled = autoEnabled)
             SettingsParamSlider(settings, "moment_max_chars", "动态最多字数", 200, 80f..500f, "每条动态最多写几个字。建议150-250。", step = 5f, pairKey = "moment_min_chars", isMinSide = false, enabled = autoEnabled)
             SettingsParamSlider(settings, "moment_anchor_count", "动态参考记忆", 3, 0f..10f, "生成动态时最多参考几条公开记忆。建议3-5。", step = 1f, enabled = autoEnabled)

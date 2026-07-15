@@ -49,6 +49,8 @@ fun DataManagementScreen(
     var stats by remember { mutableStateOf(DataViewModel.DataStats(0,0,0,0,0,0)) }
     var refreshKey by remember { mutableIntStateOf(0) }
     val context = LocalContext.current
+    var showCleanupConfirm by remember { mutableStateOf(false) }
+    var showWorldEventsConfirm by remember { mutableStateOf(false) }
 
     LaunchedEffect(refreshKey) { stats = viewModel.getDataStats() }
 
@@ -111,13 +113,12 @@ fun DataManagementScreen(
                                 label, fontSize = 11.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
                                 color = if (selected) Primary else TextSecondary,
                                 modifier = Modifier.clip(RoundedCornerShape(6.dp))
-                                    .background(if (selected) PrimaryContainer else Color.Transparent)
-                                    .clickable {
-                                        settings.putInt(item.prefKey, days)
-                                        viewModel.cleanupAllExpired()
-                                        refreshKey++
-                                        android.widget.Toast.makeText(context, "已保存", android.widget.Toast.LENGTH_SHORT).show()
-                                    }.padding(horizontal = 8.dp, vertical = 4.dp)
+                                     .background(if (selected) PrimaryContainer else Color.Transparent)
+                                     .clickable {
+                                         settings.putInt(item.prefKey, days)
+                                         refreshKey++
+                                         android.widget.Toast.makeText(context, "已保存新的保留规则", android.widget.Toast.LENGTH_SHORT).show()
+                                     }.padding(horizontal = 8.dp, vertical = 4.dp)
                             )
                         }
                     }
@@ -125,26 +126,36 @@ fun DataManagementScreen(
             }
 
             Spacer(Modifier.height(16.dp))
-            OutlinedButton(onClick = {
-                viewModel.cleanupAllExpired()
-                refreshKey++
-                android.widget.Toast.makeText(context, "已清理所有过期数据", android.widget.Toast.LENGTH_SHORT).show()
-            }, modifier = Modifier.fillMaxWidth().height(44.dp), shape = RoundedCornerShape(10.dp)) {
+            OutlinedButton(onClick = { showCleanupConfirm = true }, modifier = Modifier.fillMaxWidth().height(44.dp), shape = RoundedCornerShape(10.dp)) {
                 Icon(Icons.Default.Delete, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
                 Text("立即清理所有过期数据", fontWeight = FontWeight.SemiBold)
             }
             Spacer(Modifier.height(8.dp))
-            OutlinedButton(onClick = {
-                viewModel.deleteAllWorldEvents()
-                refreshKey++
-                android.widget.Toast.makeText(context, "已清空世界事件", android.widget.Toast.LENGTH_SHORT).show()
-            }, modifier = Modifier.fillMaxWidth().height(44.dp), shape = RoundedCornerShape(10.dp)) {
+            OutlinedButton(onClick = { showWorldEventsConfirm = true }, modifier = Modifier.fillMaxWidth().height(44.dp), shape = RoundedCornerShape(10.dp)) {
                 Icon(Icons.Default.Delete, null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
                 Text("清空世界事件", fontWeight = FontWeight.SemiBold)
             }
         }
     }
+    }
+    if (showCleanupConfirm) {
+        AlertDialog(
+            onDismissRequest = { showCleanupConfirm = false },
+            title = { Text("确认清理过期数据", color = TextPrimary) },
+            text = { Text("将立即清理所有已超过当前保留期限的数据，此操作无法恢复。", color = TextSecondary) },
+            confirmButton = { TextButton(onClick = { viewModel.cleanupAllExpired(); refreshKey++; showCleanupConfirm = false; android.widget.Toast.makeText(context, "已清理所有过期数据", android.widget.Toast.LENGTH_SHORT).show() }) { Text("确认清理", color = ErrorRed) } },
+            dismissButton = { TextButton(onClick = { showCleanupConfirm = false }) { Text("取消", color = TextSecondary) } }
+        )
+    }
+    if (showWorldEventsConfirm) {
+        AlertDialog(
+            onDismissRequest = { showWorldEventsConfirm = false },
+            title = { Text("确认清空世界事件", color = TextPrimary) },
+            text = { Text("将删除全部世界事件，且无法恢复。", color = TextSecondary) },
+            confirmButton = { TextButton(onClick = { viewModel.deleteAllWorldEvents(); refreshKey++; showWorldEventsConfirm = false; android.widget.Toast.makeText(context, "已清空世界事件", android.widget.Toast.LENGTH_SHORT).show() }) { Text("确认清空", color = ErrorRed) } },
+            dismissButton = { TextButton(onClick = { showWorldEventsConfirm = false }) { Text("取消", color = TextSecondary) } }
+        )
     }
 }

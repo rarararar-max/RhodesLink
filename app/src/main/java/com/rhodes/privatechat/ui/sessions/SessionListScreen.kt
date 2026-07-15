@@ -82,7 +82,7 @@ fun SessionListScreen(
             Box {
                 IconButton(onClick = { showOverflowMenu = true }) { Icon(Icons.Default.MoreVert, "菜单", tint = TextPrimary) }
                 ThemedDropdownMenu(expanded = showOverflowMenu, onDismissRequest = { showOverflowMenu = false }) {
-                    DropdownMenuItem(text = { Text("清除所有消息") }, onClick = { showOverflowMenu = false; showClearAllConfirm = true })
+                    DropdownMenuItem(text = { Text("移除主页所有会话") }, onClick = { showOverflowMenu = false; showClearAllConfirm = true })
                     DropdownMenuItem(text = { Text("全部标记已读") }, onClick = { showOverflowMenu = false; viewModel.markAllRead() })
                 }
             }
@@ -104,11 +104,11 @@ fun SessionListScreen(
     }
 
     showDeleteConfirm?.let { sessionId ->
-        ThemedAlertDialog("删除会话", "删除后将无法恢复", { showDeleteConfirm = null }, "删除", { onDelete(sessionId); showDeleteConfirm = null }, danger = true)
+        ThemedAlertDialog("从主页移除", "会话将暂时不在聊天主页显示。收到新的消息后，会自动重新出现在主页。", { showDeleteConfirm = null }, "确认移除", { onDelete(sessionId); showDeleteConfirm = null }, danger = true)
     }
 
     if (showClearAllConfirm) {
-        ThemedAlertDialog("清除所有消息", "将清除全部会话的聊天记录，此操作不可撤销。", { showClearAllConfirm = false }, "确认清除", { viewModel.clearAllMessages(); showClearAllConfirm = false }, danger = true)
+        ThemedAlertDialog("移除主页所有会话", "所有会话将暂时不在聊天主页显示。任一会话收到新的消息后，会自动重新出现在主页。", { showClearAllConfirm = false }, "确认移除", { viewModel.clearAllMessages(); showClearAllConfirm = false }, danger = true)
     }
 
     showSessionActions?.let { s ->
@@ -121,7 +121,7 @@ fun SessionListScreen(
                         Text(if (s.isPinned) "取消置顶" else "置顶", color = TextPrimary)
                     }
                     TextButton(onClick = { onMarkRead(s.id); showSessionActions = null }, modifier = Modifier.fillMaxWidth()) { Text("标记已读", color = TextPrimary) }
-                    TextButton(onClick = { showSessionActions = null; showDeleteConfirm = s.id }, modifier = Modifier.fillMaxWidth()) { Text("删除", color = ErrorRed) }
+                    TextButton(onClick = { showSessionActions = null; showDeleteConfirm = s.id }, modifier = Modifier.fillMaxWidth()) { Text("从主页移除", color = ErrorRed) }
                 }
             },
             confirmButton = { TextButton(onClick = { showSessionActions = null }) { Text("取消", color = TextSecondary) } }

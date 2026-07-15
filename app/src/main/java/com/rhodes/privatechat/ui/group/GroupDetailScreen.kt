@@ -46,8 +46,8 @@ import com.rhodes.privatechat.util.ChatTrace
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.MainActivity
 import com.rhodes.privatechat.audio.LocalAudioController
-import com.rhodes.privatechat.shared.voice.AsrGateway
 import com.rhodes.privatechat.shared.voice.AsrRequest
+import com.rhodes.privatechat.shared.voice.hasAsrConfiguration
 import org.koin.compose.koinInject
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -55,6 +55,9 @@ import kotlinx.coroutines.launch
 @Composable
 fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () -> Unit, onEditGroup: (String) -> Unit, groupId: String = "", modifier: Modifier = Modifier, onOperatorClick: (String) -> Unit = {}, onViewHistory: (String) -> Unit = {}) {
     val settings: SettingsRepository = koinInject()
+    val visionReady = settings.visionBaseUrl.isNotBlank() &&
+        settings.visionModelName.isNotBlank() &&
+        settings.visionApiKey.ifBlank { settings.apiKey }.isNotBlank()
     val listState = rememberLazyListState()
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -74,6 +77,8 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
     val showModePicker = remember { mutableStateOf(false) }
     var inputText by rememberSaveable { mutableStateOf("") }
     var pendingImageUri by rememberSaveable { mutableStateOf("") }
+    var imageSending by rememberSaveable { mutableStateOf(false) }
+    var forceScrollThroughMessageCount by remember { mutableStateOf(0) }
     var recordingVoice by rememberSaveable { mutableStateOf(false) }
     val audioController = remember { LocalAudioController(ctx) }
 
@@ -194,7 +199,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                     onLoadOlder = { viewModel.loadOlderGroupMessages() },
                     isLoadingOlder = isLoadingOlder,
                     hasMore = hasMoreMessages,
-                    forceScrollToLatest = false,
+                    forceScrollToLatest = groupMessages.size <= forceScrollThroughMessageCount,
                     modifier = Modifier.weight(1f)
                 )
 
@@ -213,29 +218,47 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                     onSend = { text ->
                         if (pendingImageUri.isNotBlank() && groupId.isNotBlank()) {
                             val imageUri = pendingImageUri
+                            imageSending = true
                             pendingImageUri = ""
-                            viewModel.groupChatViewModel.sendGroupImageMessage(groupId, groupName, imageUri, MainActivity.imageForModel(imageUri), inputText, currentMode) {
+                            forceScrollThroughMessageCount = groupMessages.size + 1
+                            viewModel.groupChatViewModel.sendGroupImageMessage(groupId, groupName, imageUri, MainActivity.imageForModel(imageUri), inputText, currentMode, onMessageSent = {
                                 inputText = ""
-                            }
+                            }, onResult = { success ->
+                                imageSending = false
+                                if (success) forceScrollThroughMessageCount = groupMessages.size
+                            })
                         } else if (text.isNotBlank() && groupId.isNotBlank()) {
                             viewModel.sendGroupMessage(groupId, groupName, text, currentMode) {
                                 inputText = ""
                             }
                         }
                     },
-                    enabled = !groupLoading,
+                    enabled = !imageSending,
                     forceSendEnabled = pendingImageUri.isNotBlank(),
                     currentMode = currentMode,
                     onModeChange = { currentMode = it; settings.putGroupMode(groupId, it) },
                     showModePicker = showModePicker,
                     menuItems = {
                         MenuChip("切换模式", Primary) { showModePicker.value = true }
-                        MenuChip("相册", Primary) { MainActivity.pickImage { pendingImageUri = it } }
-                        MenuChip("拍照", Primary) { MainActivity.takePhoto { pendingImageUri = it } }
+                        MenuChip("相册", Primary) {
+                            if (visionReady) MainActivity.pickImage { pendingImageUri = it }
+                            else android.widget.Toast.makeText(ctx, "图片聊天需要先设置识图模型，请在模型设置中填写识图地址、模型名和密钥。", android.widget.Toast.LENGTH_LONG).show()
+                        }
+                        MenuChip("拍照", Primary) {
+                            if (visionReady) MainActivity.takePhoto { pendingImageUri = it }
+                            else android.widget.Toast.makeText(ctx, "图片聊天需要先设置识图模型，请在模型设置中填写识图地址、模型名和密钥。", android.widget.Toast.LENGTH_LONG).show()
+                        }
                         MenuChip(if (recordingVoice) "停止录音" else "录音", if (recordingVoice) ErrorRed else Primary) {
-                            if (!recordingVoice) {
-                                recordingVoice = audioController.startRecording()
-                                if (!recordingVoice) android.widget.Toast.makeText(ctx, "无法开始录音，请检查麦克风权限", android.widget.Toast.LENGTH_SHORT).show()
+                            if (!recordingVoice && !settings.hasAsrConfiguration()) {
+                                android.widget.Toast.makeText(ctx, "请先在模型设置中填写语音识别模型和密钥。", android.widget.Toast.LENGTH_LONG).show()
+                            } else if (!recordingVoice) {
+                                MainActivity.requestMicrophonePermission { granted ->
+                                    if (!granted) android.widget.Toast.makeText(ctx, "需要允许麦克风权限才能使用语音输入。", android.widget.Toast.LENGTH_LONG).show()
+                                    else {
+                                        recordingVoice = audioController.startRecording()
+                                        if (!recordingVoice) android.widget.Toast.makeText(ctx, "无法开始录音，请检查麦克风权限", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                }
                             } else {
                                 recordingVoice = false
                                 val recorded = audioController.stopRecording()
@@ -244,11 +267,13 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                                 } else {
                                     scope.launch {
                                         try {
-                                            val asr: AsrGateway = org.koin.core.context.GlobalContext.get().get()
+                                            val asr = com.rhodes.privatechat.shared.voice.createAsrGateway(settings.asrBaseUrl, settings.asrApiKey.ifBlank { settings.apiKey }, settings.asrModelName)
                                             val text = asr.transcribe(AsrRequest(audioController.readPcmFromWav(recorded.path))).text
                                             if (text.isBlank()) android.widget.Toast.makeText(ctx, "没有识别到文字", android.widget.Toast.LENGTH_SHORT).show() else inputText = text
                                         } catch (e: Exception) {
                                             android.widget.Toast.makeText(ctx, "语音识别失败：${e.message?.take(40) ?: "未知错误"}", android.widget.Toast.LENGTH_SHORT).show()
+                                        } finally {
+                                            audioController.deleteAudio(recorded.path)
                                         }
                                     }
                                 }

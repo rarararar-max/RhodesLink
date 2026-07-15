@@ -168,7 +168,7 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
         AlertDialog(onDismissRequest = { showReplyDialog = false }, title = { Text("回复 $parentName", color = TextPrimary) }, text = {
             OutlinedTextField(value = replyText, onValueChange = { replyText = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("@$parentName...") }, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Primary, unfocusedBorderColor = Divider))
         }, confirmButton = {
-            TextButton(onClick = {
+            TextButton(enabled = !replySending && replyText.isNotBlank(), onClick = {
                 if (replyText.isBlank() || replySending) return@TextButton
                 replySending = true
                 viewModel.commentOnMoment(momentId, "user", viewModel.getUserProfile().nickname, replyText, parentId, parentName)
@@ -185,7 +185,7 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
         AlertDialog(onDismissRequest = { showCommentDialog = false }, title = { Text("写评论", color = TextPrimary) }, text = {
             OutlinedTextField(value = commentText, onValueChange = { commentText = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("说点什么...", color = TextTertiary) }, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Primary, unfocusedBorderColor = Divider))
         }, confirmButton = {
-            TextButton(onClick = {
+            TextButton(enabled = !commentSending && commentText.isNotBlank(), onClick = {
                 if (commentText.isBlank() || commentSending) return@TextButton
                 commentSending = true
                 viewModel.commentOnMoment(commentMomentId, "user", viewModel.getUserProfile().nickname, commentText, 0, "")
@@ -238,14 +238,12 @@ private fun MomentCardWithInteraction(moment: MomentEntity, viewModel: MainViewM
                         Text(if (likes.size > 3) "${likeNames}等${likes.size}人点了赞" else "${likeNames}点了赞", fontSize = 12.sp, color = Primary)
                     }
                 }
-                // 评论列表（嵌套：一级→二级）
                 if (comments.isNotEmpty()) {
                     Spacer(Modifier.height(2.dp))
                     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(SurfaceVariant).padding(horizontal = 8.dp, vertical = 6.dp)) {
-                        val topComments = comments.filter { it.parentCommentId == 0L }
-                        topComments.forEachIndexed { idx, top ->
+                        val repliesByParent = comments.filter { it.parentCommentId != 0L }.groupBy { it.parentCommentId }
+                        comments.filter { it.parentCommentId == 0L }.forEachIndexed { idx, top ->
                             if (idx > 0) Spacer(Modifier.height(4.dp))
-                            // 一级评论
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(buildAnnotatedString {
                                     withStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = Primary)) { append(top.operatorName) }
@@ -254,9 +252,7 @@ private fun MomentCardWithInteraction(moment: MomentEntity, viewModel: MainViewM
                                 Spacer(Modifier.width(4.dp))
                                 Text("回复", fontSize = 11.sp, color = Primary, modifier = Modifier.clickable { onReply(top.id, top.operatorName) }.padding(horizontal = 4.dp, vertical = 2.dp))
                             }
-                            // 该一级下的二级评论
-                            val replies = comments.filter { it.parentCommentId == top.id }
-                            replies.forEach { reply ->
+                            repliesByParent[top.id].orEmpty().forEach { reply ->
                                 Spacer(Modifier.height(2.dp))
                                 Row(modifier = Modifier.padding(start = 20.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Text(buildAnnotatedString {

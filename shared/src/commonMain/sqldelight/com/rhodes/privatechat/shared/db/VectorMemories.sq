@@ -28,3 +28,22 @@ DELETE FROM vector_memories WHERE expiresAt < ?;
 
 deleteVectorMemoriesByOwner:
 DELETE FROM vector_memories WHERE ownerType = ? AND ownerId = ?;
+
+deleteVectorMemoriesBySource:
+DELETE FROM vector_memories WHERE ownerType = ? AND ownerId = ? AND sourceId = ?;
+
+deleteVectorMemoriesBySourceId:
+DELETE FROM vector_memories WHERE sourceId = ?;
+
+deleteVectorMemoriesBySourceTypeAndId:
+DELETE FROM vector_memories WHERE sourceType = ? AND sourceId = ?;
+
+deleteVectorsForMemorySource:
+DELETE FROM vector_memories
+WHERE id IN (
+    SELECT vectorId FROM memory_items
+    WHERE sourceKind = ? AND sourceRefId = ? AND vectorId != ''
+);
+
+deleteAllVectorMemories:
+DELETE FROM vector_memories;

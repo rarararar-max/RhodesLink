@@ -1,11 +1,25 @@
 package com.rhodes.privatechat.shared.vector
 
+import com.rhodes.privatechat.shared.settings.SettingsRepository
+
 class MemoryVectorService(
-    private val embeddingGateway: EmbeddingGateway,
+    private val settings: SettingsRepository,
     private val vectorStoreGateway: VectorStoreGateway,
 ) {
+    private var gatewaySignature = ""
+    private var gateway: EmbeddingGateway? = null
+
+    private fun activeGateway(): EmbeddingGateway {
+        val signature = listOf(settings.vectorProviderMode, settings.vectorBaseUrl, settings.vectorModelName, settings.vectorApiKey, settings.apiKey).joinToString("|")
+        if (gateway == null || gatewaySignature != signature) {
+            gateway = createEmbeddingGateway(settings)
+            gatewaySignature = signature
+        }
+        return gateway!!
+    }
+
     suspend fun saveMemory(memory: VectorMemory) {
-        val embedding = embeddingGateway.embed(memory.content)
+        val embedding = activeGateway().embed(memory.content)
         vectorStoreGateway.upsert(memory.copy(embedding = embedding))
     }
 
@@ -22,7 +36,7 @@ class MemoryVectorService(
         minScore: Double = 0.0,
         now: Long = 0L,
     ): List<VectorMemory> {
-        val queryEmbedding = embeddingGateway.embed(query)
+        val queryEmbedding = activeGateway().embed(query)
         return vectorStoreGateway.search(
             VectorSearchRequest(
                 ownerType = ownerType,
@@ -38,7 +52,17 @@ class MemoryVectorService(
     }
 
     suspend fun search(request: VectorSearchRequest): List<VectorMemory> {
-        val queryEmbedding = embeddingGateway.embed(request.query)
+        val queryEmbedding = activeGateway().embed(request.query)
         return vectorStoreGateway.search(request.copy(queryEmbedding = queryEmbedding))
     }
+
+    suspend fun clearAllMemories() = vectorStoreGateway.clearAllMemories()
+
+    suspend fun deleteMemory(memoryId: String) = vectorStoreGateway.delete(memoryId)
+
+    suspend fun listMemories(ownerType: String, ownerId: String): List<VectorMemory> =
+        vectorStoreGateway.listMemories(ownerType, ownerId)
+
+    suspend fun clearSessionMemory(ownerType: String, ownerId: String, sourceId: String) =
+        vectorStoreGateway.deleteBySource(ownerType, ownerId, sourceId)
 }

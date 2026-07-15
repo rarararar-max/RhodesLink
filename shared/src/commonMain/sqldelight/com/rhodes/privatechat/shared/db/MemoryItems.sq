@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS memory_items (
 getMemoryItemsByOwner:
 SELECT * FROM memory_items WHERE ownerType = ? AND ownerId = ? ORDER BY createdAt DESC;
 
+getAllMemoryItems:
+SELECT * FROM memory_items ORDER BY createdAt DESC;
+
 getMemoryItemsByLevel:
 SELECT * FROM memory_items WHERE ownerType = ? AND ownerId = ? AND memoryLevel = ? ORDER BY createdAt DESC;
 
@@ -45,6 +48,12 @@ ORDER BY importance DESC, createdAt DESC;
 
 getMemoryItemsByType:
 SELECT * FROM memory_items WHERE ownerType = ? AND ownerId = ? AND memoryType = ? ORDER BY createdAt DESC;
+
+getMemoryItemById:
+SELECT * FROM memory_items WHERE id = ?;
+
+getMemoryItemsBySource:
+SELECT * FROM memory_items WHERE sourceKind = ? AND sourceRefId = ?;
 
 getActiveMemoryItemByContent:
 SELECT * FROM memory_items
@@ -64,6 +73,9 @@ SELECT last_insert_rowid();
 updateMemoryItemVectorId:
 UPDATE memory_items SET vectorId = ?, updatedAt = ? WHERE id = ?;
 
+clearAllMemoryItemVectorIds:
+UPDATE memory_items SET vectorId = '';
+
 archiveMemoryItemsByLevel:
 UPDATE memory_items SET status = 'archived', updatedAt = ?
 WHERE ownerType = ? AND ownerId = ? AND memoryLevel = ? AND status = 'active';
@@ -76,6 +88,18 @@ UPDATE memory_items SET lastUsedAt = ?, usedCount = usedCount + 1, updatedAt = ?
 
 deleteMemoryItem:
 DELETE FROM memory_items WHERE id = ?;
+
+deleteMemoryItemsBySession:
+DELETE FROM memory_items WHERE sessionId = ?;
+
+deleteMemoryItemsByOwnerAndSourceKind:
+DELETE FROM memory_items WHERE ownerType = ? AND ownerId = ? AND sourceKind = ?;
+
+deleteMemoryItemsBySource:
+DELETE FROM memory_items WHERE sourceKind = ? AND sourceRefId = ?;
+
+deletePrivateRelationshipMemoryItems:
+DELETE FROM memory_items WHERE ownerType = ? AND ownerId = ? AND (sourceKind = 'PRIVATE_CHAT' OR (sourceKind = 'MANUAL_MEMORY' AND privacy = 'private'));
 
 deleteMemoryItemsByOwner:
 DELETE FROM memory_items WHERE ownerType = ? AND ownerId = ?;

@@ -14,7 +14,13 @@ getAllMoments:
 SELECT * FROM moments ORDER BY createdAt DESC;
 
 getMomentsPaged:
-SELECT * FROM moments ORDER BY createdAt DESC LIMIT ? OFFSET ?;
+SELECT * FROM moments ORDER BY createdAt DESC, id DESC LIMIT ? OFFSET ?;
+
+getMomentsBefore:
+SELECT * FROM moments
+WHERE createdAt < ? OR (createdAt = ? AND id < ?)
+ORDER BY createdAt DESC, id DESC
+LIMIT ?;
 
 getMoment:
 SELECT * FROM moments WHERE id = ?;
@@ -37,6 +43,9 @@ UPDATE moments SET commentCount = ? WHERE id = ?;
 
 deleteOldMoments:
 DELETE FROM moments WHERE createdAt < ?;
+
+deleteMomentsByOperator:
+DELETE FROM moments WHERE operatorId = ?;
 
 getLastInsertRowId:
 SELECT last_insert_rowid();

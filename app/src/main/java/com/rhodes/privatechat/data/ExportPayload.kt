@@ -12,6 +12,7 @@ import com.rhodes.privatechat.shared.model.Moment
 import com.rhodes.privatechat.shared.model.MomentComment
 import com.rhodes.privatechat.shared.model.MomentLike
 import com.rhodes.privatechat.shared.model.WorldEvent
+import com.rhodes.privatechat.shared.model.MemoryItem
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -31,6 +32,8 @@ data class ExportPayload(
     val momentComments: List<MomentComment>? = null,
     val diaries: List<Diary>? = null,
     val worldEvents: List<WorldEvent>? = null,
+    /** Canonical V2 memory. Embeddings and promotion audit records are rebuilt after restore. */
+    val memoryItems: List<MemoryItem>? = null,
     val settings: Map<String, String>? = null
 )
 

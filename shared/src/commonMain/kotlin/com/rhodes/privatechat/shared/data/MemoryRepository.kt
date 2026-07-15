@@ -24,7 +24,27 @@ class MemoryRepository(private val wrapper: DatabaseWrapper) {
     }
 
     suspend fun saveMemory(memory: Memory) = withContext(Dispatchers.Default) {
-        db.memoriesQueries.insertMemory(memory.sessionId, memory.operatorId, memory.type.name, memory.content, memory.keywords, memory.preferences, memory.taboos, memory.createdAt, memory.expiresAt)
+        if (memory.type == MemoryType.LONG_TERM) {
+            db.transaction {
+                db.memoriesQueries.deleteLongTermByOperator(memory.operatorId)
+                db.memoriesQueries.insertMemory(memory.sessionId, memory.operatorId, memory.type.name, memory.content, memory.keywords, memory.preferences, memory.taboos, memory.createdAt, memory.expiresAt)
+            }
+        } else {
+            db.memoriesQueries.insertMemory(memory.sessionId, memory.operatorId, memory.type.name, memory.content, memory.keywords, memory.preferences, memory.taboos, memory.createdAt, memory.expiresAt)
+        }
+    }
+
+    suspend fun replaceShortTermMemory(memory: Memory) = withContext(Dispatchers.Default) {
+        db.memoriesQueries.deleteShortTermMemories(memory.sessionId)
+        db.memoriesQueries.insertMemory(memory.sessionId, memory.operatorId, MemoryType.SHORT_TERM.name, memory.content, memory.keywords, memory.preferences, memory.taboos, memory.createdAt, memory.expiresAt)
+    }
+
+    /** Keeps exactly one current long-term impression for each operator. */
+    suspend fun replaceLongTermImpression(memory: Memory) = withContext(Dispatchers.Default) {
+        db.transaction {
+            db.memoriesQueries.deleteLongTermByOperator(memory.operatorId)
+            db.memoriesQueries.insertMemory(memory.sessionId, memory.operatorId, MemoryType.LONG_TERM.name, memory.content, memory.keywords, memory.preferences, memory.taboos, memory.createdAt, memory.expiresAt)
+        }
     }
 
     suspend fun getAllLongTermImpressions(): List<Memory> = withContext(Dispatchers.Default) {
@@ -57,6 +77,21 @@ class MemoryRepository(private val wrapper: DatabaseWrapper) {
         }.executeAsOneOrNull()
     }
 
+    suspend fun getDailyBySessionAndDate(sessionId: String, dateKey: String): Memory? = withContext(Dispatchers.Default) {
+        db.memoriesQueries.getDailyBySessionAndDate(sessionId, dateKey) { id, sid, opId, type, content, keywords, preferences, taboos, createdAt, expiresAt ->
+            Memory(id, sid, opId, try { MemoryType.valueOf(type) } catch (_: Exception) { MemoryType.DAILY }, content, keywords, preferences, taboos, createdAt, expiresAt)
+        }.executeAsOneOrNull()
+    }
+
+    suspend fun replaceDailyBySessionAndDate(memory: Memory, dateKey: String) = withContext(Dispatchers.Default) {
+        db.memoriesQueries.getDailyBySessionAndDate(memory.sessionId, dateKey) { id, _, _, _, _, _, _, _, _, _ -> id }
+            .executeAsOneOrNull()
+            ?.let { db.memoriesQueries.deleteMemory(it) }
+        db.memoriesQueries.replaceDailyBySessionAndDate(
+            memory.sessionId, memory.operatorId, memory.content, dateKey, memory.createdAt, memory.expiresAt
+        )
+    }
+
     suspend fun enforceMemoryRetain(sessionId: String, keepCount: Int) = withContext(Dispatchers.Default) {
         if (keepCount <= 0) return@withContext
         val all = db.memoriesQueries.getMemoriesBySession(sessionId, MemoryType.SHORT_TERM.name) { id, sid, opId, type, content, keywords, preferences, taboos, createdAt, expiresAt ->
@@ -69,6 +104,7 @@ class MemoryRepository(private val wrapper: DatabaseWrapper) {
     }
 
     suspend fun deleteAllImpressions() = withContext(Dispatchers.Default) { db.memoriesQueries.deleteAllLongTerm() }
+    suspend fun deleteLongTermByOperator(operatorId: String) = withContext(Dispatchers.Default) { db.memoriesQueries.deleteLongTermByOperator(operatorId) }
     suspend fun deleteMemoriesBySession(sessionId: String) = withContext(Dispatchers.Default) { db.memoriesQueries.deleteMemoriesBySession(sessionId) }
     suspend fun deleteMemoriesByOperator(operatorId: String) = withContext(Dispatchers.Default) { db.memoriesQueries.deleteMemoriesByOperator(operatorId) }
 }

@@ -19,12 +19,15 @@ import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.ui.theme.isDarkMode
 import com.rhodes.privatechat.ui.theme.罗德岛终端Theme
 import java.io.File
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import org.koin.java.KoinJavaComponent.inject
 
 class MainActivity : ComponentActivity() {
     private var imageResultHandler: ((String) -> Unit)? = null
     private var pendingCameraUri: Uri? = null
     private var pendingTakePhotoHandler: ((String) -> Unit)? = null
+    private var pendingMicrophoneHandler: ((Boolean) -> Unit)? = null
 
     private val pickImageLauncher = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let { imageResultHandler?.invoke(copyChatImageToFiles(it).toString()) }
@@ -41,6 +44,10 @@ class MainActivity : ComponentActivity() {
         if (granted) launchTakePhoto(handler) else pendingTakePhotoHandler = null
     }
     private val notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    private val microphonePermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        pendingMicrophoneHandler?.invoke(granted)
+        pendingMicrophoneHandler = null
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         val shouldDropSavedState = consumeDropSavedStateFlag()
@@ -93,6 +100,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    fun ensureMicrophonePermission(handler: (Boolean) -> Unit) {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M || checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            handler(true)
+        } else {
+            pendingMicrophoneHandler = handler
+            microphonePermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
     private fun launchTakePhoto(handler: (String) -> Unit) {
         pendingTakePhotoHandler = handler
         val dir = File(cacheDir, "camera").apply { mkdirs() }
@@ -105,7 +121,19 @@ class MainActivity : ComponentActivity() {
     private fun copyChatImageToFiles(uri: Uri): Uri {
         val dir = File(filesDir, "chat_images").apply { mkdirs() }
         val file = File(dir, "image_${System.currentTimeMillis()}.jpg")
-        contentResolver.openInputStream(uri)?.use { input -> file.outputStream().use { output -> input.copyTo(output) } }
+        runCatching {
+            val bitmap = decodeSampledBitmap(uri, 1920) ?: error("无法解码图片")
+            run {
+                val maxDim = 1920
+                val scaled = if (maxOf(bitmap.width, bitmap.height) > maxDim) {
+                    val ratio = maxDim.toFloat() / maxOf(bitmap.width, bitmap.height)
+                    Bitmap.createScaledBitmap(bitmap, (bitmap.width * ratio).toInt(), (bitmap.height * ratio).toInt(), true)
+                } else bitmap
+                file.outputStream().use { out -> scaled.compress(Bitmap.CompressFormat.JPEG, 80, out) }
+                if (scaled !== bitmap) scaled.recycle()
+                bitmap.recycle()
+            }
+        }.onFailure { file.delete() }
         return Uri.fromFile(file)
     }
 
@@ -113,12 +141,33 @@ class MainActivity : ComponentActivity() {
         if (uriText.startsWith("http://") || uriText.startsWith("https://") || uriText.startsWith("data:")) return uriText
         val uri = Uri.parse(uriText)
         val bytes = runCatching {
-            when (uri.scheme) {
-                "file" -> File(uri.path.orEmpty()).readBytes()
-                else -> contentResolver.openInputStream(uri)?.use { it.readBytes() }
+            val bitmap = decodeSampledBitmap(uri, 1600) ?: return@runCatching null
+            val scaled = if (maxOf(bitmap.width, bitmap.height) > 1600) {
+                val ratio = 1600f / maxOf(bitmap.width, bitmap.height)
+                Bitmap.createScaledBitmap(bitmap, (bitmap.width * ratio).toInt(), (bitmap.height * ratio).toInt(), true)
+            } else bitmap
+            java.io.ByteArrayOutputStream().use { output ->
+                scaled.compress(Bitmap.CompressFormat.JPEG, 85, output)
+                if (scaled !== bitmap) scaled.recycle()
+                bitmap.recycle()
+                output.toByteArray()
             }
         }.getOrNull() ?: return null
+        if (bytes.size > 4 * 1024 * 1024) return null
         return "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
+    }
+
+    private fun decodeSampledBitmap(uri: Uri, maxDimension: Int): android.graphics.Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        while (bounds.outWidth / sample > maxDimension * 2 || bounds.outHeight / sample > maxDimension * 2) sample *= 2
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = sample
+            inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+        }
+        return contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
     }
 
     private fun consumeDropSavedStateFlag(): Boolean {
@@ -132,6 +181,7 @@ class MainActivity : ComponentActivity() {
         @Volatile private var current: MainActivity? = null
         fun pickImage(handler: (String) -> Unit) { current?.pickChatImage(handler) }
         fun takePhoto(handler: (String) -> Unit) { current?.takeChatPhoto(handler) }
+        fun requestMicrophonePermission(handler: (Boolean) -> Unit) { current?.ensureMicrophonePermission(handler) ?: handler(false) }
         fun imageForModel(uriText: String): String? = current?.prepareImageForModel(uriText)
     }
 }

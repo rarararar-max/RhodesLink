@@ -42,6 +42,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -94,9 +95,22 @@ fun ProfileSettingsScreen(
     var avatarIndex by remember { mutableIntStateOf(prefSettings.getInt("user_avatar_index", 0)) }
     var showUnsavedDialog by remember { mutableStateOf(false) }
     val hasChanges = nickname != profile.nickname || gender != profile.gender || bio != profile.bio || (avatarUri ?: "") != profile.avatarUri || avatarIndex != prefSettings.getInt("user_avatar_index", 0)
+    LaunchedEffect(profile.nickname, profile.gender, profile.bio, profile.avatarUri) {
+        if (nickname == profile.nickname && gender == profile.gender && bio == profile.bio && (avatarUri ?: "") == profile.avatarUri) {
+            nickname = profile.nickname
+            gender = profile.gender
+            bio = profile.bio
+            avatarUri = profile.avatarUri.ifBlank { null }
+        }
+    }
 
-    val saveProfile: () -> Unit = {
-        viewModel.saveUserProfile(nickname, gender, bio, avatarUri ?: "")
+    val saveProfile: () -> Unit = save@{
+        val cleanName = nickname.trim()
+        if (cleanName.isBlank()) {
+            android.widget.Toast.makeText(context, "昵称不能为空", android.widget.Toast.LENGTH_SHORT).show()
+            return@save
+        }
+        viewModel.saveUserProfile(cleanName, gender, bio, avatarUri ?: "")
         prefSettings.putInt("user_avatar_index", avatarIndex)
     }
 

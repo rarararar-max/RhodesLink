@@ -15,29 +15,30 @@ class DiaryRepository(private val wrapper: DatabaseWrapper) {
 
     // --- Diaries ---
     suspend fun insertDiary(diary: Diary) = withContext(Dispatchers.Default) {
-        db.diariesQueries.insertDiary(diary.operatorId, diary.operatorName, diary.content, diary.date, diary.createdAt)
+        val version = diary.version.takeIf { it > 0 } ?: db.diariesQueries.getNextVersion(diary.operatorId, diary.date).executeAsOne().toInt()
+        db.diariesQueries.insertDiary(diary.operatorId, diary.operatorName, diary.content, diary.date, version.toLong(), diary.createdAt)
     }
 
     suspend fun getDiary(operatorId: String, date: String): Diary? = withContext(Dispatchers.Default) {
-        db.diariesQueries.getDiary(operatorId, date) { id, opId, opName, content, date_, createdAt ->
-            Diary(id, opId, opName, content, date_, createdAt)
+        db.diariesQueries.getDiary(operatorId, date) { id, opId, opName, content, date_, version, createdAt ->
+            Diary(id, opId, opName, content, date_, version.toInt(), createdAt)
         }.executeAsOneOrNull()
     }
 
     fun getDiariesByOperator(operatorId: String): Flow<List<Diary>> =
-        db.diariesQueries.getDiariesByOperator(operatorId) { id, opId, opName, content, date, createdAt ->
-            Diary(id, opId, opName, content, date, createdAt)
+        db.diariesQueries.getDiariesByOperator(operatorId) { id, opId, opName, content, date, version, createdAt ->
+            Diary(id, opId, opName, content, date, version.toInt(), createdAt)
         }.asFlow().mapToList(Dispatchers.Default)
 
     suspend fun getAllDiaryEntries(operatorId: String): List<Diary> = withContext(Dispatchers.Default) {
-        db.diariesQueries.getAllDiaryEntries(operatorId) { id, opId, opName, content, date, createdAt ->
-            Diary(id, opId, opName, content, date, createdAt)
+        db.diariesQueries.getAllDiaryEntries(operatorId) { id, opId, opName, content, date, version, createdAt ->
+            Diary(id, opId, opName, content, date, version.toInt(), createdAt)
         }.executeAsList()
     }
 
     suspend fun getAllDiariesForBackup(): List<Diary> = withContext(Dispatchers.Default) {
-        db.diariesQueries.getAllDiariesForBackup { id, opId, opName, content, date, createdAt ->
-            Diary(id, opId, opName, content, date, createdAt)
+        db.diariesQueries.getAllDiariesForBackup { id, opId, opName, content, date, version, createdAt ->
+            Diary(id, opId, opName, content, date, version.toInt(), createdAt)
         }.executeAsList()
     }
 

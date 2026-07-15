@@ -1,0 +1,40 @@
+CREATE TABLE IF NOT EXISTS shared_experiences (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    sourceKind TEXT NOT NULL,
+    sourceRefId TEXT NOT NULL,
+    groupId TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL,
+    importance INTEGER NOT NULL DEFAULT 50,
+    status TEXT NOT NULL DEFAULT 'active',
+    createdAt INTEGER NOT NULL DEFAULT 0,
+    expiresAt INTEGER NOT NULL DEFAULT 9223372036854775807
+);
+
+CREATE TABLE IF NOT EXISTS shared_experience_participants (
+    experienceId INTEGER NOT NULL,
+    operatorId TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'participant',
+    PRIMARY KEY(experienceId, operatorId)
+);
+
+insertSharedExperience:
+INSERT INTO shared_experiences(sourceKind, sourceRefId, groupId, content, importance, status, createdAt, expiresAt)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+
+getLastSharedExperienceId:
+SELECT last_insert_rowid();
+
+getSharedExperienceBySource:
+SELECT * FROM shared_experiences WHERE sourceKind = ? AND sourceRefId = ? AND status = 'active' LIMIT 1;
+
+insertSharedExperienceParticipant:
+INSERT OR REPLACE INTO shared_experience_participants(experienceId, operatorId, role) VALUES (?, ?, ?);
+
+getSharedExperienceParticipantIds:
+SELECT operatorId FROM shared_experience_participants WHERE experienceId = ?;
+
+deleteSharedExperiencesBySource:
+DELETE FROM shared_experiences WHERE sourceKind = ? AND sourceRefId = ?;
+
+deleteSharedExperienceParticipantsBySource:
+DELETE FROM shared_experience_participants WHERE experienceId IN (SELECT id FROM shared_experiences WHERE sourceKind = ? AND sourceRefId = ?);

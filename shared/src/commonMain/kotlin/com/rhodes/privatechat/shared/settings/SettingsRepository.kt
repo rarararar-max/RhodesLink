@@ -109,11 +109,11 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     var aiAvatarUri: String
         get() = getString("ai_avatar_uri", "")
-        set(value) = settings.putString("ai_avatar_uri", value)
+        set(value) = putString("ai_avatar_uri", value)
 
     var bgUri: String
         get() = getString("bg_uri", "")
-        set(value) = settings.putString("bg_uri", value)
+        set(value) = putString("bg_uri", value)
 
     // === 聊天设置 ===
     var dualModel: Boolean
@@ -122,11 +122,11 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     var messageCounter: Int
         get() = getInt("msg_counter", 0)
-        set(value) = settings.putInt("msg_counter", value)
+        set(value) = putInt("msg_counter", value)
 
     var impressionMsgCounter: Int
         get() = getInt("impression_msg_counter", 0)
-        set(value) = settings.putInt("impression_msg_counter", value)
+        set(value) = putInt("impression_msg_counter", value)
 
     var summaryThreshold: Int
         get() = getInt("summary_threshold", 20).coerceIn(3, 200)
@@ -134,11 +134,11 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     var summaryRetain: Int
         get() = getInt("summary_retain", 5).coerceIn(1, 50)
-        set(value) = settings.putInt("summary_retain", value.coerceIn(1, 50))
+        set(value) = putInt("summary_retain", value.coerceIn(1, 50))
 
     var impressionThreshold: Int
         get() = getInt("impression_threshold", 50).coerceIn(5, 500)
-        set(value) = settings.putInt("impression_threshold", value.coerceIn(5, 500))
+        set(value) = putInt("impression_threshold", value.coerceIn(5, 500))
 
     var historyMessages: Int
         get() = getInt("history_messages", 20).coerceIn(0, 200)
@@ -155,12 +155,12 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     var cleanDays: Int
         get() = getInt("clean_days", 30).coerceIn(0, 3650)
-        set(value) = settings.putInt("clean_days", value.coerceIn(0, 3650))
+        set(value) = putInt("clean_days", value.coerceIn(0, 3650))
 
     // === 记忆注入设置 ===
     var memoryMode: String
-        get() = settings.getString("memory_mode", "standard")
-        set(value) = settings.putString("memory_mode", value)
+        get() = getString("memory_mode", "standard")
+        set(value) = putString("memory_mode", value)
 
     var sourceAwareMemoryEnabled: Boolean
         get() = getBoolean("source_aware_memory_enabled", true)
@@ -171,12 +171,12 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putBoolean("distinguish_private_memory", value)
 
     var memorySourceStyle: String
-        get() = settings.getString("memory_source_style", "natural")
-        set(value) = settings.putString("memory_source_style", value)
+        get() = getString("memory_source_style", "natural")
+        set(value) = putString("memory_source_style", value)
 
     var unifiedMemoryEnabled: Boolean
-        get() = settings.getBoolean("unified_memory_enabled", true)
-        set(value) = settings.putBoolean("unified_memory_enabled", value)
+        get() = getBoolean("unified_memory_enabled", true)
+        set(value) = putBoolean("unified_memory_enabled", value)
 
     var summaryCursorEnabled: Boolean
         get() = getBoolean("summary_cursor_enabled", true)
@@ -211,56 +211,56 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putInt("memory_pin_min_importance", value.coerceIn(0, 100))
 
     var autoImpressionUpdateEnabled: Boolean
-        get() = settings.getBoolean("auto_impression_update_enabled", true)
-        set(value) = settings.putBoolean("auto_impression_update_enabled", value)
+        get() = getBoolean("auto_impression_update_enabled", true)
+        set(value) = putBoolean("auto_impression_update_enabled", value)
 
     var momentPrivateMemoryUsage: String
-        get() = settings.getString("moment_private_memory_usage", "subtle")
-        set(value) = settings.putString("moment_private_memory_usage", value)
+        get() = getString("moment_private_memory_usage", "subtle")
+        set(value) = putString("moment_private_memory_usage", value)
 
     var privateAnchorCount: Int
-        get() = settings.getInt("private_anchor_count", 5).coerceIn(0, 20)
-        set(value) = settings.putInt("private_anchor_count", value.coerceIn(0, 20))
+        get() = getInt("private_anchor_count", 5).coerceIn(0, 20)
+        set(value) = putInt("private_anchor_count", value.coerceIn(0, 20))
 
     var privateSharedMemoryCount: Int
-        get() = settings.getInt("private_shared_memory_count", 3).coerceIn(0, 20)
-        set(value) = settings.putInt("private_shared_memory_count", value.coerceIn(0, 20))
+        get() = getInt("private_shared_memory_count", 3).coerceIn(0, 20)
+        set(value) = putInt("private_shared_memory_count", value.coerceIn(0, 20))
 
     var privateGroupContextCount: Int
-        get() = settings.getInt("private_group_context_count", 2).coerceIn(0, 10)
-        set(value) = settings.putInt("private_group_context_count", value.coerceIn(0, 10))
+        get() = getInt("private_group_context_count", 2).coerceIn(0, 10)
+        set(value) = putInt("private_group_context_count", value.coerceIn(0, 10))
 
     var groupMemberMemoryCount: Int
-        get() = settings.getInt("group_member_memory_count", 2).coerceIn(0, 10)
-        set(value) = settings.putInt("group_member_memory_count", value.coerceIn(0, 10))
+        get() = getInt("group_member_memory_count", 2).coerceIn(0, 10)
+        set(value) = putInt("group_member_memory_count", value.coerceIn(0, 10))
 
     var groupUserEventCount: Int
-        get() = settings.getInt("group_user_event_count", 3).coerceIn(0, 10)
-        set(value) = settings.putInt("group_user_event_count", value.coerceIn(0, 10))
+        get() = getInt("group_user_event_count", 3).coerceIn(0, 10)
+        set(value) = putInt("group_user_event_count", value.coerceIn(0, 10))
 
     var momentUserPostObserverCount: Int
-        get() = settings.getInt("moment_user_post_observer_count", groupUserEventCount).coerceIn(0, 10)
-        set(value) = settings.putInt("moment_user_post_observer_count", value.coerceIn(0, 10))
+        get() = getInt("moment_user_post_observer_count", groupUserEventCount).coerceIn(0, 10)
+        set(value) = putInt("moment_user_post_observer_count", value.coerceIn(0, 10))
 
     var groupRelationshipHintCount: Int
         get() = settings.getInt("group_relationship_hint_count", 10).coerceIn(0, 30)
         set(value) = settings.putInt("group_relationship_hint_count", value.coerceIn(0, 30))
 
     var momentAnchorCount: Int
-        get() = settings.getInt("moment_anchor_count", 3).coerceIn(0, 10)
-        set(value) = settings.putInt("moment_anchor_count", value.coerceIn(0, 10))
+        get() = getInt("moment_anchor_count", 3).coerceIn(0, 10)
+        set(value) = putInt("moment_anchor_count", value.coerceIn(0, 10))
 
     var momentRecentPostCount: Int
-        get() = settings.getInt("moment_recent_post_count", 3).coerceIn(0, 10)
-        set(value) = settings.putInt("moment_recent_post_count", value.coerceIn(0, 10))
+        get() = getInt("moment_recent_post_count", 3).coerceIn(0, 10)
+        set(value) = putInt("moment_recent_post_count", value.coerceIn(0, 10))
 
     var momentUserRelatedRate: Int
         get() = settings.getInt("moment_user_related_rate", 20).coerceIn(0, 100)
         set(value) = settings.putInt("moment_user_related_rate", value.coerceIn(0, 100))
 
     var commentContextCount: Int
-        get() = settings.getInt("comment_context_count", 5).coerceIn(0, 20)
-        set(value) = settings.putInt("comment_context_count", value.coerceIn(0, 20))
+        get() = getInt("comment_context_count", 5).coerceIn(0, 20)
+        set(value) = putInt("comment_context_count", value.coerceIn(0, 20))
 
     var commentMemoryCount: Int
         get() = settings.getInt("comment_memory_count", 2).coerceIn(0, 10)
@@ -275,8 +275,8 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = settings.putInt("comment_bystander_max", value.coerceIn(0, 10))
 
     var diaryAnchorCount: Int
-        get() = settings.getInt("diary_anchor_count", 5).coerceIn(0, 20)
-        set(value) = settings.putInt("diary_anchor_count", value.coerceIn(0, 20))
+        get() = getInt("diary_anchor_count", 5).coerceIn(0, 20)
+        set(value) = putInt("diary_anchor_count", value.coerceIn(0, 20))
 
     var diaryGroupSummaryCount: Int
         get() = settings.getInt("diary_group_summary_count", 3).coerceIn(0, 10)
@@ -380,8 +380,8 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putString("context_mode", value)
 
     var dailyAutoAiLimit: Int
-        get() = settings.getInt("daily_auto_ai_limit", 40).coerceIn(0, 500)
-        set(value) = settings.putInt("daily_auto_ai_limit", value.coerceIn(0, 500))
+        get() = getInt("daily_auto_ai_limit", 40).coerceIn(0, 500)
+        set(value) = putInt("daily_auto_ai_limit", value.coerceIn(0, 500))
 
     var tickAutoAiLimit: Int
         get() = settings.getInt("tick_auto_ai_limit", 3).coerceIn(0, 50)
@@ -403,12 +403,12 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     // === 旁白设置 ===
     var narSegMin: Int
-        get() = settings.getInt("nar_seg_min", 1).coerceIn(0, settings.getInt("nar_seg_max", 3).coerceIn(0, 20))
-        set(value) = settings.putInt("nar_seg_min", value.coerceIn(0, settings.getInt("nar_seg_max", 3).coerceIn(0, 20)))
+        get() = getInt("nar_seg_min", 1).coerceIn(0, getInt("nar_seg_max", 3).coerceIn(0, 20))
+        set(value) = putInt("nar_seg_min", value.coerceIn(0, getInt("nar_seg_max", 3).coerceIn(0, 20)))
 
     var narSegMax: Int
-        get() = settings.getInt("nar_seg_max", 3).coerceIn(settings.getInt("nar_seg_min", 1).coerceIn(0, 20), 20)
-        set(value) = settings.putInt("nar_seg_max", value.coerceIn(settings.getInt("nar_seg_min", 1).coerceIn(0, 20), 20))
+        get() = getInt("nar_seg_max", 3).coerceIn(getInt("nar_seg_min", 1).coerceIn(0, 20), 20)
+        set(value) = putInt("nar_seg_max", value.coerceIn(getInt("nar_seg_min", 1).coerceIn(0, 20), 20))
 
     var narMin: Int
         get() = settings.getInt("nar_min", 50).coerceIn(0, settings.getInt("nar_max", 300).coerceIn(0, 2000))
@@ -449,12 +449,12 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     // === 动态/日记设置 ===
     var momentMinChars: Int
-        get() = settings.getInt("moment_min_chars", 50).coerceIn(5, settings.getInt("moment_max_chars", 200).coerceIn(5, 2000))
-        set(value) = settings.putInt("moment_min_chars", value.coerceIn(5, settings.getInt("moment_max_chars", 200).coerceIn(5, 2000)))
+        get() = getInt("moment_min_chars", 50).coerceIn(5, getInt("moment_max_chars", 200).coerceIn(5, 2000))
+        set(value) = putInt("moment_min_chars", value.coerceIn(5, getInt("moment_max_chars", 200).coerceIn(5, 2000)))
 
     var momentMaxChars: Int
-        get() = settings.getInt("moment_max_chars", 200).coerceIn(settings.getInt("moment_min_chars", 50).coerceIn(5, 2000), 2000)
-        set(value) = settings.putInt("moment_max_chars", value.coerceIn(settings.getInt("moment_min_chars", 50).coerceIn(5, 2000), 2000))
+        get() = getInt("moment_max_chars", 200).coerceIn(getInt("moment_min_chars", 50).coerceIn(5, 2000), 2000)
+        set(value) = putInt("moment_max_chars", value.coerceIn(getInt("moment_min_chars", 50).coerceIn(5, 2000), 2000))
 
     var diaryMinChars: Int
         get() = settings.getInt("diary_min_chars", 50).coerceIn(20, settings.getInt("diary_max_chars", 300).coerceIn(20, 3000))
@@ -572,8 +572,28 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     // === 动态设置 ===
     var dailyMomentTarget: Int
-        get() = settings.getInt("daily_moment_target", 2).coerceIn(0, 100)
-        set(value) = settings.putInt("daily_moment_target", value.coerceIn(0, 100))
+        get() = settings.getInt("daily_moment_target", 2).coerceIn(0, 3)
+        set(value) = settings.putInt("daily_moment_target", value.coerceIn(0, 3))
+
+    var dailyProactiveChance: Int
+        get() = settings.getInt("daily_proactive_chance", 80).coerceIn(0, 100)
+        set(value) = settings.putInt("daily_proactive_chance", value.coerceIn(0, 100))
+
+    var dailyProactiveMax: Int
+        get() = settings.getInt("daily_proactive_max", 5).coerceIn(0, 20)
+        set(value) = settings.putInt("daily_proactive_max", value.coerceIn(0, 20))
+
+    var quietHoursEnabled: Boolean
+        get() = getBoolean("quiet_hours_enabled", false)
+        set(value) = putBoolean("quiet_hours_enabled", value)
+
+    var quietHoursStart: Int
+        get() = settings.getInt("quiet_hours_start", 1).coerceIn(0, 23)
+        set(value) = settings.putInt("quiet_hours_start", value.coerceIn(0, 23))
+
+    var quietHoursEnd: Int
+        get() = settings.getInt("quiet_hours_end", 9).coerceIn(0, 23)
+        set(value) = settings.putInt("quiet_hours_end", value.coerceIn(0, 23))
 
     // === 用户资料 ===
     var userName: String
@@ -617,6 +637,10 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = getString("vector_api_key", "")
         set(value) = putString("vector_api_key", value)
 
+    var vectorIndexSignature: String
+        get() = getString("vector_index_signature", "")
+        set(value) = putString("vector_index_signature", value)
+
     var visionProvider: String
         get() = getString("vision_provider", "ali")
         set(value) = putString("vision_provider", value)
@@ -645,6 +669,10 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = getString("asr_api_key", "")
         set(value) = putString("asr_api_key", value)
 
+    var asrProvider: String
+        get() = getString("asr_provider", "ali")
+        set(value) = putString("asr_provider", value)
+
     var ttsModelName: String
         get() = getString("tts_model_name", "speech-2.8-hd")
         set(value) = putString("tts_model_name", value)
@@ -657,34 +685,42 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = getString("tts_api_key", "")
         set(value) = putString("tts_api_key", value)
 
+    var ttsProvider: String
+        get() = getString("tts_provider", "minimax")
+        set(value) = putString("tts_provider", value)
+
     var ttsDefaultVoiceId: String
         get() = getString("tts_default_voice_id", "")
         set(value) = putString("tts_default_voice_id", value)
 
     // === 陪睡设置 ===
     var sleepAlarmHour: Int
-        get() = settings.getInt("sleep_alarm_hour", 7)
-        set(value) = settings.putInt("sleep_alarm_hour", value.coerceIn(0, 23))
+        get() = getInt("sleep_alarm_hour", 7)
+        set(value) = putInt("sleep_alarm_hour", value.coerceIn(0, 23))
 
     var sleepAlarmMinute: Int
-        get() = settings.getInt("sleep_alarm_minute", 30)
-        set(value) = settings.putInt("sleep_alarm_minute", value.coerceIn(0, 59))
+        get() = getInt("sleep_alarm_minute", 30)
+        set(value) = putInt("sleep_alarm_minute", value.coerceIn(0, 59))
 
     var sleepFixedWakeText: String
-        get() = settings.getString("sleep_fixed_wake_text", "时间到了。该醒了，我在这里。")
-        set(value) = settings.putString("sleep_fixed_wake_text", value)
+        get() = getString("sleep_fixed_wake_text", "时间到了。该醒了，我在这里。")
+        set(value) = putString("sleep_fixed_wake_text", value)
+
+    var sleepWakeTextMode: String
+        get() = getString("sleep_wake_text_mode", "ai")
+        set(value) = putString("sleep_wake_text_mode", if (value == "fixed") "fixed" else "ai")
 
     var sleepInactivityMinutes: Int
-        get() = settings.getInt("sleep_inactivity_minutes", 5).coerceIn(1, 60)
-        set(value) = settings.putInt("sleep_inactivity_minutes", value.coerceIn(1, 60))
+        get() = getInt("sleep_inactivity_minutes", 5).coerceIn(1, 60)
+        set(value) = putInt("sleep_inactivity_minutes", value.coerceIn(1, 60))
 
     var sleepDimAfterSeconds: Int
-        get() = settings.getInt("sleep_dim_after_seconds", 60).coerceIn(10, 600)
-        set(value) = settings.putInt("sleep_dim_after_seconds", value.coerceIn(10, 600))
+        get() = getInt("sleep_dim_after_seconds", 60).coerceIn(10, 600)
+        set(value) = putInt("sleep_dim_after_seconds", value.coerceIn(10, 600))
 
     var sleepSnoozeMinutes: Int
-        get() = settings.getInt("sleep_snooze_minutes", 5).coerceIn(1, 30)
-        set(value) = settings.putInt("sleep_snooze_minutes", value.coerceIn(1, 30))
+        get() = getInt("sleep_snooze_minutes", 5).coerceIn(1, 30)
+        set(value) = putInt("sleep_snooze_minutes", value.coerceIn(1, 30))
 
     // === 清理设置 ===
     var cleanDaysMessages: Int
@@ -771,12 +807,12 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putInt("group_speech_max", value.coerceIn(getInt("group_speech_min", 1).coerceIn(1, 20), 20))
 
     var groupNarSegMin: Int
-        get() = getInt("group_nar_seg_min", 1).coerceIn(0, getInt("group_nar_seg_max", 3).coerceIn(0, 20))
+        get() = getInt("group_nar_seg_min", 0).coerceIn(0, getInt("group_nar_seg_max", 3).coerceIn(0, 20))
         set(value) = putInt("group_nar_seg_min", value.coerceIn(0, getInt("group_nar_seg_max", 3).coerceIn(0, 20)))
 
     var groupNarSegMax: Int
-        get() = getInt("group_nar_seg_max", 3).coerceIn(getInt("group_nar_seg_min", 1).coerceIn(0, 20), 20)
-        set(value) = putInt("group_nar_seg_max", value.coerceIn(getInt("group_nar_seg_min", 1).coerceIn(0, 20), 20))
+        get() = getInt("group_nar_seg_max", 3).coerceIn(getInt("group_nar_seg_min", 0).coerceIn(0, 20), 20)
+        set(value) = putInt("group_nar_seg_max", value.coerceIn(getInt("group_nar_seg_min", 0).coerceIn(0, 20), 20))
 
     var groupNarMin: Int
         get() = getInt("group_nar_min", 20).coerceIn(0, getInt("group_nar_max", 100).coerceIn(0, 2000))
@@ -951,7 +987,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
     }
 
     fun putStringSet(key: String, value: Set<String>) =
-        settings.putString(key, Json.encodeToString(value))
+        putString(key, Json.encodeToString(value))
 
     fun remove(key: String) = synchronized(draftLock) {
         if (draftActive) draftValues[key] = null else settings.remove(key)

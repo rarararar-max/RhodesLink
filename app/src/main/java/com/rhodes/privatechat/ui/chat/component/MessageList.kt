@@ -50,6 +50,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -92,6 +94,7 @@ fun MessageList(
     var displayCount by remember { mutableIntStateOf(Int.MAX_VALUE) }
     var initialLoadDone by remember { mutableStateOf(false) }
     var lastMessageCount by remember { mutableIntStateOf(0) }
+    var lastFirstMessageId by remember { mutableStateOf<Long?>(null) }
     if (progressiveDisplay) {
         LaunchedEffect(messages.size) {
             val currentSize = messages.size
@@ -103,17 +106,26 @@ fun MessageList(
                 displayCount = currentSize
                 initialLoadDone = true
                 lastMessageCount = currentSize
+                lastFirstMessageId = messages.firstOrNull()?.id
             } else if (currentSize > lastMessageCount) {
-                for (i in lastMessageCount until currentSize) {
-                    if (i > lastMessageCount) {
-                        kotlinx.coroutines.delay((500L + (Math.random() * 500)).toLong())
+                val prepended = lastFirstMessageId != null && messages.firstOrNull()?.id != lastFirstMessageId
+                if (prepended) {
+                    // History pages are prepended; never present them as delayed new messages.
+                    displayCount = currentSize
+                } else {
+                    for (i in lastMessageCount until currentSize) {
+                        if (i > lastMessageCount) {
+                            kotlinx.coroutines.delay((500L + (Math.random() * 500)).toLong())
+                        }
+                        displayCount = i + 1
                     }
-                    displayCount = i + 1
                 }
                 lastMessageCount = currentSize
+                lastFirstMessageId = messages.firstOrNull()?.id
             } else if (currentSize < lastMessageCount) {
                 displayCount = currentSize
                 lastMessageCount = currentSize
+                lastFirstMessageId = messages.firstOrNull()?.id
             } else {
                 displayCount = currentSize
                 lastMessageCount = currentSize
@@ -135,6 +147,15 @@ fun MessageList(
             } catch (_: Exception) {}
         }
         lastBottomMessageId = lastId
+    }
+
+    // Keep a conversation already at the bottom visible when the IME reduces the viewport.
+    val imeBottom = WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current)
+    LaunchedEffect(imeBottom) {
+        if (imeBottom > 0 && displayMessages.isNotEmpty()) {
+            val nearBottom = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= displayMessages.lastIndex - 2 } ?: true
+            if (nearBottom) listState.animateScrollToItem(displayMessages.lastIndex)
+        }
     }
 
     LaunchedEffect(listState.firstVisibleItemIndex, displayMessages.size, isLoadingOlder, hasMore) {
@@ -260,10 +281,14 @@ private fun MessageBubble(
                         if (message.imageUri.isNotBlank()) {
                             Column {
                                 AsyncImage(model = message.imageUri, contentDescription = "图片消息", modifier = Modifier.fillMaxWidth().heightIn(max = 220.dp).clip(RoundedCornerShape(10.dp)), contentScale = ContentScale.Crop)
-                                if (message.content.isNotBlank()) {
+                                 if (message.content.isNotBlank()) {
                                     Spacer(Modifier.height(6.dp))
-                                    Text(message.content, fontSize = if (onSenderClick != null) 15.sp else 16.sp, color = TextPrimary, fontWeight = FontWeight.Normal)
-                                }
+                                     Text(message.content, fontSize = if (onSenderClick != null) 15.sp else 16.sp, color = TextPrimary, fontWeight = FontWeight.Normal)
+                                 }
+                                 if (message.imageStatus == "failed") {
+                                     Spacer(Modifier.height(6.dp))
+                                     Text("图片识别失败，请重新发送", fontSize = 12.sp, color = ErrorRed)
+                                 }
                             }
                         } else {
                             Text(message.content.ifEmpty { if (isMe) "" else "..." },

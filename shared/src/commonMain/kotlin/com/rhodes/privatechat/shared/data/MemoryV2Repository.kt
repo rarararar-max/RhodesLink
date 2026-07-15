@@ -56,6 +56,12 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
         }.executeAsList()
     }
 
+    suspend fun getAllMemoryItems(): List<MemoryItem> = withContext(Dispatchers.Default) {
+        db.memoryItemsQueries.getAllMemoryItems { id, ownerType_, ownerId_, memoryLevel, memoryType, sourceKind, sourceRefId, sessionId, content, nickname, importance, privacy, unmetNeed, location, emotionValence, eventTime, createdAt, updatedAt, expiresAt, status, scheduledTime, action, careType, topicKey, sourceActor, sourceTarget, lastUsedAt, usedCount, confidence, rawJson, vectorId ->
+            MemoryItem(id, ownerType_, ownerId_, try { MemoryLevel.valueOf(memoryLevel) } catch (_: Exception) { MemoryLevel.L1 }, memoryType, try { MemorySourceKind.valueOf(sourceKind) } catch (_: Exception) { MemorySourceKind.PRIVATE_CHAT }, sourceRefId, sessionId, content, nickname, importance.toInt(), privacy, unmetNeed != 0L, location, emotionValence, eventTime, createdAt, updatedAt, expiresAt, status, scheduledTime, action, careType, topicKey, sourceActor, sourceTarget, lastUsedAt, usedCount.toInt(), confidence, rawJson, vectorId)
+        }.executeAsList()
+    }
+
     suspend fun getMemoryItemsByLevel(ownerType: String, ownerId: String, level: MemoryLevel): List<MemoryItem> = withContext(Dispatchers.Default) {
         db.memoryItemsQueries.getMemoryItemsByLevel(ownerType, ownerId, level.name) { id, ownerType_, ownerId_, memoryLevel, memoryType, sourceKind, sourceRefId, sessionId, content, nickname, importance, privacy, unmetNeed, location, emotionValence, eventTime, createdAt, updatedAt, expiresAt, status, scheduledTime, action, careType, topicKey, sourceActor, sourceTarget, lastUsedAt, usedCount, confidence, rawJson, vectorId ->
             MemoryItem(id, ownerType_, ownerId_, try { MemoryLevel.valueOf(memoryLevel) } catch (_: Exception) { MemoryLevel.L1 }, memoryType, try { MemorySourceKind.valueOf(sourceKind) } catch (_: Exception) { MemorySourceKind.PRIVATE_CHAT }, sourceRefId, sessionId, content, nickname, importance.toInt(), privacy, unmetNeed != 0L, location, emotionValence, eventTime, createdAt, updatedAt, expiresAt, status, scheduledTime, action, careType, topicKey, sourceActor, sourceTarget, lastUsedAt, usedCount.toInt(), confidence, rawJson, vectorId)
@@ -160,12 +166,33 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
         db.memoryItemsQueries.updateMemoryItemVectorId(vectorId, updatedAt, id)
     }
 
+    suspend fun clearAllMemoryItemVectorIds() = withContext(Dispatchers.Default) {
+        db.memoryItemsQueries.clearAllMemoryItemVectorIds()
+    }
+
     suspend fun archiveMemoryItemsByLevel(ownerType: String, ownerId: String, level: MemoryLevel, updatedAt: Long) = withContext(Dispatchers.Default) {
         db.memoryItemsQueries.archiveMemoryItemsByLevel(updatedAt, ownerType, ownerId, level.name)
     }
 
     suspend fun archiveMemoryItem(id: Long, updatedAt: Long) = withContext(Dispatchers.Default) {
         db.memoryItemsQueries.archiveMemoryItem(updatedAt, id)
+    }
+
+    suspend fun deleteMemoryItemsBySession(sessionId: String) = withContext(Dispatchers.Default) {
+        db.memoryItemsQueries.deleteMemoryItemsBySession(sessionId)
+    }
+
+    /** Deletes the structured source records and all direct vector copies of that source. */
+    suspend fun deleteBySource(sourceKind: MemorySourceKind, sourceRefId: String) = withContext(Dispatchers.Default) {
+        db.transaction {
+            // Structured items retain the exact vector IDs, avoiding collisions between
+            // independently numbered moments and comments.
+            db.vectorMemoriesQueries.deleteVectorsForMemorySource(sourceKind.name, sourceRefId)
+            db.memoryItemsQueries.deleteMemoryItemsBySource(sourceKind.name, sourceRefId)
+            db.memorySourceQueueQueries.deleteMemorySourcesBySource(sourceKind.name, sourceRefId)
+            db.vectorMemoriesQueries.deleteVectorMemoriesBySourceTypeAndId(sourceKind.name.lowercase(), sourceRefId)
+            db.memoryLinksQueries.deleteOrphanedMemoryLinks()
+        }
     }
 
     suspend fun markMemoryItemUsed(id: Long, now: Long) = withContext(Dispatchers.Default) {
@@ -192,6 +219,26 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
         db.memoryItemsQueries.deleteMemoryItemsByOwner(ownerType, ownerId)
         db.memoryBatchesQueries.deleteMemoryBatchesByOwner(ownerType, ownerId)
         db.memorySourceQueueQueries.deleteMemorySourcesByOwner(ownerType, ownerId)
+    }
+
+    suspend fun deleteBySession(sessionId: String) = withContext(Dispatchers.Default) {
+        db.memoryItemsQueries.deleteMemoryItemsBySession(sessionId)
+        db.memorySourceQueueQueries.deleteMemorySourcesBySession(sessionId)
+    }
+
+    suspend fun deleteMemoryItem(id: Long) = withContext(Dispatchers.Default) {
+        db.memoryLinksQueries.deleteMemoryLinksByParent(id)
+        db.memoryLinksQueries.deleteMemoryLinksByChild(id)
+        db.memoryItemsQueries.deleteMemoryItem(id)
+    }
+
+    suspend fun deleteByOwnerAndSourceKind(ownerType: String, ownerId: String, sourceKind: MemorySourceKind) = withContext(Dispatchers.Default) {
+        if (sourceKind == MemorySourceKind.PRIVATE_CHAT) {
+            db.memoryLinksQueries.deleteMemoryLinksForOwnerPrivateSource(ownerType, ownerId, ownerType, ownerId)
+            db.memoryBatchesQueries.deletePrivateMemoryBatchesByOwner(ownerType, ownerId)
+        }
+        db.memoryItemsQueries.deleteMemoryItemsByOwnerAndSourceKind(ownerType, ownerId, sourceKind.name)
+        db.memorySourceQueueQueries.deleteMemorySourcesByOwnerAndKind(ownerType, ownerId, sourceKind.name)
     }
 
 }

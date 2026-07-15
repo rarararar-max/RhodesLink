@@ -21,7 +21,7 @@ class SessionViewModel(
 
     fun deleteSession(sessionId: String) {
         scope.launch {
-            repository.deleteSessionMessages(sessionId)
+            repository.purgeSessionData(sessionId)
             repository.deleteSession(sessionId)
         }
     }

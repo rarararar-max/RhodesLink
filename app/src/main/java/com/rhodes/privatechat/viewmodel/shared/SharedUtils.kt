@@ -141,7 +141,8 @@ class SharedUtils(
         for ((key, value) in withLegacyPromptPlaceholders(replacements)) {
             result = result.replace("{{${key}}}", value)
         }
-        return result.replace(Regex("""\{\{[A-Z0-9_]+\}\}"""), "")
+        // Keep unknown tokens visible so custom-template typos remain diagnosable.
+        return result
     }
 
     fun withLegacyPromptPlaceholders(replacements: Map<String, String>): Map<String, String> {
@@ -324,7 +325,7 @@ class SharedUtils(
         return when (surface) {
             MemorySurface.PRIVATE_CHAT -> "$base 可以说“你上次跟我说过”“我看到你评论了”“群里之前聊到”。"
             MemorySurface.GROUP_CHAT -> "$base 可以说“之前群里聊过”“我听谁提过”“动态下面有人说”。"
-            MemorySurface.MOMENT -> "$base 公开动态优先写自己的日常；来自私聊的信息只含蓄影响语气，不要像公告一样复述。"
+            MemorySurface.MOMENT -> "$base 公开动态优先写自己的日常；只使用公开场合可知的信息。"
             MemorySurface.COMMENT -> "$base 评论区只需轻轻带过，不要长篇解释来源。"
             MemorySurface.DIARY -> "$base 日记可以更直接写清楚自己从哪里知道这些事。"
         }

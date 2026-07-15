@@ -44,6 +44,9 @@ DELETE FROM relationships WHERE operatorId = ? AND relatedOperatorId = ?;
 deleteByOperator:
 DELETE FROM relationships WHERE operatorId = ?;
 
+deleteByOperatorAnyDirection:
+DELETE FROM relationships WHERE operatorId = ? OR relatedOperatorId = ?;
+
 deleteByType:
 DELETE FROM relationships WHERE type = ?;
 

@@ -14,14 +14,52 @@ object MemoryRanker {
         if (maxCount <= 0 || anchors.isEmpty()) return emptyList()
         val now = System.currentTimeMillis()
         return anchors
-            .filter { it.content.isNotBlank() && !isWeakContent(it) }
+            .map { AnchorSourcePolicy.inferLegacy(it) }
+            .filter { it.content.isNotBlank() && !isWeakContent(it) && isAllowedForSurface(it, surface) }
             .distinctBy { it.type to normalize(it.content) }
             .sortedWith(compareByDescending<MemoryAnchor> { score(it, surface, userContent, now) }.thenByDescending { it.createdAt })
             .take(maxCount)
     }
 
+    private fun isAllowedForSurface(anchor: MemoryAnchor, surface: MemorySurface): Boolean {
+        if (surface == MemorySurface.PRIVATE_CHAT) return true
+        if (anchor.isPrivate || anchor.source == AnchorSourcePolicy.PRIVATE_CHAT) return false
+        return when (surface) {
+            MemorySurface.PRIVATE_CHAT -> true
+            MemorySurface.GROUP_CHAT -> anchor.source in setOf(
+                AnchorSourcePolicy.GROUP_CHAT,
+                AnchorSourcePolicy.MOMENT,
+                AnchorSourcePolicy.COMMENT,
+                AnchorSourcePolicy.STATUS,
+                AnchorSourcePolicy.DISPATCH,
+                AnchorSourcePolicy.MAHJONG
+            )
+            MemorySurface.MOMENT -> anchor.source in setOf(
+                AnchorSourcePolicy.MOMENT,
+                AnchorSourcePolicy.COMMENT,
+                AnchorSourcePolicy.STATUS,
+                AnchorSourcePolicy.DISPATCH
+            )
+            MemorySurface.COMMENT -> anchor.source in setOf(
+                AnchorSourcePolicy.MOMENT,
+                AnchorSourcePolicy.COMMENT,
+                AnchorSourcePolicy.STATUS,
+                AnchorSourcePolicy.DISPATCH
+            )
+            MemorySurface.DIARY -> anchor.source in setOf(
+                AnchorSourcePolicy.GROUP_CHAT,
+                AnchorSourcePolicy.MOMENT,
+                AnchorSourcePolicy.COMMENT,
+                AnchorSourcePolicy.DIARY,
+                AnchorSourcePolicy.STATUS,
+                AnchorSourcePolicy.DISPATCH,
+                AnchorSourcePolicy.MAHJONG
+            )
+        }
+    }
+
     private fun score(anchor: MemoryAnchor, surface: MemorySurface, userContent: String, now: Long): Int {
-        val normalized = AnchorSourcePolicy.inferLegacy(anchor)
+        val normalized = anchor
         val sourceScore = when {
             normalized.source == AnchorSourcePolicy.PRIVATE_CHAT -> if (surface == MemorySurface.PRIVATE_CHAT) 45 else 20
             normalized.source == AnchorSourcePolicy.COMMENT -> if (surface == MemorySurface.COMMENT || surface == MemorySurface.PRIVATE_CHAT) 50 else 25

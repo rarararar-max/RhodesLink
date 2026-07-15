@@ -13,6 +13,7 @@ import com.rhodes.privatechat.shared.model.GooglePart
 import com.rhodes.privatechat.shared.model.GoogleGenerateResponse
 import com.rhodes.privatechat.shared.model.ResponseFormat
 import com.rhodes.privatechat.shared.model.Segment
+import com.rhodes.privatechat.shared.model.ThinkingParam
 import com.rhodes.privatechat.shared.model.SummaryResponse
 import io.ktor.client.HttpClient
 import io.ktor.client.request.header
@@ -44,6 +45,8 @@ class AIService(private val client: HttpClient = createHttpClient()) {
     companion object {
         private const val TAG = "AIService"
     }
+
+    class EmptyModelResponseException(modelName: String) : Exception("模型 $modelName 返回空内容，请重试或更换模型")
 
     // --- Response parsing utilities ---
 
@@ -110,6 +113,17 @@ class AIService(private val client: HttpClient = createHttpClient()) {
             val content = m.groupValues[2].trim()
             if (content.isNotBlank()) {
                 segments.add(Segment(type = type, content = content))
+            }
+        }
+        if (segments.isEmpty()) {
+            val tagged = Regex("""(?m)^(?:干员动作|旁白|动作)\s*[：:]\s*(.+)$|^(?:干员台词|台词|对话)\s*[：:]\s*(.+)$""")
+            for (match in tagged.findAll(raw)) {
+                val narration = match.groupValues[1].trim()
+                val dialogue = match.groupValues[2].trim()
+                when {
+                    narration.isNotBlank() -> segments += Segment(type = "narration", content = narration)
+                    dialogue.isNotBlank() -> segments += Segment(type = "dialogue", content = dialogue)
+                }
             }
         }
         return OfflineModeResponse(emotion = emotion, location = location, state = state, segments = segments.ifEmpty { null })
@@ -262,32 +276,42 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                 messages = messages,
                 stream = false,
                 temperature = temperature,
-                response_format = if (jsonMode && supportsJsonMode(config.id)) ResponseFormat("json_object") else null
+                // DeepSeek V4 Flash can emit whitespace-only completions when API JSON mode is combined
+                // with a long structured roleplay prompt. The prompt and local parser already enforce JSON.
+                response_format = if (jsonMode && supportsJsonMode(config.id) && config.id != "deepseek") ResponseFormat("json_object") else null,
+                thinking = if (config.id == "deepseek") ThinkingParam("disabled") else null
             )
-            val requestJson = json.encodeToString(requestBody)
-            println("[AISearch] >>> 请求URL=$url model=$model")
-            println("[AISearch] >>> 请求体=${requestJson}")
             val response: HttpResponse = client.post(url) {
                 contentType(ContentType.Application.Json)
                 header("Authorization", "Bearer $apiKey")
                 setBody(requestBody)
             }
             if (!response.status.isSuccess()) {
-                val errorBody = response.bodyAsChannel().readUTF8Line() ?: "Unknown error"
-                throw Exception("API error ${response.status.value}: $errorBody")
+                response.bodyAsText()
+                throw Exception("API error ${response.status.value}")
             }
             val responseBody = response.bodyAsText()
-            println("[AISearch] <<< 响应体=${responseBody}")
             val completion = json.decodeFromString<NonStreamResponse>(responseBody)
-            val content = completion.choices?.firstOrNull()?.message?.content ?: ""
+            val msg = completion.choices?.firstOrNull()?.message
+            val rawContent = msg?.content ?: ""
+            val content = if (rawContent.isBlank() || rawContent.all { it.isWhitespace() }) "" else rawContent
             val inputTokens = completion.usage?.promptTokens ?: 0
             val outputTokens = completion.usage?.completionTokens ?: 0
+            val cacheHit = completion.usage?.promptCacheHitTokens ?: 0
+            val cacheMiss = completion.usage?.promptCacheMissTokens ?: 0
+            if (cacheHit > 0 || cacheMiss > 0) {
+                val total = cacheHit + cacheMiss
+                val rate = if (total > 0) cacheHit * 100 / total else 0
+                println("RHODES_AI cache hit-rate=${rate}%")
+            }
             return ChatResult(content, inputTokens, outputTokens)
         }
 
         // === Google Gemini 专用格式 ===
         if (config.id == "google") {
-            val systemMsg = messages.firstOrNull { it.role == "system" }
+            val systemMsg = messages.filter { it.role == "system" }
+                .joinToString("\n\n") { it.content }
+                .takeIf { it.isNotBlank() }
             val chatMsgs = messages.filter { it.role != "system" }
             val googleBody = GoogleGenerationRequest(
                 contents = chatMsgs.map { msg ->
@@ -296,8 +320,8 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                         role = if (msg.role == "user") "user" else "model"
                     )
                 },
-                systemInstruction = systemMsg?.let {
-                    GoogleContent(parts = listOf(GooglePart(text = it.content)))
+                systemInstruction = systemMsg?.let { content ->
+                    GoogleContent(parts = listOf(GooglePart(text = content)))
                 }
             )
             val googleUrl = "${url}/${model}:generateContent"
@@ -308,7 +332,7 @@ class AIService(private val client: HttpClient = createHttpClient()) {
             }
             if (!response.status.isSuccess()) {
                 val errorBody = response.bodyAsChannel().readUTF8Line() ?: "Unknown error"
-                throw Exception("Google API error ${response.status.value}: $errorBody")
+                throw Exception("Google API error ${response.status.value}")
             }
             val responseBody = response.bodyAsText()
             val googleResp = json.decodeFromString<GoogleGenerateResponse>(responseBody)
@@ -340,14 +364,15 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         var requestError: Exception? = null
         for (attempt in 1..maxRetries) {
             try {
-                val result = chat(apiKey, messages, providerId, modelName, customUrl, temperature, jsonMode)
+                val attemptMessages = if (attempt == 1) messages else messages + AiMessage("user", repairInstruction(messages))
+                val result = chat(apiKey, attemptMessages, providerId, modelName, customUrl, temperature, jsonMode)
                 lastRaw = result.content
-                println("[AISearch] 解析内容 attempt=$attempt len=${lastRaw.length}")
                 if (lastRaw.isNotBlank()) break
+                requestError = EmptyModelResponseException(modelName)
+                if (attempt < maxRetries) kotlinx.coroutines.delay(500L * attempt)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                println("[AISearch] 重试失败 attempt=$attempt/$maxRetries err=${e.toString().take(200)}")
                 requestError = e
                 if (attempt < maxRetries) {
                     kotlinx.coroutines.delay(500L * attempt)
@@ -356,23 +381,27 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         }
 
         if (lastRaw.isBlank()) {
-            println("[AISearch] 全部${maxRetries}次失败 lastErr=${requestError.toString().take(200)}")
-            throw requestError ?: Exception("AI请求失败")
+            throw requestError ?: EmptyModelResponseException(modelName)
         }
 
-        repeat(maxRetries) { index ->
-            try {
-                val cleaned = cleanJson(lastRaw)
-                val parsed = json.decodeFromString<OfflineModeResponse>(cleaned)
-                if (parsed.segments.isNullOrEmpty() && parsed.dialogue.isBlank()) throw Exception("AI返回为空内容")
-                return parsed
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-            }
+        try {
+            val cleaned = cleanJson(lastRaw)
+            val parsed = json.decodeFromString<OfflineModeResponse>(cleaned)
+            if (parsed.segments.isNullOrEmpty() && parsed.dialogue.isBlank()) throw Exception("AI返回为空内容")
+            return parsed
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
         }
 
         return normalizeOfflineResponse(lastRaw)
+    }
+
+    private fun repairInstruction(messages: List<AiMessage>): String {
+        val system = messages.firstOrNull { it.role == "system" }?.content.orEmpty()
+        val online = system.contains("线上模式") || system.contains("主动给用户") || system.contains("只输出 dialogue")
+        return if (online) "上一轮输出无效。保留当前角色、上下文和历史，只输出可解析 JSON；segments 至少包含一条 dialogue，禁止 narration、动作和解释。"
+        else "上一轮输出无效。保留当前角色、上下文和历史，只输出符合当前模板的可解析 JSON；至少包含一条 dialogue，不要输出 Markdown 或解释。"
     }
 
     // --- Streaming chat (保留用于兼容) ---

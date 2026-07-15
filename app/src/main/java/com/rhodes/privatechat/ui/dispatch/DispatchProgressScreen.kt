@@ -194,7 +194,13 @@ fun DispatchProgressScreen(
         HorizontalDivider(color = Divider)
 
         if (errorMsg.isNotBlank()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(errorMsg, color = TextTertiary) }
+            Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(errorMsg, color = ErrorRed, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(8.dp))
+                Text("本次派遣没有开始，你可以返回后重新发起。", color = TextSecondary, fontSize = 13.sp)
+                Spacer(Modifier.height(20.dp))
+                Button(onClick = onBack, modifier = Modifier.fillMaxWidth().height(44.dp), colors = ButtonDefaults.buttonColors(containerColor = Primary)) { Text("返回派遣页") }
+            }
             return@Column
         }
 

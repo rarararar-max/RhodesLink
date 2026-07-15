@@ -47,6 +47,15 @@ SELECT COUNT(*) FROM moment_comments WHERE momentId = ?;
 deleteOldUserComments:
 DELETE FROM moment_comments WHERE createdAt < ? AND (replyToName = ? OR momentId IN (SELECT id FROM moments WHERE operatorId = 'user'));
 
+getCommentsByOperator:
+SELECT * FROM moment_comments WHERE operatorId = ?;
+
+deleteCommentsByOperator:
+DELETE FROM moment_comments WHERE operatorId = ?;
+
+deleteCommentsByMoment:
+DELETE FROM moment_comments WHERE momentId = ?;
+
 getCommentById:
 SELECT * FROM moment_comments WHERE id = ?;
 

@@ -7,7 +7,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -61,7 +60,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalFocusManager
 import coil3.compose.AsyncImage
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.ui.chat.component.ChatDropdownMenuItem
@@ -78,8 +76,9 @@ import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.util.ChatTrace
 import com.rhodes.privatechat.MainActivity
 import com.rhodes.privatechat.audio.LocalAudioController
-import com.rhodes.privatechat.shared.voice.AsrGateway
 import com.rhodes.privatechat.shared.voice.AsrRequest
+import com.rhodes.privatechat.shared.voice.hasAsrConfiguration
+import com.rhodes.privatechat.shared.voice.voiceCallSetupMessage
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import org.koin.compose.koinInject
 import kotlinx.coroutines.launch
@@ -114,7 +113,9 @@ fun ChatScreen(
     val op = operator
     val context = LocalContext.current
     val userProfile by viewModel.userProfile.collectAsState()
-    val focusManager = LocalFocusManager.current
+    val visionReady = settings.visionBaseUrl.isNotBlank() &&
+        settings.visionModelName.isNotBlank() &&
+        settings.visionApiKey.ifBlank { settings.apiKey }.isNotBlank()
 
     // 使用 MessageParser 将原始消息转换为统一 UI 模型
     val messages = remember(rawMessages, op, userProfile, sessionRestartAt) {
@@ -133,7 +134,7 @@ fun ChatScreen(
                         id = raw.id,
                         senderName = if (raw.isMe) "我" else op.name,
                         senderColor = Primary,
-                        content = raw.content.takeIf { !it.trim().startsWith("{") && !it.trim().startsWith("[") } ?: "[消息格式异常，已隐藏原始结构]",
+                        content = raw.content.take(1000),
                         timestamp = raw.timestamp,
                         isMe = raw.isMe,
                         avatarUri = if (raw.isMe) userProfile.avatarUri else op.avatarUri,
@@ -151,7 +152,7 @@ fun ChatScreen(
                     id = raw.id,
                     senderName = if (raw.isMe) "我" else op.name,
                     senderColor = Primary,
-                    content = raw.content.takeIf { !it.trim().startsWith("{") && !it.trim().startsWith("[") } ?: "[消息格式异常，已隐藏原始结构]",
+                    content = raw.content.take(1000),
                     timestamp = raw.timestamp,
                     isMe = raw.isMe,
                     avatarUri = if (raw.isMe) userProfile.avatarUri else op.avatarUri,
@@ -189,10 +190,13 @@ fun ChatScreen(
         }
     }
     var showBgReset by rememberSaveable { mutableStateOf(false) }
-    var showClearConfirm by rememberSaveable { mutableStateOf(false) }
+    var showRestartChoices by rememberSaveable { mutableStateOf(false) }
+    var showEraseConfirm by rememberSaveable { mutableStateOf(false) }
     val showModePicker = remember { mutableStateOf(false) }
     var showPropShop by rememberSaveable { mutableStateOf(false) }
     var pendingImageUri by rememberSaveable { mutableStateOf("") }
+    var imageSending by rememberSaveable { mutableStateOf(false) }
+    var forceScrollThroughMessageCount by remember { mutableStateOf(0) }
     var recordingVoice by rememberSaveable { mutableStateOf(false) }
     val audioController = remember { LocalAudioController(context) }
     val scope = rememberCoroutineScope()
@@ -202,10 +206,7 @@ fun ChatScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-    Box(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding().clickable(
-        interactionSource = remember { MutableInteractionSource() },
-        indication = null
-    ) { focusManager.clearFocus() }) {
+    Box(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
         bgUri?.let { AsyncImage(model = it, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds) }
 
         Column(modifier = modifier.fillMaxSize()) {
@@ -245,7 +246,7 @@ fun ChatScreen(
                     ChatDropdownMenuItem(
                         text = { Text("重新开始会话") },
                         leadingIcon = { Icon(Icons.Default.Refresh, null, tint = ErrorRed) },
-                        onClick = { showClearConfirm = true }
+                        onClick = { showRestartChoices = true }
                     )
                 }
             )
@@ -261,7 +262,7 @@ fun ChatScreen(
                     onLoadOlder = { viewModel.loadOlderMessages() },
                     isLoadingOlder = isLoadingOlder,
                     hasMore = hasMoreMessages,
-                    forceScrollToLatest = false,
+                    forceScrollToLatest = rawMessages.size <= forceScrollThroughMessageCount,
                     modifier = Modifier.weight(1f)
                 )
 
@@ -280,13 +281,20 @@ fun ChatScreen(
                     onSend = {
                         if (pendingImageUri.isNotBlank()) {
                             val imageUri = pendingImageUri
+                            imageSending = true
+                            // The persisted image card is now the send-state UI; restore the composer immediately.
                             pendingImageUri = ""
-                            viewModel.chatViewModel.sendImageMessage(imageUri, MainActivity.imageForModel(imageUri), inputText)
+                            forceScrollThroughMessageCount = rawMessages.size + 1
+                            viewModel.chatViewModel.sendImageMessage(imageUri, MainActivity.imageForModel(imageUri), inputText) { success ->
+                                imageSending = false
+                                if (success) forceScrollThroughMessageCount = rawMessages.size
+                            }
                         } else {
                             viewModel.sendMessage()
                         }
                     },
-                    enabled = !isLoading,
+                    // Sending again intentionally cancels the unfinished request; do not trap users in image analysis.
+                    enabled = !imageSending,
                     forceSendEnabled = pendingImageUri.isNotBlank(),
                     currentMode = currentMode,
                     onModeChange = { viewModel.setMode(it) },
@@ -301,12 +309,25 @@ fun ChatScreen(
                     menuItems = {
                         MenuChip("🔄 模式", Primary) { showModePicker.value = true }
                         MenuChip("🎒 道具", AccentOrange) { showPropShop = true }
-                        MenuChip("🖼 相册", Primary) { MainActivity.pickImage { pendingImageUri = it } }
-                        MenuChip("📷 拍照", Primary) { MainActivity.takePhoto { pendingImageUri = it } }
+                        MenuChip("🖼 相册", Primary) {
+                            if (visionReady) MainActivity.pickImage { pendingImageUri = it }
+                            else Toast.makeText(context, "图片聊天需要先设置识图模型，请在模型设置中填写识图地址、模型名和密钥。", Toast.LENGTH_LONG).show()
+                        }
+                        MenuChip("📷 拍照", Primary) {
+                            if (visionReady) MainActivity.takePhoto { pendingImageUri = it }
+                            else Toast.makeText(context, "图片聊天需要先设置识图模型，请在模型设置中填写识图地址、模型名和密钥。", Toast.LENGTH_LONG).show()
+                        }
                         MenuChip(if (recordingVoice) "⏹ 录音" else "🎤 输入", if (recordingVoice) ErrorRed else Primary) {
-                            if (!recordingVoice) {
-                                recordingVoice = audioController.startRecording()
-                                if (!recordingVoice) Toast.makeText(context, "无法开始录音，请检查麦克风权限", Toast.LENGTH_SHORT).show()
+                            if (!recordingVoice && !settings.hasAsrConfiguration()) {
+                                Toast.makeText(context, "请先在模型设置中填写语音识别模型和密钥。", Toast.LENGTH_LONG).show()
+                            } else if (!recordingVoice) {
+                                MainActivity.requestMicrophonePermission { granted ->
+                                    if (!granted) Toast.makeText(context, "需要允许麦克风权限才能使用语音输入。", Toast.LENGTH_LONG).show()
+                                    else {
+                                        recordingVoice = audioController.startRecording()
+                                        if (!recordingVoice) Toast.makeText(context, "无法开始录音，请检查麦克风权限", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
                             } else {
                                 recordingVoice = false
                                 val recorded = audioController.stopRecording()
@@ -315,18 +336,22 @@ fun ChatScreen(
                                 } else {
                                     scope.launch {
                                         try {
-                                            val asr: AsrGateway = org.koin.core.context.GlobalContext.get().get()
+                                            val asr = com.rhodes.privatechat.shared.voice.createAsrGateway(settings.asrBaseUrl, settings.asrApiKey.ifBlank { settings.apiKey }, settings.asrModelName)
                                             val text = asr.transcribe(AsrRequest(audioController.readPcmFromWav(recorded.path))).text
                                             if (text.isBlank()) Toast.makeText(context, "没有识别到文字", Toast.LENGTH_SHORT).show() else viewModel.updateInputText(text)
                                         } catch (e: Exception) {
                                             Toast.makeText(context, "语音识别失败：${e.message?.take(40) ?: "未知错误"}", Toast.LENGTH_SHORT).show()
+                                        } finally {
+                                            audioController.deleteAudio(recorded.path)
                                         }
                                     }
                                 }
                             }
                         }
                         MenuChip("📞 通话", AccentOrange) {
-                            if (op.voiceName.isBlank()) Toast.makeText(context, "请先在角色编辑页面填写音色ID", Toast.LENGTH_SHORT).show() else onVoiceCall()
+                            settings.voiceCallSetupMessage(op.voiceName)?.let {
+                                Toast.makeText(context, it, Toast.LENGTH_LONG).show()
+                            } ?: onVoiceCall()
                         }
                         MenuChip("📊 状态", Primary) { onViewStatus() }
                     }
@@ -339,7 +364,32 @@ fun ChatScreen(
     if (showBgReset) {
         ThemedAlertDialog("恢复默认背景", "将移除当前背景图", { showBgReset = false }, "确认", { bgUri = null; settings.remove("bg_${op.id}"); showBgReset = false })
     }
-    if (showClearConfirm) ThemedAlertDialog("重新开始会话", "旧聊天不会删除，会在页面中变成浅灰色；后续回复默认只参考新的会话内容。", { showClearConfirm = false }, "确认开始", { viewModel.restartSession(); showClearConfirm = false }, danger = false)
+    if (showRestartChoices) {
+        AlertDialog(
+            onDismissRequest = { showRestartChoices = false },
+            title = { Text("重新开始会话", color = TextPrimary) },
+            text = { Text("选择如何开始新的会话。", color = TextSecondary) },
+            confirmButton = {
+                TextButton(onClick = { showRestartChoices = false; showEraseConfirm = true }) {
+                    Text("彻底清空", color = ErrorRed)
+                }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { viewModel.restartSession(); showRestartChoices = false }) { Text("仅重新开始", color = Primary) }
+                    TextButton(onClick = { showRestartChoices = false }) { Text("取消", color = TextSecondary) }
+                }
+            }
+        )
+    }
+    if (showEraseConfirm) ThemedAlertDialog(
+        "彻底清空并重新开始",
+        "这会删除与${op.name}的全部私聊关系记录、摘要、长期印象和私密记忆（包括手动添加的私密记忆），无法恢复。公开动态、公开评论和群聊记录不会受影响。",
+        { showEraseConfirm = false },
+        "确认清空",
+        { viewModel.erasePrivateSessionAndRestart(); showEraseConfirm = false },
+        danger = true
+    )
     if (showPropShop) {
         PropShopDialog(viewModel = viewModel, context = context, scope = scope, onDismiss = { showPropShop = false })
     }

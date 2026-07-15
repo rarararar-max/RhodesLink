@@ -79,6 +79,10 @@ class DataViewModel(
 
     suspend fun deleteAllImpressions() = repository.deleteAllImpressions()
 
+    suspend fun deleteImpression(operatorId: String) = repository.deleteLongTermByOperator(operatorId)
+
+    suspend fun updateImpression(impression: Memory) = repository.replaceLongTermImpression(impression)
+
     fun deleteAllWorldEvents() {
         scope.launch { repository.deleteAllWorldEvents() }
     }
@@ -129,7 +133,7 @@ class DataViewModel(
         val allMessages = sessions.flatMap { repository.getMessagesSync(it.id) }
         val allRels = operators.flatMap { op -> repository.getRelationships(op.id) }
         val payload = ExportPayload(
-            version = 2,
+            version = 3,
             type = "full_backup",
             operators = operators.map { OperatorExport.fromEntity(it) },
             relationships = allRels.map { RelationshipExport.fromEntity(it) },
@@ -142,6 +146,7 @@ class DataViewModel(
             momentComments = repository.getAllCommentsForBackup(),
             diaries = repository.getAllDiariesForBackup(),
             worldEvents = repository.getAllWorldEventsForBackup(),
+            memoryItems = repository.getAllMemoryItems(),
             settings = exportSettingsSnapshot()
         )
         return ExportHelper.exportToFile(context, payload, "rhodes_full_backup_${System.currentTimeMillis()}.json")
@@ -161,6 +166,8 @@ class DataViewModel(
             payload.momentComments.orEmpty().forEach { repository.insertComment(it) }
             payload.diaries.orEmpty().forEach { repository.insertDiary(it) }
             payload.worldEvents.orEmpty().forEach { repository.insertWorldEvent(it) }
+            // V2 row IDs and vectors are local implementation details. Restore canonical items and rebuild vectors later.
+            payload.memoryItems.orEmpty().forEach { repository.insertMemoryItem(it.copy(id = 0, vectorId = "")) }
             importSettingsSnapshot(payload.settings.orEmpty())
         }
     }

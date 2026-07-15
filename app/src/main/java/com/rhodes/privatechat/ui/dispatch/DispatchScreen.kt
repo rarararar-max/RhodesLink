@@ -123,6 +123,17 @@ fun DispatchScreen(
     val teamAllExist = team.all { m -> operators.any { it.id == m.id } }
     val teamAvailable = team.none { it.id in activeOperatorIds || it.name in activeOperatorIds }
     val canStart = taskReady && team.size == 5 && teamAllExist && teamAvailable && budget >= 100 && budget <= balance && activeDispatches.size < 2 && !viewModel.dispatchViewModel.isStarting
+    val startBlockReason = when {
+        viewModel.dispatchViewModel.isStarting -> "正在创建派遣，请稍候"
+        activeDispatches.size >= 2 -> "当前已有两支小队在派遣中"
+        !taskReady -> "请填写派遣任务"
+        team.size < 5 -> "还需选择 ${5 - team.size} 名干员"
+        !teamAllExist -> "有已不存在的干员，请重新选择"
+        !teamAvailable -> "小队中有干员正在派遣中"
+        budget < 100 -> "预算至少为 100 龙门币"
+        budget > balance -> "预算不足，还差 ${budget - balance} 龙门币"
+        else -> ""
+    }
 
     Box(modifier = modifier.fillMaxSize()) {
     Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
@@ -236,6 +247,9 @@ fun DispatchScreen(
             Spacer(modifier = Modifier.height(20.dp))
 
             // 5. 按钮
+            if (startBlockReason.isNotBlank()) {
+                Text(startBlockReason, fontSize = 12.sp, color = ErrorRed, modifier = Modifier.padding(bottom = 8.dp))
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedButton(onClick = onHistory, modifier = Modifier.weight(1f).height(44.dp),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = Primary)) {

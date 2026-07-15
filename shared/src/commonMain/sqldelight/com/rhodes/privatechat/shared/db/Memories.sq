@@ -21,7 +21,9 @@ getLatestLongTermImpression:
 SELECT * FROM memories WHERE operatorId = ? AND type = 'LONG_TERM' ORDER BY createdAt DESC LIMIT 1;
 
 getAllLongTerm:
-SELECT * FROM memories WHERE type = 'LONG_TERM' ORDER BY createdAt DESC;
+SELECT * FROM memories
+WHERE id IN (SELECT MAX(id) FROM memories WHERE type = 'LONG_TERM' GROUP BY operatorId)
+ORDER BY createdAt DESC;
 
 getAllMemoriesForBackup:
 SELECT * FROM memories ORDER BY createdAt DESC;
@@ -32,6 +34,9 @@ SELECT * FROM memories WHERE type = 'DAILY' ORDER BY createdAt DESC LIMIT 1;
 getLatestPrivateDaily:
 SELECT * FROM memories WHERE operatorId = ? AND type = 'DAILY' ORDER BY createdAt DESC LIMIT 1;
 
+getDailyBySessionAndDate:
+SELECT * FROM memories WHERE sessionId = ? AND type = 'DAILY' AND keywords = ? LIMIT 1;
+
 getMemoriesBySession:
 SELECT * FROM memories WHERE sessionId = ? AND type = ? ORDER BY createdAt ASC;
 
@@ -39,11 +44,19 @@ insertMemory:
 INSERT OR REPLACE INTO memories(sessionId, operatorId, type, content, keywords, preferences, taboos, createdAt, expiresAt)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 
+replaceDailyBySessionAndDate:
+INSERT OR REPLACE INTO memories(sessionId, operatorId, type, content, keywords, preferences, taboos, createdAt, expiresAt)
+VALUES (?, ?, 'DAILY', ?, ?, '', '', ?, ?);
+
 deleteExpired:
 DELETE FROM memories WHERE expiresAt < ?;
 
 deleteMemory:
 DELETE FROM memories WHERE id = ?;
+
+deleteShortTermMemories:
+DELETE FROM memories WHERE sessionId = ? AND type = 'SHORT_TERM';
+
 
 deleteMemoriesBySession:
 DELETE FROM memories WHERE sessionId = ?;
@@ -53,3 +66,6 @@ DELETE FROM memories WHERE operatorId = ?;
 
 deleteAllLongTerm:
 DELETE FROM memories WHERE type = 'LONG_TERM';
+
+deleteLongTermByOperator:
+DELETE FROM memories WHERE operatorId = ? AND type = 'LONG_TERM';

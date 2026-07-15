@@ -303,12 +303,11 @@ fun DiaryScreen(
                                                 com.rhodes.privatechat.util.DebugLogger.log("Diary", "重生成后 DB reload 开始")
                                                 val newEntries = withContext(Dispatchers.IO) { viewModel.repository.getAllDiaryEntries(opId) }
                                                 com.rhodes.privatechat.util.DebugLogger.log("Diary", "重生成后 DB reload: count=${newEntries.size}, ids=${newEntries.map { it.id }}")
-                                                diaryEntries = newEntries; currentDateIdx = 0
-                                                if (newEntries.isNotEmpty()) {
-                                                    currentDateLabel = newEntries[0].date
-                                                    if (newEntries[0].content != text) {
-                                                        com.rhodes.privatechat.util.DebugLogger.log("Diary/WARN", "!! diaryContent与DB内容不一致: text=${text.take(20)}, DB=${newEntries[0].content.take(20)}")
-                                                    }
+                                                diaryEntries = newEntries
+                                                currentDateIdx = newEntries.indexOfFirst { it.content == text }.takeIf { it >= 0 } ?: 0
+                                                newEntries.getOrNull(currentDateIdx)?.let { latest ->
+                                                    diaryContent = latest.content
+                                                    currentDateLabel = latest.date
                                                 }
                                             } else {
                                                 android.widget.Toast.makeText(context, "AI生成失败，请检查网络和API Key后重试", android.widget.Toast.LENGTH_SHORT).show()
@@ -328,7 +327,7 @@ fun DiaryScreen(
                         ) {
                             Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text("重新生成这篇日记")
+                            Text("再生成一篇")
                         }
                     }
                 } else if (!isGenerating) {
@@ -354,12 +353,11 @@ fun DiaryScreen(
                                             com.rhodes.privatechat.util.DebugLogger.log("Diary", "偷看后 DB reload 开始")
                                             val newEntries = withContext(Dispatchers.IO) { viewModel.repository.getAllDiaryEntries(opId) }
                                             com.rhodes.privatechat.util.DebugLogger.log("Diary", "偷看后 DB reload: count=${newEntries.size}, ids=${newEntries.map { it.id }}")
-                                            diaryEntries = newEntries; currentDateIdx = 0
-                                            if (newEntries.isNotEmpty()) {
-                                                currentDateLabel = newEntries[0].date
-                                                if (newEntries[0].content != text) {
-                                                    com.rhodes.privatechat.util.DebugLogger.log("Diary/WARN", "!! diaryContent与DB内容不一致: text=${text.take(20)}, DB=${newEntries[0].content.take(20)}")
-                                                }
+                                            diaryEntries = newEntries
+                                            currentDateIdx = newEntries.indexOfFirst { it.content == text }.takeIf { it >= 0 } ?: 0
+                                            newEntries.getOrNull(currentDateIdx)?.let { latest ->
+                                                diaryContent = latest.content
+                                                currentDateLabel = latest.date
                                             }
                                             if (text.isBlank()) {
                                                 android.widget.Toast.makeText(context, "AI生成失败，请检查网络和API Key后重试", android.widget.Toast.LENGTH_SHORT).show()

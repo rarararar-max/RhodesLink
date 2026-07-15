@@ -75,3 +75,16 @@ data class MemorySourceItem(
     val processedVector: Boolean = false,
     val createdAt: Long = 0L
 )
+
+@Serializable
+data class SharedExperience(
+    val id: Long = 0,
+    val sourceKind: String,
+    val sourceRefId: String,
+    val groupId: String,
+    val content: String,
+    val importance: Int = 50,
+    val status: String = "active",
+    val createdAt: Long = 0L,
+    val expiresAt: Long = Long.MAX_VALUE,
+)

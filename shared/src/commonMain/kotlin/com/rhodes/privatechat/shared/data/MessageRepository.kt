@@ -61,8 +61,15 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
             message.narration, message.segmentGroup, message.intimacyChange.toLong(), ts,
             if (message.isMe) 1L else 0L
         )
-        val preview = if (message.type == "ai_json") previewFromAiJson(message.content) else message.content.take(50)
-        db.chatSessionsQueries.updateLastMessage(preview, ts, sessionId)
+        // System markers, failures and transient placeholders should not replace a real chat preview.
+        if (message.type != "system" && !message.content.startsWith("正在重新生成") && !message.content.startsWith("上下文超限")) {
+            val preview = when (message.type) {
+                "ai_json" -> previewFromAiJson(message.content)
+                "image" -> "[图片]"
+                else -> message.content.take(50)
+            }
+            db.chatSessionsQueries.updateLastMessage(preview, ts, sessionId)
+        }
     }
 
     private fun previewFromAiJson(content: String): String {
@@ -80,7 +87,9 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
                     val lastText = segArray?.mapNotNull { it as? kotlinx.serialization.json.JsonObject }
                         ?.asReversed()
                         ?.firstNotNullOfOrNull { obj ->
-                            (obj["content"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
+                            val type = (obj["type"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                            (obj["content"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                                ?.takeIf { it.isNotBlank() && !type.equals("narration", true) }
                         }
                     lastText?.take(50)
                         ?: (root["dialogue"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.take(50)
@@ -104,6 +113,10 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
 
     suspend fun deleteSessionMessages(sessionId: String) = withContext(Dispatchers.Default) {
         db.chatMessagesQueries.deleteSessionMessages(sessionId)
+    }
+
+    suspend fun clearSessionPreview(sessionId: String, timestamp: Long = Clock.System.now().toEpochMilliseconds()) = withContext(Dispatchers.Default) {
+        db.chatSessionsQueries.updateLastMessage("", timestamp, sessionId)
     }
 
     suspend fun deleteMessage(id: Long) = withContext(Dispatchers.Default) { db.chatMessagesQueries.deleteMessage(id) }

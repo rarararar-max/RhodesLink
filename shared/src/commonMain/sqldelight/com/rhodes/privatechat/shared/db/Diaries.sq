@@ -4,20 +4,18 @@ CREATE TABLE IF NOT EXISTS diaries (
     operatorName TEXT NOT NULL,
     content TEXT NOT NULL,
     date TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
     createdAt INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_diaries_operator_date
-ON diaries(operatorId, date);
-
 getDiariesByOperator:
-SELECT * FROM diaries WHERE operatorId = ? ORDER BY date DESC;
+SELECT * FROM diaries WHERE operatorId = ? ORDER BY date DESC, version DESC, createdAt DESC, id DESC;
 
 getDiary:
-SELECT * FROM diaries WHERE operatorId = ? AND date = ? ORDER BY id DESC LIMIT 1;
+SELECT * FROM diaries WHERE operatorId = ? AND date = ? ORDER BY version DESC, createdAt DESC, id DESC LIMIT 1;
 
 getAllDiaryEntries:
-SELECT * FROM diaries WHERE operatorId = ? ORDER BY date DESC, id DESC;
+SELECT * FROM diaries WHERE operatorId = ? ORDER BY date DESC, version DESC, createdAt DESC, id DESC;
 
 getDiaryDates:
 SELECT DISTINCT date FROM diaries WHERE operatorId = ? ORDER BY date DESC;
@@ -28,9 +26,12 @@ SELECT COUNT(*) FROM diaries;
 getAllDiariesForBackup:
 SELECT * FROM diaries ORDER BY date DESC, id DESC;
 
+getNextVersion:
+SELECT COALESCE(MAX(version), 0) + 1 FROM diaries WHERE operatorId = ? AND date = ?;
+
 insertDiary:
-INSERT OR REPLACE INTO diaries(operatorId, operatorName, content, date, createdAt)
-VALUES (?, ?, ?, ?, ?);
+INSERT INTO diaries(operatorId, operatorName, content, date, version, createdAt)
+VALUES (?, ?, ?, ?, ?, ?);
 
 deleteOldDiaries:
 DELETE FROM diaries WHERE createdAt < ?;

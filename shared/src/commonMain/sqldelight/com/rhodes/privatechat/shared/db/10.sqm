@@ -1,0 +1,19 @@
+DROP INDEX IF EXISTS idx_diaries_operator_date;
+
+UPDATE diaries
+SET date = substr(date, 1, instr(date, '#') - 1)
+WHERE instr(date, '#') > 0;
+
+ALTER TABLE diaries ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+
+UPDATE diaries
+SET version = (
+    SELECT COUNT(*)
+    FROM diaries AS earlier
+    WHERE earlier.operatorId = diaries.operatorId
+      AND earlier.date = diaries.date
+      AND (earlier.createdAt < diaries.createdAt OR (earlier.createdAt = diaries.createdAt AND earlier.id <= diaries.id))
+);
+
+CREATE INDEX IF NOT EXISTS idx_diaries_operator_date_version
+ON diaries(operatorId, date, version DESC);

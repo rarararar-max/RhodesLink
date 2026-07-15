@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.rhodes.privatechat.data.ExportPayload
+import com.rhodes.privatechat.data.PromptPlaceholderRegistry
 import com.rhodes.privatechat.data.ExportHelper
 import com.rhodes.privatechat.data.MessageExport
 import com.rhodes.privatechat.data.OperatorExport
@@ -19,7 +20,6 @@ import com.rhodes.privatechat.shared.model.DispatchRecord
 import com.rhodes.privatechat.shared.model.MemoryAnchor
 import com.rhodes.privatechat.shared.model.Memory
 import com.rhodes.privatechat.shared.model.MemoryType
-import com.rhodes.privatechat.shared.model.ImpressionResponse
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.Serializable
@@ -37,6 +37,8 @@ import com.rhodes.privatechat.shared.model.Operator
 import com.rhodes.privatechat.shared.model.WorldEvent
 import com.rhodes.privatechat.shared.model.WorldEventType
 import com.rhodes.privatechat.util.DebugLogger
+import com.rhodes.privatechat.automation.DailyContentScheduler
+import com.rhodes.privatechat.notification.RhodesNotificationCenter
 import com.rhodes.privatechat.shared.data.SenderCount
 import com.rhodes.privatechat.shared.data.BfsNode
 import com.rhodes.privatechat.viewmodel.shared.AppStateHolder
@@ -51,6 +53,9 @@ import com.rhodes.privatechat.shared.model.AnchorType
 import com.rhodes.privatechat.shared.model.AnalysisResult
 import com.rhodes.privatechat.shared.model.AiMessage
 import com.rhodes.privatechat.shared.model.OfflineModeResponse
+import com.rhodes.privatechat.shared.model.MemoryItem
+import com.rhodes.privatechat.shared.model.MemoryLevel
+import com.rhodes.privatechat.shared.model.MemorySourceKind
 import com.rhodes.privatechat.shared.vector.MemoryVectorService
 import com.rhodes.privatechat.shared.vector.VectorMemory
 import com.rhodes.privatechat.viewmodel.shared.MemoryIngestor
@@ -80,9 +85,15 @@ import java.util.concurrent.ConcurrentHashMap
 private val json = Json { ignoreUnknownKeys = true }
 
 data class MomentGenerateStatus(val running: Boolean = false, val msg: String = "")
+data class IndexRebuildResult(
+    val eligible: Int,
+    val succeeded: Int,
+    val failed: Int,
+    val skipped: Int,
+    val errors: List<String> = emptyList()
+)
 @Serializable
 private data class MomentMemoryContext(
-    val impression: String,
     val chatSummary: String,
     val memories: String,
     val sourceAwareMemories: String,
@@ -121,7 +132,7 @@ class MainViewModel(
     }
     private val memoryVectorService: MemoryVectorService? = try { org.koin.core.context.GlobalContext.get().get() } catch (_: Exception) { null }
     private val memoryV2Pipeline = MemoryV2Pipeline(repository, settings, sharedUtils.aiService, memoryVectorService) { getUserProfile().nickname }
-    private val memoryIngestor = MemoryIngestor(repository, settings, memoryV2Pipeline, memoryVectorService)
+    private val memoryIngestor = MemoryIngestor(settings, memoryVectorService)
     private val memoryContextBuilder = MemoryContextBuilder(settings, memoryVectorService)
     private val visionGateway: com.rhodes.privatechat.shared.modelgateway.VisionGateway? = try { org.koin.core.context.GlobalContext.get().get() } catch (_: Exception) { null }
     val dataViewModel = DataViewModel(repository, settings, viewModelScope)
@@ -142,7 +153,7 @@ class MainViewModel(
     private val sessionMessageCounter = ConcurrentHashMap<String, Int>()
     private val pendingCommentJobs = ConcurrentHashMap<String, kotlinx.coroutines.Job>()
     val momentsViewModel = MomentsViewModel(repository, settings, appState, viewModelScope) { getUserProfile() }
-    val dispatchViewModel = DispatchViewModel(repository, settings, sharedUtils, operatorStateUpdater, appState, viewModelScope, { refreshAllOperatorStatus(force = true) }) { getUserProfile() }
+    val dispatchViewModel = DispatchViewModel(repository, settings, sharedUtils, operatorStateUpdater, appState, viewModelScope, { refreshAllOperatorStatus(force = true) }, { getUserProfile() }, memoryVectorService)
     val groupChatViewModel = GroupChatViewModel(
         repository,
         settings,
@@ -158,6 +169,23 @@ class MainViewModel(
         { title, content, sessionId -> com.rhodes.privatechat.notification.RhodesNotificationCenter.show(application, title, content, sessionId, isGroup = true) },
         { reason -> tryConsumeAutoAiBudget(reason) }
     )
+    private val worldScheduler by lazy {
+        WorldScheduler(repository, settings, appState, viewModelScope,
+            generateOneMoment = {
+                appState.operators.value.filter { settings.getOperatorDynPermission(it.id) }
+                    .randomOrNull()?.let { generateOneForOpSync(it, MomentTriggerType.AUTO) != null } ?: false
+            },
+            triggerEventGroups = { event ->
+                val groups = appState.sessions.value.filter { it.operatorId.startsWith("group_") && settings.getGroupAuto(it.id) }
+                groups.forEach { group -> groupChatViewModel.sendGroupMessage(group.id, group.operatorName, event?.content.orEmpty(), settings.getGroupMode(group.id), autoSpeak = true, isAuto = true) }
+                groups.isNotEmpty()
+            },
+            generateDiary = { generateDiarySync(it, auto = true) },
+            triggerProactivePrivate = { triggerProactivePrivateFromEvent(it) },
+            canUseWorldTrigger = { true },
+            consumeWorldTrigger = { tryConsumeAutoAiBudget(it) }
+        )
+    }
 
     private val _momentGenerateStatus: MutableStateFlow<MomentGenerateStatus> get() = _globalMomentStatus
     val momentGenerateStatus: StateFlow<MomentGenerateStatus> = _momentGenerateStatus.asStateFlow()
@@ -234,9 +262,14 @@ class MainViewModel(
         return settings.getString(key, "")?.ifBlank { null } ?: defaultTemplate(type, mode)
     }
 
-    fun savePromptTemplate(type: String, mode: String, template: String) {
+    fun savePromptTemplate(type: String, mode: String, template: String): List<String> {
         val key = if (mode.isNotBlank()) "prompt_${type}_${mode}" else "prompt_$type"
         settings.putString(key, template)
+        val allowed = PromptPlaceholderRegistry.allowed(type)
+        val unsupported = Regex("\\{\\{([A-Z0-9_]+)}}").findAll(template).map { it.groupValues[1] }
+            .filter { it !in allowed }.distinct().sorted()
+            .map { "{{$it}} 不适用于当前模板，运行时会保留原文。" }
+        return unsupported.toList()
     }
 
     fun resetPromptTemplate(type: String, mode: String = "") {
@@ -296,14 +329,12 @@ class MainViewModel(
                 settings.putBoolean("initial_hidden_done", true)
             }
             cleanupExpired()
-            autoGenerateTodayMoments()
+            DailyContentScheduler.ensureTodayPlan(application, repository, settings)
         }
-        startAutoStatusRefresh()
+        // WorkManager delivers planned daily content even while the app is closed.
         loadHypnosis()
         // 启动时检查派遣恢复
         viewModelScope.launch { recoverDispatches() }
-        // 启动时恢复自动群聊 + 执行一次数据清理
-        viewModelScope.launch { refreshAutoGroupChats() }
         // 每日龙门币刷新（麻将干员保底）
         viewModelScope.launch { refreshDailyLmb() }
         // 定期清理过期记忆、锚点等（每6小时）
@@ -419,6 +450,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 if (settings.autoAiEnabled) {
                     autoGenerateTodayMoments()
                 }
+                worldScheduler.tick()
             }
         }
     }
@@ -529,7 +561,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         val shortTerm = repository.getShortTermMemory(session.id)
         val longTerm = repository.getLongTermImpression(op.id)
         val sharedMemories = repository.getSharedMemoriesForOperator(op.id)
-        val anchors = repository.getAnchors(op.id)
+        val anchors = repository.getPublicAnchors(op.id)
         val analysisBlock = if (isDualModel() && analysisGuidance.isNotBlank()) "【AI分析指导】\n${analysisGuidance}\n" else ""
         val pickedAnchors = sharedUtils.pickAnchorsForSurface(anchors, settings.privateAnchorCount, MemorySurface.PRIVATE_CHAT)
         val v2Memories = memoryV2Pipeline.buildPrivateMemoryContext(op.id, limitL1 = 1, limitL2 = 2, limitL3 = 2).ifBlank { "无" }
@@ -565,7 +597,6 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             "OPERATOR_PERSONA" to (op.privatePrompt.ifBlank { op.description }),
             "OPERATOR_GENDER" to (op.gender.ifBlank { "" }),
             "LONG_TERM_IMPRESSION" to (longTerm?.content ?: "暂无"),
-            "OPERATOR_MEMORY_INJECTION" to op.memoryInjection.trim().ifBlank { "无" },
             "USER_PREFS" to buildString {
                 longTerm?.preferences?.takeIf { it.isNotBlank() }?.let {
                     append("已知偏好：${it.split(",").map { it.trim() }.joinToString("、")}\n")
@@ -581,6 +612,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             "SHARED_MEMORIES" to sharedMemories.ifBlank { "无" },
             "DAILY_SUMMARY" to "无",
             "SHORT_TERM_SUMMARY" to (shortTerm?.content ?: "无"),
+            "OPERATOR_MEMORY_INJECTION" to "",
             "USER_RELATION" to (op.userRelation.ifBlank { "未知" }),
             // 主动消息只发一句话（1段台词，无旁白）
             "NAR_SEG_MIN" to "0",
@@ -597,8 +629,15 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             "GROUP_CONTEXT" to ""
         )
         val prompt = applyTemplate(getPromptTemplate("private", "proactive"), replacements)
+        // A proactive opening must see the actual recent exchange, not only an eventually stale summary.
+        val history = repository.getMessagesSync(session.id).filter { it.type != "system" }.takeLast(10)
+        val conversation = mutableListOf(AiMessage("system", prompt))
+        history.forEach { message ->
+            val content = if (message.type == "ai_json") extractProactiveText(message.content) else message.content
+            if (content.isNotBlank()) conversation += AiMessage(if (message.isMe) "user" else "assistant", content.take(800))
+        }
         try {
-            val parsed = withTimeout(60_000) { sharedUtils.chatWithRetry(listOf(AiMessage("system", prompt)), "ProactivePrivate") }
+            val parsed = withTimeout(60_000) { sharedUtils.chatWithRetry(conversation, "ProactivePrivate") }
             val normalized = normalizeProactiveResponse(parsed)
             val raw = json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), normalized)
             if (raw.isNotBlank()) {
@@ -622,12 +661,62 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         return false
     }
 
+    private fun extractProactiveText(content: String): String = try {
+        val root = json.parseToJsonElement(content).jsonObject
+        root["segments"]?.jsonArray?.joinToString(" ") { it.jsonObject["content"]?.jsonPrimitive?.content.orEmpty() }
+            ?: root["dialogue"]?.jsonPrimitive?.content.orEmpty()
+    } catch (_: Exception) { content }
+
+    /** Called from WorkManager. Idempotency is persisted per product day and operator. */
+    suspend fun deliverScheduledMoment(operatorId: String, cycle: String, deliveryId: String): Boolean {
+        if (!settings.autoAiEnabled || !settings.dailyAutoMomentEnabled) return false
+        val key = "daily_content_moment_${cycle}_${operatorId}_$deliveryId"
+        if (settings.getBoolean(key, false)) return true
+        val op = repository.getOperator(operatorId) ?: return false
+        if (!settings.getOperatorDynPermission(op.id)) return false
+        val countKey = "daily_content_moment_count_${cycle}_${op.id}"
+        if (settings.getInt(countKey, 0) >= settings.dailyMomentTarget) return false
+        if (!tryConsumeAutoAiBudget("scheduled_moment")) return false
+        val momentId = generateOneForOpSync(op, MomentTriggerType.AUTO) ?: return false
+        settings.putInt(countKey, settings.getInt(countKey, 0) + 1)
+        settings.putBoolean(key, true)
+        generateLikesAndComments(momentId, op, consumeBudget = true)
+        refreshMomentsNow()
+        return true
+    }
+
+    /** Called from WorkManager after a plan-selected character reaches its individual delivery time. */
+    suspend fun deliverScheduledPrivate(operatorId: String, cycle: String): Boolean {
+        if (!settings.autoAiEnabled) return false
+        val key = "daily_content_private_${cycle}_$operatorId"
+        if (settings.getBoolean(key, false)) return true
+        val sentKey = "daily_content_private_sent_$cycle"
+        if (settings.getInt(sentKey, 0) >= settings.dailyProactiveMax) return false
+        val op = repository.getOperator(operatorId) ?: return false
+        if (!settings.getOperatorMsgPermission(op.id)) return false
+        val session = repository.getSessionByOperator(op.id) ?: return false
+        val lastUser = repository.getLastUserMessageTime(session.id)
+        if (lastUser != null && System.currentTimeMillis() - lastUser < 15 * 60_000L) return false
+        // The daily planner selected the character; temporarily use the existing private prompt path.
+        val enabledBefore = settings.idleProactiveChatEnabled
+        settings.idleProactiveChatEnabled = true
+        val sent = try { sendProactiveMessage(op) } finally { settings.idleProactiveChatEnabled = enabledBefore }
+        if (sent) {
+            settings.putBoolean(key, true)
+            settings.putInt(sentKey, settings.getInt(sentKey, 0) + 1)
+            val latest = repository.getMessagesSync(session.id).lastOrNull()
+            RhodesNotificationCenter.show(
+                getApplication(), op.name, latest?.let { extractProactiveText(it.content) }?.take(120).orEmpty(),
+                session.id, avatarUri = op.avatarUri
+            )
+        }
+        return sent
+    }
+
     private fun normalizeProactiveResponse(response: com.rhodes.privatechat.shared.model.OfflineModeResponse): com.rhodes.privatechat.shared.model.OfflineModeResponse {
         val source = response.segments.orEmpty().filter { it.content.isNotBlank() }
-        val narration = source.firstOrNull { it.type.equals("narration", true) }
         val dialogue = source.firstOrNull { it.type.equals("dialogue", true) }
             ?: response.dialogue.takeIf { it.isNotBlank() }?.let { com.rhodes.privatechat.shared.model.Segment(type = "dialogue", content = it) }
-            ?: narration?.let { com.rhodes.privatechat.shared.model.Segment(type = "dialogue", content = it.content) }
             ?: com.rhodes.privatechat.shared.model.Segment(type = "dialogue", content = "刚刚想到你，就想发来看看。")
         val result = listOf(com.rhodes.privatechat.shared.model.Segment(type = "dialogue", content = dialogue.content))
         return response.copy(dialogue = "", narration = "", segments = result)
@@ -762,6 +851,128 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
 
     fun clearMessages() = chatViewModel.clearMessages()
     fun restartSession() = chatViewModel.restartSession()
+    fun erasePrivateSessionAndRestart() = chatViewModel.erasePrivateSessionAndRestart()
+
+    suspend fun getOperatorMemoryItems(operatorId: String) = repository.getMemoryItemsByOwner("operator", operatorId)
+
+    suspend fun getOperatorVectorMemories(operatorId: String) = memoryVectorService?.listMemories("operator", operatorId).orEmpty()
+
+    suspend fun deleteOperatorMemoryItem(item: MemoryItem) {
+        item.vectorId.takeIf { it.isNotBlank() }?.let { memoryVectorService?.deleteMemory(it) }
+        repository.deleteMemoryItem(item.id)
+    }
+
+    suspend fun deleteOperatorMemorySource(item: MemoryItem) {
+        if (item.sourceRefId.isBlank()) {
+            deleteOperatorMemoryItem(item)
+        } else {
+            repository.deleteMemoryV2BySource(item.sourceKind, item.sourceRefId)
+        }
+    }
+
+    suspend fun addManualOperatorMemory(operatorId: String, content: String, privacy: String, importance: Int): Boolean {
+        val clean = content.trim().take(240)
+        if (clean.isBlank()) return false
+        val now = System.currentTimeMillis()
+        val item = MemoryItem(
+            ownerType = "operator", ownerId = operatorId, memoryLevel = MemoryLevel.L2,
+            memoryType = "preference_expression", sourceKind = MemorySourceKind.MANUAL_MEMORY,
+            content = clean, importance = importance.coerceIn(0, 100), privacy = privacy,
+            sourceActor = appState.userProfile.value.nickname, sourceTarget = operatorId,
+            createdAt = now, updatedAt = now
+        )
+        val id = repository.insertMemoryItem(item)
+        if (id <= 0) return false
+        val vectorId = "manual_memory_operator_${operatorId}_$id"
+        runCatching {
+            memoryVectorService?.saveMemory(VectorMemory(
+                id = vectorId, ownerType = "operator", ownerId = operatorId,
+                sourceType = "manual_memory", sourceId = id.toString(), content = clean,
+                importance = importance.coerceIn(0, 100) / 100.0, visibility = privacy, createdAt = now
+            ))
+            if (memoryVectorService != null) repository.updateMemoryItemVectorId(id, vectorId, now)
+        }
+        return true
+    }
+
+    suspend fun countEligibleMemoryIndexes(operatorId: String? = null): Int {
+        val now = System.currentTimeMillis()
+        val items = if (operatorId == null) repository.getAllMemoryItems() else repository.getMemoryItemsByOwner("operator", operatorId)
+        return items.count { it.status == "active" && it.expiresAt > now && it.content.isNotBlank() }
+    }
+
+    suspend fun rebuildOperatorMemoryIndexes(operatorId: String, onProgress: (Int, Int) -> Unit = { _, _ -> }): IndexRebuildResult {
+        val now = System.currentTimeMillis()
+        val errors = mutableListOf<String>()
+        memoryVectorService?.listMemories("operator", operatorId)
+            ?.filter { it.sourceType.startsWith("memory_v2_") || it.sourceType == "manual_memory" }
+            ?.forEach { memoryVectorService.deleteMemory(it.id) }
+        val items = repository.getMemoryItemsByOwner("operator", operatorId)
+            .filter { it.status == "active" && it.expiresAt > now && it.content.isNotBlank() }
+        if (memoryVectorService == null) return IndexRebuildResult(items.size, 0, 0, items.size)
+        var succeeded = 0
+        var failed = 0
+        items.forEach { item ->
+            item.vectorId.takeIf { it.isNotBlank() }?.let { memoryVectorService?.deleteMemory(it) }
+            val vectorId = "memory_v2_operator_${operatorId}_${item.memoryLevel.name.lowercase()}_${item.id}"
+            val result = runCatching {
+                memoryVectorService?.saveMemory(VectorMemory(
+                    id = vectorId, ownerType = "operator", ownerId = operatorId,
+                    sourceType = "memory_v2_${item.memoryLevel.name.lowercase()}",
+                    sourceId = item.sourceRefId.ifBlank { item.sessionId }, content = item.content,
+                    importance = item.importance.coerceIn(0, 100) / 100.0,
+                    tags = listOf(item.memoryLevel.name, item.memoryType, item.sourceKind.name).joinToString(","),
+                    visibility = item.privacy ?: "private", createdAt = item.createdAt, expiresAt = item.expiresAt
+                ))
+                if (memoryVectorService != null) repository.updateMemoryItemVectorId(item.id, vectorId, now)
+            }
+            if (result.isSuccess) succeeded++ else {
+                failed++
+                result.exceptionOrNull()?.message?.take(80)?.let { errors += it }
+            }
+            onProgress(succeeded + failed, items.size)
+        }
+        return IndexRebuildResult(items.size, succeeded, failed, 0, errors.distinct().take(3))
+    }
+
+    suspend fun rebuildAllMemoryIndexes(onProgress: (Int, Int) -> Unit = { _, _ -> }): IndexRebuildResult {
+        val now = System.currentTimeMillis()
+        val items = repository.getAllMemoryItems().filter { it.status == "active" && it.expiresAt > now && it.content.isNotBlank() }
+        if (memoryVectorService == null) return IndexRebuildResult(items.size, 0, 0, items.size)
+        val errors = mutableListOf<String>()
+        items.groupBy { it.ownerType to it.ownerId }.forEach { (owner, _) ->
+            memoryVectorService?.listMemories(owner.first, owner.second)
+                ?.filter { it.sourceType.startsWith("memory_v2_") || it.sourceType == "manual_memory" }
+                ?.forEach { memoryVectorService.deleteMemory(it.id) }
+        }
+        var succeeded = 0
+        var failed = 0
+        items.forEach { item ->
+            val vectorId = "memory_v2_${item.ownerType}_${item.ownerId}_${item.memoryLevel.name.lowercase()}_${item.id}"
+            val result = runCatching {
+                memoryVectorService?.saveMemory(VectorMemory(
+                    id = vectorId, ownerType = item.ownerType, ownerId = item.ownerId,
+                    sourceType = "memory_v2_${item.memoryLevel.name.lowercase()}",
+                    sourceId = item.sourceRefId.ifBlank { item.sessionId }, content = item.content,
+                    importance = item.importance.coerceIn(0, 100) / 100.0,
+                    tags = listOf(item.memoryLevel.name, item.memoryType, item.sourceKind.name).joinToString(","),
+                    visibility = item.privacy ?: "private", createdAt = item.createdAt, expiresAt = item.expiresAt
+                ))
+                if (memoryVectorService != null) repository.updateMemoryItemVectorId(item.id, vectorId, now)
+            }
+            if (result.isSuccess) succeeded++ else {
+                failed++
+                result.exceptionOrNull()?.message?.take(80)?.let { errors += it }
+            }
+            onProgress(succeeded + failed, items.size)
+        }
+        return IndexRebuildResult(items.size, succeeded, failed, 0, errors.distinct().take(3))
+    }
+
+    suspend fun invalidateAllMemoryIndexes() {
+        memoryVectorService?.clearAllMemories()
+        repository.clearAllMemoryItemVectorIds()
+    }
 
     suspend fun searchCurrentSessionMessages(keyword: String, limit: Long = 200) = chatViewModel.searchCurrentSessionMessages(keyword, limit)
     suspend fun getCurrentSessionMessageDates() = chatViewModel.getCurrentSessionMessageDates()
@@ -930,85 +1141,6 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             // 保留条数限制
             val retain = settings.summaryRetain
             repository.enforceMemoryRetain(session.id, retain)
-        } catch (_: Exception) { }
-    }
-
-    private suspend fun generateLongTermImpression(session: ChatSession) {
-        return
-        try {
-            val op = repository.getOperator(session.operatorId) ?: return
-            var summaries = repository.getShortTermMemory(session.id)?.content
-            if (summaries == null) {
-                // 无可滚动摘要时，用最近对话代替
-                val recentMsgs = _messages.value.takeLast(10)
-                if (recentMsgs.size < 3) return
-                val profile = getUserProfile()
-                summaries = recentMsgs.joinToString("\n") { "${if (it.isMe) profile.nickname else session.operatorName}: ${it.content.take(80)}" }
-            }
-            val oldImpression = repository.getLongTermImpression(session.operatorId)
-            val profile = getUserProfile()
-            val oldImpressionText = oldImpression?.content ?: "无"
-            DebugLogger.log("Memory/Impression", "开始更新印象(Main): op=${session.operatorId}, old=${oldImpression != null}, summaryLen=${summaries.length}")
-            val prompt = """
-你是罗德岛的心理档案员。基于多次对话摘要总结干员对用户的长期印象。每次更新时融合旧印象和新摘要。
-
-总结用户${profile.nickname}在${op.name}眼中的整体印象。
-
-输出JSON：{"impression":"50~200字印象描述，使用'用户'指代对方","keywords":["关键词1","关键词2","关键词3"],"preferences":["偏好1","偏好2"],"taboos":["禁忌1"]}
-
-字段说明：
-- impression：完整人像描述，包含性格特质、偏好、情感模式、互动风格
-- keywords：3~5个关键词，最突出特点
-- preferences：2~4个持续偏好标签
-- taboos：0~2个持续禁忌标签，无则空数组
-
-质量要求：
-- impression要有整体感，不是零散信息堆砌
-- 旧印象与新信息冲突时以新信息为准
-- 标签从所有摘要中综合提取
-- 如果用户主要输入短句、数字、拼音、测试字符或乱码，不要过度心理分析；最多描述为“近期表达较简短/测试性输入较多”
-- 长期特征必须来自多次明确表达或反复行为，不能从一两句含糊输入中编造人格标签
-- 不要使用“符号化回应”“高强度思考”“最低限度联系”等过度诊断式标签，除非对话中有明确证据
-
-宁缺毋滥：
-- 如果对话内容不足以支撑足够标签，可返回少于标准数量
-- 不要为了凑数而编造不存在的标签
-
-之前的印象（在此基础上融合更新）：
-${oldImpressionText}
-
-新的对话摘要：
-${summaries}
-
-直接输出JSON对象。
-""".trimIndent()
-            val sb = StringBuilder()
-            sb.append(withTimeout(15_000) { chat(listOf(AiMessage("system", prompt)), "Memory") })
-            trackTokens("memory", prompt, sb.toString())
-            val cleaned = sharedUtils.aiService.cleanJson(sb.toString().trim())
-            val parsed = try { json.decodeFromString<ImpressionResponse>(cleaned) } catch (_: Exception) { null }
-            if (parsed != null && parsed.impression.isNotBlank()) {
-                DebugLogger.log("Memory/Impression", "印象已保存(Main): op=${session.operatorId}, len=${parsed.impression.length}, keywords=${parsed.keywords.joinToString(",").take(40)}")
-                repository.saveMemory(Memory(
-                    sessionId = session.id, operatorId = session.operatorId,
-                    type = MemoryType.LONG_TERM, content = parsed.impression,
-                    keywords = parsed.keywords.joinToString(","),
-                    preferences = parsed.preferences.joinToString(","),
-                    taboos = parsed.taboos.joinToString(","),
-                    createdAt = System.currentTimeMillis()
-                ))
-            } else {
-                // 降级：纯文本存入 impression
-                val fallback = sb.toString().trim()
-                if (fallback.isNotBlank()) {
-                    repository.saveMemory(Memory(
-                        sessionId = session.id, operatorId = session.operatorId,
-                        type = MemoryType.LONG_TERM, content = fallback,
-                        keywords = "", preferences = "", taboos = "",
-                        createdAt = System.currentTimeMillis()
-                    ))
-                }
-            }
         } catch (_: Exception) { }
     }
 
@@ -1324,8 +1456,8 @@ ${summaries}
     private suspend fun buildMomentMemoryContext(op: Operator, mentionUser: Boolean): MomentMemoryContext {
         val anchors = repository.getAnchors(op.id)
         val picked = sharedUtils.pickAnchorsForSurface(anchors, settings.momentAnchorCount, MemorySurface.MOMENT)
-        val v2Memories = memoryV2Pipeline.buildPrivateMemoryContext(op.id, limitL1 = 2, limitL2 = 3, limitL3 = 2).ifBlank { "无" }
-        val vectorMemories = memoryContextBuilder.privateVectorContext(op.id, op.name)
+        val v2Memories = "无"
+        val vectorMemories = memoryContextBuilder.publicOperatorVectorContext(op.id, op.name, 2)
         val legacyMemories = if (v2Memories == "无" && vectorMemories == "无") {
             picked.joinToString("\n") { "- ${anchorTimeLabel(it)} ${it.content}" }
         } else ""
@@ -1339,13 +1471,17 @@ ${summaries}
             sharedUtils.buildSourceAwareMemoryContext(anchors, settings.momentAnchorCount, MemorySurface.MOMENT)
         } else "无"
         return MomentMemoryContext(
-            impression = repository.getLongTermImpression(op.id)?.content ?: "无",
             chatSummary = repository.getPrivateChatSummary(op.id)?.take(160) ?: repository.getShortTermMemory("session_${op.id}")?.content?.take(160) ?: "无",
             memories = memories,
             sourceAwareMemories = sharedUtils.trimContextBlock(sourceAware, sharedUtils.contextBlockLimit()),
             privateDaily = "无"
         ).let { ctx ->
-            if (mentionUser) ctx else ctx.copy(impression = "无", chatSummary = "无", privateDaily = "无")
+            if (mentionUser) ctx else ctx.copy(
+                chatSummary = "无",
+                memories = "无",
+                sourceAwareMemories = "无",
+                privateDaily = "无"
+            )
         }
     }
 
@@ -1382,9 +1518,13 @@ ${summaries}
         }
     }
 
-    private suspend fun buildCommenterMemoryContext(operatorId: String, surface: MemorySurface, query: String): Pair<String, String> {
-        val anchors = repository.getAnchors(operatorId)
-        val vector = memoryContextBuilder.privateVectorContext(operatorId, query)
+    private suspend fun buildCommenterMemoryContext(operatorId: String, surface: MemorySurface, query: String, includePrivateConversation: Boolean = false): Pair<String, String> {
+        val anchors = repository.getPublicAnchors(operatorId)
+        val vector = if (includePrivateConversation) {
+            memoryContextBuilder.operatorConversationVectorContext(operatorId, query, settings.commentMemoryCount.coerceAtLeast(3))
+        } else {
+            memoryContextBuilder.publicOperatorVectorContext(operatorId, query, settings.commentMemoryCount)
+        }
         val legacy = if (vector == "无") {
             sharedUtils.pickAnchorsForSurface(anchors, settings.commentMemoryCount, surface, query)
                 .joinToString("\n") { "- ${it.content}" }
@@ -1392,6 +1532,15 @@ ${summaries}
         val memory = UnifiedMemoryContext.mergeBlocks(sharedUtils.contextBlockLimit(), vector, legacy)
         val sourceAware = if (legacy.isNotBlank()) sharedUtils.buildSourceAwareMemoryContext(anchors, settings.commentMemoryCount, surface, query) else "无"
         return memory to sourceAware
+    }
+
+    private fun commentTimeReplacements(now: Long = System.currentTimeMillis()): Map<String, String> {
+        val calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai")).apply { timeInMillis = now }
+        val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
+        val timeOfDay = when (hour) {
+            in 5..8 -> "清晨"; in 9..11 -> "上午"; in 12..13 -> "中午"; in 14..17 -> "下午"; in 18..20 -> "傍晚"; in 21..23 -> "深夜"; else -> "凌晨"
+        }
+        return mapOf("CURRENT_TIME" to beijingSdf("yyyy-MM-dd HH:mm").format(java.util.Date(now)), "CURRENT_DATE" to beijingSdf("yyyy-MM-dd").format(java.util.Date(now)), "TIME_OF_DAY" to timeOfDay)
     }
 
     suspend fun generateAllMoments(target: Int = 1, dateKey: String = "", force: Boolean = false, onProgress: (String) -> Unit = {}) {
@@ -1449,9 +1598,10 @@ ${summaries}
                         val momentMemory = buildMomentMemoryContext(op, mentionUser)
                         val mmtReplacements = mapOf(
                             "OPERATOR_NAME" to op.name, "OPERATOR_PERSONA" to op.privatePrompt.ifBlank { op.description },
-                            "TIME_OF_DAY" to timeOfDay, "LONG_TERM_IMPRESSION" to if (mentionUser) momentMemory.impression else "无",
+                            "TIME_OF_DAY" to timeOfDay, "LONG_TERM_IMPRESSION" to "无",
                             "RECENT_CHAT_SUMMARY" to if (mentionUser) momentMemory.chatSummary else "无",
                             "RECENT_MEMORIES" to momentMemory.memories,
+                            "MEMORY_V2_CONTEXT" to momentMemory.memories,
                             "SOURCE_AWARE_MEMORIES" to momentMemory.sourceAwareMemories,
                             "RECENT_WORLD_EVENTS" to worldEvents,
                             "UNCONSUMED_EVENTS" to unconsumedEvents,
@@ -1500,7 +1650,9 @@ ${summaries}
                             } catch (_: Exception) { if (attempt < 2) delay((1000L * (attempt + 1))) }
                         }
                         trackTokens("moment", prompt, momentResult)
-                        val content = cleanAiOutput(momentResult)
+                        val content = cleanAiOutput(momentResult).take(settings.momentMaxChars).takeUnless {
+                            it.startsWith("作为AI") || it.startsWith("下面是") || it.contains("{{")
+                        }.orEmpty()
                         if (content.isNotBlank()) {
                             if (isAuto) settings.putMomentCount(op.id, today, generated + 1)
                             val moment = Moment(operatorId = op.id, operatorName = op.name, content = content, createdAt = fakeTs)
@@ -1546,9 +1698,9 @@ ${summaries}
                                             } catch (_: Exception) { "" }
                                             val (commenterMemory, sourceAwareMemory) = buildCommenterMemoryContext(commenter.id, MemorySurface.COMMENT, c)
                                             val cmtReplacements = mapOf(
-                                                "COMMENTER_NAME" to commenter.name, "COMMENTER_PERSONA" to (commenter.groupPrompt.ifBlank { commenter.description }),
+                                                "COMMENTER_NAME" to commenter.name, "COMMENTER_PERSONA" to publicCommentPersona(commenter),
                                                 "POST_AUTHOR_NAME" to op.name,
-                                                "POST_AUTHOR_PERSONA" to (op.groupPrompt.ifBlank { op.description }),
+                                                "POST_AUTHOR_PERSONA" to publicCommentPersona(op),
                                                 "COMMENTER_LOCATION" to commenter.location,
                                                 "COMMENTER_STATE" to commenter.activity,
                                                 "COMMENTER_EMOTION" to commenter.emotion,
@@ -1563,8 +1715,13 @@ ${summaries}
                                             val cp = applyTemplate(cmtTpl, cmtReplacements)
                                             val cc = withTimeout(8_000) { chat(listOf(AiMessage("system", cp)), "Moment") }.trim()
                                             trackTokens("moment", cp, cc)
-                                            if (cc.isNotBlank()) {
-                                                repository.insertComment(MomentComment(momentId = momentId, operatorId = commenter.id, operatorName = commenter.name, content = cc, createdAt = System.currentTimeMillis()))
+                                            val cleanComment = cleanAiOutput(cc).take(intPref("comment_max_chars", 40)).takeUnless {
+                                                it.startsWith("作为AI") || it.startsWith("下面是") || it.contains("{{")
+                                            }.orEmpty()
+                                            if (cleanComment.isNotBlank()) {
+                                                val comment = MomentComment(momentId = momentId, operatorId = commenter.id, operatorName = commenter.name, content = cleanComment, createdAt = System.currentTimeMillis())
+                                                repository.insertComment(comment)
+                                                memoryIngestor.ingestOperatorMomentComment(comment)
                                                 actualComments++
                                             }
                                         } catch (_: Exception) {}
@@ -1613,6 +1770,11 @@ ${summaries}
         return content
     }
 
+    private fun cleanGeneratedContent(raw: String, maxChars: Int): String {
+        val content = cleanAiOutput(raw).take(maxChars).trim()
+        return if (content.startsWith("作为AI") || content.startsWith("下面是") || content.contains("{{")) "" else content
+    }
+
     /** 为指定干员同步生成 1 条动态（不含点赞评论），返回 momentId */
     private suspend fun generateOneForOpSync(op: Operator, triggerType: MomentTriggerType = MomentTriggerType.MANUAL): Long? {
         Log.d("RHODES_MOMENT", "generateOneForOpSync: 开始 op=${op.name} triggerType=$triggerType")
@@ -1632,7 +1794,7 @@ ${summaries}
             DebugLogger.log("Moment", "用户提及决策: rate=${settings.momentUserRelatedRate}, roll=$userMentionRoll, mention=$mentionUser")
             val mmtReplacements = mapOf(
                 "OPERATOR_NAME" to op.name, "OPERATOR_PERSONA" to op.privatePrompt.ifBlank { op.description },
-                "TIME_OF_DAY" to timeOfDay, "LONG_TERM_IMPRESSION" to momentMemory.impression,
+                "TIME_OF_DAY" to timeOfDay, "LONG_TERM_IMPRESSION" to "无",
                 "RECENT_CHAT_SUMMARY" to momentMemory.chatSummary,
                 "RECENT_MEMORIES" to momentMemory.memories,
                 "SOURCE_AWARE_MEMORIES" to momentMemory.sourceAwareMemories,
@@ -1683,7 +1845,7 @@ ${summaries}
                 } catch (_: Exception) { if (attempt < 2) delay((1000L * (attempt + 1))) }
             }
             trackTokens("moment", prompt, momentResult)
-            var content = cleanAiOutput(momentResult)
+            var content = cleanGeneratedContent(momentResult, settings.momentMaxChars)
             if (content.isNotBlank()) {
                 val moment = Moment(operatorId = op.id, operatorName = op.name, content = content, createdAt = fakeTs)
                 val momentId = repository.insertMoment(moment)
@@ -1750,10 +1912,10 @@ ${summaries}
                                 .joinToString("\n") { "${it.operatorName}：${it.content.take(60)}" }
                         } catch (_: Exception) { "" }
                         val (commenterMemory, sourceAwareMemory) = buildCommenterMemoryContext(commenter.id, MemorySurface.COMMENT, postContent)
-                        val cmtReplacements = mapOf(
-                            "COMMENTER_NAME" to commenter.name, "COMMENTER_PERSONA" to (commenter.groupPrompt.ifBlank { commenter.description }),
+                        val cmtReplacements = commentTimeReplacements() + mapOf(
+                            "COMMENTER_NAME" to commenter.name, "COMMENTER_PERSONA" to publicCommentPersona(commenter),
                             "POST_AUTHOR_NAME" to op.name,
-                            "POST_AUTHOR_PERSONA" to (op.groupPrompt.ifBlank { op.description }),
+                            "POST_AUTHOR_PERSONA" to publicCommentPersona(op),
                             "COMMENTER_LOCATION" to commenter.location,
                             "COMMENTER_STATE" to commenter.activity,
                             "COMMENTER_EMOTION" to commenter.emotion,
@@ -1761,6 +1923,9 @@ ${summaries}
                             "COMMENTER_MEMORY" to commenterMemory,
                             "SOURCE_AWARE_MEMORIES" to sourceAwareMemory,
                             "SOURCE_AWARE_RULES" to sharedUtils.sourceAwareUsageRule(MemorySurface.COMMENT),
+                            "COMMENT_TASK" to "new_comment",
+                            "COMMENT_INSTRUCTION" to "对这条新动态发表一条自然的公开评论。",
+                            "REPLY_TARGET" to "无",
                             "POST_CONTENT" to postContent, "COMMENT_MIN_CHARS" to intPref("comment_min_chars", 10).toString(),
                             "COMMENT_MAX_CHARS" to intPref("comment_max_chars", 40).toString()
                         )
@@ -1768,7 +1933,9 @@ ${summaries}
                         val cc = withTimeout(8_000) { chat(listOf(AiMessage("system", cp)), "Moment") }.trim()
                         trackTokens("moment", cp, cc)
                         if (cc.isNotBlank()) {
-                            repository.insertComment(MomentComment(momentId = momentId, operatorId = commenter.id, operatorName = commenter.name, content = cc, createdAt = System.currentTimeMillis()))
+                            val comment = MomentComment(momentId = momentId, operatorId = commenter.id, operatorName = commenter.name, content = cc, createdAt = System.currentTimeMillis())
+                            val commentId = repository.insertComment(comment)
+                            memoryIngestor.ingestOperatorMomentComment(comment.copy(id = commentId))
                             actualComments++
                             Log.d("RHODES_MOMENT", "generateLikesAndComments: 评论成功 i=${commenters.indexOf(commenter)} name=${commenter.name}")
                         }
@@ -1806,27 +1973,30 @@ ${summaries}
                 else
                     parentCommentId
             } else 0L
-            repository.insertComment(MomentComment(momentId = momentId, operatorId = operatorId, operatorName = operatorName, content = cleanContent, parentCommentId = rootParentId, replyToName = replyToName, createdAt = System.currentTimeMillis(), isRead = operatorId == "user"))
+            val userComment = MomentComment(momentId = momentId, operatorId = operatorId, operatorName = operatorName, content = cleanContent, parentCommentId = rootParentId, replyToName = replyToName, createdAt = System.currentTimeMillis(), isRead = operatorId == "user")
+            val userCommentId = repository.insertComment(userComment)
             if (operatorId == "user") {
-                memoryIngestor.ingestMomentComment(MomentComment(momentId = momentId, operatorId = operatorId, operatorName = operatorName, content = cleanContent, parentCommentId = rootParentId, replyToName = replyToName, createdAt = System.currentTimeMillis(), isRead = true))
+                memoryIngestor.ingestMomentComment(userComment.copy(id = userCommentId, isRead = true))
             }
-            Log.d("RHODES_MOMENT", "commentOnMoment: 评论已写入")
+            Log.d("RHODES_MOMENT", "commentOnMoment: 评论已写入 id=$userCommentId")
             refreshMomentCommentCount(momentId)
-            DebugLogger.log("Moment/DB", "评论已写入DB, momentId=$momentId")
+            DebugLogger.log("Moment/DB", "评论已写入DB, momentId=$momentId, commentId=$userCommentId")
             if (operatorId != "user") return@launch
-            val moment = _moments.value.find { it.id == momentId } ?: return@launch
+            val moment = _moments.value.find { it.id == momentId } ?: repository.getMoment(momentId) ?: return@launch
             val userName = getUserProfile().nickname
 
             val alreadyReplied = mutableSetOf<String>()
+            // 用户回复某干员 → AI 回复挂在原根评论下（微信模式）
             if (parentCommentId > 0 && replyToName.isNotBlank() && replyToName.trim() != moment.operatorName.trim() && replyToName.trim() != userName.trim()) {
                 Log.d("RHODES_MOMENT", "commentOnMoment: 回复目标人=$replyToName")
                 scheduleAiComment(momentId, replyToName, content, rootParentId, userName)
                 alreadyReplied.add(replyToName)
             }
 
+            // 动态主人回复→用 userCommentId 作为 parentCommentId，嵌套在用户评论下
             if (moment.operatorName != "我" && moment.operatorName.trim() != userName.trim() && moment.operatorName !in alreadyReplied) {
                 Log.d("RHODES_MOMENT", "commentOnMoment: 动态主人回复 start=${moment.operatorName}")
-                scheduleAiComment(momentId, moment.operatorName, content, rootParentId, userName, "你是${moment.operatorName}。用户${userName}在你的动态下评论了：「${content}」。请用10-50字自然回复。只输出回复内容本身，不要加任何前缀如「回复xxx」或冒号。直接输出纯文本。")
+                scheduleAiComment(momentId, moment.operatorName, content, userCommentId, userName, "你是${moment.operatorName}。用户${userName}在你的动态下评论了：「${content}」。请用10-50字自然回复。只输出回复内容本身，不要加任何前缀如「回复xxx」或冒号。直接输出纯文本。", immediate = true)
                 alreadyReplied.add(moment.operatorName)
             }
 
@@ -1840,8 +2010,14 @@ ${summaries}
                 .take(bystanderCount)
             for ((i, bystander) in bystanders.withIndex()) {
                 Log.d("RHODES_MOMENT", "commentOnMoment: 旁观者回复 i=$i name=$bystander")
-                val bp = "你是${bystander}。你刚看到${moment.operatorName}的动态下，用户${userName}评论了「${content}」。请用10-40字凑热闹式地回复这条评论（看戏、调侃、起哄风格）。直接输出纯文本。"
-                scheduleAiComment(momentId, bystander, content, rootParentId, userName, bp)
+                val op = _operators.value.find { it.name == bystander }
+                val persona = op?.let(::publicCommentPersona).orEmpty()
+                val bp = if (persona.isNotBlank()) {
+                    "你是${bystander}（${persona}）。你刚看到${moment.operatorName}的动态下，用户${userName}评论了「${content}」。请以${bystander}的性格自然凑热闹回复这条评论。10-40字。直接输出纯文本。"
+                } else {
+                    "你是${bystander}。你刚看到${moment.operatorName}的动态下，用户${userName}评论了「${content}」。请用10-40字凑热闹式地回复这条评论（看戏、调侃、起哄风格）。直接输出纯文本。"
+                }
+                scheduleAiComment(momentId, bystander, content, 0L, userName, bp)
             }
         }
     }
@@ -1852,6 +2028,10 @@ ${summaries}
         if (max <= 0) return 0
         return (min..max).random()
     }
+
+    // Public surfaces use the public/group voice first and never inject private memory or summaries.
+    private fun publicCommentPersona(op: Operator): String =
+        op.groupPrompt.ifBlank { op.description }
 
     private suspend fun refreshMomentCommentCount(momentId: Long) {
         val count = repository.getCommentCount(momentId)
@@ -1868,13 +2048,14 @@ ${summaries}
         userName: String,
         customPrompt: String? = null,
         mustInsert: Boolean = false,
-        fallbackComment: String = "我看到了，特意来回一句。"
+        fallbackComment: String = "我看到了，特意来回一句。",
+        immediate: Boolean = false,
     ) {
-        val key = "$momentId:$speakerName:$parentCommentId:${customPrompt?.hashCode() ?: 0}"
+        val key = "$momentId:$speakerName:$parentCommentId:${System.nanoTime()}"
         if (pendingCommentJobs.containsKey(key)) return
         val job = appScope.launch {
             try {
-                delay(randomCommentDelayMs())
+                if (!immediate) delay(randomCommentDelayMs())
                 if (repository.getMoment(momentId) == null) return@launch
                 triggerSingleAiReply(momentId, speakerName, userContent, parentCommentId, userName, customPrompt, mustInsert, fallbackComment)
             } finally {
@@ -1900,7 +2081,14 @@ ${summaries}
     private suspend fun insertAiComment(momentId: Long, speakerName: String, content: String, parentCommentId: Long, userName: String) {
         val realOp = _operators.value.find { it.name == speakerName || it.id == speakerName }
         val realId = realOp?.id ?: speakerName
-        repository.insertComment(MomentComment(momentId = momentId, operatorId = realId, operatorName = speakerName, content = content, parentCommentId = parentCommentId, replyToName = userName, createdAt = System.currentTimeMillis()))
+        val comment = MomentComment(momentId = momentId, operatorId = realId, operatorName = speakerName, content = content, parentCommentId = parentCommentId, replyToName = userName, createdAt = System.currentTimeMillis())
+        val commentId = repository.insertComment(comment)
+        val persistedComment = comment.copy(id = commentId)
+        memoryIngestor.ingestOperatorMomentComment(persistedComment)
+        if (settings.memoryV2Enabled && settings.momentMemoryV2Enabled) {
+            runCatching { memoryV2Pipeline.ingestMomentComment(persistedComment, momentId) }
+                .onFailure { DebugLogger.log("MemoryV2", "评论分层记忆写入失败: ${it.message?.take(80)}") }
+        }
         refreshMomentCommentCount(momentId)
         refreshMomentsNow()
     }
@@ -1908,18 +2096,18 @@ ${summaries}
     private suspend fun triggerSingleAiReply(momentId: Long, speakerName: String, userContent: String, parentCommentId: Long, userName: String, customPrompt: String? = null, mustInsert: Boolean = false, fallbackComment: String = "我看到了，特意来回一句。") {
             try {
                 val realOp = _operators.value.find { it.name == speakerName || it.id == speakerName }
+                val moment = repository.getMoment(momentId)
                 val recentComments = try {
                     withTimeout(500) { repository.getComments(momentId).first() }
                         .takeLast(settings.commentContextCount)
                         .joinToString("\n") { "${it.operatorName}：${it.content.take(60)}" }
                 } catch (_: Exception) { "" }
-                val memory = if (realOp != null) {
-                    sharedUtils.pickAnchorsForSurface(repository.getAnchors(realOp.id), settings.commentMemoryCount, MemorySurface.COMMENT, userContent)
-                        .joinToString("\n") { "- ${it.content}" }
-                } else ""
-                val sourceAwareMemory = if (realOp != null) {
-                    sharedUtils.buildSourceAwareMemoryContext(repository.getAnchors(realOp.id), settings.commentMemoryCount, MemorySurface.COMMENT, userContent)
-                } else ""
+                // A direct reply to the user on this operator's own post is a private interaction,
+                // even though its rendered result is a public comment.
+                val isOwnerReply = realOp?.id == moment?.operatorId
+                val (memory, sourceAwareMemory) = if (realOp != null) {
+                    buildCommenterMemoryContext(realOp.id, MemorySurface.COMMENT, userContent, isOwnerReply)
+                } else "" to ""
                 val contextBlock = listOfNotNull(
                     recentComments.takeIf { it.isNotBlank() }?.let { "【评论上下文】\n$it" },
                     memory.takeIf { it.isNotBlank() }?.let { "【你的相关记忆】\n$it" },
@@ -1941,10 +2129,31 @@ ${summaries}
                         "commentMemoryCount" to settings.commentMemoryCount.toString()
                     )
                 )
-                val prompt = if (customPrompt != null) {
-                    listOf(customPrompt, contextBlock.takeIf { it.isNotBlank() }?.let { "【可参考背景，不要覆盖动态原文】\n$it" }).filterNotNull().joinToString("\n")
-                } else "你是${speakerName}。用户扮演的角色${userName}刚刚回复了你的评论，说：「${userContent}」。\n$contextBlock\n请用10-50字自然回复。只输出回复内容本身，不要加任何前缀如「回复xxx」或冒号。直接输出纯文本。注意：你是${speakerName}，不是${userName}，不要替${userName}说话。"
-                val reply = withTimeout(10_000) { chat(listOf(AiMessage("system", prompt))) }.trim()
+                val minChars = intPref("comment_min_chars", 10)
+                val maxChars = intPref("comment_max_chars", 40)
+                val template = getPromptTemplate("moment_comment")
+                val prompt = applyTemplate(template, commentTimeReplacements() + mapOf(
+                    "COMMENTER_NAME" to speakerName,
+                    "COMMENTER_PERSONA" to (realOp?.let(::publicCommentPersona).orEmpty().ifBlank { "无" }),
+                    "COMMENTER_LOCATION" to (realOp?.location ?: "无"),
+                    "COMMENTER_STATE" to (realOp?.activity ?: "无"),
+                    "COMMENTER_EMOTION" to (realOp?.emotion ?: "无"),
+                    "POST_AUTHOR_NAME" to (moment?.operatorName ?: "动态作者"),
+                    "POST_AUTHOR_PERSONA" to "公开动态作者",
+                    "POST_CONTENT" to (moment?.content ?: "无"),
+                    "COMMENT_CONTEXT" to recentComments.ifBlank { "无" },
+                    "COMMENTER_MEMORY" to memory.ifBlank { "无" },
+                    "SOURCE_AWARE_MEMORIES" to sourceAwareMemory.ifBlank { "无" },
+                    "SOURCE_AWARE_RULES" to sharedUtils.sourceAwareUsageRule(MemorySurface.COMMENT),
+                    "USER_CONTENT" to userContent,
+                    "REPLY_TARGET" to userName,
+                    "COMMENT_TASK" to "reply_to_user",
+                    "COMMENT_INSTRUCTION" to listOfNotNull("回复用户 $userName 的最新评论，不要添加回复前缀。", customPrompt?.let { "互动意图：$it" }).joinToString("\n"),
+                    "COMMENT_MIN_CHARS" to minChars.toString(),
+                    "COMMENT_MAX_CHARS" to maxChars.toString()
+                ))
+                val reply = withTimeout(10_000) { chat(listOf(AiMessage("system", prompt)), "Moment") }
+                    .trim().take(maxChars).takeIf { it.length >= minChars }.orEmpty()
                 if (reply.isNotBlank()) {
                     insertAiComment(momentId, speakerName, reply, parentCommentId, userName)
                     Log.d("RHODES_MOMENT", "triggerSingleAiReply: $speakerName 回复成功")
@@ -1971,6 +2180,10 @@ ${summaries}
             val momentId = repository.insertMoment(moment)
             DebugLogger.log("Moment/DB", "动态已写入DB, id=$momentId")
             memoryIngestor.ingestMoment(moment.copy(id = momentId))
+            if (settings.memoryV2Enabled && settings.momentMemoryV2Enabled) {
+                runCatching { memoryV2Pipeline.ingestMoment(moment.copy(id = momentId)) }
+                    .onFailure { DebugLogger.log("MemoryV2", "动态分层记忆写入失败: ${it.message?.take(80)}") }
+            }
             refreshMomentsNow()
             val mentionedOperators = mentionedOps.mapNotNull { resolveMentionedOperator(it) }.distinctBy { it.id }
             val mentionedIds = mentionedOperators.map { it.id }
@@ -1989,13 +2202,20 @@ ${summaries}
             repository.updateLikeCount(momentId, repository.getLikeCount(momentId))
             refreshMomentsNow()
 
+            val availableBystanders = eligibleOps.filter { it.id !in mentionedInteractive.map { op -> op.id } }
             val randomReplyCount = (1..3).random()
-            val randomRepliers = eligibleOps.filter { it.id !in mentionedInteractive.map { op -> op.id } }.shuffled().take(randomReplyCount)
+            val bystanderTake = if (availableBystanders.isNotEmpty()) randomReplyCount.coerceAtLeast(1) else 0
+            val randomRepliers = availableBystanders.shuffled().take(bystanderTake)
             val repliers = (mentionedInteractive + randomRepliers).distinctBy { it.id }
             DebugLogger.log("Moment/Mention", "评论角色: mentioned=${mentionedInteractive.joinToString("、") { it.name }}, random=${randomRepliers.joinToString("、") { it.name }}")
             val c = content; val u = userName
             for (op in repliers) {
-                val prompt = if (op.id in mentionedIds) buildMentionedCommentPrompt(op.name, u, c) else buildBystanderCommentPrompt(op.name, u, c, mentionedInteractive.map { it.name })
+                val prompt = if (op.id in mentionedIds) {
+                    buildMentionedCommentPrompt(op.name, u, c)
+                } else {
+                    val persona = publicCommentPersona(op)
+                    buildBystanderCommentPrompt(op.name, u, c, mentionedInteractive.map { it.name }, persona)
+                }
                 val mustInsert = op.id in mentionedIds
                 scheduleAiComment(
                     momentId = momentId,
@@ -2005,7 +2225,8 @@ ${summaries}
                     userName = u,
                     customPrompt = prompt,
                     mustInsert = mustInsert,
-                    fallbackComment = if (mustInsert) "我在，刚看到你提到我。" else "我也看到了，顺手留个评论。"
+                    fallbackComment = if (mustInsert) "我在，刚看到你提到我。" else "我也看到了，顺手留个评论。",
+                    immediate = mustInsert,
                 )
             }
         }
@@ -2033,13 +2254,13 @@ ${summaries}
 - 只输出评论内容本身，不要加引号、前缀、冒号。
 """.trimIndent()
 
-    private fun buildBystanderCommentPrompt(operatorName: String, userName: String, content: String, mentionedNames: List<String>): String = """
-你是${operatorName}。你刷到用户${userName}发布的一条动态。
+    private fun buildBystanderCommentPrompt(operatorName: String, userName: String, content: String, mentionedNames: List<String>, persona: String = ""): String = """
+你是${operatorName}${if (persona.isNotBlank()) "（${persona}）" else ""}。你刷到用户${userName}发布的一条动态。
 
 动态原文：${content}
 被@的人：${mentionedNames.joinToString("、").ifBlank { "无" }}
 
-任务：你作为旁观者，在这条动态下评论。
+任务：你作为旁观者，以${operatorName}的性格自然评论这条动态。
 要求：
 - 评论必须围绕动态原文，不要转移到无关话题。
 - 如果提到被@的人，只能作为旁观者提一句，不要冒充对方。
@@ -2114,9 +2335,9 @@ ${summaries}
     fun refreshMomentsNow() {
         viewModelScope.launch(Dispatchers.IO) {
             val limit = appState.moments.value.size.coerceAtLeast(MOMENT_PAGE_SIZE)
-            val fresh = repository.getMomentsPaged(limit, 0)
-            _hasMoreMoments.value = fresh.size >= limit
-            appState.refreshMoments(fresh)
+            val fresh = repository.getMomentsPaged(limit + 1, 0)
+            _hasMoreMoments.value = fresh.size > limit
+            appState.refreshMoments(fresh.take(limit))
         }
     }
 
@@ -2125,9 +2346,9 @@ ${summaries}
         viewModelScope.launch(Dispatchers.IO) {
             _isLoadingMoments.value = true
             try {
-                val firstPage = repository.getMomentsPaged(MOMENT_PAGE_SIZE, 0)
-                _hasMoreMoments.value = firstPage.size >= MOMENT_PAGE_SIZE
-                appState.refreshMoments(firstPage)
+                val firstPage = repository.getMomentsPaged(MOMENT_PAGE_SIZE + 1, 0)
+                _hasMoreMoments.value = firstPage.size > MOMENT_PAGE_SIZE
+                appState.refreshMoments(firstPage.take(MOMENT_PAGE_SIZE))
             } finally {
                 _isLoadingMoments.value = false
             }
@@ -2140,10 +2361,11 @@ ${summaries}
             _isLoadingMoments.value = true
             try {
                 val current = appState.moments.value
-                val more = repository.getMomentsPaged(MOMENT_PAGE_SIZE, current.size)
-                _hasMoreMoments.value = more.size >= MOMENT_PAGE_SIZE
+                val cursor = current.minWithOrNull(compareBy<Moment> { it.createdAt }.thenBy { it.id })
+                val more = cursor?.let { repository.getMomentsBefore(it.createdAt, it.id, MOMENT_PAGE_SIZE + 1) }.orEmpty()
+                _hasMoreMoments.value = more.size > MOMENT_PAGE_SIZE
                 if (more.isNotEmpty()) {
-                    appState.refreshMoments((current + more).distinctBy { it.id }.sortedByDescending { it.createdAt })
+                    appState.refreshMoments((current + more.take(MOMENT_PAGE_SIZE)).distinctBy { it.id }.sortedWith(compareByDescending<Moment> { it.createdAt }.thenByDescending { it.id }))
                 }
             } finally {
                 _isLoadingMoments.value = false
@@ -2152,6 +2374,8 @@ ${summaries}
     }
     suspend fun getAllImpressions(): List<Memory> = dataViewModel.getAllImpressions()
     suspend fun deleteAllImpressions() = dataViewModel.deleteAllImpressions()
+    suspend fun deleteImpression(operatorId: String) = dataViewModel.deleteImpression(operatorId)
+    suspend fun updateImpression(impression: Memory) = dataViewModel.updateImpression(impression)
     suspend fun exportFullBackup(context: android.content.Context): java.io.File = dataViewModel.exportFullBackup(context, _operators.value)
     fun importFullBackup(payload: ExportPayload) = dataViewModel.importFullBackup(payload)
     fun generateDiary(operatorId: String, auto: Boolean = false, onResult: (String) -> Unit) {
@@ -2198,17 +2422,20 @@ ${summaries}
                 val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
                 cal.add(java.util.Calendar.DAY_OF_MONTH, -1)
                 val yesterdayStr = sharedUtils.beijingSdf("yyyy-MM-dd").format(cal.time)
+                if (auto && repository.getDiary(operatorId, yesterdayStr) != null) return ""
                 val yesterdayDisplay = sharedUtils.beijingSdf("yyyy年MM月dd日").format(cal.time)
+                val yesterdayStart = cal.apply { set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0); set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0) }.timeInMillis
+                val yesterdayEnd = yesterdayStart + 86_400_000L
                 cal.add(java.util.Calendar.DAY_OF_MONTH, 1)
                 val todayDisplay = sharedUtils.beijingSdf("yyyy年MM月dd日").format(cal.time)
 
                 val groupSummaries = _allSessions.value.filter { session ->
                     session.operatorId.startsWith("group_") && session.members.split(",").map { it.trim() }.any { it == operatorId || it == op.name }
                 }
-                    .mapNotNull { repository.getShortTermMemory(it.id)?.content?.let { c -> "- ${it.operatorName}：${c.take(80)}" } }
+                    .mapNotNull { session -> repository.getMessagesSync(session.id).filter { it.timestamp in yesterdayStart until yesterdayEnd }.takeLast(12).takeIf { it.isNotEmpty() }?.joinToString("；") { it.senderName + "：" + it.content.take(40) }?.let { c -> "- ${session.operatorName}：${c.take(160)}" } }
                     .take(settings.diaryGroupSummaryCount)
                     .joinToString("\n").ifBlank { "无" }
-                val diaryAnchors = repository.getAnchors(operatorId)
+                val diaryAnchors = repository.getAnchors(operatorId).filter { it.createdAt in yesterdayStart until yesterdayEnd }
                 val diaryV2Memories = memoryV2Pipeline.buildPrivateMemoryContext(operatorId, limitL1 = 3, limitL2 = 4, limitL3 = 3).ifBlank { "无" }
                 val diaryVectorMemories = memoryContextBuilder.privateVectorContext(operatorId, "日记 回顾 ${op.name}")
                 val legacyDiaryMemories = if (diaryV2Memories == "无" && diaryVectorMemories == "无") {
@@ -2224,7 +2451,7 @@ ${summaries}
                 val sourceAwareMemories = if (legacyDiaryMemories.isNotBlank()) {
                     sharedUtils.buildSourceAwareMemoryContext(diaryAnchors, settings.diaryAnchorCount, MemorySurface.DIARY)
                 } else "无"
-                val worldEvents = sharedUtils.buildWorldEventContext(operatorId, op.name, 8)
+                val worldEvents = repository.getRecentWorldEvents(40).filter { it.createdAt in yesterdayStart until yesterdayEnd }.take(8).joinToString("\n") { "- ${it.content.take(160)}" }.ifBlank { "无" }
                 val unconsumedEvents = sharedUtils.buildUnconsumedEventContextForOperator(operatorId, op.name, "diary:$operatorId", settings.eventContextCount, markConsumed = false)
                 val diaryTpl = getPromptTemplate("diary")
                 val dReplacements = mapOf(
@@ -2240,7 +2467,7 @@ ${summaries}
                     "USER_BIO" to profile.bio,
                     "USER_RELATION" to (op.userRelation.ifBlank { "未知" }),
                     "LONG_TERM_IMPRESSION" to (repository.getLongTermImpression(operatorId)?.content ?: "无"),
-                    "DAILY_SUMMARY" to (repository.getLatestPrivateDaily(operatorId)?.content ?: repository.getLatestDaily()?.content ?: "无"),
+                    "DAILY_SUMMARY" to (repository.getLatestPrivateDaily(operatorId)?.content ?: "无"),
                     "PRIVATE_DAILY_SUMMARY" to (repository.getLatestPrivateDaily(operatorId)?.content ?: "无"),
                     "PRIVATE_SUMMARY" to (repository.getPrivateChatSummary(operatorId)?.take(200) ?: "无"),
                     "GROUP_SUMMARIES" to groupSummaries,
@@ -2277,7 +2504,14 @@ ${summaries}
                     )
                 )
                 val prompt = sharedUtils.applyTemplate(diaryTpl, dReplacements)
-                var text = withTimeout(25_000) { sharedUtils.chat(listOf(AiMessage("system", prompt))) }.trim()
+                Log.d("RHODES_DIARY", "prompt长度=${prompt.length}")
+                var text = try {
+                    withTimeout(25_000) { sharedUtils.chat(listOf(AiMessage("system", prompt))) }.trim()
+                } catch (e: Exception) {
+                    Log.e("RHODES_DIARY", "API调用失败: ${e.message}", e)
+                    throw e
+                }
+                Log.d("RHODES_DIARY", "日记生成返回 length=${text.length}")
                 if (looksThirdPersonDiary(text, op)) {
                     val retryPrompt = "$prompt\n\n【重写要求】上一版像第三人称记录，不像日记。请改写成${op.name}本人第一人称日记，全篇用“我”，不要用角色名、她、他或这名干员称呼自己。直接输出日记文本。"
                     text = withTimeout(25_000) { sharedUtils.chat(listOf(AiMessage("system", retryPrompt))) }.trim()

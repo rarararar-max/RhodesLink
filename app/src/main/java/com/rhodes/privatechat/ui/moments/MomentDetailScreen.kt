@@ -27,6 +27,8 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.data.db.entity.MomentCommentEntity
 import com.rhodes.privatechat.data.db.entity.MomentEntity
@@ -47,13 +49,18 @@ fun MomentDetailScreen(
     modifier: Modifier = Modifier
 ) {
     val moments by viewModel.moments.collectAsState()
-    val moment = remember(moments, momentId) { moments.find { it.id == momentId } }
+    var loadedMoment by remember(momentId) { mutableStateOf<com.rhodes.privatechat.shared.model.Moment?>(null) }
+    val moment = moments.find { it.id == momentId } ?: loadedMoment
     val likes by viewModel.getLikes(momentId).collectAsState(initial = emptyList())
     val comments by viewModel.getCommentsForMoment(momentId).collectAsState(initial = emptyList())
     var inputText by remember { mutableStateOf("") }
     var replyTarget by remember { mutableStateOf(Triple(0L, "", "")) }
     val profile by viewModel.userProfile.collectAsState()
     val userName = profile.nickname
+
+    LaunchedEffect(momentId) {
+        loadedMoment = withContext(Dispatchers.IO) { viewModel.repository.getMoment(momentId) }
+    }
 
     // 初始回复目标
     LaunchedEffect(replyToCommentId, replyToName) {
@@ -163,6 +170,7 @@ private fun MomentDetailCard(
         if (comments.isNotEmpty()) {
             Spacer(Modifier.height(8.dp))
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)).background(SurfaceVariant).padding(horizontal = 8.dp, vertical = 6.dp)) {
+                val repliesByParent = comments.filter { it.parentCommentId != 0L }.groupBy { it.parentCommentId }
                 val topComments = comments.filter { it.parentCommentId == 0L }
                 topComments.forEach { top ->
                     // 一级评论
@@ -175,7 +183,7 @@ private fun MomentDetailCard(
                         Text("回复", fontSize = 11.sp, color = Primary, modifier = Modifier.clickable { onReply(top.id, top.operatorName) }.padding(horizontal = 4.dp, vertical = 2.dp))
                     }
                     // 该一级下的二级评论
-                    val replies = comments.filter { it.parentCommentId == top.id }
+                    val replies = repliesByParent[top.id].orEmpty()
                     replies.forEach { reply ->
                         Spacer(Modifier.height(2.dp))
                         Row(modifier = Modifier.padding(start = 20.dp), verticalAlignment = Alignment.CenterVertically) {

@@ -22,12 +22,15 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -66,6 +69,8 @@ fun ImpressionsScreen(
     var tab by remember { mutableIntStateOf(0) }
     var impressions by remember { mutableStateOf<List<MemoryEntity>>(emptyList()) }
     var showClearDialog by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<MemoryEntity?>(null) }
+    var editContent by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
@@ -76,9 +81,27 @@ fun ImpressionsScreen(
         AlertDialog(
             onDismissRequest = { showClearDialog = false },
             title = { Text("清空所有印象") },
-            text = { Text("确定删除所有干员对你的印象数据？此操作不可撤销。") },
+            text = { Text("将清除所有干员当前对你的长期印象，且无法恢复。不会删除聊天记录、短期摘要、角色记忆、动态、评论或向量索引。") },
             confirmButton = { TextButton(onClick = { scope.launch { viewModel.deleteAllImpressions(); impressions = emptyList() }; showClearDialog = false }) { Text("确认清空", color = ErrorRed) } },
             dismissButton = { TextButton(onClick = { showClearDialog = false }) { Text("取消", color = TextSecondary) } }
+        )
+    }
+
+    editing?.let { entry ->
+        AlertDialog(
+            onDismissRequest = { editing = null },
+            title = { Text("编辑长期印象") },
+            text = { OutlinedTextField(value = editContent, onValueChange = { editContent = it }, label = { Text("印象内容") }, modifier = Modifier.fillMaxWidth(), minLines = 4) },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        viewModel.updateImpression(entry.copy(content = editContent.trim(), createdAt = System.currentTimeMillis()))
+                        impressions = viewModel.getAllImpressions()
+                        editing = null
+                    }
+                }, enabled = editContent.isNotBlank()) { Text("保存") }
+            },
+            dismissButton = { TextButton(onClick = { editing = null }) { Text("取消", color = TextSecondary) } }
         )
     }
 
@@ -95,10 +118,10 @@ fun ImpressionsScreen(
 
         Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 16.dp, vertical = 8.dp)) {
             Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).background(if (tab == 0) PrimaryContainer else Color.Transparent).clickable { tab = 0 }.padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
-                Text("标签云", fontSize = 13.sp, fontWeight = if (tab == 0) FontWeight.SemiBold else FontWeight.Normal, color = if (tab == 0) Primary else TextSecondary)
+                Text("当前标签", fontSize = 13.sp, fontWeight = if (tab == 0) FontWeight.SemiBold else FontWeight.Normal, color = if (tab == 0) Primary else TextSecondary)
             }
             Box(modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).background(if (tab == 1) PrimaryContainer else Color.Transparent).clickable { tab = 1 }.padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
-                Text("详细印象", fontSize = 13.sp, fontWeight = if (tab == 1) FontWeight.SemiBold else FontWeight.Normal, color = if (tab == 1) Primary else TextSecondary)
+                Text("当前印象", fontSize = 13.sp, fontWeight = if (tab == 1) FontWeight.SemiBold else FontWeight.Normal, color = if (tab == 1) Primary else TextSecondary)
             }
         }
         HorizontalDivider(color = Divider)
@@ -106,7 +129,13 @@ fun ImpressionsScreen(
         if (tab == 0) {
             TagCloudPage(impressions)
         } else {
-            DetailImpressionsPage(impressions, operators, onOperatorClick)
+            DetailImpressionsPage(
+                impressions = impressions,
+                operators = operators,
+                onOperatorClick = onOperatorClick,
+                onEdit = { entry -> editing = entry; editContent = entry.content },
+                onDelete = { entry -> scope.launch { viewModel.deleteImpression(entry.operatorId); impressions = viewModel.getAllImpressions() } }
+            )
         }
     }
     }
@@ -124,7 +153,7 @@ private fun TagCloudPage(impressions: List<MemoryEntity>) {
 
     Column(modifier = Modifier.fillMaxSize().background(BG).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text("AI眼中的你", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-        Text("来自所有干员的长期印象关键词", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(bottom = 16.dp))
+        Text("来自所有干员当前长期印象的关键词", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(bottom = 16.dp))
         if (tags.isEmpty()) {
             Text("暂无印象数据", color = TextTertiary)
         } else {
@@ -142,7 +171,13 @@ private fun TagCloudPage(impressions: List<MemoryEntity>) {
 }
 
 @Composable
-private fun DetailImpressionsPage(impressions: List<MemoryEntity>, operators: List<OperatorEntity>, onOperatorClick: (String) -> Unit = {}) {
+private fun DetailImpressionsPage(
+    impressions: List<MemoryEntity>,
+    operators: List<OperatorEntity>,
+    onOperatorClick: (String) -> Unit = {},
+    onEdit: (MemoryEntity) -> Unit,
+    onDelete: (MemoryEntity) -> Unit
+) {
     if (impressions.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("暂无印象数据", fontSize = 16.sp, color = TextTertiary)
@@ -161,6 +196,9 @@ private fun DetailImpressionsPage(impressions: List<MemoryEntity>, operators: Li
                         Text(displayName, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
                         Text("更新于 ${SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()).apply { timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai") }.format(Date(entry.createdAt))}", fontSize = 11.sp, color = TextTertiary)
                     }
+                    Spacer(modifier = Modifier.weight(1f))
+                    IconButton(onClick = { onEdit(entry) }) { Icon(Icons.Default.Edit, "编辑印象", tint = TextSecondary) }
+                    IconButton(onClick = { onDelete(entry) }) { Icon(Icons.Default.Delete, "删除印象", tint = ErrorRed) }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(entry.content, fontSize = 14.sp, color = TextPrimary, lineHeight = 22.sp)

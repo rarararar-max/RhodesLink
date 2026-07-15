@@ -2,6 +2,7 @@ package com.rhodes.privatechat.ui.model
 
 import android.content.ClipboardManager
 import android.content.Context
+import android.media.MediaPlayer
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -27,14 +28,31 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.shared.network.providers
+import com.rhodes.privatechat.shared.network.AIService
+import com.rhodes.privatechat.shared.model.AiMessage
+import com.rhodes.privatechat.shared.modelgateway.VisionAnalyzeRequest
+import com.rhodes.privatechat.shared.modelgateway.createVisionGateway
+import com.rhodes.privatechat.shared.voice.TtsRequest
+import com.rhodes.privatechat.shared.voice.createTtsGateway
+import com.rhodes.privatechat.shared.voice.AsrRequest
+import com.rhodes.privatechat.shared.voice.createAsrGateway
+import com.rhodes.privatechat.shared.vector.testEmbeddingGateway
+import com.rhodes.privatechat.shared.vector.MemoryVectorService
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.ui.theme.*
+import com.rhodes.privatechat.viewmodel.MainViewModel
 import org.koin.compose.koinInject
+import org.koin.compose.viewmodel.koinViewModel
+import kotlinx.coroutines.launch
 
 @Composable
 fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     val settings: SettingsRepository = koinInject()
+    val aiService: AIService = koinInject()
+    val memoryVectorService: MemoryVectorService = koinInject()
+    val viewModel: MainViewModel = koinViewModel()
     val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     val providerIds = providers.keys.toList()
     val providerNames = providerIds.map { providers.getValue(it).name }
@@ -53,6 +71,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     var customUrl by remember { mutableStateOf(settings.customUrl) }
     var apiKey by remember { mutableStateOf(settings.apiKey) }
     var visionBaseUrl by remember { mutableStateOf(settings.visionBaseUrl) }
+    var visionProvider by remember { mutableStateOf(settings.visionProvider) }
     var visionModelName by remember { mutableStateOf(settings.visionModelName) }
     var visionApiKey by remember { mutableStateOf(settings.visionApiKey) }
     var vectorProviderMode by remember { mutableStateOf(settings.vectorProviderMode) }
@@ -60,25 +79,39 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     var vectorBaseUrl by remember { mutableStateOf(settings.vectorBaseUrl) }
     var vectorModelName by remember { mutableStateOf(settings.vectorModelName) }
     var vectorApiKey by remember { mutableStateOf(settings.vectorApiKey) }
+    var showRebuildVectorIndex by remember { mutableStateOf(false) }
+    var invalidatingVectorIndex by remember { mutableStateOf(false) }
+    var rebuildingVectorIndex by remember { mutableStateOf(false) }
+    var vectorIndexFlowPending by remember { mutableStateOf(false) }
+    var rebuildVectorResult by remember { mutableStateOf("") }
+    var rebuildVectorProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var rebuildEligibleCount by remember { mutableStateOf<Int?>(null) }
     var asrBaseUrl by remember { mutableStateOf(settings.asrBaseUrl) }
+    var asrProvider by remember { mutableStateOf(settings.asrProvider) }
     var asrModelName by remember { mutableStateOf(settings.asrModelName) }
     var asrApiKey by remember { mutableStateOf(settings.asrApiKey) }
     var ttsBaseUrl by remember { mutableStateOf(settings.ttsBaseUrl) }
+    var ttsProvider by remember { mutableStateOf(settings.ttsProvider) }
     var ttsModelName by remember { mutableStateOf(settings.ttsModelName) }
     var ttsApiKey by remember { mutableStateOf(settings.ttsApiKey) }
     var ttsDefaultVoiceId by remember { mutableStateOf(settings.ttsDefaultVoiceId) }
-    var showKey by remember { mutableStateOf(false) }
     var errorText by remember { mutableStateOf("") }
     var showUnsavedDialog by remember { mutableStateOf(false) }
+    var testing by remember { mutableStateOf<String?>(null) }
+    var chatTestResult by remember { mutableStateOf("") }
+    var visionTestResult by remember { mutableStateOf("") }
+    var asrTestResult by remember { mutableStateOf("") }
+    var ttsTestResult by remember { mutableStateOf("") }
+    var vectorTestResult by remember { mutableStateOf("") }
 
     val isCustom = currentProviderId == "custom"
     val modelOptions = if (isCustom) listOf("自填") else currentConfig.models + "自填"
     val currentModelName = if (isCustom || selectedModelIdx >= currentConfig.models.size) customModelName.trim() else currentConfig.models[selectedModelIdx].trim()
     val hasChanges = currentProviderId != settings.provider || currentModelName != settings.modelName || customUrl.trim() != settings.customUrl || apiKey.trim() != settings.apiKey ||
-        visionBaseUrl.trim() != settings.visionBaseUrl || visionModelName.trim() != settings.visionModelName || visionApiKey.trim() != settings.visionApiKey ||
+        visionProvider != settings.visionProvider || visionBaseUrl.trim() != settings.visionBaseUrl || visionModelName.trim() != settings.visionModelName || visionApiKey.trim() != settings.visionApiKey ||
         vectorProviderMode != settings.vectorProviderMode || vectorProvider != settings.vectorProvider || vectorBaseUrl.trim() != settings.vectorBaseUrl || vectorModelName.trim() != settings.vectorModelName || vectorApiKey.trim() != settings.vectorApiKey ||
-        asrBaseUrl.trim() != settings.asrBaseUrl || asrModelName.trim() != settings.asrModelName || asrApiKey.trim() != settings.asrApiKey ||
-        ttsBaseUrl.trim() != settings.ttsBaseUrl || ttsModelName.trim() != settings.ttsModelName || ttsApiKey.trim() != settings.ttsApiKey || ttsDefaultVoiceId.trim() != settings.ttsDefaultVoiceId
+        asrProvider != settings.asrProvider || asrBaseUrl.trim() != settings.asrBaseUrl || asrModelName.trim() != settings.asrModelName || asrApiKey.trim() != settings.asrApiKey ||
+        ttsProvider != settings.ttsProvider || ttsBaseUrl.trim() != settings.ttsBaseUrl || ttsModelName.trim() != settings.ttsModelName || ttsApiKey.trim() != settings.ttsApiKey || ttsDefaultVoiceId.trim() != settings.ttsDefaultVoiceId
 
     fun validateSettings(): String? {
         val modelName = if (isCustom || selectedModelIdx >= currentConfig.models.size) {
@@ -93,6 +126,10 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             if (url.isBlank()) return "请填写 API 地址"
             if (!url.startsWith("http://") && !url.startsWith("https://")) return "API 地址需以 http:// 或 https:// 开头"
         }
+        if (visionBaseUrl.isNotBlank() && !visionBaseUrl.trim().startsWith("http")) return "识图 API 地址需以 http:// 或 https:// 开头"
+        if (vectorProviderMode == "third_party" && vectorBaseUrl.isNotBlank() && !vectorBaseUrl.trim().startsWith("http")) return "向量 API 地址需以 http:// 或 https:// 开头"
+        if (asrBaseUrl.isNotBlank() && !asrBaseUrl.trim().startsWith("ws")) return "语音识别地址需以 ws:// 或 wss:// 开头"
+        if (ttsBaseUrl.isNotBlank() && !ttsBaseUrl.trim().startsWith("ws")) return "文字转语音地址需以 ws:// 或 wss:// 开头"
         return null
     }
 
@@ -108,6 +145,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             settings.customUrl = customUrl.trim()
             settings.apiKey = apiKey.trim()
             settings.visionBaseUrl = visionBaseUrl.trim()
+            settings.visionProvider = visionProvider
             settings.visionModelName = visionModelName.trim()
             settings.visionApiKey = visionApiKey.trim()
             settings.vectorProviderMode = vectorProviderMode
@@ -116,19 +154,167 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             settings.vectorModelName = vectorModelName.trim()
             settings.vectorApiKey = vectorApiKey.trim()
             settings.asrBaseUrl = asrBaseUrl.trim()
+            settings.asrProvider = asrProvider
             settings.asrModelName = asrModelName.trim()
             settings.asrApiKey = asrApiKey.trim()
             settings.ttsBaseUrl = ttsBaseUrl.trim()
+            settings.ttsProvider = ttsProvider
             settings.ttsModelName = ttsModelName.trim()
             settings.ttsApiKey = ttsApiKey.trim()
             settings.ttsDefaultVoiceId = ttsDefaultVoiceId.trim()
+            val newVectorSignature = if (vectorProviderMode == "local") "local-hash-384-v1" else "${vectorProvider}:${vectorBaseUrl.trim()}:${vectorModelName.trim()}"
+            val vectorSignatureChanged = settings.vectorIndexSignature != newVectorSignature
+            if (vectorSignatureChanged) {
+                vectorIndexFlowPending = true
+                invalidatingVectorIndex = true
+                scope.launch {
+                    runCatching { viewModel.invalidateAllMemoryIndexes() }
+                        .onFailure { rebuildVectorResult = "旧索引清理失败：${it.message?.take(60) ?: "未知错误"}" }
+                    invalidatingVectorIndex = false
+                    if (rebuildVectorResult.isBlank()) {
+                        rebuildEligibleCount = runCatching { viewModel.countEligibleMemoryIndexes() }.getOrNull()
+                        showRebuildVectorIndex = true
+                    } else {
+                        vectorIndexFlowPending = false
+                    }
+                }
+            }
+            settings.vectorIndexSignature = newVectorSignature
             errorText = ""
-            true
+            vectorSignatureChanged
         }
     }
 
     fun requestBack() {
         if (hasChanges) showUnsavedDialog = true else onBack()
+    }
+
+    fun testChat() {
+        if (testing != null) return
+        testing = "chat"
+        chatTestResult = "正在测试..."
+        scope.launch {
+            try {
+                val validationError = validateSettings()
+                if (validationError != null) throw IllegalArgumentException(validationError)
+                val result = aiService.chat(
+                    apiKey.trim(), listOf(AiMessage("user", "只回复：连接成功")),
+                    currentProviderId, currentModelName, customUrl.trim(), temperature = 0.1
+                )
+                chatTestResult = if (result.content.isBlank()) "测试失败：服务没有返回内容" else "连接成功：${result.content.trim().take(60)}"
+            } catch (e: Exception) {
+                chatTestResult = "测试失败：${e.message?.take(100) ?: "请检查地址、模型和密钥"}"
+            } finally { testing = null }
+        }
+    }
+
+    fun testVision() {
+        if (testing != null) return
+        testing = "vision"
+        visionTestResult = "正在测试..."
+        scope.launch {
+            try {
+                val key = visionApiKey.trim().ifBlank { apiKey.trim() }
+                require(visionBaseUrl.trim().startsWith("http")) { "请填写正确的识图 API 地址" }
+                require(visionModelName.trim().isNotBlank()) { "请填写识图模型名" }
+                require(key.isNotBlank()) { "请填写识图密钥，或先填写聊天密钥" }
+                val testImage = runCatching {
+                    val bmp = android.graphics.BitmapFactory.decodeResource(ctx.resources, com.rhodes.privatechat.R.drawable.sleep_idle_001)
+                    val out = java.io.ByteArrayOutputStream()
+                    bmp?.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, out)
+                    if (bmp == null) throw IllegalStateException("null")
+                    "data:image/jpeg;base64," + android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
+                }.getOrNull() ?: throw IllegalStateException("无法加载测试图片")
+                val result = createVisionGateway(visionProvider, visionBaseUrl.trim(), key, visionModelName.trim()).analyzeImage(
+                    VisionAnalyzeRequest(testImage, "请用中文描述这张图片中的内容，只输出描述文字。")
+                )
+                val display = result.text.take(300)
+                val summary: String? = runCatching {
+                    val element = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }.parseToJsonElement(display)
+                    val obj = element as? kotlinx.serialization.json.JsonObject ?: return@runCatching null
+                    obj["visibleSummary"]?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
+                }.getOrNull()
+                visionTestResult = if (display.isBlank()) "测试失败：服务没有返回识图结果" else
+                    "连接成功\n${if (summary != null) "可见分析：$summary\n" else ""}原始返回：$display"
+            } catch (e: Exception) {
+                visionTestResult = "测试失败：${e.message?.take(100) ?: "请检查识图配置"}"
+            } finally { testing = null }
+        }
+    }
+
+    fun testTts() {
+        if (testing != null) return
+        testing = "tts"
+        ttsTestResult = "正在测试..."
+        scope.launch {
+            try {
+                val key = ttsApiKey.trim().ifBlank { apiKey.trim() }
+                require(ttsBaseUrl.trim().startsWith("ws")) { "文字转语音地址需要以 ws:// 或 wss:// 开头" }
+                require(ttsModelName.trim().isNotBlank()) { "请填写文字转语音模型名" }
+                require(key.isNotBlank()) { "请填写文字转语音密钥，或先填写聊天密钥" }
+                val testVoiceId = ttsDefaultVoiceId.trim()
+                require(testVoiceId.isNotBlank()) { "请填写默认音色 ID，或到角色编辑页测试角色音色" }
+                val audioBytes = createTtsGateway(ttsBaseUrl.trim(), key, ttsModelName.trim())
+                    .synthesize(TtsRequest("测试成功", testVoiceId)).audioBytes
+                if (audioBytes == null || audioBytes.isEmpty()) {
+                    ttsTestResult = "测试失败：服务没有返回音频数据"
+                } else {
+                    val file = java.io.File(ctx.cacheDir, "tts_test.mp3")
+                    file.writeBytes(audioBytes)
+                    MediaPlayer().apply {
+                        setDataSource(file.absolutePath)
+                        prepare()
+                        start()
+                        setOnCompletionListener { release(); file.delete() }
+                    }
+                    ttsTestResult = "连接成功（测试语音正在播放）"
+                }
+            } catch (e: Exception) {
+                ttsTestResult = "测试失败：${e.message?.take(100) ?: "请检查文字转语音配置"}"
+            } finally { testing = null }
+        }
+    }
+
+    fun testVector() {
+        if (testing != null) return
+        testing = "vector"
+        vectorTestResult = "正在测试..."
+        scope.launch {
+            try {
+                if (vectorProviderMode != "third_party") {
+                    vectorTestResult = "本地索引可直接使用：384 维，不联网，无额外 Embedding API 费用"
+                    return@launch
+                }
+                val key = vectorApiKey.trim().ifBlank { apiKey.trim() }
+                require(vectorBaseUrl.trim().startsWith("http")) { "记忆增强地址需要以 http:// 或 https:// 开头" }
+                require(vectorModelName.trim().isNotBlank()) { "请填写记忆增强模型名" }
+                require(key.isNotBlank()) { "请填写记忆增强密钥，或先填写聊天密钥" }
+                val values = testEmbeddingGateway(vectorBaseUrl.trim(), key, vectorModelName.trim())
+                require(values.isNotEmpty()) { "服务没有返回记忆数据" }
+                require(values.all { it.isFinite() }) { "服务返回了无效的记忆数据" }
+                require(values.size >= 64) { "返回维度过低，可能不是 Embedding 模型" }
+                vectorTestResult = "连接成功：返回 ${values.size} 维向量。此测试已发起一次真实 Embedding API 请求。"
+            } catch (e: Exception) { vectorTestResult = "测试失败：${e.message?.take(100) ?: "请检查地址、模型和密钥"}" }
+            finally { testing = null }
+        }
+    }
+
+    fun testAsr() {
+        if (testing != null) return
+        testing = "asr"
+        asrTestResult = "正在测试..."
+        scope.launch {
+            try {
+                val key = asrApiKey.trim().ifBlank { apiKey.trim() }
+                require(asrBaseUrl.trim().startsWith("ws")) { "语音识别地址需要以 ws:// 或 wss:// 开头" }
+                require(asrModelName.trim().isNotBlank()) { "请填写语音识别模型配置" }
+                require(key.isNotBlank()) { "请填写语音识别密钥，或先填写聊天密钥" }
+                createAsrGateway(asrBaseUrl.trim(), key, asrModelName.trim()).transcribe(AsrRequest(ByteArray(3200)))
+                asrTestResult = "连接成功"
+            } catch (e: Exception) {
+                asrTestResult = "测试失败：${e.message?.take(100) ?: "请检查语音识别配置"}"
+            } finally { testing = null }
+        }
     }
 
     BackHandler(onBack = { requestBack() })
@@ -140,7 +326,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             Spacer(Modifier.weight(1f))
             Text("模型设置", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
             Spacer(Modifier.weight(1f))
-            TextButton(onClick = { if (saveSettings()) onBack() }) {
+            TextButton(enabled = !invalidatingVectorIndex && !rebuildingVectorIndex, onClick = { val stayForVectorFlow = saveSettings(); if (!stayForVectorFlow) onBack() }) {
                 Icon(Icons.Default.Check, null, tint = Primary, modifier = Modifier.size(20.dp))
                 Text("保存", color = Primary, fontWeight = FontWeight.SemiBold)
             }
@@ -149,7 +335,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
 
         Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
             // Vendor
-            DropDown("厂商", providerNames, selectedProvider) { i -> selectedProvider = i; selectedModelIdx = 0; errorText = "" }
+            DropDown("厂商", providerNames, selectedProvider) { i -> selectedProvider = i; selectedModelIdx = 0; customModelName = ""; errorText = "" }
             Spacer(Modifier.height(12.dp))
 
             // Model
@@ -172,53 +358,84 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
 
             // API Key
             LabeledField("API 密钥") {
-                Row {
-                    OutlinedTextField(value = apiKey, onValueChange = { apiKey = it; errorText = "" }, modifier = Modifier.weight(1f), singleLine = true, visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(), shape = RoundedCornerShape(8.dp), colors = fieldColors())
-                    Spacer(Modifier.width(4.dp)); PasteBtn(ctx) { apiKey = it; errorText = "" }
-                }
-                TextButton(onClick = { showKey = !showKey }) { Text(if (showKey) "隐藏" else "显示", fontSize = 11.sp, color = Primary) }
+                SecretInput(apiKey, { apiKey = it; errorText = "" }, ctx)
             }
             if (errorText.isNotBlank()) {
                 Text(errorText, fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
             }
+            TestButton("测试聊天模型", testing == "chat", chatTestResult, onClick = ::testChat)
             Spacer(Modifier.height(12.dp))
 
             SettingsSection("识图模型") {
+                DropDown("服务商", listOf("阿里千问", "豆包", "OpenAI 兼容/自填"), when (visionProvider) { "ali" -> 0; "doubao" -> 1; else -> 2 }) { index ->
+                    visionProvider = listOf("ali", "doubao", "openai")[index]
+                    when (visionProvider) {
+                        "ali" -> { visionBaseUrl = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"; visionModelName = "qwen3-vl-plus" }
+                        "doubao" -> { visionBaseUrl = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"; visionModelName = "" }
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                Text(if (visionProvider == "ali") "使用阿里千问视觉接口。" else "请选择支持图片理解的模型。", fontSize = 12.sp, color = TextSecondary)
+                Spacer(Modifier.height(8.dp))
                 LabeledField("API 地址") { TextInput(visionBaseUrl, { visionBaseUrl = it }, ctx) }
                 Spacer(Modifier.height(10.dp))
                 LabeledField("模型名") { TextInput(visionModelName, { visionModelName = it }, ctx, placeholder = "qwen3-vl-plus") }
                 Spacer(Modifier.height(10.dp))
-                LabeledField("API Key（空则复用聊天 API Key）") { SecretInput(visionApiKey, { visionApiKey = it }, ctx, showKey) }
+                LabeledField("API Key（空则复用聊天 API Key）") { SecretInput(visionApiKey, { visionApiKey = it }, ctx) }
+                TestButton("测试识图模型", testing == "vision", visionTestResult, onClick = ::testVision)
             }
 
             SettingsSection("向量模型") {
-                DropDown("模式", listOf("本地兜底", "第三方向量模型"), if (vectorProviderMode == "third_party") 1 else 0) { vectorProviderMode = if (it == 1) "third_party" else "local" }
+                Text("用于帮助角色找回较早的相关聊天。不开启也能正常聊天，索引始终保存在本机。", fontSize = 12.sp, color = TextSecondary)
+                Spacer(Modifier.height(8.dp))
+                DropDown("模式", listOf("手机自带的免费版", "付费 Embedding（更好的记忆力）"), if (vectorProviderMode == "third_party") 1 else 0) { vectorProviderMode = if (it == 1) "third_party" else "local" }
                 Spacer(Modifier.height(10.dp))
-                DropDown("接口类型", listOf("阿里百炼", "OpenAI 兼容"), if (vectorProvider == "ali") 0 else 1) { vectorProvider = if (it == 0) "ali" else "openai" }
+                if (vectorProviderMode == "local") Text("在手机本地建立检索索引，不上传聊天内容，也不产生额外 Embedding API 费用。对近义表达和复杂语义的理解较弱。", fontSize = 12.sp, color = TextSecondary)
+                else {
+                Text("会把需要建立或查询的记忆文本发送给你配置的服务，通常语义召回更准确，但可能产生供应商费用。测试、写入和检索都会发起真实请求。", fontSize = 12.sp, color = TextSecondary)
+                Spacer(Modifier.height(10.dp))
+                    DropDown("接口预设", listOf("阿里百炼兼容 Endpoint 预设", "自定义 OpenAI 兼容 Endpoint"), if (vectorProvider == "ali") 0 else 1) { index ->
+                    vectorProvider = if (index == 0) "ali" else "openai"
+                    if (index == 0) { vectorBaseUrl = "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/embeddings"; vectorModelName = "text-embedding-v4" }
+                    }
+                    Text("两个预设当前都使用 OpenAI 兼容 Embedding 协议；阿里预设会填入推荐地址和模型名，需将 URL 中的 {WorkspaceId} 替换为实际工作区。", fontSize = 12.sp, color = TextSecondary)
                 Spacer(Modifier.height(10.dp))
                 LabeledField("API 地址") { TextInput(vectorBaseUrl, { vectorBaseUrl = it }, ctx) }
                 Spacer(Modifier.height(10.dp))
                 LabeledField("模型名") { TextInput(vectorModelName, { vectorModelName = it }, ctx, placeholder = "text-embedding-v4") }
                 Spacer(Modifier.height(10.dp))
-                LabeledField("API Key（空则复用聊天 API Key）") { SecretInput(vectorApiKey, { vectorApiKey = it }, ctx, showKey) }
+                LabeledField("API Key（空则复用聊天 API Key）") { SecretInput(vectorApiKey, { vectorApiKey = it }, ctx) }
+                TestButton("测试付费 Embedding", testing == "vector", vectorTestResult, onClick = ::testVector)
+                }
+                if (rebuildVectorResult.isNotBlank()) Text(rebuildVectorResult, fontSize = 12.sp, color = TextSecondary)
             }
 
             SettingsSection("语音识别 ASR") {
+                DropDown("服务商", listOf("阿里千问实时识别", "自填（阿里兼容）"), if (asrProvider == "ali") 0 else 1) { asrProvider = if (it == 0) "ali" else "custom" }
+                Text("自填服务必须兼容阿里实时 WebSocket 协议与音频格式。", fontSize = 12.sp, color = TextSecondary)
+                Spacer(Modifier.height(10.dp))
                 LabeledField("WebSocket 地址") { TextInput(asrBaseUrl, { asrBaseUrl = it }, ctx) }
                 Spacer(Modifier.height(10.dp))
                 LabeledField("模型配置") { TextInput(asrModelName, { asrModelName = it }, ctx, placeholder = "realtime|transcription") }
                 Spacer(Modifier.height(10.dp))
-                LabeledField("API Key（空则复用聊天 API Key）") { SecretInput(asrApiKey, { asrApiKey = it }, ctx, showKey) }
+                LabeledField("API Key（空则复用聊天 API Key）") { SecretInput(asrApiKey, { asrApiKey = it }, ctx) }
+                TestButton("测试语音识别", testing == "asr", asrTestResult, onClick = ::testAsr)
             }
 
             SettingsSection("文字转语音 TTS") {
-                LabeledField("WebSocket 地址") { TextInput(ttsBaseUrl, { ttsBaseUrl = it }, ctx) }
+                DropDown("服务商", listOf("MiniMax", "自填（MiniMax 兼容）"), if (ttsProvider == "minimax") 0 else 1) { index ->
+                    ttsProvider = if (index == 0) "minimax" else "custom"
+                    if (index == 0) { ttsBaseUrl = "wss://api.minimaxi.com/ws/v1/t2a_v2"; ttsModelName = "speech-2.8-hd" }
+                }
+                Text("自填服务必须兼容 MiniMax WebSocket TTS 协议。", fontSize = 12.sp, color = TextSecondary)
+                Spacer(Modifier.height(10.dp))
+                LabeledField("API 地址") { TextInput(ttsBaseUrl, { ttsBaseUrl = it }, ctx) }
                 Spacer(Modifier.height(10.dp))
                 LabeledField("模型名") { TextInput(ttsModelName, { ttsModelName = it }, ctx, placeholder = "speech-2.8-hd") }
                 Spacer(Modifier.height(10.dp))
-                LabeledField("默认音色ID") { TextInput(ttsDefaultVoiceId, { ttsDefaultVoiceId = it }, ctx, placeholder = "角色未填写时使用") }
-                Spacer(Modifier.height(10.dp))
-                LabeledField("API Key（空则复用聊天 API Key）") { SecretInput(ttsApiKey, { ttsApiKey = it }, ctx, showKey) }
+                LabeledField("默认音色 ID") { TextInput(ttsDefaultVoiceId, { ttsDefaultVoiceId = it }, ctx, placeholder = "角色未设置音色时使用") }
+                LabeledField("API Key（空则复用聊天 API Key）") { SecretInput(ttsApiKey, { ttsApiKey = it }, ctx) }
+                TestButton("测试文字转语音", testing == "tts", ttsTestResult, onClick = ::testTts)
             }
         }
     }
@@ -237,6 +454,43 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             }
         )
     }
+    if (invalidatingVectorIndex) AlertDialog(
+        onDismissRequest = {},
+        title = { Text("正在更新记忆索引") },
+        text = { Text("正在清空旧索引，请稍候。") },
+        confirmButton = {}
+    )
+    if (showRebuildVectorIndex) AlertDialog(
+        onDismissRequest = { if (!rebuildingVectorIndex) showRebuildVectorIndex = false },
+        title = { Text("重建记忆索引") },
+        text = {
+            val progress = rebuildVectorProgress
+            val eligibleText = rebuildEligibleCount?.let { "当前有 $it 条有效记忆可重建。\n" }.orEmpty()
+            Text(
+                if (rebuildingVectorIndex && progress != null) {
+                    "正在重建：${progress.first} / ${progress.second}"
+                } else {
+                    eligibleText + "记忆检索方式已变更，旧索引已清空。现在重建全部有效记忆索引吗？付费 Embedding 模式最多会为每条有效记忆发起一次真实 API 请求，可能产生服务商费用。"
+                }
+            )
+        },
+        confirmButton = { TextButton(onClick = {
+            rebuildingVectorIndex = true
+            rebuildVectorProgress = 0 to (rebuildEligibleCount ?: 0)
+            scope.launch {
+                val result = runCatching { viewModel.rebuildAllMemoryIndexes { done, total -> rebuildVectorProgress = done to total } }.getOrNull()
+                rebuildVectorResult = result?.let {
+                    "索引重建完成：有效 ${it.eligible}，成功 ${it.succeeded}，失败 ${it.failed}，跳过 ${it.skipped}" +
+                        if (it.errors.isNotEmpty()) "。错误：${it.errors.joinToString("；")}" else ""
+                } ?: "索引重建失败，请稍后在角色记忆页重试"
+                rebuildingVectorIndex = false
+                rebuildVectorProgress = null
+                vectorIndexFlowPending = false
+                showRebuildVectorIndex = false
+            }
+        }, enabled = !rebuildingVectorIndex) { Text(if (rebuildingVectorIndex) "重建中..." else "立即重建") } },
+        dismissButton = { TextButton(enabled = !rebuildingVectorIndex, onClick = { vectorIndexFlowPending = false; showRebuildVectorIndex = false }) { Text("稍后处理") } }
+    )
 }
 
 @Composable private fun DropDown(label: String, options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
@@ -271,6 +525,16 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     }
 }
 
+@Composable private fun TestButton(label: String, testing: Boolean, result: String, onClick: () -> Unit) {
+    Spacer(Modifier.height(12.dp))
+    OutlinedButton(onClick = onClick, enabled = !testing, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.outlinedButtonColors(contentColor = Primary)) {
+        Text(if (testing) "测试中..." else label, fontWeight = FontWeight.SemiBold)
+    }
+    if (result.isNotBlank()) {
+        Text(result, fontSize = 12.sp, color = if (result.startsWith("连接成功")) Primary else MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 6.dp))
+    }
+}
+
 @Composable private fun TextInput(value: String, onChange: (String) -> Unit, ctx: Context, placeholder: String = "") {
     Row {
         OutlinedTextField(value = value, onValueChange = onChange, modifier = Modifier.weight(1f), singleLine = true, shape = RoundedCornerShape(8.dp), colors = fieldColors(), placeholder = { if (placeholder.isNotBlank()) Text(placeholder, fontSize = 13.sp, color = TextTertiary) })
@@ -279,9 +543,12 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     }
 }
 
-@Composable private fun SecretInput(value: String, onChange: (String) -> Unit, ctx: Context, show: Boolean) {
+@Composable private fun SecretInput(value: String, onChange: (String) -> Unit, ctx: Context) {
+    var show by remember { mutableStateOf(false) }
     Row {
         OutlinedTextField(value = value, onValueChange = onChange, modifier = Modifier.weight(1f), singleLine = true, visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(), shape = RoundedCornerShape(8.dp), colors = fieldColors())
+        Spacer(Modifier.width(4.dp))
+        TextButton(onClick = { show = !show }, modifier = Modifier.height(48.dp)) { Text(if (show) "隐藏" else "显示", fontSize = 11.sp, color = Primary) }
         Spacer(Modifier.width(4.dp))
         PasteBtn(ctx) { onChange(it) }
     }

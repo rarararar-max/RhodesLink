@@ -2,6 +2,7 @@ package com.rhodes.privatechat.audio
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioFormat
@@ -10,28 +11,35 @@ import android.media.AudioRecord
 import android.media.MediaPlayer
 import android.os.Build
 import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import kotlin.concurrent.thread
 
 class LocalAudioController(private val context: Context) {
+    companion object {
+        const val MAX_RECORDING_MS = 120_000L
+        private const val MAX_RECORDING_BYTES = 4_000_000
+    }
     private var recorder: AudioRecord? = null
     private var player: MediaPlayer? = null
     private var recordingFile: File? = null
     private var startedAt: Long = 0L
     @Volatile private var isRecording = false
     private var recordingThread: Thread? = null
-    private val pcmChunks = mutableListOf<ByteArray>()
-    private val pcmLock = Any()
+    private var pcmFile: File? = null
     @Volatile private var currentRecordingLevel = 0f
     @Volatile private var currentRecordingBytes = 0
     @Volatile private var lastSpeechAt = 0L
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var audioFocusRequest: AudioFocusRequest? = null
+    private var playbackCompletion: ((Boolean) -> Unit)? = null
 
     @SuppressLint("MissingPermission")
     fun startRecording(): Boolean {
+        if (context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return false
         if (isRecording) stopRecordingInternal()
         stopPlayback()
-        val file = File(File(context.filesDir, "voice").apply { mkdirs() }, "voice_${System.currentTimeMillis()}.wav")
+        val file = File(File(context.filesDir, "voice").apply { mkdirs() }, "voice_${System.currentTimeMillis()}.pcm")
         val minBufferSize = AudioRecord.getMinBufferSize(RECORD_SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         if (minBufferSize <= 0) return false
         return runCatching {
@@ -41,26 +49,32 @@ class LocalAudioController(private val context: Context) {
                 audioRecord.release()
                 error("AudioRecord init failed")
             }
-            synchronized(pcmLock) { pcmChunks.clear() }
+            file.delete()
             currentRecordingLevel = 0f
             currentRecordingBytes = 0
             recorder = audioRecord
             recordingFile = file
+            pcmFile = file
             startedAt = System.currentTimeMillis()
             lastSpeechAt = startedAt
             isRecording = true
             audioRecord.startRecording()
             recordingThread = thread(name = "rhodes-audio-record") {
-                val buffer = ByteArray(bufferSize)
-                while (isRecording) {
-                    val read = audioRecord.read(buffer, 0, buffer.size)
-                    if (read > 0) {
-                        val chunk = buffer.copyOf(read)
-                        val average = averageAbsPcm16(chunk)
-                        currentRecordingLevel = (average / 4000f).coerceIn(0f, 1f)
-                        currentRecordingBytes += read
-                        if (average > RECORD_SPEECH_THRESHOLD) lastSpeechAt = System.currentTimeMillis()
-                        synchronized(pcmLock) { pcmChunks += chunk }
+                FileOutputStream(file).use { output ->
+                    val buffer = ByteArray(bufferSize)
+                    while (isRecording) {
+                        val read = audioRecord.read(buffer, 0, buffer.size)
+                        if (read > 0) {
+                            val average = averageAbsPcm16(buffer, read)
+                            currentRecordingLevel = (average / 4000f).coerceIn(0f, 1f)
+                            currentRecordingBytes += read
+                            if (average > RECORD_SPEECH_THRESHOLD) lastSpeechAt = System.currentTimeMillis()
+                            if (currentRecordingBytes <= MAX_RECORDING_BYTES && System.currentTimeMillis() - startedAt <= MAX_RECORDING_MS) {
+                                output.write(buffer, 0, read)
+                            } else {
+                                isRecording = false
+                            }
+                        }
                     }
                 }
             }
@@ -68,25 +82,34 @@ class LocalAudioController(private val context: Context) {
         }.getOrElse {
             stopRecordingInternal()
             recordingFile = null
+            pcmFile?.delete()
+            pcmFile = null
             false
         }
     }
 
     fun stopRecording(): RecordedAudio? {
-        val file = recordingFile ?: return null
+        val pcm = recordingFile ?: return null
         val durationMs = (System.currentTimeMillis() - startedAt).coerceAtLeast(300L)
         stopRecordingInternal()
-        val pcmBytes = synchronized(pcmLock) {
-            val output = ByteArray(pcmChunks.sumOf { it.size })
-            var offset = 0
-            pcmChunks.forEach { chunk -> chunk.copyInto(output, destinationOffset = offset); offset += chunk.size }
-            pcmChunks.clear()
-            output
-        }
         recordingFile = null
-        if (pcmBytes.isEmpty()) return null
-        file.writeBytes(buildWavFile(pcmBytes, RECORD_SAMPLE_RATE, 1, 16))
-        return RecordedAudio(file.absolutePath, durationMs)
+        pcmFile = null
+        if (!pcm.exists() || pcm.length() == 0L) {
+            pcm.delete()
+            return null
+        }
+        return runCatching {
+            val wav = File(pcm.parentFile, pcm.nameWithoutExtension + ".wav")
+            FileOutputStream(wav).use { output ->
+                output.write(buildWavHeader(pcm.length().toInt(), RECORD_SAMPLE_RATE, 1, 16))
+                FileInputStream(pcm).use { input -> input.copyTo(output) }
+            }
+            pcm.delete()
+            RecordedAudio(wav.absolutePath, durationMs)
+        }.getOrElse {
+            pcm.delete()
+            null
+        }
     }
 
     fun readPcmFromWav(path: String): ByteArray {
@@ -101,11 +124,16 @@ class LocalAudioController(private val context: Context) {
         return RecordedAudio(file.absolutePath, (bytes.size / 16L).coerceIn(800L, 120_000L))
     }
 
+    fun deleteAudio(path: String) {
+        runCatching { File(path.removePrefix("file://")).delete() }
+    }
+
     fun play(path: String, onComplete: ((Boolean) -> Unit)? = null) {
         stopPlayback()
         val file = File(path.removePrefix("file://"))
         runCatching {
-            requestPlaybackFocus()
+            if (!requestPlaybackFocus()) error("无法获取音频播放焦点")
+            playbackCompletion = onComplete
             player = MediaPlayer().apply {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                     setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
@@ -113,25 +141,36 @@ class LocalAudioController(private val context: Context) {
                     @Suppress("DEPRECATION") setAudioStreamType(AudioManager.STREAM_MUSIC)
                 }
                 setDataSource(file.absolutePath)
-                prepare()
-                setOnCompletionListener { stopPlayback(); onComplete?.invoke(true) }
-                setOnErrorListener { _, _, _ -> stopPlayback(); onComplete?.invoke(false); true }
-                start()
+                prepareAsync()
+                setOnPreparedListener { it.start() }
+                setOnCompletionListener { finishPlayback(true) }
+                setOnErrorListener { _, _, _ -> finishPlayback(false); true }
             }
-        }.getOrElse { stopPlayback(); onComplete?.invoke(false) }
+        }.getOrElse { finishPlayback(false) }
     }
 
     fun stopPlayback() {
+        val callback = playbackCompletion
+        playbackCompletion = null
         runCatching { player?.stop() }
         player?.release()
         player = null
         abandonPlaybackFocus()
+        callback?.invoke(false)
+    }
+
+    private fun finishPlayback(success: Boolean) {
+        val callback = playbackCompletion
+        playbackCompletion = null
+        stopPlayback()
+        callback?.invoke(success)
     }
 
     /** Releases recording, playback, audio focus, and transient in-memory buffers on screen exit. */
     fun release() {
         stopRecordingInternal()
-        synchronized(pcmLock) { pcmChunks.clear() }
+        recordingFile?.delete()
+        pcmFile?.delete()
         recordingFile = null
         currentRecordingLevel = 0f
         currentRecordingBytes = 0
@@ -149,15 +188,18 @@ class LocalAudioController(private val context: Context) {
         return System.currentTimeMillis() - lastSpeechAt >= silenceMs
     }
 
+    fun hasReachedRecordingLimit(): Boolean =
+        currentRecordingBytes >= MAX_RECORDING_BYTES || (startedAt > 0L && System.currentTimeMillis() - startedAt >= MAX_RECORDING_MS)
+
     fun getCurrentRecordingLevel(): Float = currentRecordingLevel
 
     fun getRecordingDebugInfo(): String = "recording=$isRecording level=${"%.2f".format(currentRecordingLevel)} bytes=$currentRecordingBytes lastSpeechAgoMs=${System.currentTimeMillis() - lastSpeechAt}"
 
     private fun stopRecordingInternal() {
         isRecording = false
+        runCatching { recorder?.stop() }
         recordingThread?.join(500L)
         recordingThread = null
-        runCatching { recorder?.stop() }
         recorder?.release()
         recorder = null
     }
@@ -165,7 +207,9 @@ class LocalAudioController(private val context: Context) {
     private fun requestPlaybackFocus(): Boolean = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
             .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
-            .setOnAudioFocusChangeListener { }
+            .setOnAudioFocusChangeListener { change ->
+                if (change < AudioManager.AUDIOFOCUS_GAIN) finishPlayback(false)
+            }
             .build()
         audioFocusRequest = request
         audioManager.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
@@ -182,25 +226,25 @@ class LocalAudioController(private val context: Context) {
         }
     }
 
-    private fun buildWavFile(pcm: ByteArray, sampleRate: Int, channels: Int, bitsPerSample: Int): ByteArray {
+    private fun buildWavHeader(pcmSize: Int, sampleRate: Int, channels: Int, bitsPerSample: Int): ByteArray {
         val byteRate = sampleRate * channels * bitsPerSample / 8
         val blockAlign = channels * bitsPerSample / 8
-        val output = ByteArray(WAV_HEADER_SIZE + pcm.size)
+        val output = ByteArray(WAV_HEADER_SIZE)
         fun writeAscii(offset: Int, value: String) { value.forEachIndexed { index, char -> output[offset + index] = char.code.toByte() } }
         fun writeIntLe(offset: Int, value: Int) { output[offset] = (value and 0xff).toByte(); output[offset + 1] = ((value shr 8) and 0xff).toByte(); output[offset + 2] = ((value shr 16) and 0xff).toByte(); output[offset + 3] = ((value shr 24) and 0xff).toByte() }
         fun writeShortLe(offset: Int, value: Int) { output[offset] = (value and 0xff).toByte(); output[offset + 1] = ((value shr 8) and 0xff).toByte() }
-        writeAscii(0, "RIFF"); writeIntLe(4, 36 + pcm.size); writeAscii(8, "WAVE"); writeAscii(12, "fmt "); writeIntLe(16, 16)
+        writeAscii(0, "RIFF"); writeIntLe(4, 36 + pcmSize); writeAscii(8, "WAVE"); writeAscii(12, "fmt "); writeIntLe(16, 16)
         writeShortLe(20, 1); writeShortLe(22, channels); writeIntLe(24, sampleRate); writeIntLe(28, byteRate); writeShortLe(32, blockAlign); writeShortLe(34, bitsPerSample)
-        writeAscii(36, "data"); writeIntLe(40, pcm.size); pcm.copyInto(output, destinationOffset = WAV_HEADER_SIZE)
+        writeAscii(36, "data"); writeIntLe(40, pcmSize)
         return output
     }
 
-    private fun averageAbsPcm16(bytes: ByteArray): Int {
-        if (bytes.size < 2) return 0
+    private fun averageAbsPcm16(bytes: ByteArray, length: Int = bytes.size): Int {
+        if (length < 2) return 0
         var sum = 0L
         var count = 0
         var index = 0
-        while (index + 1 < bytes.size) {
+        while (index + 1 < length) {
             val sample = ((bytes[index + 1].toInt() shl 8) or (bytes[index].toInt() and 0xff)).toShort().toInt()
             sum += kotlin.math.abs(sample)
             count++

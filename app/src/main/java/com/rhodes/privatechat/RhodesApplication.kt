@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import com.rhodes.privatechat.di.appModule
 import com.rhodes.privatechat.settings.SettingsMigration
+import com.rhodes.privatechat.automation.DailyContentScheduler
 import com.rhodes.privatechat.shared.db.DatabaseWrapper
 import com.rhodes.privatechat.shared.di.sharedModule
 import com.rhodes.privatechat.shared.settings.AndroidSettingsFactory
@@ -24,6 +25,7 @@ class RhodesApplication : Application() {
             androidLogger()
             androidContext(this@RhodesApplication)
             modules(sharedModule(DatabaseWrapper(this@RhodesApplication)), appModule)
+            DailyContentScheduler.schedulePlanner(this@RhodesApplication)
         }
     }
     

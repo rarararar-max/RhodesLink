@@ -36,7 +36,9 @@ interface VectorStoreGateway {
     suspend fun search(request: VectorSearchRequest): List<VectorMemory>
     suspend fun listMemories(ownerType: String, ownerId: String): List<VectorMemory>
     suspend fun delete(memoryId: String)
+    suspend fun deleteBySource(ownerType: String, ownerId: String, sourceId: String)
     suspend fun clearOwnerMemory(ownerType: String, ownerId: String)
+    suspend fun clearAllMemories()
 }
 
 class DisabledVectorStoreGateway : VectorStoreGateway {
@@ -44,5 +46,7 @@ class DisabledVectorStoreGateway : VectorStoreGateway {
     override suspend fun search(request: VectorSearchRequest): List<VectorMemory> = emptyList()
     override suspend fun listMemories(ownerType: String, ownerId: String): List<VectorMemory> = emptyList()
     override suspend fun delete(memoryId: String) = Unit
+    override suspend fun deleteBySource(ownerType: String, ownerId: String, sourceId: String) = Unit
     override suspend fun clearOwnerMemory(ownerType: String, ownerId: String) = Unit
+    override suspend fun clearAllMemories() = Unit
 }

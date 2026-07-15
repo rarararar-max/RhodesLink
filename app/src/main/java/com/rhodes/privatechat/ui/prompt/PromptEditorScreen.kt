@@ -61,13 +61,14 @@ fun PromptEditorScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val tabs = listOf("私聊", "群聊", "动态", "日记", "说明")
-    val tabKeys = listOf("private", "group", "moment", "diary", "help")
+    val tabs = listOf("私聊", "群聊", "动态", "评论", "日记", "说明")
+    val tabKeys = listOf("private", "group", "moment", "moment_comment", "diary", "help")
     var tabIndex by remember { mutableIntStateOf(0) }
     val context = LocalContext.current
 
     val privModeLabels = listOf("线上模式", "线下模式", "导演模式", "主动消息")
     val privModes = listOf("online", "offline", "director", "proactive")
+    // Automatic group chat reuses the group's current online/offline/director template.
     val grpModeLabels = listOf("线上模式", "线下模式", "导演模式")
     val grpModes = listOf("online", "offline", "director")
 
@@ -82,7 +83,8 @@ fun PromptEditorScreen(
         0 -> "private:${privModes[privModeIdx]}"
         1 -> "group:${grpModes[grpModeIdx]}"
         2 -> "moment:"
-        3 -> "diary:"
+        3 -> "moment_comment:"
+        4 -> "diary:"
         else -> "help:"
     }
 
@@ -97,7 +99,7 @@ fun PromptEditorScreen(
     val key = currentKey()
     var textFieldValue by remember(key) {
         mutableStateOf(
-            if (tabIndex < 4) {
+            if (tabIndex < 5) {
                 textMap[key] ?: TextFieldValue(loadTemplate(currentType(), currentMode()))
             } else {
                 TextFieldValue("")
@@ -106,13 +108,28 @@ fun PromptEditorScreen(
     }
 
     val saveCurrent: () -> Unit = {
-        if (tabIndex < 4) {
+        if (tabIndex < 5) {
             textMap[currentKey()] = textFieldValue
-            viewModel.savePromptTemplate(currentType(), currentMode(), textFieldValue.text)
+            val warnings = viewModel.savePromptTemplate(currentType(), currentMode(), textFieldValue.text)
+            if (warnings.isNotEmpty()) {
+                android.widget.Toast.makeText(context, warnings.joinToString("\n"), android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+    val saveAllEdited: () -> Unit = {
+        if (tabIndex < 5) textMap[currentKey()] = textFieldValue
+        val warnings = mutableListOf<String>()
+        textMap.forEach { (templateKey, value) ->
+            val type = templateKey.substringBefore(":")
+            val mode = templateKey.substringAfter(":", "")
+            warnings += viewModel.savePromptTemplate(type, mode, value.text)
+        }
+        if (warnings.isNotEmpty()) {
+            android.widget.Toast.makeText(context, warnings.distinct().joinToString("\n"), android.widget.Toast.LENGTH_LONG).show()
         }
     }
 
-    BackHandler(onBack = { saveCurrent(); onBack() })
+    BackHandler(onBack = { saveAllEdited(); onBack() })
 
     var showResetDialog by remember { mutableStateOf(false) }
     var showHelpDialog by remember { mutableStateOf(false) }
@@ -160,7 +177,7 @@ fun PromptEditorScreen(
         "{{GROUP_RECENT_WORLD_EVENTS}}" to "群聊可参考的近期世界事件",
         "{{GROUP_UNCONSUMED_EVENTS}}" to "当前群尚未消费的相关事件",
         "{{MEMBER_PROFILES}}" to "成员简介与人设（自动生成）",
-        "{{MEMBER_PRIVATE_CONTEXT}}" to "群成员各自可公开参考的私聊/记忆上下文",
+        "{{MEMBER_PRIVATE_CONTEXT}}" to "已停用：为避免私聊串线，当前群聊不会注入此内容",
         "{{GROUP_SUMMARY}}" to "群聊短期摘要",
         "{{GROUP_TRIGGER_EVENT}}" to "唤起群聊的大世界事件",
         "{{GROUP_TOPIC_SEED}}" to "群聊自动续聊或事件触发的话题种子",
@@ -203,7 +220,14 @@ fun PromptEditorScreen(
         "{{RECENT_DAILY_SUMMARY}}" to "动态可参考的近期每日摘要",
         "{{COMMENTER_NAME}}" to "评论者名称",
         "{{COMMENTER_PERSONA}}" to "评论者人设",
+        "{{POST_AUTHOR_NAME}}" to "动态作者名称",
+        "{{POST_AUTHOR_PERSONA}}" to "动态作者公开人设",
+        "{{COMMENT_CONTEXT}}" to "当前评论区上下文",
+        "{{COMMENTER_MEMORY}}" to "评论者可用的公开记忆",
         "{{POST_CONTENT}}" to "被评论的动态正文",
+        "{{COMMENT_TASK}}" to "评论任务类型：新评论或回复用户评论",
+        "{{COMMENT_INSTRUCTION}}" to "本次评论/回复的具体任务说明",
+        "{{REPLY_TARGET}}" to "需要回复的对象名称；新评论时为空",
         "{{COMMENT_MIN_CHARS}}" to "评论字数下限",
         "{{COMMENT_MAX_CHARS}}" to "评论字数上限",
         "{{YESTERDAY_DATE}}" to "昨天日期",
@@ -227,14 +251,14 @@ fun PromptEditorScreen(
             modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = { saveCurrent(); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
+            IconButton(onClick = { saveAllEdited(); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Spacer(modifier = Modifier.weight(1f))
             Text("提示词模板编辑", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
             Spacer(modifier = Modifier.weight(1f))
             IconButton(onClick = { showHelpDialog = true }) {
                 Icon(Icons.AutoMirrored.Filled.HelpOutline, "帮助", tint = Blue400, modifier = Modifier.size(22.dp))
             }
-            TextButton(onClick = { saveCurrent(); Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show(); onBack() }) {
+            TextButton(onClick = { saveAllEdited(); Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show(); onBack() }) {
                 Icon(Icons.Default.Check, null, tint = Blue400, modifier = Modifier.size(20.dp))
                 Text("保存", color = Blue400, fontWeight = FontWeight.SemiBold)
             }
@@ -246,7 +270,7 @@ fun PromptEditorScreen(
                 Tab(
                     selected = tabIndex == i,
                     onClick = {
-                        if (tabIndex < 4) textMap[currentKey()] = textFieldValue
+                        if (tabIndex < 5) textMap[currentKey()] = textFieldValue
                         tabIndex = i
                     },
                     text = {
@@ -300,7 +324,7 @@ fun PromptEditorScreen(
         }
 
         Column(modifier = Modifier.weight(1f).imePadding()) {
-        if (tabIndex < 4) {
+        if (tabIndex < 5) {
             Column(modifier = Modifier.weight(1f).padding(12.dp)) {
                 OutlinedTextField(
                     value = textFieldValue,
@@ -414,7 +438,7 @@ fun PromptEditorScreen(
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     Text(
-                        "提示：私聊和群聊下的子标签页（线上/线下/导演模式）的模板会根据所选模式独立加载和保存。写错或未识别的占位符不会报错，会原样发送给模型。",
+                        "提示：私聊和群聊下的子标签页（线上/线下/导演模式）的模板会根据所选模式独立加载和保存。未识别的占位符会原样保留在最终提示词中，请核对拼写。",
                         fontSize = 13.sp,
                         color = TextSecondary,
                         modifier = Modifier.padding(bottom = 8.dp)

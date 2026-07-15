@@ -22,6 +22,7 @@ data class ChatUiMessage(
     val mode: String = "online",
     val isArchived: Boolean = false,
     val imageUri: String = "",
+    val imageStatus: String = "",
     /** 原始 ChatMessage 的 id，用于撤回等操作 */
     val originalMessageId: Long = id,
     /** 在原始 JSON segments 数组中的索引，用于单条撤回；-1 表示非多段消息 */

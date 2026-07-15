@@ -20,6 +20,7 @@ object MemoryV2PromptTemplates {
 - 每个对象必须符合统一字段结构。
 - content 必须包含时间范围或来源线索，例如“最近几次”“6月下旬”“昨天到今天”。
 - 不要写画像式结论，不要把一次玩笑概括成稳定人格。
+- 每个输出项必须提供 evidence_ids，列出实际支持这条结论的输入记忆 id；不得编造 id。
 
 $SCHEMA
 """.trimIndent()
@@ -35,6 +36,7 @@ $SCHEMA
 - 每个对象必须符合统一字段结构。
 - content 必须包含大时间跨度或稳定性来源，例如“长期以来”“最近多次”“一段时间内”。
 - 不要编造用户画像，不要输出 relationship_statement。
+- 每个输出项必须提供 evidence_ids，列出实际支持这条结论的输入记忆 id；不得编造 id。
 
 $SCHEMA
 """.trimIndent()
@@ -141,5 +143,6 @@ $SCHEMA
 - content 禁止出现“系统记录”“记忆”“锚点”“摘要”“好感度”“affection”等机制词。
 - content 必须具体到谁、什么事、什么偏好或什么约定；不要写“聊得很开心”这种空泛句。
 - JSON 字段类型必须正确：importance 是数字，unmet_need 是布尔值，其他字段是字符串。
+- L2/L3 合并时额外输出 evidence_ids：整数数组，必须只引用本次输入 JSON 中的 id。L1 提取时不要输出该字段。
 """
 }

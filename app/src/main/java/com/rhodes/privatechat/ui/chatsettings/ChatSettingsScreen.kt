@@ -125,9 +125,9 @@ private fun PrivateTab(settings: SettingsRepository) {
     Spacer(modifier = Modifier.height(12.dp))
 
     SectionTitle("旁白（线下/导演模式）")
-    ParamSlider(settings, "nar_seg_min", "最少旁白段数", 1, 1f..10f, "环境描写最少出现几次。只在「线下」或「导演」模式下有效。线上模式旁白很短。建议1-2段就好，太多会喧宾夺主。")
+    ParamSlider(settings, "nar_seg_min", "最少旁白段数", 0, 0f..10f, "只在线下或导演模式有效；线上模式不会显示旁白。设为0时，仅在场景推进需要时自然加入旁白。")
     ParamSlider(settings, "nar_seg_max", "最多旁白段数", 3, 1f..10f, "环境描写最多出现几次。线下和导演模式建议不超过3段，超过了像在读剧本。")
-    ParamSlider(settings, "nar_min", "旁白最少字数", 50, 1f..1000f, "每段环境描写最少写几个字。太短了画面感不够，建议30-50字。", step = 5f, pairKey = "nar_max", isMinSide = true)
+    ParamSlider(settings, "nar_min", "旁白最少字数", 20, 0f..1000f, "每段环境描写最少写几个字。只在线下或导演模式有效，建议20-50字。", step = 5f, pairKey = "nar_max", isMinSide = true)
     ParamSlider(settings, "nar_max", "旁白最多字数", 300, 1f..1000f, "每段环境描写最多写几个字。太长会显得啰嗦，建议200-300字。数字越大消耗的AI额度越多。", step = 5f, pairKey = "nar_min", isMinSide = false)
 }
 
@@ -150,10 +150,9 @@ private fun GroupTab(settings: SettingsRepository) {
     ParamSlider(settings, "group_chat_max_interval", "空闲最大间隔(秒)", 180, 30f..900f, "开启群的空闲自动聊天后，AI干员自己聊起来的最长等待时间。建议180-300秒。", step = 10f)
     ParamSlider(settings, "group_auto_max_rounds", "空闲连续轮数", 20, 1f..300f, "空闲自动聊天最多连续聊多少轮。建议10-30，太高容易刷屏。", step = 1f)
 
-    Spacer(Modifier.height(12.dp)); SectionTitle("群聊旁白(线上/线下/导演)")
-    ParamSlider(settings, "group_nar_seg_min", "最少旁白段数", 1, 1f..10f, "群聊里环境描写最少出现几次。线上模式会过滤旁白。建议1-2段就好。")
-    ParamSlider(settings, "group_nar_seg_max", "最多旁白段数", 3, 1f..10f, "群聊里环境描写最多出现几次。超过3段就像在读剧本了。")
-    ParamSlider(settings, "group_nar_min", "旁白最小字数", 20, 20f..200f, "每段环境描写最少写几个字。线上模式旁白很短，不受这里控制。", step = 5f, pairKey = "group_nar_max", isMinSide = true)
+    Spacer(Modifier.height(12.dp)); SectionTitle("群聊旁白(线下/导演)")
+    Text("线下和导演模式中，每位活跃成员会自动对应一段旁白和至少一段台词；成员越多，生成时间和消耗越高。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
+    ParamSlider(settings, "group_nar_min", "旁白最小字数", 20, 0f..200f, "每段环境描写最少写几个字。只在线下或导演模式有效。", step = 5f, pairKey = "group_nar_max", isMinSide = true)
     ParamSlider(settings, "group_nar_max", "旁白最大字数", 100, 50f..300f, "每段环境描写最多写几个字。群聊旁白建议100字以内，太长了像私聊剧本。", step = 5f, pairKey = "group_nar_min", isMinSide = false)
 }
 
@@ -162,7 +161,7 @@ private fun GroupTab(settings: SettingsRepository) {
 @Composable
 private fun MemoryTab(settings: SettingsRepository) {
     ParamSlider(settings, "summary_threshold", "触发总结的聊天条数", 20, 3f..200f, "聊多少句话后，AI会自动总结前面聊的内容。设太小（低于10）频繁总结浪费AI额度，太大（超过100）AI记不住前面聊了什么。建议20-50条。", step = 1f)
-    ParamSlider(settings, "summary_retain", "保留最近几条总结", 5, 1f..50f, "保留最近几次对话总结，下次聊天时给AI参考。设太小（1-2条）之前的总结容易被丢掉，太大（超过10条）消耗AI上下文额度太多。建议3-5条。", step = 1f)
+    ParamSlider(settings, "summary_retain", "保留最近原始消息", 5, 1f..50f, "滚动摘要会先保留最近几条原始消息，较早内容才会合并进摘要。设太小会过早压缩上下文，太大则摘要更新变慢。建议3-5条。", step = 1f)
     Spacer(modifier = Modifier.height(12.dp))
     ParamSlider(settings, "impression_threshold", "触发印象更新的聊天条数", 50, 5f..100f, "聊多少句话后，AI会重新总结对你的整体印象。设太小会频繁消耗额度，设太大则印象变化较慢。建议30-80条。", step = 1f)
     Spacer(modifier = Modifier.height(12.dp))
@@ -196,7 +195,6 @@ private fun MemoryTab(settings: SettingsRepository) {
     )
     ParamSlider(settings, "memory_v2_promote_l1_threshold", "L1 合并为 L2 阈值", 20, 5f..100f, "同一干员的 L1 记忆达到多少条后，合并成中期 L2 记忆。越小越频繁消耗额度，建议20。", step = 1f)
     ParamSlider(settings, "memory_v2_promote_l2_threshold", "L2 合并为 L3 阈值", 10, 3f..50f, "同一干员的 L2 记忆达到多少条后，合并成长期 L3 记忆。建议10。", step = 1f)
-    ParamSlider(settings, "memory_pin_min_importance", "关键记忆 Pin 阈值", 70, 0f..100f, "Memory V2 记忆重要度达到多少后，额外生成关键记忆提醒。越低越容易生成锚点，越高越干净。建议70。", step = 5f)
     Spacer(modifier = Modifier.height(12.dp))
     SectionTitle("记忆注入")
     var distinguishPrivateMemory by remember { mutableStateOf(settings.distinguishPrivateMemory) }
@@ -385,11 +383,9 @@ private fun ParamSlider(settings: SettingsRepository, key: String, label: String
             if (pairKey != null) {
                 pairValue = settings.getInt(pairKey, defaultVal).toFloat()
                 if (isMinSide) {
-                    if (v <= pairValue) { value = v }
-                    else { value = pairValue; pairValue = v }
+                    value = v.coerceAtMost(pairValue)
                 } else {
-                    if (v >= pairValue) { value = v }
-                    else { value = pairValue; pairValue = v }
+                    value = v.coerceAtLeast(pairValue)
                 }
             } else { value = v }
         }, onValueChangeFinished = {

@@ -20,10 +20,14 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -199,8 +203,7 @@ class MemoryV2Pipeline(
                     temperature = settings.aiTemperature
                 ).content
             }
-            val l2Items = parseMemoryItems(raw, ownerType, ownerId, MemoryLevel.L2, sourceKind)
-                .map { withPromotionMeta(it, l1Topic.topicKey, selected, MemoryLevel.L2) }
+            val l2Items = parsePromotionItems(raw, ownerType, ownerId, MemoryLevel.L2, sourceKind, l1Topic.topicKey, selected)
             if (l2Items.isNotEmpty()) {
                 val saved = saveMemoryItems(l2Items)
                 if (saved.isNotEmpty()) linkAndArchiveParents(saved, selected, "merge_l1_to_l2")
@@ -234,8 +237,7 @@ class MemoryV2Pipeline(
                     temperature = settings.aiTemperature
                 ).content
             }
-            val l3Items = parseMemoryItems(raw, ownerType, ownerId, MemoryLevel.L3, sourceKind)
-                .map { withPromotionMeta(it, l2Topic.topicKey, selected, MemoryLevel.L3) }
+            val l3Items = parsePromotionItems(raw, ownerType, ownerId, MemoryLevel.L3, sourceKind, l2Topic.topicKey, selected)
             if (l3Items.isNotEmpty()) {
                 val saved = saveMemoryItems(l3Items)
                 if (saved.isNotEmpty()) linkAndArchiveParents(saved, selected, "merge_l2_to_l3")
@@ -400,7 +402,15 @@ class MemoryV2Pipeline(
                 val content = sanitizeContent(textValue(obj["content"]).orEmpty()).takeIf { it.isNotBlank() } ?: return@mapNotNull null
                 val nickname = textValue(obj["nickname"])?.takeIf { it.isNotBlank() } ?: userNicknameProvider()
                 val importance = intValue(obj["importance"]).coerceIn(0, 100)
-                val privacy = textValue(obj["privacy"])?.takeIf { it in allowedPrivacy } ?: defaultPrivacy(sourceKind)
+                val requestedPrivacy = textValue(obj["privacy"])?.takeIf { it in allowedPrivacy }
+                val policy = MemoryPrivacyPolicy.forSource(sourceKind, ownerType, ownerId, content)
+                // Source policy is authoritative: private chats never become public by model choice,
+                // while public posts/comments cannot be downgraded into a private hidden record.
+                val privacy = when (sourceKind) {
+                    MemorySourceKind.PRIVATE_CHAT -> "private"
+                    MemorySourceKind.MOMENT, MemorySourceKind.MOMENT_COMMENT, MemorySourceKind.GROUP_CHAT, MemorySourceKind.WORLD_EVENT -> "public"
+                    else -> requestedPrivacy ?: policy.privacy
+                }
                 val unmetNeed = booleanValue(obj["unmet_need"])
                 val location = textValue(obj["location"])?.takeIf { it.isNotBlank() }
                 val emotionValence = textValue(obj["emotion_valence"])?.takeIf { it in allowedEmotionValence } ?: "neutral"
@@ -435,7 +445,8 @@ class MemoryV2Pipeline(
                     confidence = if (level == MemoryLevel.L1) 0.8 else 0.85,
                     rawJson = obj.toString(),
                     createdAt = System.currentTimeMillis(),
-                    updatedAt = System.currentTimeMillis()
+                    updatedAt = System.currentTimeMillis(),
+                    expiresAt = expiresAtFor(type, level)
                 )
             }.distinctBy { normalizeForDedup(it.memoryType, it.content) }
         } catch (_: Exception) {
@@ -466,14 +477,55 @@ class MemoryV2Pipeline(
 
     private suspend fun linkAndArchiveParents(children: List<MemoryItem>, parents: List<MemoryItem>, linkType: String) {
         val now = System.currentTimeMillis()
-        for (child in children) {
-            for (parent in parents) {
-                if (child.id > 0 && parent.id > 0) {
-                    repository.insertMemoryLink(MemoryLink(parentMemoryId = parent.id, childMemoryId = child.id, linkType = linkType, createdAt = now))
-                }
+        val parentById = parents.filter { it.id > 0 }.associateBy { it.id }
+        val linkedParentIds = mutableSetOf<Long>()
+        children.filter { it.id > 0 }.forEach { child ->
+            val evidenceIds = evidenceIdsFrom(child.rawJson).filter { it in parentById }
+            evidenceIds.forEach { evidenceId ->
+                val parent = parentById.getValue(evidenceId)
+                repository.insertMemoryLink(MemoryLink(parentMemoryId = parent.id, childMemoryId = child.id, linkType = linkType, createdAt = now))
+                linkedParentIds += parent.id
             }
         }
-        parents.forEach { if (it.id > 0) repository.archiveMemoryItem(it.id, now) }
+        linkedParentIds.mapNotNull(parentById::get).forEach { parent ->
+            repository.archiveMemoryItem(parent.id, now)
+            parent.vectorId.takeIf { it.isNotBlank() }?.let { memoryVectorService?.deleteMemory(it) }
+        }
+    }
+
+    private fun parsePromotionItems(
+        raw: String,
+        ownerType: String,
+        ownerId: String,
+        level: MemoryLevel,
+        sourceKind: MemorySourceKind,
+        topicKey: String,
+        parents: List<MemoryItem>
+    ): List<MemoryItem> {
+        val parsed = parseMemoryItems(raw, ownerType, ownerId, level, sourceKind)
+        val objects = runCatching { json.decodeFromString(ListSerializer(JsonObject.serializer()), aiService.cleanJson(raw)) }.getOrDefault(emptyList())
+        val allowedIds = parents.map { it.id }.filter { it > 0 }.toSet()
+        return parsed.mapIndexedNotNull { index, item ->
+            val evidenceIds = objects.getOrNull(index)?.let { obj: JsonObject -> evidenceIdsFrom(obj) }
+                ?.filter { it in allowedIds }
+                ?.distinct()
+                .orEmpty()
+            if (evidenceIds.isEmpty()) null else withPromotionMeta(item, topicKey, parents.filter { it.id in evidenceIds }, level)
+        }
+    }
+
+    private fun evidenceIdsFrom(jsonText: String): List<Long> = runCatching<List<Long>> {
+        val obj = json.parseToJsonElement(jsonText).jsonObject
+        evidenceIdsFrom(obj)
+    }.getOrDefault(emptyList())
+
+    private fun evidenceIdsFrom(obj: JsonObject): List<Long> {
+        val value = obj["evidence_ids"] ?: return emptyList()
+        return runCatching {
+            value.jsonArray.mapNotNull { it.jsonPrimitive.longOrNull ?: it.jsonPrimitive.contentOrNull?.toLongOrNull() }
+        }.getOrElse {
+            value.jsonPrimitive.contentOrNull.orEmpty().split(',').mapNotNull { it.trim().toLongOrNull() }
+        }
     }
 
     private suspend fun saveMemoryItemToVector(id: Long, item: MemoryItem) {
@@ -497,7 +549,8 @@ class MemoryV2Pipeline(
                 )
             )
             repository.updateMemoryItemVectorId(id, vectorId, System.currentTimeMillis())
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            com.rhodes.privatechat.util.DebugLogger.log("Vector/Save", "记忆向量写入失败 owner=${item.ownerId} level=${item.memoryLevel} err=${e.message?.take(80)}")
         }
     }
 
@@ -530,9 +583,19 @@ class MemoryV2Pipeline(
     }
 
     private fun defaultPrivacy(sourceKind: MemorySourceKind): String = when (sourceKind) {
-        MemorySourceKind.PRIVATE_CHAT -> "shared"
+        MemorySourceKind.PRIVATE_CHAT -> "private"
         MemorySourceKind.GROUP_CHAT, MemorySourceKind.MOMENT, MemorySourceKind.MOMENT_COMMENT, MemorySourceKind.WORLD_EVENT -> "public"
         else -> "shared"
+    }
+
+    private fun expiresAtFor(type: String, level: MemoryLevel): Long {
+        if (level == MemoryLevel.L3 || type in setOf("preference_expression", "agreement_commitment")) return Long.MAX_VALUE
+        val days = when (type) {
+            "emotion_state", "behavior_state", "physiological_state" -> 21L
+            "intent_wish", "care_reminder" -> 30L
+            else -> 30L
+        }
+        return System.currentTimeMillis() + days * 86_400_000L
     }
 
     private data class PromotionTopic(val topicKey: String, val items: List<MemoryItem>)
@@ -600,7 +663,7 @@ class MemoryV2Pipeline(
             put("source_kinds", parents.map { it.sourceKind.name }.distinct().joinToString(","))
         }.toString()
         val maxImportance = maxOf(item.importance, parents.maxOfOrNull { it.importance } ?: item.importance)
-        val privacy = if (parents.any { it.privacy == "private" }) "shared" else item.privacy
+        val privacy = if (parents.any { it.privacy == "private" }) "private" else item.privacy
         return item.copy(
             importance = maxImportance.coerceIn(0, 100),
             privacy = privacy,

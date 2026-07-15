@@ -118,8 +118,18 @@ fun SettingsSwitchCard(title: String, desc: String, checked: Boolean, enabled: B
 
 @Composable
 fun SettingsParamSlider(settings: SettingsRepository, key: String, label: String, defaultVal: Int, range: ClosedFloatingPointRange<Float>, tip: String, step: Float = 1f, pairKey: String? = null, isMinSide: Boolean = true, enabled: Boolean = true) {
-    var value by remember { mutableFloatStateOf(settings.getInt(key, defaultVal).toFloat().coerceIn(range)) }
-    var pairValue by remember { mutableFloatStateOf(if (pairKey != null) settings.getInt(pairKey, defaultVal).toFloat() else 0f) }
+    var value by remember(key) { mutableFloatStateOf(settings.getInt(key, defaultVal).toFloat().coerceIn(range)) }
+    fun pairedDefault(key: String, fallback: Int): Int = when (key) {
+        "dia_min" -> 10; "dia_max" -> 300
+        "nar_min" -> 50; "nar_max" -> 300
+        "group_msg_min" -> 10; "group_msg_max" -> 100
+        "group_nar_min" -> 20; "group_nar_max" -> 100
+        "moment_min_chars" -> 50; "moment_max_chars" -> 200
+        "diary_min_chars" -> 50; "diary_max_chars" -> 300
+        "dispatch_min_chars" -> 50; "dispatch_max_chars" -> 300
+        else -> fallback
+    }
+    var pairValue by remember(pairKey) { mutableFloatStateOf(if (pairKey != null) settings.getInt(pairKey, pairedDefault(pairKey, defaultVal)).toFloat() else 0f) }
     SoftCard(modifier = Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.45f), shadow = false) { Column(Modifier.fillMaxWidth().padding(14.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(label, fontSize = 13.sp, color = TextPrimary)
@@ -130,22 +140,19 @@ fun SettingsParamSlider(settings: SettingsRepository, key: String, label: String
         }
         Slider(value = value, enabled = enabled, onValueChange = { v ->
             if (pairKey != null) {
-                pairValue = settings.getInt(pairKey, defaultVal).toFloat()
+                // Reload the paired setting at drag start so the two separate controls stay in sync.
+                pairValue = settings.getInt(pairKey, pairedDefault(pairKey, defaultVal)).toFloat()
                 if (isMinSide) {
-                    if (v <= pairValue) value = v else { value = pairValue; pairValue = v }
+                    // Clamp at the paired thumb. Swapping values makes the other slider appear stuck.
+                    value = v.coerceAtMost(pairValue)
                 } else {
-                    if (v >= pairValue) value = v else { value = pairValue; pairValue = v }
+                    value = v.coerceAtLeast(pairValue)
                 }
             } else value = v
         }, onValueChangeFinished = {
             val oldValue = settings.getInt(key, defaultVal)
-            val oldPairValue = if (pairKey != null) settings.getInt(pairKey, defaultVal) else null
             settings.putInt(key, value.toInt())
             DebugLogger.log("Settings/Param", "参数调整: $label($key) $oldValue -> ${value.toInt()}")
-            if (pairKey != null) {
-                settings.putInt(pairKey, pairValue.toInt())
-                DebugLogger.log("Settings/Param", "联动参数: $pairKey ${oldPairValue ?: 0} -> ${pairValue.toInt()}")
-            }
         }, valueRange = range, steps = ((range.endInclusive - range.start) / step).toInt(), colors = SliderDefaults.colors(thumbColor = Blue400, activeTrackColor = Blue400))
     } }
     Spacer(Modifier.height(4.dp))

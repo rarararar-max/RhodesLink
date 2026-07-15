@@ -30,5 +30,17 @@ UPDATE memory_source_queue SET processedVector = 1 WHERE id = ?;
 deleteMemorySourcesByOwner:
 DELETE FROM memory_source_queue WHERE ownerType = ? AND ownerId = ?;
 
+deleteMemorySourcesByOwnerAndKind:
+DELETE FROM memory_source_queue WHERE ownerType = ? AND ownerId = ? AND sourceKind = ?;
+
+deletePrivateRelationshipSources:
+DELETE FROM memory_source_queue WHERE ownerType = ? AND ownerId = ? AND sourceKind = 'PRIVATE_CHAT';
+
+deleteMemorySourcesBySession:
+DELETE FROM memory_source_queue WHERE sourceRefId = ?;
+
+deleteMemorySourcesBySource:
+DELETE FROM memory_source_queue WHERE sourceKind = ? AND sourceRefId = ?;
+
 deleteProcessedMemorySourcesBefore:
 DELETE FROM memory_source_queue WHERE processedL1 = 1 AND createdAt < ?;

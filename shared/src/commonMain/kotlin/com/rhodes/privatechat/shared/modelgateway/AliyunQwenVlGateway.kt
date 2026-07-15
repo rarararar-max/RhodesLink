@@ -19,36 +19,56 @@ class AliyunQwenVlGateway(
     private val modelName: String = "qwen3-vl-plus",
     private val client: HttpClient = createHttpClient(),
 ) : VisionGateway {
+    private val visionPrompt = """请分析这张图片，用以下 JSON 格式回答（只输出 JSON，不要 Markdown 标记）：
+{
+  "visibleSummary": "一句话描述画面中最重要的可见内容",
+  "userStateGuess": "基于画面的谨慎推测，不确定写 unknown",
+  "notableObjects": ["物体1", "物体2"],
+  "sceneQuality": "clear | dim | blurry | blocked | unknown",
+  "confidence": 0.0~1.0
+}
+要求：
+- 只描述画面中确定看到的内容，不确定的字段填 "unknown" 或 0.0
+- 不要编造看不见的内容
+- 输出中文"""
+
     override suspend fun analyzeImage(request: VisionAnalyzeRequest): VisionAnalyzeResponse {
+        println("RHODES_VISION AliyunQwenVlGateway.analyzeImage: endpoint=$endpoint model=$modelName imageLen=${request.imageUrlOrBase64.length}")
         val raw = client.post(endpoint) {
             bearerAuth(apiKey)
             header("X-DashScope-SSE", "enable")
+            header("Accept", "text/event-stream")
             contentType(ContentType.Application.Json)
             setBody(NativeVisionRequest(
                 model = modelName,
                 input = NativeVisionInput(messages = listOf(
                     NativeVisionMessage(role = "user", content = listOf(
                         NativeVisionContent(image = request.imageUrlOrBase64),
-                        NativeVisionContent(text = request.prompt),
+                        NativeVisionContent(text = visionPrompt),
                     ))
                 )),
                 parameters = NativeVisionParameters(enableThinking = false, incrementalOutput = true, thinkingBudget = 0),
             ))
         }.body<String>()
 
+        println("RHODES_VISION 原始响应(前500): ${raw.take(500)}")
         val parsed = parseResponse(raw)
+        println("RHODES_VISION 解析结果: text长度=${parsed.text.length} 前300=${parsed.text.take(300)}")
         return parsed
     }
 
     private fun parseResponse(raw: String): VisionAnalyzeResponse {
-        runCatching { json.decodeFromString(NativeVisionResponse.serializer(), raw) }
+        val single = runCatching { json.decodeFromString(NativeVisionResponse.serializer(), raw) }
             .getOrNull()
             ?.output?.choices?.firstOrNull()?.message?.content
             .orEmpty()
             .mapNotNull { it.text }
             .joinToString("")
-            .takeIf { it.isNotBlank() }
-            ?.let { return VisionAnalyzeResponse(text = it) }
+        if (single.isNotBlank()) {
+            println("RHODES_VISION parseResponse: 单次 JSON 解析成功, text长度=${single.length}")
+            return VisionAnalyzeResponse(text = single)
+        }
+        println("RHODES_VISION parseResponse: 单次 JSON 解析失败, 尝试 SSE 行解析")
 
         val text = raw.lineSequence()
             .map { it.removePrefix("data:").trim() }
@@ -61,7 +81,12 @@ class AliyunQwenVlGateway(
             .mapNotNull { it.text }
             .joinToString("")
 
-        return VisionAnalyzeResponse(text = text.ifBlank { raw })
+        if (text.isNotBlank()) {
+            println("RHODES_VISION parseResponse: SSE 解析成功, text长度=${text.length}")
+            return VisionAnalyzeResponse(text = text)
+        }
+        println("RHODES_VISION parseResponse: 两种解析均失败, 返回结构化 fallback")
+        return VisionAnalyzeResponse(text = """{"visibleSummary":"图片内容未能识别","userStateGuess":"unknown","sceneQuality":"unknown","confidence":0.0}""")
     }
 }
 

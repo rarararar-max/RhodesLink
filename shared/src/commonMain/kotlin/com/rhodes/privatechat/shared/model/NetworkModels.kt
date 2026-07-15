@@ -10,8 +10,12 @@ data class ChatCompletionRequest(
     val stream: Boolean = true,
     val temperature: Double = 0.95,
     val max_tokens: Int? = null,
-    val response_format: ResponseFormat? = null
+    val response_format: ResponseFormat? = null,
+    val thinking: ThinkingParam? = null
 )
+
+@Serializable
+data class ThinkingParam(val type: String)
 
 @Serializable
 data class ResponseFormat(
@@ -21,7 +25,8 @@ data class ResponseFormat(
 @Serializable
 data class AiMessage(
     val role: String,
-    val content: String
+    val content: String,
+    @SerialName("reasoning_content") val reasoningContent: String? = null
 )
 
 @Serializable
@@ -49,7 +54,9 @@ data class NonStreamResponse(
 data class Usage(
     @SerialName("prompt_tokens") val promptTokens: Int = 0,
     @SerialName("completion_tokens") val completionTokens: Int = 0,
-    @SerialName("total_tokens") val totalTokens: Int = 0
+    @SerialName("total_tokens") val totalTokens: Int = 0,
+    @SerialName("prompt_cache_hit_tokens") val promptCacheHitTokens: Int = 0,
+    @SerialName("prompt_cache_miss_tokens") val promptCacheMissTokens: Int = 0
 )
 
 @Serializable

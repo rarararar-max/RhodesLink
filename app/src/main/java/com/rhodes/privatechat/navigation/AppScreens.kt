@@ -8,6 +8,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
 import android.widget.Toast
 import cafe.adriel.voyager.core.screen.Screen
 import cafe.adriel.voyager.navigator.LocalNavigator
@@ -23,6 +25,7 @@ import com.rhodes.privatechat.ui.gameroom.PokerMode
 import com.rhodes.privatechat.ui.gameroom.PokerOpponent
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.viewmodel.MainViewModel
+import com.rhodes.privatechat.shared.voice.voiceCallSetupMessage
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
@@ -120,7 +123,7 @@ data class ChatOperator(val operatorId: String) : Screen {
                 onVoiceCall = { navigator.push(VoiceCallRoute(operator.id)) }
             )
         } else {
-            androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+            androidx.compose.foundation.layout.Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
                 androidx.compose.material3.Text(if (operators.isEmpty()) "正在加载角色..." else "角色不存在或已删除")
             }
         }
@@ -132,12 +135,21 @@ data class VoiceCallRoute(val operatorId: String) : Screen {
     override fun Content() {
         val navigator = LocalNavigator.currentOrThrow
         val viewModel: MainViewModel = koinViewModel()
+        val settings: SettingsRepository = koinInject()
         val operators by viewModel.operators.collectAsState()
         val operator = remember(operators, operatorId) { operators.find { it.id == operatorId } }
-        if (operator != null) {
+        val context = androidx.compose.ui.platform.LocalContext.current
+        val setupMessage = operator?.let { settings.voiceCallSetupMessage(it.voiceName) }
+        LaunchedEffect(setupMessage) {
+            if (setupMessage != null) {
+                Toast.makeText(context, setupMessage, Toast.LENGTH_LONG).show()
+                navigator.pop()
+            }
+        }
+        if (operator != null && setupMessage == null) {
             com.rhodes.privatechat.ui.call.VoiceCallScreen(viewModel = viewModel, operator = operator, onBack = { navigator.pop() })
         } else {
-            androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+            androidx.compose.foundation.layout.Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
                 androidx.compose.material3.Text(if (operators.isEmpty()) "正在加载角色..." else "角色不存在或已删除")
             }
         }
@@ -149,6 +161,7 @@ data object SleepRoute : Screen {
     override fun Content() {
         val navigator = LocalNavigator.currentOrThrow
         val viewModel: MainViewModel = koinViewModel()
+        val settings: SettingsRepository = koinInject()
         val operators by viewModel.operators.collectAsState()
         val kaltsit = remember(operators) { operators.find { it.id == "kaltsit" || it.name == "凯尔希" } }
         val context = androidx.compose.ui.platform.LocalContext.current
@@ -156,12 +169,12 @@ data object SleepRoute : Screen {
             if (operators.isNotEmpty() && kaltsit == null) {
                 android.widget.Toast.makeText(context, "未找到凯尔希角色", android.widget.Toast.LENGTH_SHORT).show()
                 navigator.pop()
-            } else if (kaltsit != null && kaltsit.voiceName.isBlank()) {
-                android.widget.Toast.makeText(context, "请先在凯尔希角色编辑页面填写音色ID", android.widget.Toast.LENGTH_SHORT).show()
+            } else if (kaltsit != null && settings.voiceCallSetupMessage(kaltsit.voiceName) != null) {
+                android.widget.Toast.makeText(context, settings.voiceCallSetupMessage(kaltsit.voiceName), android.widget.Toast.LENGTH_LONG).show()
                 navigator.pop()
             }
         }
-        if (kaltsit != null && kaltsit.voiceName.isNotBlank()) {
+        if (kaltsit != null && settings.voiceCallSetupMessage(kaltsit.voiceName) == null) {
             com.rhodes.privatechat.ui.sleep.SleepModeScreen(viewModel = viewModel, operator = kaltsit, onBack = { navigator.pop() })
         }
     }
@@ -250,7 +263,7 @@ data class EditOperator(val opId: String) : Screen {
         val op = remember(operators) { operators.find { it.id == opId } }
         LaunchedEffect(op) { if (op == null && operators.isNotEmpty()) navigator.pop() }
         if (op != null) {
-            com.rhodes.privatechat.ui.editor.OperatorEditScreen(viewModel = viewModel, operator = op, onBack = { navigator.pop() })
+            com.rhodes.privatechat.ui.editor.OperatorEditScreen(viewModel = viewModel, operator = op, onBack = { navigator.pop() }, onManageMemories = { navigator.push(OperatorMemoryRoute(op.id)) })
         }
     }
 }
@@ -287,6 +300,18 @@ data class OperatorDetailRoute(val opId: String) : Screen {
                 onOperatorClick = { clickedOp -> navigator.push(ChatOperator(clickedOp.id)) }
             )
         }
+    }
+}
+
+data class OperatorMemoryRoute(val opId: String) : Screen {
+    @Composable
+    override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        val viewModel: MainViewModel = koinViewModel()
+        val operators by viewModel.operators.collectAsState()
+        val op = remember(operators) { operators.find { it.id == opId } }
+        LaunchedEffect(op) { if (op == null && operators.isNotEmpty()) navigator.pop() }
+        if (op != null) com.rhodes.privatechat.ui.memory.OperatorMemoryScreen(viewModel, op, onBack = { navigator.pop() })
     }
 }
 

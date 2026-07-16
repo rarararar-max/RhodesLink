@@ -532,9 +532,11 @@ ${recentChats.ifBlank { "暂无" }}
 
 直接输出纯文本，不加任何前缀或说明。
 """.trimIndent()
-                                    innerThoughts = viewModel.sharedUtils.chat(listOf(
+                                    val innerResult = viewModel.sharedUtils.chat(listOf(
                                         AiMessage("system", innerPrompt)
                                     ), "InnerThoughts")
+                                    viewModel.sharedUtils.trackTokens("inner_monologue", innerPrompt, innerResult)
+                                    innerThoughts = innerResult
                                     // 内心独白只在弹窗显示，不插入聊天记录
                                 } catch (_: Exception) {
                                     settings.addLmb(PROP_PRICE)

@@ -91,34 +91,14 @@ object PromptTemplates {
 
 {{AI_ANALYSIS}}
 {{HYPNOSIS}}
-{{MIND_READ}}
 {{TRANSITION_NOTICE}}
 
-【你对{{USER_NAME}}的了解】
-长期印象：{{LONG_TERM_IMPRESSION}}
-{{USER_PREFS}}近期你注意到的事：
-{{MEMORY_ANCHORS}}
-【你了解到的相关情况】
+【你记得的相关经历】
 {{MEMORY_V2_CONTEXT}}
-【你知道这些事的来源】
-{{SOURCE_AWARE_MEMORIES}}
 {{SOURCE_AWARE_RULES}}
 【最近与你有关的罗德岛事件】
 {{UNCONSUMED_EVENTS}}
-{{SHARED_MEMORIES}}
-
-【主动触发信息】
-触发类型：{{PROACTIVE_TRIGGER_TYPE}}
-触发上下文：{{PROACTIVE_TRIGGER_CONTEXT}}
-- 如果触发类型是 idle：像自然想起{{USER_NAME}}，不要说"我看到事件/系统提醒"。
-- 如果触发类型是 event：可以自然提到触发上下文里的公开事件，但不要暴露系统字段或说"事件触发"。
-- 事件归因最高优先级：只有上下文明说"发起者身份:用户"且事件类型是"用户动态"时，才能说"你刚刚发的动态"。如果是"干员动态/干员评论/群聊话题"，必须说成"我看到某某发了动态/评论了"，严禁把它归因给{{USER_NAME}}。
-
-【昨天和最近的聊天】
-你与{{USER_NAME}}昨天聊天的总结：
-{{DAILY_SUMMARY}}
-
-你与{{USER_NAME}}最近的聊天摘要：
+【最近聊天进展】
 {{SHORT_TERM_SUMMARY}}
 
 【群聊回顾】
@@ -197,29 +177,12 @@ object PromptTemplates {
 
 {{AI_ANALYSIS}}
 {{HYPNOSIS}}
-{{MIND_READ}}
 {{TRANSITION_NOTICE}}
 
-【你当前的记忆】
-长期印象：{{LONG_TERM_IMPRESSION}}
-{{USER_PREFS}}近期你注意到的事：
-{{MEMORY_ANCHORS}}
-【你了解到的相关情况】
+【你记得的相关经历】
 {{MEMORY_V2_CONTEXT}}
-{{SHARED_MEMORIES}}
 
-【主动触发信息】
-触发类型：{{PROACTIVE_TRIGGER_TYPE}}
-触发上下文：{{PROACTIVE_TRIGGER_CONTEXT}}
-- 如果触发类型是 idle：像自然想起{{USER_NAME}}，不要说"我看到事件/系统提醒"。
-- 如果触发类型是 event：可以自然提到触发上下文里的公开事件，但不要暴露系统字段或说"事件触发"。
-- 事件归因最高优先级：只有上下文明说"发起者身份:用户"且事件类型是"用户动态"时，才能说"你刚刚发的动态"。如果是"干员动态/干员评论/群聊话题"，必须说成"我看到某某发了动态/评论了"，严禁把它归因给{{USER_NAME}}。
-
-【昨天和最近的聊天】
-昨天发生的事情：
-{{DAILY_SUMMARY}}
-
-最近的对话摘要：
+【最近聊天进展】
 {{SHORT_TERM_SUMMARY}}
 
 【群聊回顾】
@@ -324,29 +287,12 @@ object PromptTemplates {
 
 {{AI_ANALYSIS}}
 {{HYPNOSIS}}
-{{MIND_READ}}
 {{TRANSITION_NOTICE}}
 
-【你对{{USER_NAME}}的了解】
-长期印象：{{LONG_TERM_IMPRESSION}}
-{{USER_PREFS}}近期你注意到的事：
-{{MEMORY_ANCHORS}}
-【你了解到的相关情况】
+【你记得的相关经历】
 {{MEMORY_V2_CONTEXT}}
-{{SHARED_MEMORIES}}
 
-【主动触发信息】
-触发类型：{{PROACTIVE_TRIGGER_TYPE}}
-触发上下文：{{PROACTIVE_TRIGGER_CONTEXT}}
-- 如果触发类型是 idle：像自然想起{{USER_NAME}}，不要说"我看到事件/系统提醒"。
-- 如果触发类型是 event：可以自然提到触发上下文里的公开事件，但不要暴露系统字段或说"事件触发"。
-- 事件归因最高优先级：只有上下文明说"发起者身份:用户"且事件类型是"用户动态"时，才能说"你刚刚发的动态"。如果是"干员动态/干员评论/群聊话题"，必须说成"我看到某某发了动态/评论了"，严禁把它归因给{{USER_NAME}}。
-
-【昨天和最近的聊天】
-你与{{USER_NAME}}昨天聊天的总结：
-{{DAILY_SUMMARY}}
-
-你与{{USER_NAME}}最近的聊天摘要：
+【最近聊天进展】
 {{SHORT_TERM_SUMMARY}}
 
 【群聊回顾】
@@ -401,11 +347,7 @@ object PromptTemplates {
 {{OPERATOR_PERSONA}}
 
 【记忆与上下文】
-长期印象：{{LONG_TERM_IMPRESSION}}
-短期摘要：{{SHORT_TERM_SUMMARY}}
-记忆锚点：
-{{MEMORY_ANCHORS}}
- 你了解到的相关情况：
+最近聊天进展：{{SHORT_TERM_SUMMARY}}
 {{MEMORY_V2_CONTEXT}}
 事件触发背景：{{PROACTIVE_TRIGGER_CONTEXT}}
 
@@ -501,7 +443,8 @@ object PromptTemplates {
 【群聊记忆】
 昨日群聊总结：{{DAILY_SUMMARY}}
 最近群聊摘要：{{SHORT_TERM_SUMMARY}}
-成员们对用户的长期印象：{{LONG_TERM_IMPRESSION}}
+【群成员共同知道的相关经历】
+{{MEMORY_ANCHORS}}
 【本轮群聊触发事件】
 {{GROUP_TRIGGER_EVENT}}
 【群聊可接的话题】
@@ -617,13 +560,6 @@ object PromptTemplates {
 【群聊记忆】
 昨日群聊总结：{{DAILY_SUMMARY}}
 最近群聊摘要：{{SHORT_TERM_SUMMARY}}
-【群成员共同知道的事】
-{{MEMORY_ANCHORS}}
-【各成员个人知识】
-{{MEMBER_PRIVATE_CONTEXT}}
-【知识边界】
-- 每位角色只能使用群共同知识和标注为自己个人知识的内容。
-- 不得让其他角色引用不属于自己的个人知识；本轮说出口的内容会成为之后群成员共同知道的事。
 【群成员共同知道的事】
 {{MEMORY_ANCHORS}}
 【各成员个人知识】
@@ -893,15 +829,9 @@ object PromptTemplates {
 今天是{{CURRENT_DATE}}，{{TIME_OF_DAY}}。用户：{{USER_NAME}}（{{USER_GENDER}}）
 
 【背景】
- 对{{USER_NAME}}的印象：{{LONG_TERM_IMPRESSION}}
- 最近聊天摘要：{{RECENT_CHAT_SUMMARY}}
- 昨天你和{{USER_NAME}}的互动：{{RECENT_DAILY_SUMMARY}}
- 最近注意到的事：{{RECENT_MEMORIES}}
- 你了解到的相关情况：
- {{MEMORY_V2_CONTEXT}}
- 今日状态：{{WORLD_TODAY_STATE}}
-近期可作为灵感的来源：
-{{SOURCE_AWARE_MEMORIES}}
+最近注意到的相关经历：
+{{RECENT_MEMORIES}}
+今日状态：{{WORLD_TODAY_STATE}}
 {{SOURCE_AWARE_RULES}}
 
 【避免重复】
@@ -996,13 +926,6 @@ object PromptTemplates {
 【关于你与用户的关系】
 用户{{USER_NAME}}（{{USER_GENDER}}）：{{USER_BIO}}
 你与{{USER_NAME}}的关系：{{USER_RELATION}}
-你对{{USER_NAME}}的长期印象：{{LONG_TERM_IMPRESSION}}
-
-【昨日全体聊天总结】
-{{DAILY_SUMMARY}}
-
-【你与{{USER_NAME}}昨天聊天的回顾】
-{{PRIVATE_DAILY_SUMMARY}}
 
 【昨天你与{{USER_NAME}}的互动】
 私聊摘要：{{PRIVATE_SUMMARY}}
@@ -1023,11 +946,9 @@ object PromptTemplates {
 【你参与或看到的社交互动】
 {{SOCIAL_INTERACTIONS}}
 
-【你回想起的信息来源】
-{{SOURCE_AWARE_MEMORIES}}
 {{SOURCE_AWARE_RULES}}
 
-【你了解到的相关情况】
+【你回想起的相关经历】
 {{MEMORY_V2_CONTEXT}}
 
 【关系网中与你相关的事件】

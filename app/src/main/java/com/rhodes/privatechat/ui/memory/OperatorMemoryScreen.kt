@@ -47,11 +47,11 @@ fun OperatorMemoryScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
             Text("近期记录、长期记忆和角色记得的你都在这里。删除会同步清除检索索引，角色之后不会再引用这条内容。", fontSize = 12.sp, color = TextSecondary)
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-                FilterMenu(sourceFilter, listOf("全部来源", "PRIVATE_CHAT", "GROUP_CHAT", "MOMENT", "MOMENT_COMMENT", "MANUAL_MEMORY")) { sourceFilter = it }
+                FilterMenu(sourceFilter, listOf("全部来源", "私聊", "群聊", "动态", "评论", "手动添加")) { sourceFilter = it }
                 FilterMenu(levelFilter, listOf("全部等级", "L1", "L2", "L3")) { levelFilter = it }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                FilterMenu(privacyFilter, listOf("全部权限", "private", "shared", "public")) { privacyFilter = it }
+                FilterMenu(privacyFilter, listOf("全部权限", "私密", "可传开", "公开")) { privacyFilter = it }
                 TextButton(onClick = { newestFirst = !newestFirst }) { Text(if (newestFirst) "最新优先" else "最早优先") }
             }
             if (message.isNotBlank()) Text(message, fontSize = 12.sp, color = TextSecondary)
@@ -95,10 +95,12 @@ fun OperatorMemoryScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
     ) }
     if (pendingRebuild) AlertDialog(
         onDismissRequest = { if (!working) pendingRebuild = false },
-        title = { Text("重建记忆索引") },
-        text = {
-            val progress = rebuildProgress
-            Text(if (working && progress != null) "正在重建：${progress.first} / ${progress.second}" else "当前有 ${eligibleCount ?: 0} 条有效记忆可重建。付费 Embedding 模式会为每条记忆发起一次真实 API 请求，可能产生服务商费用。")
+            title = { Text("重建记忆索引") },
+            text = {
+                val progress = rebuildProgress
+                if (working && progress != null) {
+                    Text("正在重建：${progress.first} / ${progress.second}")
+                } else Text("重新为 ${operator.name} 的有效记忆生成向量索引。\n\n什么情况下需要做：\n• 更换了向量模型后，旧向量和新模型不兼容\n• 部分记忆显示“未建立索引”\n• 你觉得角色召回记忆不准确\n\n什么情况下不需要做：\n• 日常使用中，新增的记忆会自动索引\n• 删除记忆后，对应的索引会自动清理\n\n注意：使用了阿里等付费 embedding 服务时，重建会对每条有效记忆发起一次 API 请求，可能产生费用。")
         },
         confirmButton = { TextButton(enabled = !working, onClick = { scope.launch { working = true; rebuildProgress = 0 to (eligibleCount ?: 0); val result = runCatching { viewModel.rebuildOperatorMemoryIndexes(operator.id) { done, total -> rebuildProgress = done to total } }.getOrNull(); message = result?.let { "索引重建完成：有效 ${it.eligible}，成功 ${it.succeeded}，失败 ${it.failed}，跳过 ${it.skipped}" + if (it.errors.isNotEmpty()) "。错误：${it.errors.joinToString("；")}" else "" } ?: "索引重建失败，请稍后重试"; items = viewModel.getOperatorMemoryItems(operator.id); rebuildProgress = null; working = false; pendingRebuild = false } }) { Text("开始重建") } },
         dismissButton = { TextButton(enabled = !working, onClick = { pendingRebuild = false }) { Text("取消") } }

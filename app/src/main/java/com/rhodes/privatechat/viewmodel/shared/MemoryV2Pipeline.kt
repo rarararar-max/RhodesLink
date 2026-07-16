@@ -118,8 +118,14 @@ class MemoryV2Pipeline(
             // A message heard in the group becomes each present member's knowledge.  The group
             // keeps its own shared record while every character receives an independently
             // addressable copy for later private chat, moments, and comments.
+            val longTermShared = savedGroupItems.filter {
+                it.importance >= 70 && it.memoryType in setOf(
+                    "agreement_commitment", "care_reminder", "preference_expression",
+                    "evaluation_opinion", "self_cognition_statement"
+                )
+            }
             memberIds.distinct().filter { it.isNotBlank() }.forEach { memberId ->
-                val personalItems = savedGroupItems.map { item ->
+                val personalItems = longTermShared.map { item ->
                     item.copy(
                         id = 0,
                         ownerType = "operator",
@@ -308,26 +314,8 @@ class MemoryV2Pipeline(
 
     suspend fun buildOwnerMemoryContext(ownerType: String, ownerId: String, limitL1: Int, limitL2: Int, limitL3: Int, query: String = ""): String {
         val now = System.currentTimeMillis()
-        val budget = when (settings.memoryRecallMode) { "fast" -> 40; "deep" -> 240; else -> 100 }
-        val l1 = repository.getActiveMemoryCandidatesByLevel(ownerType, ownerId, MemoryLevel.L1, now, budget).rankForPrompt().take(limitL1)
-        val l2 = repository.getActiveMemoryCandidatesByLevel(ownerType, ownerId, MemoryLevel.L2, now, budget / 2).rankForPrompt().take(limitL2)
-        val l3 = repository.getActiveMemoryCandidatesByLevel(ownerType, ownerId, MemoryLevel.L3, now, 60).rankForPrompt().take(limitL3)
-        val structured = buildString {
-            if (l3.isNotEmpty()) {
-                append("【长期记忆】\n")
-                l3.forEach { append("- ").append(it.content).append('\n') }
-            }
-            if (l2.isNotEmpty()) {
-                append("【中期记忆】\n")
-                l2.forEach { append("- ").append(it.content).append('\n') }
-            }
-            if (l1.isNotEmpty()) {
-                append("【近期记忆】\n")
-                l1.forEach { append("- ").append(it.content).append('\n') }
-            }
-        }.trim()
-        val vectorService = memoryVectorService ?: return structured
-        if (query.isBlank()) return structured
+        val vectorService = memoryVectorService ?: return ""
+        if (query.isBlank()) return ""
         val candidateLimit = when (settings.memoryRecallMode) {
             "fast" -> 100
             "deep" -> 700
@@ -339,7 +327,7 @@ class MemoryV2Pipeline(
                     ownerType = ownerType,
                     ownerId = ownerId,
                     query = query,
-                    limit = (limitL1 + limitL2 + limitL3).coerceIn(2, 8),
+                    limit = maxOf(limitL1, limitL2, limitL3).coerceIn(2, 8),
                     sourceTypes = listOf("memory_v2_l1", "memory_v2_l2", "memory_v2_l3", "manual_memory"),
                     minScore = if (settings.memoryRecallMode == "fast") 0.24 else 0.16,
                     now = now,
@@ -351,28 +339,7 @@ class MemoryV2Pipeline(
         val semanticLines = semantic
             .distinctBy { normalizeForDedup("semantic", it.content) }
             .joinToString("\n") { "- ${it.content.take(180)}" }
-        return listOf(structured.takeIf { it.isNotBlank() }, semanticLines.takeIf { it.isNotBlank() }?.let { "【相关回忆】\n$it" })
-            .filterNotNull().joinToString("\n")
-    }
-
-    private fun List<MemoryItem>.rankForPrompt(): List<MemoryItem> {
-        val now = System.currentTimeMillis()
-        return filter { it.content.isNotBlank() && it.expiresAt > now && it.status == "active" }
-            .distinctBy { normalizeForDedup(it.memoryType, it.content) }
-            .sortedWith(
-                compareByDescending<MemoryItem> { levelPromptWeight(it.memoryLevel) }
-                    .thenByDescending { it.importance }
-                    .thenByDescending { it.confidence }
-                    .thenBy { it.lastUsedAt.coerceAtLeast(0L) }
-                    .thenBy { it.usedCount }
-                    .thenByDescending { it.createdAt }
-            )
-    }
-
-    private fun levelPromptWeight(level: MemoryLevel): Int = when (level) {
-        MemoryLevel.L3 -> 300
-        MemoryLevel.L2 -> 200
-        MemoryLevel.L1 -> 100
+        return semanticLines.takeIf { it.isNotBlank() }?.let { "【与当前话题相关的经历】\n$it" }.orEmpty()
     }
 
     private fun formatPrivateMessage(msg: ChatMessage): String {
@@ -421,21 +388,6 @@ class MemoryV2Pipeline(
             ).content
         }
         return parseMemoryItems(raw, "group", groupId, MemoryLevel.L1, MemorySourceKind.GROUP_CHAT, sourceRefId, groupId)
-    }
-
-    private suspend fun extractEventL1(sourceKind: MemorySourceKind, ownerType: String, ownerId: String, sourceRefId: String, sessionId: String, text: String): List<MemoryItem> {
-        val prompt = MemoryV2PromptTemplates.getL1("MOMENT") + "\n系统提供的当前昵称：${userNicknameProvider()}\n内容：\n$text\n"
-        val raw = withTimeout(15_000) {
-            aiService.chat(
-                settings.apiKey,
-                listOf(AiMessage("system", prompt)),
-                settings.provider,
-                settings.modelName,
-                settings.customUrl,
-                temperature = settings.aiTemperature
-            ).content
-        }
-        return parseMemoryItems(raw, ownerType, ownerId, MemoryLevel.L1, sourceKind, sourceRefId, sessionId)
     }
 
     private fun formatGroupMessage(groupName: String, msg: ChatMessage): String {

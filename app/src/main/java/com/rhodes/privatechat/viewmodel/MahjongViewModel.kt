@@ -95,7 +95,8 @@ class MahjongViewModel(
     private suspend fun generateMahjongText(prompt: String, fallback: String, maxChars: Int): String {
         return try {
             if (settings.apiKey.isBlank()) return fallback
-            val raw = withTimeout(12_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Mahjong", "mahjong") }
+            val raw = withTimeout(12_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Mahjong") }
+            sharedUtils.trackTokens("mahjong", prompt, raw)
             val cleaned = cleanMahjongLine(raw, maxChars)
             if (isNarrationLike(cleaned) || isInvalidMahjongPresence(cleaned)) fallback else cleaned.ifBlank { fallback }
         } catch (_: Exception) {

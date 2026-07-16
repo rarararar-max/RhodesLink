@@ -166,12 +166,6 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
         db.memoryItemsQueries.updateMemoryItemVectorId(vectorId, updatedAt, id)
     }
 
-    suspend fun getActiveMemoryCandidatesByLevel(ownerType: String, ownerId: String, level: MemoryLevel, now: Long, limit: Int): List<MemoryItem> = withContext(Dispatchers.Default) {
-        db.memoryItemsQueries.getActiveMemoryCandidatesByLevel(ownerType, ownerId, level.name, now, limit.toLong()) { id, ownerType_, ownerId_, memoryLevel, memoryType, sourceKind, sourceRefId, sessionId, content, nickname, importance, privacy, unmetNeed, location, emotionValence, eventTime, createdAt, updatedAt, expiresAt, status, scheduledTime, action, careType, topicKey, sourceActor, sourceTarget, lastUsedAt, usedCount, confidence, rawJson, vectorId ->
-            MemoryItem(id, ownerType_, ownerId_, try { MemoryLevel.valueOf(memoryLevel) } catch (_: Exception) { MemoryLevel.L1 }, memoryType, try { MemorySourceKind.valueOf(sourceKind) } catch (_: Exception) { MemorySourceKind.PRIVATE_CHAT }, sourceRefId, sessionId, content, nickname, importance.toInt(), privacy, unmetNeed != 0L, location, emotionValence, eventTime, createdAt, updatedAt, expiresAt, status, scheduledTime, action, careType, topicKey, sourceActor, sourceTarget, lastUsedAt, usedCount.toInt(), confidence, rawJson, vectorId)
-        }.executeAsList()
-    }
-
     suspend fun clearAllMemoryItemVectorIds() = withContext(Dispatchers.Default) {
         db.memoryItemsQueries.clearAllMemoryItemVectorIds()
     }

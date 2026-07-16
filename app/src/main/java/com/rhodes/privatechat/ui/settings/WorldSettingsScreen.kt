@@ -56,16 +56,16 @@ fun WorldSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             SettingsSwitchCard("每日固定动态", "开启动态权限的角色每天会生成设定数量的公开动态，不会由评论、群聊或世界事件追加。", settings.dailyAutoMomentEnabled, enabled = autoEnabled) {
                 settings.dailyAutoMomentEnabled = it
             }
-            SettingsParamSlider(settings, "daily_moment_target", "每角色每日动态数", 1, 0f..3f, "每位开启动态权限的角色每天固定发布几条。角色多时信息流会相应增多。", step = 1f, enabled = autoEnabled)
-            SettingsParamSlider(settings, "moment_min_chars", "动态最少字数", 50, 20f..300f, "建议 20-50。", step = 5f, pairKey = "moment_max_chars", isMinSide = true, enabled = autoEnabled)
-            SettingsParamSlider(settings, "moment_max_chars", "动态最多字数", 200, 80f..500f, "建议 120-200。", step = 5f, pairKey = "moment_min_chars", isMinSide = false, enabled = autoEnabled)
+            SettingsParamSlider(settings, "daily_moment_target", "每角色每日动态数", 1, 0f..3f, "每个角色每天自动发几条动态。建议1。太高（超过3）信息流刷屏太快看不过来。", step = 1f, enabled = autoEnabled)
+            SettingsParamSlider(settings, "moment_min_chars", "动态最少字数", 50, 20f..300f, "每条动态最少写几个字。建议20-50。太低（低于10）只有几个字太敷衍。", step = 5f, pairKey = "moment_max_chars", isMinSide = true, enabled = autoEnabled)
+            SettingsParamSlider(settings, "moment_max_chars", "动态最多字数", 200, 80f..500f, "每条动态最多写几个字。建议120-200。太高（超过300）每条都是小作文。", step = 5f, pairKey = "moment_min_chars", isMinSide = false, enabled = autoEnabled)
             SettingsSectionTitle("主动私聊")
-            InfoCard("自然分散发送", "每天会从已开启私聊权限、且有聊天或记忆依据的角色中抽取。每人当天最多主动联系一次；刚和该角色聊过 15 分钟内不会再主动开场。")
-            SettingsParamSlider(settings, "daily_proactive_chance", "角色每日主动概率", 80, 0f..100f, "每个开启私聊权限的角色每天独立参与抽取的概率。", step = 5f, enabled = autoEnabled)
-            SettingsParamSlider(settings, "daily_proactive_max", "每天最多主动角色数", 5, 0f..20f, "当天最多有多少位角色主动联系你。", step = 1f, enabled = autoEnabled)
-            SettingsSwitchCard("免打扰时段", "开启后，主动私聊会避开下方设定的时段并顺延；动态不受影响。", settings.quietHoursEnabled, enabled = autoEnabled) { settings.quietHoursEnabled = it }
-            SettingsParamSlider(settings, "quiet_hours_start", "免打扰开始时间", 1, 0f..23f, "按北京时间整点设置。", step = 1f, enabled = autoEnabled && settings.quietHoursEnabled)
-            SettingsParamSlider(settings, "quiet_hours_end", "免打扰结束时间", 9, 0f..23f, "跨午夜时可将结束时间设为较小的小时数。", step = 1f, enabled = autoEnabled && settings.quietHoursEnabled)
+            InfoCard("自然分散发送", "每天从有私聊权限的角色中抽人主动找你。每人每天最多一次；刚聊过15分钟内不会又来。")
+            SettingsParamSlider(settings, "daily_proactive_chance", "角色每日主动概率", 80, 0f..100f, "每个角色每天可能主动找你的概率。建议80。太低（低于30）基本没人找你，太高（100）每天都有很多人来。", step = 5f, enabled = autoEnabled)
+            SettingsParamSlider(settings, "daily_proactive_max", "每天最多主动角色数", 5, 0f..20f, "每天最多有多少个角色主动找你。建议5。太低（低于2）每天就一两个人来，太高（超过10）消息太多看不过来。", step = 1f, enabled = autoEnabled)
+            SettingsSwitchCard("免打扰时段", "开启后主动私聊会避开这个时段，过后再发。动态照常。", settings.quietHoursEnabled, enabled = autoEnabled) { settings.quietHoursEnabled = it }
+            SettingsParamSlider(settings, "quiet_hours_start", "免打扰开始时间", 1, 0f..23f, "几点开始不打扰（24小时制）。建议凌晨1点。", step = 1f, enabled = autoEnabled && settings.quietHoursEnabled)
+            SettingsParamSlider(settings, "quiet_hours_end", "免打扰结束时间", 9, 0f..23f, "几点恢复（24小时制）。建议早上9点。如果结束时间小于开始时间，表示跨午夜。", step = 1f, enabled = autoEnabled && settings.quietHoursEnabled)
             Spacer(Modifier.height(12.dp))
         }
     }

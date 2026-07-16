@@ -84,7 +84,7 @@ fun FeaturesScreen(
             Spacer(Modifier.height(8.dp))
             WechatListGroup {
                 FeatureButton(FeatureEntry(Icons.Default.EmojiEvents, "聊天排行榜", "昨日聊天数据排名", iconColor = Color(0xFFFFB300)), onClick = onRanking)
-                FeatureButton(FeatureEntry(Icons.Default.BarChart, "消费统计", "Token消耗分析", iconColor = Color(0xFF00BCD4)), onClick = onTokenStats)
+                FeatureButton(FeatureEntry(Icons.Default.BarChart, "消费统计", "AI用量统计", iconColor = Color(0xFF00BCD4)), onClick = onTokenStats)
                 FeatureButton(FeatureEntry(Icons.Default.Casino, "游戏室", "麻将、斗地主、跑得快", iconColor = Color(0xFFFF8F00)), onClick = onGameRoom)
                 FeatureButton(FeatureEntry(Icons.Default.Bedtime, "陪睡", "凯尔希陪睡语音模式", iconColor = Color(0xFF7C4DFF)), onClick = onSleep)
             }

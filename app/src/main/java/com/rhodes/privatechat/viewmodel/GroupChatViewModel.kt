@@ -27,7 +27,6 @@ import com.rhodes.privatechat.viewmodel.shared.UserProfile
 import com.rhodes.privatechat.viewmodel.shared.MemoryPolicy
 import com.rhodes.privatechat.viewmodel.shared.MemorySurface
 import com.rhodes.privatechat.viewmodel.shared.MemoryV2Pipeline
-import com.rhodes.privatechat.viewmodel.shared.MemoryContextBuilder
 import com.rhodes.privatechat.viewmodel.shared.UnifiedMemoryContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -102,7 +101,6 @@ class GroupChatViewModel(
     private val groupMessageMutexes = ConcurrentHashMap<String, Mutex>()
     private fun mutexFor(groupId: String): Mutex = groupMessageMutexes.computeIfAbsent(groupId) { Mutex() }
     private val memoryV2Pipeline = MemoryV2Pipeline(repository, settings, sharedUtils.aiService, memoryVectorService) { getUserProfile().nickname }
-    private val memoryContextBuilder = MemoryContextBuilder(settings, memoryVectorService)
 
     // 自动群聊
     private val lastUserMsgTime = ConcurrentHashMap<String, Long>()
@@ -441,17 +439,19 @@ class GroupChatViewModel(
                 val profile = getUserProfile()
                 val relContext = getGroupRelationshipContext(activeMembers)
                 val relationHints = if (relContext.isNotBlank()) relContext else "无"
+                val recalledMembers = activeMembers.filter { member ->
+                    text.contains(member.name) || UnifiedMemoryContext.shouldIncludeTimeSummary(text)
+                }.take(settings.groupMemberMemoryCount.coerceAtMost(2))
                 val memberPrivateContext = buildString {
-                    appendLine("【共同经历引用风格】${when (settings.personalMemoryReferenceStyle) { "restrained" -> "仅在高度相关时提及"; "proactive" -> "可主动自然关联共同经历"; else -> "话题相关时自然提及，不要无故翻旧账" }}")
-                    activeMembers.forEach { member ->
-                        val knowledge = memoryV2Pipeline.buildPrivateMemoryContext(member.id, limitL1 = 1, limitL2 = 2, limitL3 = 1, query = text)
+                    recalledMembers.forEach { member ->
+                        val knowledge = memoryV2Pipeline.buildPrivateMemoryContext(member.id, 1, 1, 1, text)
                         if (knowledge.isNotBlank()) {
-                            appendLine("【${member.name}的个人知识，仅${member.name}发言时可使用】")
+                            appendLine("【${member.name}的相关经历，仅${member.name}发言时可使用】")
                             appendLine(knowledge)
                         }
                     }
                 }.ifBlank { "无" }
-                val groupSummary = ""
+                val groupSummary = repository.getShortTermMemory(groupSessionId)?.content?.takeIf { it.isNotBlank() } ?: ""
                 val memberMemoryContext = ""
                 val sourceAwareMemories = "无"
                 val groupUnconsumedEvents = sharedUtils.trimContextBlock(sharedUtils.buildUnconsumedEventContextForGroup(groupSessionId, activeMembers.map { it.id }, activeMembers.map { it.name }, settings.eventContextCount, markConsumed = false), sharedUtils.contextBlockLimit())
@@ -459,8 +459,8 @@ class GroupChatViewModel(
                     ownerType = "group",
                     ownerId = groupSessionId,
                     limitL1 = 3,
-                    limitL2 = 3,
-                    limitL3 = 1,
+                    limitL2 = 0,
+                    limitL3 = 0,
                     query = text,
                 ).ifBlank { "无" }
                 val groupDailySummary = if (UnifiedMemoryContext.shouldIncludeTimeSummary(text)) {
@@ -652,6 +652,7 @@ class GroupChatViewModel(
                     }
                 }
                 if (filtered.isNotEmpty()) markGroupUnreadIfNotCurrent(groupSessionId, visibleGroupMessageCount(filtered, mode))
+                if (filtered.isNotEmpty()) extractGroupMemoryIfNeeded(groupSessionId, groupName)
                 val gc = sessionMessageCounter.merge(groupSessionId, 1) { old, inc -> old + inc } ?: 1
                 if (gc >= settings.summaryThreshold && groupSessionId.isNotBlank()) {
                     val gs = repository.getSession(groupSessionId)
@@ -939,10 +940,6 @@ class GroupChatViewModel(
         }
     }
 
-    private suspend fun recallGroupVectorMemories(groupSessionId: String, query: String): String {
-        return memoryContextBuilder.groupVectorContext(groupSessionId, query)
-    }
-
     private fun notifyIfBackground(title: String, content: String, sessionId: String?) {
         if (!RhodesAppVisibility.isForeground) {
             showNotification(title, content.take(120), sessionId)
@@ -1069,7 +1066,6 @@ $text"""
                     createdAt = System.currentTimeMillis(),
                     expiresAt = MemoryPolicy.memoryExpiresAt(settings)
                 ))
-                ingestGroupMemoryV2(groupSessionId, groupName, msgs)
                 if (settings.summaryCursorEnabled) msgs.maxOfOrNull { it.id }?.let { settings.putSummaryCursor(groupSessionId, it) }
                 DebugLogger.log("GroupChat", "群聊短期摘要已生成: $groupSessionId")
             }
@@ -1098,15 +1094,28 @@ $text"""
         return repository.searchMessagesInSession(groupId, q, limit)
     }
 
-    private suspend fun ingestGroupMemoryV2(groupSessionId: String, groupName: String, messages: List<ChatMessage>) {
-        if (!settings.memoryV2Enabled) return
-        if (messages.isEmpty()) return
-        try {
+    private suspend fun ingestGroupMemoryV2(groupSessionId: String, groupName: String, messages: List<ChatMessage>): Boolean {
+        if (!settings.memoryV2Enabled || messages.isEmpty()) return false
+        return try {
             val memberIds = repository.getSession(groupSessionId)?.members
                 ?.split(',')?.map { it.trim() }?.filter { it.isNotBlank() }.orEmpty()
             memoryV2Pipeline.ingestGroupChat(groupSessionId, groupName, messages, memberIds)
+            true
         } catch (e: Exception) {
             DebugLogger.log("MemoryV2", "群聊L1写入失败: ${e.message?.take(80)}")
+            false
+        }
+    }
+
+    private suspend fun extractGroupMemoryIfNeeded(groupSessionId: String, groupName: String) {
+        if (!settings.memoryV2Enabled) return
+        val cursor = settings.getMemoryExtractionCursor(groupSessionId)
+        val pending = repository.getMessagesSync(groupSessionId)
+            .filter { it.id > cursor && it.type != "system" }
+            .take(settings.groupMemoryExtractionThreshold.coerceAtMost(30))
+        if (pending.size < settings.groupMemoryExtractionThreshold) return
+        if (ingestGroupMemoryV2(groupSessionId, groupName, pending)) {
+            pending.maxOfOrNull { it.id }?.let { settings.putMemoryExtractionCursor(groupSessionId, it) }
         }
     }
 

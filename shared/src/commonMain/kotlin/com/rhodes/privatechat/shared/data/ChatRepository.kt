@@ -290,7 +290,6 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun saveMemoryBatch(batch: MemoryBatch) = memoryV2.saveBatch(batch)
     suspend fun getMemoryItemsByLevel(ownerType: String, ownerId: String, level: MemoryLevel) = memoryV2.getMemoryItemsByLevel(ownerType, ownerId, level)
     suspend fun getActiveMemoryItemsByLevel(ownerType: String, ownerId: String, level: MemoryLevel, now: Long) = memoryV2.getActiveMemoryItemsByLevel(ownerType, ownerId, level, now)
-    suspend fun getActiveMemoryCandidatesByLevel(ownerType: String, ownerId: String, level: MemoryLevel, now: Long, limit: Int) = memoryV2.getActiveMemoryCandidatesByLevel(ownerType, ownerId, level, now, limit)
     suspend fun getMemoryItemsByOwner(ownerType: String, ownerId: String) = memoryV2.getMemoryItemsByOwner(ownerType, ownerId)
     suspend fun getAllMemoryItems() = memoryV2.getAllMemoryItems()
     suspend fun getMemoryItemsByType(ownerType: String, ownerId: String, type: String) = memoryV2.getMemoryItemsByType(ownerType, ownerId, type)

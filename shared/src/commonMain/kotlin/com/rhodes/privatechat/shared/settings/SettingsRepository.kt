@@ -220,25 +220,9 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = getInt("memory_v2_promote_l2_threshold", 10).coerceIn(3, 100)
         set(value) = putInt("memory_v2_promote_l2_threshold", value.coerceIn(3, 100))
 
-    var memoryPinMinImportance: Int
-        get() = getInt("memory_pin_min_importance", 70).coerceIn(0, 100)
-        set(value) = putInt("memory_pin_min_importance", value.coerceIn(0, 100))
-
-    var autoImpressionUpdateEnabled: Boolean
-        get() = getBoolean("auto_impression_update_enabled", true)
-        set(value) = putBoolean("auto_impression_update_enabled", value)
-
     var momentPrivateMemoryUsage: String
         get() = getString("moment_private_memory_usage", "subtle")
         set(value) = putString("moment_private_memory_usage", value)
-
-    var privateAnchorCount: Int
-        get() = getInt("private_anchor_count", 5).coerceIn(0, 20)
-        set(value) = putInt("private_anchor_count", value.coerceIn(0, 20))
-
-    var privateSharedMemoryCount: Int
-        get() = getInt("private_shared_memory_count", 3).coerceIn(0, 20)
-        set(value) = putInt("private_shared_memory_count", value.coerceIn(0, 20))
 
     var privateGroupContextCount: Int
         get() = getInt("private_group_context_count", 2).coerceIn(0, 10)
@@ -247,6 +231,14 @@ class SettingsRepository(private val settings: ObservableSettings) {
     var groupMemberMemoryCount: Int
         get() = getInt("group_member_memory_count", 2).coerceIn(0, 10)
         set(value) = putInt("group_member_memory_count", value.coerceIn(0, 10))
+
+    var privateMemoryExtractionThreshold: Int
+        get() = getInt("private_memory_extraction_threshold", 12).coerceIn(3, 30)
+        set(value) = putInt("private_memory_extraction_threshold", value.coerceIn(3, 30))
+
+    var groupMemoryExtractionThreshold: Int
+        get() = getInt("group_memory_extraction_threshold", 12).coerceIn(3, 30)
+        set(value) = putInt("group_memory_extraction_threshold", value.coerceIn(3, 30))
 
     var groupUserEventCount: Int
         get() = getInt("group_user_event_count", 3).coerceIn(0, 10)
@@ -259,10 +251,6 @@ class SettingsRepository(private val settings: ObservableSettings) {
     var groupRelationshipHintCount: Int
         get() = settings.getInt("group_relationship_hint_count", 10).coerceIn(0, 30)
         set(value) = settings.putInt("group_relationship_hint_count", value.coerceIn(0, 30))
-
-    var momentAnchorCount: Int
-        get() = getInt("moment_anchor_count", 3).coerceIn(0, 10)
-        set(value) = putInt("moment_anchor_count", value.coerceIn(0, 10))
 
     var momentRecentPostCount: Int
         get() = getInt("moment_recent_post_count", 3).coerceIn(0, 10)
@@ -287,10 +275,6 @@ class SettingsRepository(private val settings: ObservableSettings) {
     var commentBystanderMax: Int
         get() = settings.getInt("comment_bystander_max", 3).coerceIn(0, 10)
         set(value) = settings.putInt("comment_bystander_max", value.coerceIn(0, 10))
-
-    var diaryAnchorCount: Int
-        get() = getInt("diary_anchor_count", 5).coerceIn(0, 20)
-        set(value) = putInt("diary_anchor_count", value.coerceIn(0, 20))
 
     var diaryGroupSummaryCount: Int
         get() = settings.getInt("diary_group_summary_count", 3).coerceIn(0, 10)
@@ -917,21 +901,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
     fun removeMomentCount(operatorId: String, date: String) =
         remove("moment_count_${operatorId}_$date")
 
-    // === Token 追踪（旧字段：总计，兼容旧数据）===
-
-    fun getTokenCount(category: String): Int =
-        getInt("token_$category", 0)
-
-    fun putTokenCount(category: String, value: Int) =
-        putInt("token_$category", value)
-
-    fun getDailyTokenCount(category: String, date: String): Int =
-        getInt("daily_${category}_$date", 0)
-
-    fun putDailyTokenCount(category: String, date: String, value: Int) =
-        putInt("daily_${category}_$date", value)
-
-    // === Token 追踪（新字段：输入/输出分离）===
+    // === Token 追踪（输入/输出分离）===
 
     fun getInputTokenCount(category: String): Int =
         getInt("token_in_$category", 0)
@@ -956,6 +926,18 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     fun addDailyOutputTokenCount(category: String, date: String, delta: Int) =
         putInt("daily_out_${category}_$date", getDailyOutputTokenCount(category, date) + delta)
+
+    fun clearTokenStats(categories: List<String>) {
+        val today = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.CHINA).apply {
+            timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")
+        }.format(java.util.Date())
+        for (cat in categories) {
+            remove("token_in_$cat")
+            remove("token_out_$cat")
+            remove("daily_in_${cat}_$today")
+            remove("daily_out_${cat}_$today")
+        }
+    }
 
     // === 通用方法 ===
     fun getString(key: String, default: String = ""): String =
@@ -994,6 +976,10 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     fun putSummaryCursor(sessionId: String, value: Long) = putLong("summary_cursor_session_$sessionId", value)
 
+    fun getMemoryExtractionCursor(sessionId: String): Long = getLong("memory_extraction_cursor_session_$sessionId", 0L)
+
+    fun putMemoryExtractionCursor(sessionId: String, value: Long) = putLong("memory_extraction_cursor_session_$sessionId", value)
+
     fun getStringSet(key: String, default: Set<String> = emptySet()): Set<String> {
         val json = safeGetString(key, "")
         return if (json.isBlank()) default
@@ -1013,8 +999,6 @@ class SettingsRepository(private val settings: ObservableSettings) {
             "economy" -> {
                 dualModel = false
                 historyMessages = 12
-                putInt("private_anchor_count", 3)
-                putInt("private_shared_memory_count", 1)
                 putInt("private_group_context_count", 1)
                 putInt("group_member_memory_count", 1)
                 putInt("event_context_count", 2)
@@ -1026,8 +1010,6 @@ class SettingsRepository(private val settings: ObservableSettings) {
             }
             "standard" -> {
                 historyMessages = 20
-                putInt("private_anchor_count", 5)
-                putInt("private_shared_memory_count", 3)
                 putInt("private_group_context_count", 2)
                 putInt("group_member_memory_count", 2)
                 putInt("event_context_count", 5)
@@ -1039,8 +1021,6 @@ class SettingsRepository(private val settings: ObservableSettings) {
             }
             "full" -> {
                 historyMessages = 40
-                putInt("private_anchor_count", 8)
-                putInt("private_shared_memory_count", 5)
                 putInt("private_group_context_count", 4)
                 putInt("group_member_memory_count", 4)
                 putInt("event_context_count", 8)

@@ -26,7 +26,7 @@ class SharedUtils(
     // === AI 调用 ===
 
     /** 非流式聊天：发送请求，等待完整响应后返回 */
-    suspend fun chat(messages: List<AiMessage>, logTag: String = "Chat", category: String = ""): String {
+    suspend fun chat(messages: List<AiMessage>, logTag: String = "Chat"): String {
         val temp = settings.aiTemperature
         val prompt = messages.firstOrNull()?.content ?: ""
         logAiCall("→$logTag", prompt, "(requesting...)", messages)
@@ -34,9 +34,6 @@ class SharedUtils(
             settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl, temperature = temp
         )
         if (DEBUG) logAiCall("←$logTag", prompt, result.content, messages)
-        if (category.isNotBlank() && (result.inputTokens > 0 || result.outputTokens > 0)) {
-            trackTokens(category, result.inputTokens, result.outputTokens)
-        }
         return result.content
     }
 
@@ -114,13 +111,7 @@ class SharedUtils(
     }
 
     private fun addTokenCounts(category: String, input: Int, output: Int, total: Int) {
-        // 旧字段（总计，兼容旧UI）
-        val oldTotal = settings.getTokenCount(category)
-        settings.putTokenCount(category, oldTotal + total)
         val today = beijingSdf("yyyy-MM-dd").format(java.util.Date())
-        val oldDaily = settings.getDailyTokenCount(category, today)
-        settings.putDailyTokenCount(category, today, oldDaily + total)
-        // 新字段（输入/输出分离）
         settings.addInputTokenCount(category, input)
         settings.addOutputTokenCount(category, output)
         settings.addDailyInputTokenCount(category, today, input)

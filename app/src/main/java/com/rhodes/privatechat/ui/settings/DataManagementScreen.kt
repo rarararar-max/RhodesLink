@@ -83,7 +83,7 @@ fun DataManagementScreen(
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
                         Text("来源感知记忆", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-                        Text(if (settings.sourceAwareMemoryEnabled) "已开启，旧锚点会自动推断来源" else "已关闭，仅使用旧式记忆文本", fontSize = 12.sp, color = TextSecondary)
+                        Text(if (settings.sourceAwareMemoryEnabled) "已开启，角色会自然说出从哪里知道这些事的" else "已关闭，角色只背记忆不说来源", fontSize = 12.sp, color = TextSecondary)
                     }
                     Text(if (settings.sourceAwareMemoryEnabled) "开启" else "关闭", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Primary)
                 }

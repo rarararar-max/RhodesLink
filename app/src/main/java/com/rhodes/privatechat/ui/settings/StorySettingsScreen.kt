@@ -42,26 +42,24 @@ fun StorySettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
             StoryInfoCard("这里影响什么？", "每日动态参数按北京时间自然日 00:00-23:59 统计；日记只在你手动点击生成时才写；派遣参数只影响派遣故事文本长度，不影响收益、成功率或耗时。")
             SettingsSectionTitle("每日动态")
-            SettingsSwitchCard("后台自动 AI", "控制每日自动动态。关闭后，每日固定动态也不会自动生成；你手动聊天和手动生成不受影响。", autoEnabled) { autoEnabled = it; settings.autoAiEnabled = it }
-            SettingsSwitchCard("每日自动动态", "开启后，每天按每人每日自动动态上限为有动态权限的角色补动态。", settings.dailyAutoMomentEnabled, enabled = autoEnabled) { settings.dailyAutoMomentEnabled = it }
-            SettingsParamSlider(settings, "daily_auto_ai_limit", "每日后台 AI 预算", 40, 0f..500f, "自动动态、自动评论等后台内容共用的每日 AI 调用预算。设0等同于关闭后台自动 AI。建议30-50。", step = 5f, enabled = autoEnabled)
-            SettingsParamSlider(settings, "daily_moment_target", "每人每日自动动态上限", 2, 0f..3f, "每天每个有动态权限的角色最多自动发几条动态。0=不自动发动态；用户主动催发动态不受此限制。建议1-3。", step = 1f, enabled = autoEnabled)
-            SettingsParamSlider(settings, "moment_min_chars", "动态最少字数", 50, 20f..300f, "每条动态最少写几个字。建议20-50。", step = 5f, pairKey = "moment_max_chars", isMinSide = true, enabled = autoEnabled)
-            SettingsParamSlider(settings, "moment_max_chars", "动态最多字数", 200, 80f..500f, "每条动态最多写几个字。建议150-250。", step = 5f, pairKey = "moment_min_chars", isMinSide = false, enabled = autoEnabled)
-            SettingsParamSlider(settings, "moment_anchor_count", "动态参考记忆", 3, 0f..10f, "生成动态时最多参考几条公开记忆。建议3-5。", step = 1f, enabled = autoEnabled)
-            SettingsParamSlider(settings, "moment_recent_post_count", "近期动态参考", 3, 0f..10f, "参考该干员最近几条动态，避免连续重复话题。建议2-3。", step = 1f, enabled = autoEnabled)
+            SettingsSwitchCard("后台自动 AI", "控制是否让角色自动发动态。关闭后角色不会自己发动态，但你手动聊天和手动刷新不受影响。", autoEnabled) { autoEnabled = it; settings.autoAiEnabled = it }
+            SettingsSwitchCard("每日自动动态", "开启后每天会给有权限的角色自动补发新动态。", settings.dailyAutoMomentEnabled, enabled = autoEnabled) { settings.dailyAutoMomentEnabled = it }
+            SettingsParamSlider(settings, "daily_auto_ai_limit", "每天自动对话次数上限", 40, 0f..500f, "自动动态、自动评论这类后台任务，每天总共能自动执行多少次。建议30-50。太低（低于10）基本不自动，太高（超过100）后台消耗很大。设为0就是不自动。", step = 5f, enabled = autoEnabled)
+            SettingsParamSlider(settings, "daily_moment_target", "每人每天自动动态数", 2, 0f..3f, "每个角色每天最多自动发几条新动态。建议1-2。太高（超过5）信息流会刷屏。设为0就不自动发。", step = 1f, enabled = autoEnabled)
+            SettingsParamSlider(settings, "moment_min_chars", "动态最少字数", 50, 20f..300f, "每条动态最少写几个字。建议20-50。太低（低于10）只有一句话太敷衍。", step = 5f, pairKey = "moment_max_chars", isMinSide = true, enabled = autoEnabled)
+            SettingsParamSlider(settings, "moment_max_chars", "动态最多字数", 200, 80f..500f, "每条动态最多写几个字。建议150-250。太高（超过400）每条都是小作文，不像朋友圈。", step = 5f, pairKey = "moment_min_chars", isMinSide = false, enabled = autoEnabled)
+            SettingsParamSlider(settings, "moment_recent_post_count", "近期动态参考", 3, 0f..10f, "写动态时会参考该角色最近几条旧动态，避免连续重复同一话题。建议2-3。太低（0）可能连着说同一件事，太高（超过5）参考太多反而放不开。", step = 1f, enabled = autoEnabled)
 
             SettingsSectionTitle("日记生成")
-            SettingsParamSlider(settings, "diary_min_chars", "日记最少字数", 50, 20f..500f, "每篇日记最少写几个字。太短了内容单薄，建议50-100字。", step = 10f, pairKey = "diary_max_chars", isMinSide = true)
-            SettingsParamSlider(settings, "diary_max_chars", "日记最多字数", 300, 100f..800f, "每篇日记最多写几个字。设太小没内容，设太大消耗AI额度。建议200-400字。", step = 10f, pairKey = "diary_min_chars", isMinSide = false)
-            SettingsParamSlider(settings, "diary_anchor_count", "日记参考记忆", 5, 0f..20f, "生成日记时最多参考几条关键记忆。设太多日记容易变流水账，建议3-5条。", step = 1f)
-            SettingsParamSlider(settings, "diary_group_summary_count", "日记群聊摘要", 3, 0f..10f, "生成日记时最多参考几个群聊里发生的事。建议2-3个。", step = 1f)
-            SettingsParamSlider(settings, "diary_relation_event_count", "日记关系事件", 3, 0f..10f, "生成日记时最多参考几条和关系网（朋友、队友等）有关的事件。建议2-3条。", step = 1f)
+            SettingsParamSlider(settings, "diary_min_chars", "日记最少字数", 50, 20f..500f, "每篇日记最少写几个字。建议50-100。太低（低于30）日记太短没内容。", step = 10f, pairKey = "diary_max_chars", isMinSide = true)
+            SettingsParamSlider(settings, "diary_max_chars", "日记最多字数", 300, 100f..800f, "每篇日记最多写几个字。建议200-400。太高（超过500）每篇日记都很长，花钱多且像在写作文。", step = 10f, pairKey = "diary_min_chars", isMinSide = false)
+            SettingsParamSlider(settings, "diary_group_summary_count", "日记群聊摘要", 3, 0f..10f, "写日记时最多参考几个群的聊天内容。建议2-3。太低（0）日记里不会提到群聊的事，太高（超过5）日记里塞太多群信息。", step = 1f)
+            SettingsParamSlider(settings, "diary_relation_event_count", "日记关系事件", 3, 0f..10f, "写日记时最多参考几条和其他角色的互动事件。建议2-3。太低（0）日记不提和其他人的交往，太高（超过5）日记变成报流水账。", step = 1f)
 
             SettingsSectionTitle("派遣故事")
-            SettingsSwitchCard("派遣快速模式", "开启后派遣段落会更快刷新，适合测试或想快速看结果。正常游玩建议关闭。", settings.dispatchFastMode) { settings.dispatchFastMode = it }
-            SettingsParamSlider(settings, "dispatch_min_chars", "每段最少字数", 50, 20f..400f, "派遣故事的每个阶段最少写几个字。只影响文本长度，不影响收益。建议50-100字。", step = 10f, pairKey = "dispatch_max_chars", isMinSide = true)
-            SettingsParamSlider(settings, "dispatch_max_chars", "每段最多字数", 300, 100f..800f, "派遣故事的每个阶段最多写几个字。设太小故事单薄，设太大消耗AI额度。建议200-400字。", step = 10f, pairKey = "dispatch_min_chars", isMinSide = false)
+            SettingsSwitchCard("派遣快速模式", "开启后派遣剧情刷新更快，适合想快速看结果。正常玩建议关掉。", settings.dispatchFastMode) { settings.dispatchFastMode = it }
+            SettingsParamSlider(settings, "dispatch_min_chars", "每段最少字数", 50, 20f..400f, "派遣故事的每段最少写几个字。建议50-100。太低（低于30）故事太短没看头。", step = 10f, pairKey = "dispatch_max_chars", isMinSide = true)
+            SettingsParamSlider(settings, "dispatch_max_chars", "每段最多字数", 300, 100f..800f, "派遣故事的每段最多写几个字。建议200-400。太高（超过500）故事太长，等得久花钱也多。", step = 10f, pairKey = "dispatch_min_chars", isMinSide = false)
         }
     }
 }

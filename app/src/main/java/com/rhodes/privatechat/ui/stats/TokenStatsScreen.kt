@@ -14,21 +14,25 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -55,7 +59,7 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
-data class TokenCategory(val key: String, val name: String, val tokens: Int, val color: Color, val inputTokens: Int = 0, val outputTokens: Int = 0)
+data class TokenCategory(val keys: List<String>, val name: String, val tokens: Int, val color: Color, val inputTokens: Int = 0, val outputTokens: Int = 0)
 
 @Composable
 fun TokenStatsScreen(
@@ -69,16 +73,15 @@ fun TokenStatsScreen(
     val tabs = listOf("今日", "本周", "全部")
     var tabIndex by remember { mutableIntStateOf(0) }
 
-    // 所有分类配置（key 与 trackTokens 中的 category 一致）
+    // 所有分类（合并多存储 key 为一个显示行）
     val allCategories = remember {
         listOf(
-            TokenCategory("private", "私聊", 0, Primary),
-            TokenCategory("private_analysis", "私聊分析", 0, Color(0xFF7C4DFF)),
-            TokenCategory("group", "群聊", 0, AccentOrange),
-            TokenCategory("moment", "动态生成", 0, AccentGreen),
-            TokenCategory("diary", "日记生成", 0, AccentPurple),
-            TokenCategory("dispatch", "派遣日志", 0, ErrorRed),
-            TokenCategory("memory", "记忆系统", 0, AccentBlue)
+            TokenCategory(listOf("private", "private_analysis", "voice_call", "inner_monologue", "sleep"), "私聊", 0, Primary),
+            TokenCategory(listOf("group"), "群聊", 0, AccentOrange),
+            TokenCategory(listOf("memory"), "记忆", 0, AccentBlue),
+            TokenCategory(listOf("moment", "comment"), "动态", 0, AccentGreen),
+            TokenCategory(listOf("diary"), "日记", 0, AccentPurple),
+            TokenCategory(listOf("dispatch", "mahjong", "poker"), "其他", 0, ErrorRed)
         )
     }
 
@@ -90,21 +93,26 @@ fun TokenStatsScreen(
         scan.time = start.time
         while (scan <= end) {
             val d = sdf.format(scan.time)
-            total += settings.getDailyTokenCount(cat.key, d)
-            input += settings.getDailyInputTokenCount(cat.key, d)
-            output += settings.getDailyOutputTokenCount(cat.key, d)
+            for (k in cat.keys) {
+                input += settings.getDailyInputTokenCount(k, d)
+                output += settings.getDailyOutputTokenCount(k, d)
+            }
             scan.add(Calendar.DAY_OF_MONTH, 1)
         }
+        total = input + output
         return cat.copy(tokens = total, inputTokens = input, outputTokens = output)
     }
 
+    var showResetDialog by remember { mutableStateOf(false) }
+
     val todayData = remember(tabIndex) {
         allCategories.map { cat ->
-            cat.copy(
-                tokens = settings.getDailyTokenCount(cat.key, todayStr),
-                inputTokens = settings.getDailyInputTokenCount(cat.key, todayStr),
-                outputTokens = settings.getDailyOutputTokenCount(cat.key, todayStr)
-            )
+            var input = 0; var output = 0
+            for (k in cat.keys) {
+                input += settings.getDailyInputTokenCount(k, todayStr)
+                output += settings.getDailyOutputTokenCount(k, todayStr)
+            }
+            cat.copy(tokens = input + output, inputTokens = input, outputTokens = output)
         }
     }
 
@@ -124,11 +132,12 @@ fun TokenStatsScreen(
     // 读取全部数据
     val allData = remember(tabIndex) {
         allCategories.map { cat ->
-            cat.copy(
-                tokens = settings.getTokenCount(cat.key),
-                inputTokens = settings.getInputTokenCount(cat.key),
-                outputTokens = settings.getOutputTokenCount(cat.key)
-            )
+            var input = 0; var output = 0
+            for (k in cat.keys) {
+                input += settings.getInputTokenCount(k)
+                output += settings.getOutputTokenCount(k)
+            }
+            cat.copy(tokens = input + output, inputTokens = input, outputTokens = output)
         }
     }
 
@@ -151,7 +160,9 @@ fun TokenStatsScreen(
             while (scan.time <= weekEnd) {
                 val d = bjSdf.format(scan.time)
                 for (cat in allCategories) {
-                    sum += settings.getDailyTokenCount(cat.key, d)
+                    for (k in cat.keys) {
+                        sum += settings.getDailyInputTokenCount(k, d) + settings.getDailyOutputTokenCount(k, d)
+                    }
                 }
                 scan.add(Calendar.DAY_OF_MONTH, 1)
             }
@@ -276,33 +287,70 @@ fun TokenStatsScreen(
             }
             Spacer(Modifier.height(12.dp))
 
-            // 明细
+            // 明细（可横向滚动）
             Box(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Card).padding(16.dp)) {
                 Column {
                     Text("明细", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
                     Spacer(Modifier.height(4.dp))
-                    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-                        Text("分类", fontSize = 11.sp, color = TextSecondary, modifier = Modifier.weight(1f))
-                        Text("输入", fontSize = 11.sp, color = TextSecondary, modifier = Modifier.width(50.dp))
-                        Text("输出", fontSize = 11.sp, color = TextSecondary, modifier = Modifier.width(50.dp))
-                        Text("总计", fontSize = 11.sp, color = TextSecondary, modifier = Modifier.width(50.dp))
-                    }
-                    Spacer(Modifier.height(4.dp))
-                    currentData.forEach { cat ->
-                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Box(modifier = Modifier.size(12.dp).clip(RoundedCornerShape(3.dp)).background(cat.color))
-                            Spacer(Modifier.width(8.dp))
-                            Text(cat.name, fontSize = 13.sp, color = TextPrimary, modifier = Modifier.weight(1f))
-                            Text(formatTokens(cat.inputTokens), fontSize = 12.sp, color = TextSecondary, modifier = Modifier.width(50.dp))
-                            Text(formatTokens(cat.outputTokens), fontSize = 12.sp, color = TextSecondary, modifier = Modifier.width(50.dp))
-                            Text(formatTokens(cat.tokens), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, modifier = Modifier.width(50.dp))
+                    Row(modifier = Modifier.horizontalScroll(rememberScrollState()).padding(bottom = 4.dp)) {
+                        Column(Modifier.width(120.dp)) {
+                            Text("分类", modifier = Modifier.padding(vertical = 4.dp), fontSize = 11.sp, color = TextSecondary)
+                            currentData.forEach { cat ->
+                                Row(modifier = Modifier.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Box(modifier = Modifier.size(12.dp).clip(RoundedCornerShape(3.dp)).background(cat.color))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(cat.name, fontSize = 13.sp, color = TextPrimary)
+                                }
+                            }
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Column(Modifier.width(60.dp)) {
+                            Text("输入", modifier = Modifier.padding(vertical = 4.dp), fontSize = 11.sp, color = TextSecondary)
+                            currentData.forEach { cat ->
+                                Text(formatTokens(cat.inputTokens), modifier = Modifier.padding(vertical = 6.dp), fontSize = 12.sp, color = TextSecondary)
+                            }
+                        }
+                        Column(Modifier.width(60.dp)) {
+                            Text("输出", modifier = Modifier.padding(vertical = 4.dp), fontSize = 11.sp, color = TextSecondary)
+                            currentData.forEach { cat ->
+                                Text(formatTokens(cat.outputTokens), modifier = Modifier.padding(vertical = 6.dp), fontSize = 12.sp, color = TextSecondary)
+                            }
+                        }
+                        Column(Modifier.width(60.dp)) {
+                            Text("总计", modifier = Modifier.padding(vertical = 4.dp), fontSize = 11.sp, color = TextSecondary)
+                            currentData.forEach { cat ->
+                                Text(formatTokens(cat.tokens), modifier = Modifier.padding(vertical = 6.dp), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                            }
                         }
                     }
                 }
             }
+            Spacer(Modifier.height(12.dp))
+            TextButton(
+                onClick = { showResetDialog = true },
+                modifier = Modifier.align(Alignment.CenterHorizontally)
+            ) {
+                Text("重置统计数据", color = ErrorRed, fontSize = 13.sp)
+            }
             Spacer(Modifier.height(24.dp))
         }
     }
+    }
+    if (showResetDialog) {
+        AlertDialog(
+            onDismissRequest = { showResetDialog = false },
+            title = { Text("重置统计数据") },
+            text = { Text("清空所有类别的累计和今日数据？此操作不能撤销。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    settings.clearTokenStats(allCategories.flatMap { it.keys })
+                    showResetDialog = false
+                }) { Text("确认重置", color = ErrorRed) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showResetDialog = false }) { Text("取消") }
+            }
+        )
     }
 }
 

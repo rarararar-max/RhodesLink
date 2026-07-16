@@ -49,16 +49,6 @@ SELECT * FROM memory_items
 WHERE ownerType = ? AND ownerId = ? AND memoryLevel = ? AND status = 'active' AND expiresAt > ?
 ORDER BY importance DESC, createdAt DESC;
 
-getActiveMemoryCandidatesByLevel:
-SELECT * FROM memory_items
-WHERE ownerType = ? AND ownerId = ? AND memoryLevel = ? AND status = 'active' AND expiresAt > ?
-ORDER BY
-  CASE WHEN scheduledTime IS NOT NULL AND scheduledTime != '' THEN 1 ELSE 0 END DESC,
-  importance DESC,
-  lastUsedAt DESC,
-  createdAt DESC
-LIMIT ?;
-
 getMemoryItemsByType:
 SELECT * FROM memory_items WHERE ownerType = ? AND ownerId = ? AND memoryType = ? ORDER BY createdAt DESC;
 

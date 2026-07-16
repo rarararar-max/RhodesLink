@@ -9,7 +9,6 @@ import com.rhodes.privatechat.shared.model.ChatSession
 import com.rhodes.privatechat.shared.model.AnchorType
 import com.rhodes.privatechat.shared.model.MemoryAnchor
 import com.rhodes.privatechat.shared.model.Memory
-import com.rhodes.privatechat.shared.model.MemoryLevel
 import com.rhodes.privatechat.shared.model.MemorySourceKind
 import com.rhodes.privatechat.shared.model.MemoryType
 import com.rhodes.privatechat.shared.model.Operator
@@ -38,7 +37,6 @@ import com.rhodes.privatechat.viewmodel.shared.UserProfile
 import com.rhodes.privatechat.viewmodel.shared.MemoryPolicy
 import com.rhodes.privatechat.viewmodel.shared.MemorySurface
 import com.rhodes.privatechat.viewmodel.shared.MemoryV2Pipeline
-import com.rhodes.privatechat.viewmodel.shared.MemoryContextBuilder
 import com.rhodes.privatechat.viewmodel.shared.UnifiedMemoryContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -141,7 +139,6 @@ class ChatViewModel(
     private val chatAiJobs = ConcurrentHashMap<String, Job>()
     private val pageSize: Long get() = CHAT_PAGE_SIZE
     private val memoryV2Pipeline = MemoryV2Pipeline(repository, settings, sharedUtils.aiService, memoryVectorService) { appState.userProfile.value.nickname }
-    private val memoryContextBuilder = MemoryContextBuilder(settings, memoryVectorService)
 
     init {
         loadHypnosis()
@@ -269,7 +266,6 @@ ${text}"""
                     createdAt = now,
                     expiresAt = MemoryPolicy.memoryExpiresAt(settings)
                 ))
-                ingestPrivateMemoryV2(session, older)
                 if (settings.summaryCursorEnabled) older.maxOfOrNull { it.id }?.let { settings.putSummaryCursor(session.id, it) }
             }
         } catch (e: Exception) {
@@ -773,6 +769,7 @@ ${recentDialogues}
                             generateShortTermSummary(session)
                             settings.putSessionMessageCounter(session.id, 0)
                         }
+                        extractPrivateMemoryIfNeeded(session)
                         markUnreadIfNotCurrent(session.id, aiResponseCount)
                         lastError = null
                         break  // 成功，退出重试循环
@@ -1373,76 +1370,9 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         return if (!isUserRelated || isOperatorState) AnchorType.EVENT else type
     }
 
-    private suspend fun saveAnchorsToVector(anchors: List<MemoryAnchor>) {
-        anchors.filter { it.content.isNotBlank() }.forEach { anchor ->
-            repository.saveAnchor(anchor)
-            val service = memoryVectorService ?: return@forEach
-            try {
-                service.saveMemory(VectorMemory(
-                    id = "anchor_${anchor.operatorId}_${anchor.createdAt}_${anchor.content.hashCode()}",
-                    ownerType = "operator",
-                    ownerId = anchor.operatorId,
-                    sourceType = "anchor_${anchor.type.name.lowercase()}",
-                    sourceId = anchor.sessionId,
-                    content = anchor.content,
-                    importance = when (anchor.importance) {
-                        AnchorSourcePolicy.STRONG -> 1.0
-                        AnchorSourcePolicy.MEDIUM -> 0.6
-                        AnchorSourcePolicy.WEAK -> 0.25
-                        else -> 0.4
-                    },
-                    tags = anchor.type.name,
-                    visibility = if (anchor.isPrivate) "private" else "shared",
-                    createdAt = anchor.createdAt,
-                    expiresAt = anchor.expiresAt
-                ))
-            } catch (e: Exception) {
-                DebugLogger.log("Vector/Save", "锚点向量写入失败: ${e.message?.take(80)}")
-            }
-        }
-    }
-
-    private suspend fun recallVectorMemories(operatorId: String, userContent: String): String {
-        val restartAt = _currentSession.value?.let { settings.getSessionRestartAt(it.id) } ?: 0L
-        return memoryContextBuilder.privateVectorContext(operatorId, userContent, restartAt)
-    }
-
-    private suspend fun buildRelationNetworkMemoryContext(operatorId: String, userContent: String): String {
-        if (settings.privateSharedMemoryCount <= 0) return "无"
+    private suspend fun ingestPrivateMemoryV2(session: ChatSession, messages: List<ChatMessage>): Boolean {
+        if (!settings.memoryV2Enabled || messages.isEmpty()) return false
         return try {
-            val now = System.currentTimeMillis()
-            val relations = repository.getRelationships(operatorId)
-                .filter { it.intimacy >= 20 }
-                .sortedByDescending { it.intimacy }
-                .take(5)
-            val lines = mutableListOf<String>()
-            for (rel in relations) {
-                val items = listOf(MemoryLevel.L3, MemoryLevel.L2).flatMap { level ->
-                    repository.getActiveMemoryItemsByLevel("operator", rel.relatedOperatorId, level, now)
-                }
-                    .filter { it.privacy != "private" && it.content.isNotBlank() }
-                    .sortedByDescending { relationMemoryScore(it.content, userContent, it.importance) }
-                    .take(1)
-                items.forEach { item ->
-                    lines += "- ${rel.relatedOperatorName}可能听说：${item.content.take(90)}"
-                }
-            }
-            UnifiedMemoryContext.mergeBlocks(sharedUtils.contextBlockLimit(), lines.joinToString("\n"))
-        } catch (_: Exception) {
-            "无"
-        }
-    }
-
-    private fun relationMemoryScore(content: String, userContent: String, importance: Int): Int {
-        val chars = userContent.filter { !it.isWhitespace() }.toSet()
-        val overlap = chars.count { content.contains(it) }.coerceAtMost(10) * 6
-        return importance + overlap
-    }
-
-    private suspend fun ingestPrivateMemoryV2(session: ChatSession, messages: List<ChatMessage>) {
-        if (!settings.memoryV2Enabled) return
-        if (messages.isEmpty()) return
-        try {
             memoryV2Pipeline.ingestPrivateChat(
                 sessionId = session.id,
                 operatorId = session.operatorId,
@@ -1450,8 +1380,22 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
                 messages = messages,
                 currentRound = settings.getSessionMessageCounter(session.id)
             )
+            true
         } catch (e: Exception) {
             DebugLogger.log("MemoryV2", "私聊L1写入失败: ${e.message?.take(80)}")
+            false
+        }
+    }
+
+    private suspend fun extractPrivateMemoryIfNeeded(session: ChatSession) {
+        if (!settings.memoryV2Enabled) return
+        val cursor = settings.getMemoryExtractionCursor(session.id)
+        val pending = repository.getMessagesSync(session.id)
+            .filter { it.id > cursor && it.type != "system" }
+            .take(settings.privateMemoryExtractionThreshold.coerceAtMost(30))
+        if (pending.size < settings.privateMemoryExtractionThreshold) return
+        if (ingestPrivateMemoryV2(session, pending)) {
+            pending.maxOfOrNull { it.id }?.let { settings.putMemoryExtractionCursor(session.id, it) }
         }
     }
 
@@ -1550,24 +1494,26 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
                 "${if (message.isMe) "用户" else op?.name ?: session.operatorName}：${message.content.take(120)}"
             }
             .ifBlank { userContent }
+        val groupContext = buildPrivateGroupContext(session.operatorId, userContent)
         val memoryV2Context = sharedUtils.trimContextBlock(
             memoryV2Pipeline.buildPrivateMemoryContext(
                 operatorId = session.operatorId,
-                limitL1 = if (wantsRecall) settings.privateAnchorCount else 2,
-                limitL2 = if (wantsRecall) 5 else 3,
-                limitL3 = if (wantsRecall) 4 else 2,
+                limitL1 = if (wantsRecall) 6 else 3,
+                limitL2 = 0,
+                limitL3 = 0,
                 query = recallQuery
             ).ifBlank { "无" },
             sharedUtils.contextBlockLimit()
         )
-        val publicMemoryContext = memoryV2Pipeline.buildPublicMemoryContext(recallQuery, limit = 2).ifBlank { "无" }
+        val publicMemoryContext = if (settings.globalPublicMemoryEnabled) {
+            memoryV2Pipeline.buildPublicMemoryContext(recallQuery, limit = 2).ifBlank { "无" }
+        } else "无"
         val eventConsumer = "private:${session.operatorId}"
         val unconsumedEvents = sharedUtils.buildUnconsumedEventContextForOperator(session.operatorId, op?.name ?: session.operatorName, eventConsumer, settings.eventContextCount, markConsumed = false)
-        val unifiedMemoryContext = UnifiedMemoryContext.mergeBlocks(
+        val recallMemoryContext = UnifiedMemoryContext.mergeBlocks(
             maxChars = sharedUtils.contextBlockLimit(2),
             memoryV2Context,
-            publicMemoryContext.takeIf { it != "无" }?.let { "【公开动态与评论】\n$it" }.orEmpty(),
-            unconsumedEvents
+            publicMemoryContext.takeIf { it != "无" }?.let { "【公开动态与评论】\n$it" }.orEmpty()
         )
         DebugLogger.log(
             "Memory/Inject",
@@ -1581,21 +1527,21 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             "OPERATOR_NAME" to (op?.name ?: session.operatorName), "OPERATOR_TITLE" to (op?.title ?: ""),
             "OPERATOR_PERSONA" to (op?.privatePrompt?.ifBlank { op.description } ?: ""),
             "OPERATOR_GENDER" to (op?.gender?.ifBlank { "" } ?: ""),
-            "LONG_TERM_IMPRESSION" to "无",
-            "USER_PREFS" to "无",
-            "MEMORY_ANCHORS" to unifiedMemoryContext,
-            "MEMORY_V2_CONTEXT" to memoryV2Context,
+            "LONG_TERM_IMPRESSION" to "",
+            "USER_PREFS" to "",
+            "MEMORY_ANCHORS" to "",
+            "MEMORY_V2_CONTEXT" to recallMemoryContext,
             "OPERATOR_MEMORY_INJECTION" to "",
-            "SOURCE_AWARE_MEMORIES" to "无",
+            "SOURCE_AWARE_MEMORIES" to "",
             "UNCONSUMED_EVENTS" to sharedUtils.trimContextBlock(unconsumedEvents, sharedUtils.contextBlockLimit()),
             "RECENT_SOCIAL_EVENTS" to unconsumedEvents,
             "EVENT_TRIGGERED_PRIVATE_CONTEXT" to unconsumedEvents,
-            "KNOWN_FROM_CONTEXT" to "无",
+            "KNOWN_FROM_CONTEXT" to "",
             "SOURCE_AWARE_RULES" to sharedUtils.sourceAwareUsageRule(MemorySurface.PRIVATE_CHAT),
-            "SHARED_MEMORIES" to "无",
-            "DAILY_SUMMARY" to "无",
+            "SHARED_MEMORIES" to "",
+            "DAILY_SUMMARY" to "",
             "SHORT_TERM_SUMMARY" to (shortTerm?.content ?: "无"),
-            "GROUP_CONTEXT" to "无",
+            "GROUP_CONTEXT" to groupContext,
             "USER_RELATION" to (op?.userRelation?.ifBlank { "未知" } ?: "未知"),
             "NAR_SEG_MIN" to settings.narSegMin.toString(), "NAR_SEG_MAX" to settings.narSegMax.toString(),
             "NAR_MIN" to settings.narMin.toString(), "NAR_MAX" to settings.narMax.toString(),
@@ -1641,14 +1587,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         val context = """CACHE_CONTEXT_V1:private
             |当前时间：${sharedUtils.beijingSdf("yyyy-MM-dd HH时").format(java.util.Date())}
             |用户：${profile.nickname}，${profile.gender.ifBlank { "未知" }}，${profile.bio.ifBlank { "无" }}
-            |角色记得的你：$memoryV2Context
-            |用户偏好与边界：${replacements["USER_PREFS"].orEmpty().ifBlank { "无" }}
-            |滚动摘要：${shortTerm?.content ?: "无"}
-            |相关记忆：$unifiedMemoryContext
             |共同经历引用风格：${when (settings.personalMemoryReferenceStyle) { "restrained" -> "只在用户明确问起或话题高度相关时提及"; "proactive" -> "话题有联系时可主动自然提及共同经历"; else -> "话题相关时自然提及共同经历，不要无故翻旧账" }}
-            |来源提示：无
-            |群聊回顾：无
-            |待处理事件：$unconsumedEvents
             |临时指令：${listOf(analysisBlock, hypnosisBlock, transitionNotice).filter { it.isNotBlank() }.joinToString("\n").ifBlank { "无" }}
             |格式边界：${if (mode == "offline" || mode == "director") "必须至少有一条 dialogue；旁白段数为 ${settings.narSegMin} 到 ${settings.narSegMax} 段。动作、表情、环境只写 narration；dialogue 只写说出口台词，禁止括号动作。" else "只允许 dialogue；禁止旁白、动作和环境描写。"}
         """.trimMargin()
@@ -1699,6 +1638,25 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
                 markConsumed = true
             )
         } catch (_: Exception) { }
+    }
+
+    private suspend fun buildPrivateGroupContext(operatorId: String, query: String): String {
+        if (settings.privateGroupContextCount <= 0) return "无"
+        val groups = repository.getAllSessionsSync()
+            .filter { it.operatorId.startsWith("group") || it.id.startsWith("group") }
+            .filter { group ->
+                group.members.split(',').map(String::trim).any { it == operatorId }
+            }
+            .sortedByDescending { it.lastTime }
+        if (groups.isEmpty()) return "无"
+        val expandedRecall = UnifiedMemoryContext.shouldIncludeTimeSummary(query) ||
+            listOf("群", "大家", "群里", "谁说", "谁提", "之前").any(query::contains)
+        val candidates = if (expandedRecall) groups.take(settings.privateGroupContextCount) else groups.take(1)
+        val lines = candidates.mapNotNull { group ->
+            repository.getShortTermMemory(group.id)?.content?.takeIf { it.isNotBlank() }
+                ?.let { "- 在群聊「${group.operatorName}」中：${it.take(220)}" }
+        }
+        return lines.joinToString("\n").ifBlank { "无" }
     }
 
     private suspend fun buildRegenerateApiMessages(
@@ -1809,73 +1767,6 @@ $avoid
                 ), dateKey)
             }
         } catch (_: Exception) {}
-    }
-
-
-    private suspend fun generateLongTermImpression(session: ChatSession) {
-        try {
-            val op = repository.getOperator(session.operatorId) ?: return
-            val profile = appState.userProfile.value
-            val oldImpression = repository.getLongTermImpression(session.operatorId)
-            val oldImpressionText = oldImpression?.content ?: "无"
-            val impThreshold = settings.impressionThreshold.coerceAtLeast(1)
-            val msgs = repository.getMessagesSync(session.id).takeLast(impThreshold * 2)
-            if (msgs.isEmpty()) {
-                DebugLogger.log("Memory/Impression", "跳过印象更新: op=${session.operatorId}, sampleMsgs=0")
-                return
-            }
-            DebugLogger.log("Memory/Impression", "开始更新印象: op=${session.operatorId}, threshold=$impThreshold, sampleMsgs=${msgs.size}, old=${oldImpression != null}")
-            val messagesText = msgs.joinToString("\n") { formatPrivateMessageForMemory(it, 120) }
-            val prompt = """
-基于以下${op.name}与${profile.nickname}的最近${msgs.size}条完整对话，更新${op.name}对${profile.nickname}的主观长期印象。目标是让${op.name}之后能自然记住${profile.nickname}的稳定偏好、边界、承诺和相处方式，而不是把最近聊天流水账背出来。
-
-要求：
-- 重点观察${profile.nickname}明确表达的偏好、禁忌、计划、情绪、边界和反复出现的行为模式。
-- 融合旧印象，不要只复述近期事件。
-- 如果旧印象与新对话冲突，以新对话为准改写，不要把矛盾说法并列保留。
-- 区分“长期特征”和“本轮情绪”：一次性的撒娇、玩笑、疲惫、测试，不要写成永久人格。
-- impression 要包含可用于后续对话的具体线索，例如用户在意什么、讨厌什么、希望被怎样对待、最近有什么约定或牵挂。
-- preferences 只记录用户明确表达的喜好、习惯、期待；taboos 只记录用户明确表达的不喜欢、边界、雷点。
-- keywords 用短词概括稳定特征，不要写空泛词如“复杂”“特别”“有趣”。
-- 如果近期表现只是短暂情绪，不要上升为永久性格。
-- 如果用户主要输入短句、数字、拼音、测试字符或乱码，不要过度心理分析；最多描述为“近期表达较简短/测试性输入较多”。
-- 长期特征必须来自多次明确表达或反复行为，不能从一两句含糊输入中编造人格标签。
-- 不要使用“符号化回应”“高强度思考”“最低限度联系”等过度诊断式标签，除非对话中有明确证据。
-- 这是${op.name}的主观看法，可以带有角色视角，但不要编造用户没有表达过的事实。
-- 禁止提到“系统记录”“摘要”“锚点”“好感度”等机制词。
-
-之前的印象（如有则融合更新）：
-${oldImpressionText}
-
-最近的对话记录：
-${messagesText}
-
-输出JSON：
-{"impression":"50~200字印象描述","keywords":["关键词1","关键词2","关键词3"],"preferences":["偏好1","偏好2"],"taboos":["禁忌1"]}
-
-直接输出JSON对象。
-""".trimIndent()
-            val rawResult = withTimeout(15_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Memory") }.trim()
-            sharedUtils.trackTokens("memory", prompt, rawResult)
-            val cleaned = sharedUtils.aiService.cleanJson(rawResult)
-            try {
-                val obj = kotlinx.serialization.json.Json.parseToJsonElement(cleaned).jsonObject
-                val impression = obj["impression"]?.jsonPrimitive?.content ?: rawResult
-                val keywords = obj["keywords"]?.jsonArray?.mapNotNull { it.jsonPrimitive?.content }?.joinToString(",") ?: ""
-                val preferences = obj["preferences"]?.jsonArray?.mapNotNull { it.jsonPrimitive?.content }?.joinToString(",") ?: ""
-                val taboos = obj["taboos"]?.jsonArray?.mapNotNull { it.jsonPrimitive?.content }?.joinToString(",") ?: ""
-                if (impression.isNotBlank()) {
-                    DebugLogger.log("Memory/Impression", "印象已保存: op=${session.operatorId}, len=${impression.length}, keywords=${keywords.take(40)}, prefs=${preferences.split(',').filter { it.isNotBlank() }.size}, taboos=${taboos.split(',').filter { it.isNotBlank() }.size}")
-                    repository.replaceLongTermImpression(Memory(sessionId = session.id, operatorId = session.operatorId, type = MemoryType.LONG_TERM, content = impression, keywords = keywords, preferences = preferences, taboos = taboos, createdAt = System.currentTimeMillis()))
-                }
-            } catch (_: Exception) {
-                if (rawResult.isNotBlank()) {
-                    DebugLogger.log("Chat/Impression", "印象JSON解析失败: ${rawResult.take(100)}")
-                }
-            }
-        } catch (e: Exception) {
-            DebugLogger.log("Chat/Impression", "长期印象生成失败: ${e.message?.take(120)}")
-        }
     }
 
 

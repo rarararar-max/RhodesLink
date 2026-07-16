@@ -431,7 +431,11 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
 12到36个中文字符。
 """.trimIndent()
             val text = try {
-                if (settings.apiKey.isBlank()) fallback else sharedUtils.chat(listOf(AiMessage("system", prompt)), "Poker", "poker").trim().lines().firstOrNull { it.isNotBlank() }?.trim(' ', '"', '“', '”', '：', ':')?.take(48).orEmpty().ifBlank { fallback }
+                if (settings.apiKey.isBlank()) fallback else {
+                    val pokerResult = sharedUtils.chat(listOf(AiMessage("system", prompt)), "Poker").trim()
+                    sharedUtils.trackTokens("poker", prompt, pokerResult)
+                    pokerResult.lines().firstOrNull { it.isNotBlank() }?.trim(' ', '"', '“', '”', '：', ':')?.take(48).orEmpty().ifBlank { fallback }
+                }
             } catch (_: Exception) { fallback }
             callback(text)
         }
@@ -1470,33 +1474,6 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         } catch (_: Exception) { }
     }
 
-    private suspend fun saveAnchorWithVector(anchor: MemoryAnchor) {
-        repository.saveAnchor(anchor)
-        val service = memoryVectorService ?: return
-        try {
-            service.saveMemory(VectorMemory(
-                id = "anchor_${anchor.operatorId}_${anchor.createdAt}_${anchor.content.hashCode()}",
-                ownerType = "operator",
-                ownerId = anchor.operatorId,
-                sourceType = "anchor_${anchor.source.ifBlank { anchor.type.name.lowercase() }}",
-                sourceId = anchor.sessionId,
-                content = anchor.content,
-                importance = when (anchor.importance) {
-                    AnchorSourcePolicy.STRONG -> 1.0
-                    AnchorSourcePolicy.MEDIUM -> 0.6
-                    AnchorSourcePolicy.WEAK -> 0.25
-                    else -> 0.4
-                },
-                tags = anchor.type.name,
-                visibility = if (anchor.isPrivate) "private" else if (anchor.source == AnchorSourcePolicy.MOMENT || anchor.source == AnchorSourcePolicy.COMMENT) "public" else "shared",
-                createdAt = anchor.createdAt,
-                expiresAt = anchor.expiresAt
-            ))
-        } catch (e: Exception) {
-            DebugLogger.log("Vector/Save", "锚点向量写入失败: ${e.message?.take(80)}")
-        }
-    }
-
     private suspend fun buildCommenterMemoryContext(operatorId: String, surface: MemorySurface, query: String, includePrivateConversation: Boolean = false): Pair<String, String> {
         val memory = memoryV2Pipeline.buildPrivateMemoryContext(
             operatorId,
@@ -1576,6 +1553,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                             "RECENT_CHAT_SUMMARY" to if (mentionUser) momentMemory.chatSummary else "无",
                             "RECENT_MEMORIES" to momentMemory.memories,
                             "MEMORY_V2_CONTEXT" to momentMemory.memories,
+                            "PERSONAL_MEMORY_REFERENCE_STYLE" to personalMemoryReferenceRule(),
                             "SOURCE_AWARE_MEMORIES" to momentMemory.sourceAwareMemories,
                             "RECENT_WORLD_EVENTS" to worldEvents,
                             "UNCONSUMED_EVENTS" to unconsumedEvents,
@@ -1607,7 +1585,6 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                             extra = mapOf(
                                 "auto" to isAuto.toString(),
                                 "timeOfDay" to timeOfDay,
-                                "momentAnchorCount" to settings.momentAnchorCount.toString(),
                                 "momentRecentPostCount" to settings.momentRecentPostCount.toString()
                             )
                         )
@@ -1672,13 +1649,16 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                                                 "PERSONAL_MEMORY_REFERENCE_STYLE" to personalMemoryReferenceRule(),
                                                 "SOURCE_AWARE_MEMORIES" to sourceAwareMemory,
                                                 "SOURCE_AWARE_RULES" to sharedUtils.sourceAwareUsageRule(MemorySurface.COMMENT),
+                                                "COMMENT_TASK" to "new_comment",
+                                                "COMMENT_INSTRUCTION" to "对这条新动态发表一条自然的公开评论。",
+                                                "REPLY_TARGET" to "无",
                                                 "POST_CONTENT" to c,
                                                 "COMMENT_MIN_CHARS" to intPref("comment_min_chars", 10).toString(),
                                                 "COMMENT_MAX_CHARS" to intPref("comment_max_chars", 40).toString()
                                             )
                                             val cp = applyTemplate(cmtTpl, cmtReplacements)
                                             val cc = withTimeout(8_000) { chat(listOf(AiMessage("system", cp)), "Moment") }.trim()
-                                            trackTokens("moment", cp, cc)
+                                            trackTokens("comment", cp, cc)
                                             val cleanComment = cleanAiOutput(cc).take(intPref("comment_max_chars", 40)).takeUnless {
                                                 it.startsWith("作为AI") || it.startsWith("下面是") || it.contains("{{")
                                             }.orEmpty()
@@ -1795,7 +1775,6 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 extra = mapOf(
                     "auto" to "false",
                     "timeOfDay" to timeOfDay,
-                    "momentAnchorCount" to settings.momentAnchorCount.toString(),
                     "momentRecentPostCount" to settings.momentRecentPostCount.toString()
                 )
             )
@@ -1889,7 +1868,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                         )
                         val cp = applyTemplate(cmtTpl, cmtReplacements)
                         val cc = withTimeout(8_000) { chat(listOf(AiMessage("system", cp)), "Moment") }.trim()
-                        trackTokens("moment", cp, cc)
+                        trackTokens("comment", cp, cc)
                         if (cc.isNotBlank()) {
                             val comment = MomentComment(momentId = momentId, operatorId = commenter.id, operatorName = commenter.name, content = cc, createdAt = System.currentTimeMillis())
                             val commentId = repository.insertComment(comment)
@@ -2450,7 +2429,6 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                     extra = mapOf(
                         "user" to profile.nickname,
                         "date" to yesterdayStr,
-                        "diaryAnchorCount" to settings.diaryAnchorCount.toString(),
                         "diaryGroupSummaryCount" to settings.diaryGroupSummaryCount.toString(),
                         "diaryRelationEventCount" to settings.diaryRelationEventCount.toString()
                     )

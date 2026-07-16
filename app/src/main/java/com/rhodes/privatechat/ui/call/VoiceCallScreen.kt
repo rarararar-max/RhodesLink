@@ -179,9 +179,10 @@ fun VoiceCallScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
 $recent"""
                 Log.d("RHODES_DEBUG", "[VoiceCall] AI prompt(前200): ${prompt.take(200)}")
                 reply = "${operator.name}正在思考..."
-                val ai = viewModel.chatViewModel.sharedChatForFeature(listOf(AiMessage("system", prompt), AiMessage("user", "用户刚说：$text")))
+                val aiRaw = viewModel.chatViewModel.sharedChatForFeature(listOf(AiMessage("system", prompt), AiMessage("user", "用户刚说：$text")))
                     .trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
-                    .take(500).ifBlank { "我刚才没有听清，能再说一次吗？" }
+                viewModel.sharedUtils.trackTokens("voice_call", prompt, aiRaw)
+                val ai = aiRaw.take(500).ifBlank { "我刚才没有听清，能再说一次吗？" }
                 Log.d("RHODES_DEBUG", "[VoiceCall] AI 回复: '${ai.take(100)}'")
                 reply = ai
                 turns = turns + (operator.name to ai)

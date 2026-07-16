@@ -120,7 +120,7 @@ fun GlobalMemoryScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 MemoryFilterMenu(statusFilter, listOf("正在使用", "已归档", "全部状态")) { statusFilter = it }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-                MemoryFilterMenu(sourceFilter, listOf("全部来源", "PRIVATE_CHAT", "GROUP_CHAT", "MOMENT", "MOMENT_COMMENT", "DIARY", "MANUAL_MEMORY")) { sourceFilter = it }
+                MemoryFilterMenu(sourceFilter, listOf("全部来源", "私聊", "群聊", "动态", "评论", "日记", "手动添加")) { sourceFilter = it }
                 Text("共 ${filtered.size} 条", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 12.dp))
             }
             if (message.isNotBlank()) Text(message, fontSize = 12.sp, color = TextSecondary)
@@ -189,7 +189,12 @@ fun GlobalMemoryScreen(viewModel: MainViewModel, onBack: () -> Unit) {
         AlertDialog(
             onDismissRequest = { if (!working) pendingRebuild = false },
             title = { Text("重建全部记忆索引") },
-            text = { Text(rebuildProgress?.let { "正在重建：${it.first} / ${it.second}" } ?: "会为全部有效统一记忆重新生成向量。付费 embedding 服务可能产生费用。") },
+            text = {
+                val progress = rebuildProgress
+                if (working && progress != null) {
+                    Text("正在重建：${progress.first} / ${progress.second}")
+                } else Text("重新为所有角色的有效记忆生成向量索引。\n\n什么情况下需要做：\n• 更换了向量模型后，旧向量和新模型不兼容\n• 部分记忆显示“未建立索引”\n• 你觉得角色召回记忆不准确\n\n什么情况下不需要做：\n• 日常使用中，新增的记忆会自动索引\n• 删除记忆后，对应的索引会自动清理\n\n注意：使用了阿里等付费 embedding 服务时，重建会对每条有效记忆发起一次 API 请求，可能产生费用。")
+            },
             confirmButton = {
                 TextButton(enabled = !working, onClick = {
                     scope.launch {

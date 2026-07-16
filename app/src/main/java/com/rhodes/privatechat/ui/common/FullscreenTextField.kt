@@ -82,7 +82,7 @@ fun FullscreenTextField(
 
     if (showEditor) {
         var draft by remember(value) { mutableStateOf(value) }
-        Dialog(onDismissRequest = { showEditor = false }) {
+        Dialog(onDismissRequest = { onValueChange(draft); showEditor = false }) {
             Column(
                 modifier = Modifier.fillMaxWidth().fillMaxHeight(0.9f).clip(RoundedCornerShape(16.dp))
                     .background(Card).imePadding().padding(16.dp)
@@ -106,13 +106,16 @@ fun FullscreenTextField(
                             draft = if (draft.isBlank()) clip else "$draft\n$clip"
                         }
                     }
-                    TextButton(onClick = { draft = "" }) { Text("清空", color = TextSecondary) }
+                    SmallActionButton("清空", pasteIcon = null) { draft = "" }
                     Spacer(modifier = Modifier.weight(1f))
-                    TextButton(onClick = { showEditor = false }) { Text("取消", color = TextSecondary) }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     Button(
                         onClick = { onValueChange(draft); showEditor = false },
+                        modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = Primary)
-                    ) { Text("应用") }
+                    ) { Text("保存", fontSize = 15.sp) }
                 }
             }
         }
@@ -121,11 +124,11 @@ fun FullscreenTextField(
 
 @Composable
 private fun SmallActionButton(text: String, pasteIcon: Boolean?, onClick: () -> Unit) {
-    OutlinedButton(onClick = onClick, modifier = Modifier.height(30.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = Blue400)) {
+    OutlinedButton(onClick = onClick, modifier = Modifier.height(36.dp), colors = ButtonDefaults.outlinedButtonColors(contentColor = Blue400)) {
         if (pasteIcon != null) {
-            Icon(if (pasteIcon) Icons.Default.ContentPaste else Icons.Default.ContentCopy, null)
+            Icon(if (pasteIcon) Icons.Default.ContentPaste else Icons.Default.ContentCopy, null, modifier = Modifier.padding(end = 4.dp))
         }
-        Text(text, fontSize = 12.sp)
+        Text(text, fontSize = 13.sp)
     }
 }
 

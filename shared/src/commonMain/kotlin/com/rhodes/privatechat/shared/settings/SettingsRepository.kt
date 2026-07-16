@@ -186,6 +186,20 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = getBoolean("memory_v2_enabled", true)
         set(value) = putBoolean("memory_v2_enabled", value)
 
+    /** fast, balanced, or deep; controls candidate work, not what the character knows. */
+    var memoryRecallMode: String
+        get() = getString("memory_recall_mode", "balanced").takeIf { it in setOf("fast", "balanced", "deep") } ?: "balanced"
+        set(value) = putString("memory_recall_mode", value.takeIf { it in setOf("fast", "balanced", "deep") } ?: "balanced")
+
+    /** restrained, natural, or proactive references to a character's own past conversations. */
+    var personalMemoryReferenceStyle: String
+        get() = getString("personal_memory_reference_style", "natural").takeIf { it in setOf("restrained", "natural", "proactive") } ?: "natural"
+        set(value) = putString("personal_memory_reference_style", value.takeIf { it in setOf("restrained", "natural", "proactive") } ?: "natural")
+
+    var memoryRecallCandidateLimit: Int
+        get() = getInt("memory_recall_candidate_limit", 300).coerceIn(50, 1000)
+        set(value) = putInt("memory_recall_candidate_limit", value.coerceIn(50, 1000))
+
     var momentMemoryV2Enabled: Boolean
         get() = getBoolean("moment_memory_v2_enabled", true)
         set(value) = putBoolean("moment_memory_v2_enabled", value)

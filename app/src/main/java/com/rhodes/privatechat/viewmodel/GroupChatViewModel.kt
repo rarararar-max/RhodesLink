@@ -441,31 +441,32 @@ class GroupChatViewModel(
                 val profile = getUserProfile()
                 val relContext = getGroupRelationshipContext(activeMembers)
                 val relationHints = if (relContext.isNotBlank()) relContext else "无"
-                // 群聊只使用公开记忆和群聊记录，避免私聊内容穿帮。
-                val memberPrivateContext = ""
-                val groupSummary = repository.getShortTermMemory(groupSessionId)?.content ?: ""
-                val memberMemoryContext = if (settings.groupMemberMemoryCount > 0) {
-                    buildString {
-                        for (m in activeMembers) {
-                            val picked = sharedUtils.pickAnchorsForSurface(repository.getPublicAnchors(m.id), settings.groupMemberMemoryCount, MemorySurface.GROUP_CHAT, text)
-                            appendLine(if (picked.isEmpty()) "- ${m.name}：暂无近期公开事件" else "- ${m.name}：" + picked.joinToString("；") { it.content.take(60) })
+                val memberPrivateContext = buildString {
+                    appendLine("【共同经历引用风格】${when (settings.personalMemoryReferenceStyle) { "restrained" -> "仅在高度相关时提及"; "proactive" -> "可主动自然关联共同经历"; else -> "话题相关时自然提及，不要无故翻旧账" }}")
+                    activeMembers.forEach { member ->
+                        val knowledge = memoryV2Pipeline.buildPrivateMemoryContext(member.id, limitL1 = 1, limitL2 = 2, limitL3 = 1, query = text)
+                        if (knowledge.isNotBlank()) {
+                            appendLine("【${member.name}的个人知识，仅${member.name}发言时可使用】")
+                            appendLine(knowledge)
                         }
                     }
-                } else ""
-                val sourceAwareMemories = if (settings.groupMemberMemoryCount > 0) {
-                    buildString {
-                        for (m in activeMembers) {
-                            val ctx = sharedUtils.buildSourceAwareMemoryContext(repository.getPublicAnchors(m.id), settings.groupMemberMemoryCount, MemorySurface.GROUP_CHAT, text)
-                            if (ctx != "无") appendLine("${m.name}知道：\n$ctx")
-                        }
-                    }.ifBlank { "无" }
-                } else "无"
+                }.ifBlank { "无" }
+                val groupSummary = ""
+                val memberMemoryContext = ""
+                val sourceAwareMemories = "无"
                 val groupUnconsumedEvents = sharedUtils.trimContextBlock(sharedUtils.buildUnconsumedEventContextForGroup(groupSessionId, activeMembers.map { it.id }, activeMembers.map { it.name }, settings.eventContextCount, markConsumed = false), sharedUtils.contextBlockLimit())
-                val groupVectorMemories = recallGroupVectorMemories(groupSessionId, text)
+                val groupVectorMemories = memoryV2Pipeline.buildOwnerMemoryContext(
+                    ownerType = "group",
+                    ownerId = groupSessionId,
+                    limitL1 = 3,
+                    limitL2 = 3,
+                    limitL3 = 1,
+                    query = text,
+                ).ifBlank { "无" }
                 val groupDailySummary = if (UnifiedMemoryContext.shouldIncludeTimeSummary(text)) {
                     (repository.getLatestDailyBySession(groupSessionId) ?: repository.getLatestDaily())?.content ?: "无"
                 } else "无"
-                val legacyMemberMemory = if (groupVectorMemories == "无") memberMemoryContext else ""
+                val legacyMemberMemory = ""
                 val unifiedGroupMemory = UnifiedMemoryContext.mergeBlocks(
                     maxChars = sharedUtils.contextBlockLimit(2),
                     legacyMemberMemory,
@@ -514,6 +515,8 @@ class GroupChatViewModel(
                     "DAILY_SUMMARY" to groupDailySummary,
                     "LONG_TERM_IMPRESSION" to "无",
                     "SOURCE_AWARE_MEMORIES" to unifiedKnownFrom,
+                    "MEMORY_ANCHORS" to unifiedGroupMemory,
+                    "MEMORY_V2_CONTEXT" to unifiedGroupMemory,
                     "GROUP_TRIGGER_EVENT" to "群聊自然延续",
                     "GROUP_RECENT_WORLD_EVENTS" to "无",
                     "GROUP_TOPIC_SEED" to "无",
@@ -642,32 +645,6 @@ class GroupChatViewModel(
                         type = "ai_json", mode = mode, isMe = false
                     ))
                     notifyIfBackground(groupName, filtered.firstOrNull()?.let { "${it.speaker}：${it.message}" } ?: "群聊有新消息", groupSessionId)
-                    for (r in filtered) {
-                        val anchorOp = if (r.speaker == "旁白" || r.speaker == "系统") null
-                        else opsByName[r.speaker]
-                        if (anchorOp != null) {
-                            if (MemoryPolicy.shouldSaveGroupAnchor(r.message)) {
-                                val anchorContent = sharedUtils.formatAnchorContent("群聊", if (isAuto) "弱" else "中", r.speaker, "在${groupName}中提到", r.message, groupName)
-                                val anchor = AnchorSourcePolicy.buildAnchor(
-                                    source = AnchorSourcePolicy.GROUP_CHAT,
-                                    sourceName = groupName,
-                                    sourceActor = r.speaker,
-                                    sourceTarget = groupName,
-                                    operatorId = anchorOp.id,
-                                    type = AnchorType.EVENT,
-                                    content = r.message.take(80),
-                                    importance = if (isAuto) AnchorSourcePolicy.WEAK else AnchorSourcePolicy.MEDIUM,
-                                    sessionId = groupSessionId,
-                                    createdAt = System.currentTimeMillis(),
-                                    expiresAt = MemoryPolicy.anchorExpiresAt(settings, AnchorType.EVENT)
-                                )
-                                saveGroupAnchorToVector(anchor, groupSessionId, groupName)
-                                DebugLogger.log("Memory/GroupAnchor", "群聊锚点保存: mode=${if (isAuto) "auto/$mode" else mode}, group=$groupName, speaker=${r.speaker}, op=${anchorOp.id}, content=${anchorContent.take(60)}")
-                            } else {
-                                DebugLogger.log("Memory/GroupAnchor", "群聊锚点跳过: reason=weak_message, speaker=${r.speaker}, text=${r.message.take(40)}")
-                            }
-                        }
-                    }
                     val last = filtered.last()
                     repository.updateLastMessage(groupSessionId, "${last.speaker}：${last.message.take(50)}", System.currentTimeMillis())
                     if (groupUnconsumedEvents != "无") {
@@ -1125,7 +1102,9 @@ $text"""
         if (!settings.memoryV2Enabled) return
         if (messages.isEmpty()) return
         try {
-            memoryV2Pipeline.ingestGroupChat(groupSessionId, groupName, messages)
+            val memberIds = repository.getSession(groupSessionId)?.members
+                ?.split(',')?.map { it.trim() }?.filter { it.isNotBlank() }.orEmpty()
+            memoryV2Pipeline.ingestGroupChat(groupSessionId, groupName, messages, memberIds)
         } catch (e: Exception) {
             DebugLogger.log("MemoryV2", "群聊L1写入失败: ${e.message?.take(80)}")
         }

@@ -44,7 +44,7 @@ fun OperatorMemoryScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
         }) }
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize().padding(16.dp)) {
-            Text("可按来源、等级和权限筛选。删除单条记忆会同步删除其向量索引；来源级删除会清除同一来源的直接记忆与向量。", fontSize = 12.sp, color = TextSecondary)
+            Text("近期记录、长期记忆和角色记得的你都在这里。删除会同步清除检索索引，角色之后不会再引用这条内容。", fontSize = 12.sp, color = TextSecondary)
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
                 FilterMenu(sourceFilter, listOf("全部来源", "PRIVATE_CHAT", "GROUP_CHAT", "MOMENT", "MOMENT_COMMENT", "MANUAL_MEMORY")) { sourceFilter = it }
@@ -65,7 +65,7 @@ fun OperatorMemoryScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
                             Column(Modifier.padding(12.dp)) {
                                 Text(item.content, fontSize = 14.sp, color = TextPrimary)
                                 Spacer(Modifier.height(6.dp))
-                                Text("${item.memoryLevel} · ${item.memoryType} · ${item.privacy ?: "private"} · 来源 ${item.sourceKind} · 重要性 ${item.importance}" + if (item.vectorId.isBlank()) " · 未建立索引" else " · 已建立索引", fontSize = 11.sp, color = TextSecondary)
+                                Text("${when (item.memoryLevel) { com.rhodes.privatechat.shared.model.MemoryLevel.L1 -> "近期记录"; com.rhodes.privatechat.shared.model.MemoryLevel.L2 -> "长期记忆"; com.rhodes.privatechat.shared.model.MemoryLevel.L3 -> "角色记得的你" }} · 来源 ${item.sourceKind} · 重要性 ${item.importance}" + if (item.vectorId.isBlank()) " · 未建立索引" else " · 已建立索引", fontSize = 11.sp, color = TextSecondary)
                                 TextButton(enabled = !working, onClick = { pendingDelete = item }) { Text("删除", color = ErrorRed) }
                             }
                         }
@@ -80,7 +80,7 @@ fun OperatorMemoryScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
         text = { Column {
             OutlinedTextField(content, { content = it }, label = { Text("记忆内容") }, minLines = 3)
             OutlinedTextField(importance, { importance = it.filter(Char::isDigit) }, label = { Text("重要性 0-100") })
-            Row(verticalAlignment = Alignment.CenterVertically) { Text("私密"); Switch(checked = privacy == "private", onCheckedChange = { privacy = if (it) "private" else "public" }); Text("公开") }
+            Text("这条记忆由当前角色拥有。角色可在私聊、群聊、动态和评论中自然引用；其他角色不会直接获得。", fontSize = 12.sp, color = TextSecondary)
         } },
         confirmButton = { TextButton(enabled = content.isNotBlank() && !working, onClick = { scope.launch { working = true; val saved = runCatching { viewModel.addManualOperatorMemory(operator.id, content, privacy, importance.toIntOrNull() ?: 80) }.getOrDefault(false); if (saved) { items = viewModel.getOperatorMemoryItems(operator.id); showAdd = false; content = ""; message = "记忆已保存" } else message = "记忆保存失败，请检查内容后重试"; working = false } }) { Text("保存") } },
         dismissButton = { TextButton(onClick = { showAdd = false }) { Text("取消") } }
@@ -88,7 +88,7 @@ fun OperatorMemoryScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
     pendingDelete?.let { item -> AlertDialog(
         onDismissRequest = { pendingDelete = null }, title = { Text("删除这条记忆？") }, text = { Column {
             Text(if (item.sourceRefId.isBlank()) item.content else "${item.content}\n\n此记忆来自 ${item.sourceKind}。可仅删除该条，或删除此来源的全部直接记忆与向量索引。")
-            if (item.sourceRefId.isNotBlank()) TextButton(enabled = !working, onClick = { scope.launch { working = true; runCatching { viewModel.deleteOperatorMemorySource(item) }.onSuccess { items = viewModel.getOperatorMemoryItems(operator.id); message = "已删除该来源的直接记忆与索引" }.onFailure { message = "删除失败：${it.message?.take(60) ?: "未知错误"}" }; working = false; pendingDelete = null } }) { Text("删除此来源", color = ErrorRed) }
+            if (item.sourceRefId.isNotBlank() && item.sourceKind != com.rhodes.privatechat.shared.model.MemorySourceKind.GROUP_CHAT) TextButton(enabled = !working, onClick = { scope.launch { working = true; runCatching { viewModel.deleteOperatorMemorySource(item) }.onSuccess { items = viewModel.getOperatorMemoryItems(operator.id); message = "已删除该来源的直接记忆与索引" }.onFailure { message = "删除失败：${it.message?.take(60) ?: "未知错误"}" }; working = false; pendingDelete = null } }) { Text("删除此来源", color = ErrorRed) }
         } },
         confirmButton = { TextButton(onClick = { scope.launch { working = true; runCatching { viewModel.deleteOperatorMemoryItem(item) }.onSuccess { items = viewModel.getOperatorMemoryItems(operator.id); message = "记忆已删除" }.onFailure { message = "删除失败：${it.message?.take(60) ?: "未知错误"}" }; working = false; pendingDelete = null } }) { Text("删除", color = ErrorRed) } },
         dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } }

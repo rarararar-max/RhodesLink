@@ -29,6 +29,7 @@ class VectorRepository(
             Json.encodeToString(memory.embedding),
             memory.tags,
             memory.visibility,
+            memory.embeddingSignature,
             memory.createdAt,
             memory.expiresAt,
         )

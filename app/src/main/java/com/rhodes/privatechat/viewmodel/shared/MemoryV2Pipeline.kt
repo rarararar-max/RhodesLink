@@ -15,6 +15,7 @@ import com.rhodes.privatechat.shared.network.AIService
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.shared.vector.MemoryVectorService
 import com.rhodes.privatechat.shared.vector.VectorMemory
+import com.rhodes.privatechat.shared.vector.VectorSearchRequest
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -82,23 +83,26 @@ class MemoryV2Pipeline(
         maybePromotePrivateMemory(operatorId, thresholdL1 = settings.memoryV2PromoteL1Threshold, thresholdL2 = settings.memoryV2PromoteL2Threshold)
     }
 
-    suspend fun ingestGroupChat(groupId: String, groupName: String, messages: List<ChatMessage>) {
+    suspend fun ingestGroupChat(groupId: String, groupName: String, messages: List<ChatMessage>, memberIds: List<String>) {
         if (messages.isEmpty()) return
         val sourceText = messages.joinToString("\n") { formatGroupMessage(groupName, it) }
+        // A group has many extraction windows.  Use the window identity rather than the group
+        // identity so deleting one source in memory management cannot purge the whole group.
+        val sourceRefId = "$groupId:${messages.first().id}-${messages.last().id}"
         val sourceId = repository.insertMemorySource(
             MemorySourceItem(
                 sourceKind = MemorySourceKind.GROUP_CHAT,
                 ownerType = "group",
                 ownerId = groupId,
-                sourceRefId = groupId,
+                sourceRefId = sourceRefId,
                 contentText = sourceText,
                 timestamp = messages.lastOrNull()?.timestamp ?: System.currentTimeMillis(),
                 createdAt = System.currentTimeMillis()
             )
         )
-        val l1 = extractGroupL1(groupId, groupName, sourceText)
+        val l1 = extractGroupL1(groupId, groupName, sourceText, sourceRefId)
         if (l1.isNotEmpty()) {
-            saveMemoryItems(l1)
+            val savedGroupItems = saveMemoryItems(l1)
             repository.saveMemoryBatch(MemoryBatch(
                 ownerType = "group",
                 ownerId = groupId,
@@ -111,6 +115,23 @@ class MemoryV2Pipeline(
                 promptVersion = "memory_v2_group_l1_v1",
                 createdAt = System.currentTimeMillis()
             ))
+            // A message heard in the group becomes each present member's knowledge.  The group
+            // keeps its own shared record while every character receives an independently
+            // addressable copy for later private chat, moments, and comments.
+            memberIds.distinct().filter { it.isNotBlank() }.forEach { memberId ->
+                val personalItems = savedGroupItems.map { item ->
+                    item.copy(
+                        id = 0,
+                        ownerType = "operator",
+                        ownerId = memberId,
+                        sourceTarget = memberId,
+                        vectorId = "",
+                        createdAt = System.currentTimeMillis(),
+                        updatedAt = System.currentTimeMillis(),
+                    )
+                }
+                saveMemoryItems(personalItems)
+            }
         }
         if (sourceId > 0) repository.markMemorySourceProcessedL1(sourceId)
         maybePromoteOwnerMemory("group", groupId, MemorySourceKind.GROUP_CHAT, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
@@ -129,9 +150,12 @@ class MemoryV2Pipeline(
                 createdAt = System.currentTimeMillis()
             )
         )
-        val l1 = extractEventL1(MemorySourceKind.MOMENT, "operator", moment.operatorId, moment.id.toString(), "", sourceText)
+        val l1 = listOf(publicEventItem(MemorySourceKind.MOMENT, moment.operatorId, moment.id.toString(), sourceText, moment.createdAt))
         if (l1.isNotEmpty()) {
             saveMemoryItems(l1)
+            // Public posts are a shared information source.  The author keeps their own
+            // record while all characters can discover the public copy when it is relevant.
+            saveMemoryItems(l1.map { it.copy(ownerType = "global", ownerId = "public", sourceTarget = "public", vectorId = "") })
             repository.saveMemoryBatch(MemoryBatch(
                 ownerType = "operator",
                 ownerId = moment.operatorId,
@@ -162,9 +186,10 @@ class MemoryV2Pipeline(
                 createdAt = System.currentTimeMillis()
             )
         )
-        val l1 = extractEventL1(MemorySourceKind.MOMENT_COMMENT, "operator", comment.operatorId, comment.id.toString(), "", sourceText)
+        val l1 = listOf(publicEventItem(MemorySourceKind.MOMENT_COMMENT, comment.operatorId, comment.id.toString(), sourceText, comment.createdAt))
         if (l1.isNotEmpty()) {
             saveMemoryItems(l1)
+            saveMemoryItems(l1.map { it.copy(ownerType = "global", ownerId = "public", sourceTarget = "public", vectorId = "") })
             repository.saveMemoryBatch(MemoryBatch(
                 ownerType = "operator",
                 ownerId = comment.operatorId,
@@ -180,6 +205,20 @@ class MemoryV2Pipeline(
         }
         if (sourceId > 0) repository.markMemorySourceProcessedL1(sourceId)
         maybePromoteOwnerMemory("operator", comment.operatorId, MemorySourceKind.MOMENT_COMMENT, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
+    }
+
+    suspend fun ingestDiary(operatorId: String, operatorName: String, diaryId: String, content: String) {
+        if (content.isBlank()) return
+        val now = System.currentTimeMillis()
+        val item = MemoryItem(
+            ownerType = "operator", ownerId = operatorId, memoryLevel = MemoryLevel.L1,
+            memoryType = "event", sourceKind = MemorySourceKind.DIARY, sourceRefId = diaryId,
+            content = "$operatorName 的日记：${content.take(180)}", importance = 45, privacy = "private",
+            sourceActor = operatorName, sourceTarget = operatorId, topicKey = topicKey("event", content),
+            createdAt = now, updatedAt = now, expiresAt = now + 30L * 86_400_000L,
+        )
+        saveMemoryItems(listOf(item))
+        maybePromoteOwnerMemory("operator", operatorId, MemorySourceKind.DIARY, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
     }
 
     suspend fun maybePromotePrivateMemory(operatorId: String, thresholdL1: Int, thresholdL2: Int) {
@@ -257,12 +296,23 @@ class MemoryV2Pipeline(
         }
     }
 
-    suspend fun buildPrivateMemoryContext(operatorId: String, limitL1: Int, limitL2: Int, limitL3: Int): String {
+    suspend fun buildPrivateMemoryContext(operatorId: String, limitL1: Int, limitL2: Int, limitL3: Int, query: String = ""): String {
+        val personal = buildOwnerMemoryContext("operator", operatorId, limitL1, limitL2, limitL3, query)
+        return listOf(
+            personal.takeIf { it.isNotBlank() },
+        ).filterNotNull().joinToString("\n")
+    }
+
+    suspend fun buildPublicMemoryContext(query: String, limit: Int = 3): String =
+        buildOwnerMemoryContext("global", "public", limit, 0, 0, query)
+
+    suspend fun buildOwnerMemoryContext(ownerType: String, ownerId: String, limitL1: Int, limitL2: Int, limitL3: Int, query: String = ""): String {
         val now = System.currentTimeMillis()
-        val l1 = repository.getActiveMemoryItemsByLevel("operator", operatorId, MemoryLevel.L1, now).rankForPrompt().take(limitL1)
-        val l2 = repository.getActiveMemoryItemsByLevel("operator", operatorId, MemoryLevel.L2, now).rankForPrompt().take(limitL2)
-        val l3 = repository.getActiveMemoryItemsByLevel("operator", operatorId, MemoryLevel.L3, now).rankForPrompt().take(limitL3)
-        return buildString {
+        val budget = when (settings.memoryRecallMode) { "fast" -> 40; "deep" -> 240; else -> 100 }
+        val l1 = repository.getActiveMemoryCandidatesByLevel(ownerType, ownerId, MemoryLevel.L1, now, budget).rankForPrompt().take(limitL1)
+        val l2 = repository.getActiveMemoryCandidatesByLevel(ownerType, ownerId, MemoryLevel.L2, now, budget / 2).rankForPrompt().take(limitL2)
+        val l3 = repository.getActiveMemoryCandidatesByLevel(ownerType, ownerId, MemoryLevel.L3, now, 60).rankForPrompt().take(limitL3)
+        val structured = buildString {
             if (l3.isNotEmpty()) {
                 append("【长期记忆】\n")
                 l3.forEach { append("- ").append(it.content).append('\n') }
@@ -276,6 +326,33 @@ class MemoryV2Pipeline(
                 l1.forEach { append("- ").append(it.content).append('\n') }
             }
         }.trim()
+        val vectorService = memoryVectorService ?: return structured
+        if (query.isBlank()) return structured
+        val candidateLimit = when (settings.memoryRecallMode) {
+            "fast" -> 100
+            "deep" -> 700
+            else -> settings.memoryRecallCandidateLimit
+        }
+        val semantic = runCatching {
+            vectorService.search(
+                VectorSearchRequest(
+                    ownerType = ownerType,
+                    ownerId = ownerId,
+                    query = query,
+                    limit = (limitL1 + limitL2 + limitL3).coerceIn(2, 8),
+                    sourceTypes = listOf("memory_v2_l1", "memory_v2_l2", "memory_v2_l3", "manual_memory"),
+                    minScore = if (settings.memoryRecallMode == "fast") 0.24 else 0.16,
+                    now = now,
+                    candidateLimit = candidateLimit,
+                    minCreatedAt = if (settings.memoryRecallMode == "fast") now - 30L * 86_400_000L else 0L,
+                )
+            )
+        }.getOrDefault(emptyList())
+        val semanticLines = semantic
+            .distinctBy { normalizeForDedup("semantic", it.content) }
+            .joinToString("\n") { "- ${it.content.take(180)}" }
+        return listOf(structured.takeIf { it.isNotBlank() }, semanticLines.takeIf { it.isNotBlank() }?.let { "【相关回忆】\n$it" })
+            .filterNotNull().joinToString("\n")
     }
 
     private fun List<MemoryItem>.rankForPrompt(): List<MemoryItem> {
@@ -331,7 +408,7 @@ class MemoryV2Pipeline(
         return parseMemoryItems(raw, ownerType, ownerId, MemoryLevel.L1, sourceKind, sourceRefId, sessionId)
     }
 
-    private suspend fun extractGroupL1(groupId: String, groupName: String, text: String): List<MemoryItem> {
+    private suspend fun extractGroupL1(groupId: String, groupName: String, text: String, sourceRefId: String): List<MemoryItem> {
         val prompt = MemoryV2PromptTemplates.getL1("GROUP_CHAT") + "\n系统提供的当前昵称：${userNicknameProvider()}\n群聊：$groupName\n内容：\n$text\n"
         val raw = withTimeout(15_000) {
             aiService.chat(
@@ -343,7 +420,7 @@ class MemoryV2Pipeline(
                 temperature = settings.aiTemperature
             ).content
         }
-        return parseMemoryItems(raw, "group", groupId, MemoryLevel.L1, MemorySourceKind.GROUP_CHAT, groupId, groupId)
+        return parseMemoryItems(raw, "group", groupId, MemoryLevel.L1, MemorySourceKind.GROUP_CHAT, sourceRefId, groupId)
     }
 
     private suspend fun extractEventL1(sourceKind: MemorySourceKind, ownerType: String, ownerId: String, sourceRefId: String, sessionId: String, text: String): List<MemoryItem> {
@@ -478,19 +555,47 @@ class MemoryV2Pipeline(
     private suspend fun linkAndArchiveParents(children: List<MemoryItem>, parents: List<MemoryItem>, linkType: String) {
         val now = System.currentTimeMillis()
         val parentById = parents.filter { it.id > 0 }.associateBy { it.id }
-        val linkedParentIds = mutableSetOf<Long>()
         children.filter { it.id > 0 }.forEach { child ->
             val evidenceIds = evidenceIdsFrom(child.rawJson).filter { it in parentById }
             evidenceIds.forEach { evidenceId ->
                 val parent = parentById.getValue(evidenceId)
                 repository.insertMemoryLink(MemoryLink(parentMemoryId = parent.id, childMemoryId = child.id, linkType = linkType, createdAt = now))
-                linkedParentIds += parent.id
             }
         }
-        linkedParentIds.mapNotNull(parentById::get).forEach { parent ->
+        // The selected topic window is consumed as one promotion unit.  The model still links
+        // the exact evidence it used, but leaving uncited siblings active would make the same
+        // window qualify again and repeatedly create slightly different L2/L3 summaries.
+        parents.filter { it.id > 0 }.forEach { parent ->
             repository.archiveMemoryItem(parent.id, now)
             parent.vectorId.takeIf { it.isNotBlank() }?.let { memoryVectorService?.deleteMemory(it) }
         }
+    }
+
+    /** Public social activity is recorded directly.  It does not spend an AI call per post. */
+    private fun publicEventItem(sourceKind: MemorySourceKind, ownerId: String, sourceRefId: String, content: String, eventAt: Long): MemoryItem {
+        val now = System.currentTimeMillis()
+        return MemoryItem(
+            ownerType = "operator",
+            ownerId = ownerId,
+            memoryLevel = MemoryLevel.L1,
+            memoryType = "event",
+            sourceKind = sourceKind,
+            sourceRefId = sourceRefId,
+            content = content.take(180),
+            importance = 35,
+            privacy = "public",
+            eventTime = eventAt.takeIf { it > 0 }?.let {
+                java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.CHINA).apply {
+                    timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")
+                }.format(java.util.Date(it))
+            },
+            sourceActor = ownerId,
+            sourceTarget = ownerId,
+            topicKey = topicKey("event", content),
+            createdAt = now,
+            updatedAt = now,
+            expiresAt = now + 30L * 86_400_000L,
+        )
     }
 
     private fun parsePromotionItems(
@@ -540,7 +645,7 @@ class MemoryV2Pipeline(
                     ownerId = item.ownerId,
                     sourceType = "memory_v2_${item.memoryLevel.name.lowercase()}",
                     sourceId = item.sourceRefId.ifBlank { item.sessionId },
-                    content = item.content,
+                    content = formatVectorContent(item),
                     importance = item.importance.coerceIn(0, 100) / 100.0,
                     tags = listOf(item.memoryLevel.name, item.memoryType, item.sourceKind.name).joinToString(","),
                     visibility = item.privacy ?: defaultPrivacy(item.sourceKind),
@@ -586,6 +691,26 @@ class MemoryV2Pipeline(
         MemorySourceKind.PRIVATE_CHAT -> "private"
         MemorySourceKind.GROUP_CHAT, MemorySourceKind.MOMENT, MemorySourceKind.MOMENT_COMMENT, MemorySourceKind.WORLD_EVENT -> "public"
         else -> "shared"
+    }
+
+    private fun formatVectorContent(item: MemoryItem): String {
+        val time = item.eventTime?.takeIf { it.isNotBlank() }
+            ?: item.scheduledTime?.takeIf { it.isNotBlank() }?.let { "约定 $it" }
+            ?: item.createdAt.takeIf { it > 0 }?.let { timestamp ->
+                java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.CHINA).apply {
+                    timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")
+                }.format(java.util.Date(timestamp))
+            }.orEmpty()
+        val source = when (item.sourceKind) {
+            MemorySourceKind.PRIVATE_CHAT -> "私聊"
+            MemorySourceKind.GROUP_CHAT -> "群聊"
+            MemorySourceKind.MOMENT -> "动态"
+            MemorySourceKind.MOMENT_COMMENT -> "评论"
+            MemorySourceKind.WORLD_EVENT -> "世界事件"
+            MemorySourceKind.DIARY -> "日记"
+            MemorySourceKind.MANUAL_MEMORY -> "手动记忆"
+        }
+        return "[$time·$source] ${item.content}"
     }
 
     private fun expiresAtFor(type: String, level: MemoryLevel): Long {
@@ -653,6 +778,7 @@ class MemoryV2Pipeline(
     }
 
     private fun withPromotionMeta(item: MemoryItem, topicKey: String, parents: List<MemoryItem>, targetLevel: MemoryLevel): MemoryItem {
+        val primarySource = parents.firstOrNull()
         val meta = buildJsonObject {
             put("topic_key", topicKey)
             put("evidence_count", parents.size)
@@ -667,6 +793,10 @@ class MemoryV2Pipeline(
         return item.copy(
             importance = maxImportance.coerceIn(0, 100),
             privacy = privacy,
+            // Derived memory must retain a deletable source/session identity.  Without this,
+            // clearing a conversation could leave its promoted L2/L3 facts recallable.
+            sourceRefId = primarySource?.sourceRefId.orEmpty(),
+            sessionId = primarySource?.sessionId.orEmpty(),
             topicKey = topicKey,
             sourceActor = parents.firstOrNull()?.sourceActor ?: item.sourceActor,
             sourceTarget = parents.firstOrNull()?.sourceTarget ?: item.sourceTarget,

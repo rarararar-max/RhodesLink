@@ -177,7 +177,7 @@ object DatabaseCompatibility {
                     sourceType TEXT NOT NULL, sourceId TEXT NOT NULL,
                     content TEXT NOT NULL, importance REAL NOT NULL DEFAULT 0,
                     embeddingJson TEXT NOT NULL DEFAULT '[]', tags TEXT NOT NULL DEFAULT '',
-                    visibility TEXT NOT NULL DEFAULT 'public',
+                    visibility TEXT NOT NULL DEFAULT 'public', embeddingSignature TEXT NOT NULL DEFAULT '',
                     createdAt INTEGER NOT NULL DEFAULT 0,
                     expiresAt INTEGER NOT NULL DEFAULT 9223372036854775807
                 )
@@ -187,6 +187,9 @@ object DatabaseCompatibility {
             if (!tableExists(db, table)) {
                 db.execSQL(ddl)
             }
+        }
+        if (tableExists(db, "vector_memories") && "embeddingSignature" !in existingColumns(db, "vector_memories")) {
+            db.execSQL("ALTER TABLE vector_memories ADD COLUMN embeddingSignature TEXT NOT NULL DEFAULT ''")
         }
     }
 

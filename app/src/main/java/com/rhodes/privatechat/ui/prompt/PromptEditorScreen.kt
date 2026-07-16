@@ -224,6 +224,7 @@ fun PromptEditorScreen(
         "{{POST_AUTHOR_PERSONA}}" to "动态作者公开人设",
         "{{COMMENT_CONTEXT}}" to "当前评论区上下文",
         "{{COMMENTER_MEMORY}}" to "评论者可用的公开记忆",
+        "{{PERSONAL_MEMORY_REFERENCE_STYLE}}" to "角色引用与用户共同经历的方式",
         "{{POST_CONTENT}}" to "被评论的动态正文",
         "{{COMMENT_TASK}}" to "评论任务类型：新评论或回复用户评论",
         "{{COMMENT_INSTRUCTION}}" to "本次评论/回复的具体任务说明",

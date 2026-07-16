@@ -22,6 +22,8 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -60,6 +62,7 @@ import org.koin.compose.koinInject
 fun ChatSettingsScreen(
     onBack: () -> Unit,
     onPromptEditor: () -> Unit = {},
+    onManageMemories: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val settings: SettingsRepository = koinInject()
@@ -84,7 +87,7 @@ fun ChatSettingsScreen(
                 0 -> GeneralTab(settings, onPromptEditor)
                 1 -> PrivateTab(settings)
                 2 -> GroupTab(settings)
-                3 -> MemoryTab(settings)
+                3 -> MemoryTab(settings, onManageMemories)
             }
         }
     }
@@ -156,20 +159,18 @@ private fun GroupTab(settings: SettingsRepository) {
     ParamSlider(settings, "group_nar_max", "旁白最大字数", 100, 50f..300f, "每段环境描写最多写几个字。群聊旁白建议100字以内，太长了像私聊剧本。", step = 5f, pairKey = "group_nar_min", isMinSide = false)
 }
 
-// ── Tab 2: 记忆与印象 ──
+// ── Tab 2: 统一记忆 ──
 
 @Composable
-private fun MemoryTab(settings: SettingsRepository) {
+private fun MemoryTab(settings: SettingsRepository, onManageMemories: () -> Unit) {
     ParamSlider(settings, "summary_threshold", "触发总结的聊天条数", 20, 3f..200f, "聊多少句话后，AI会自动总结前面聊的内容。设太小（低于10）频繁总结浪费AI额度，太大（超过100）AI记不住前面聊了什么。建议20-50条。", step = 1f)
     ParamSlider(settings, "summary_retain", "保留最近原始消息", 5, 1f..50f, "滚动摘要会先保留最近几条原始消息，较早内容才会合并进摘要。设太小会过早压缩上下文，太大则摘要更新变慢。建议3-5条。", step = 1f)
-    Spacer(modifier = Modifier.height(12.dp))
-    ParamSlider(settings, "impression_threshold", "触发印象更新的聊天条数", 50, 5f..100f, "聊多少句话后，AI会重新总结对你的整体印象。设太小会频繁消耗额度，设太大则印象变化较慢。建议30-80条。", step = 1f)
     Spacer(modifier = Modifier.height(12.dp))
     ParamSlider(settings, "daily_intimacy_cap", "每日好感变化上限", 5, 1f..20f, "每名干员每天最多涨或掉多少好感。调高数值关系推进更快，调低更慢热。建议3-5。", step = 1f)
     Spacer(modifier = Modifier.height(12.dp))
     ParamSlider(settings, "history_messages", "每次回复最多回看几句", 20, 0f..200f, "AI每次回复最多参考最近多少句聊天。设0表示不按条数限制，但仍会受模型上下文上限影响。建议15-30句。", step = 1f)
     Spacer(modifier = Modifier.height(12.dp))
-    ParamSlider(settings, "clean_days", "记忆过期天数", 30, 0f..365f, "AI对你的对话总结和印象保留多少天。0=不自动过期；太短AI容易忘记，太长旧印象会长期生效。建议30天。", step = 5f)
+    ParamSlider(settings, "clean_days", "近期记录整理天数", 30, 0f..365f, "近期记录在多久后自动整理。长期记忆和角色记得的你不会因这个设置直接消失。0=不自动整理。", step = 5f)
     Spacer(modifier = Modifier.height(12.dp))
     SectionTitle("记忆生成")
     SettingsSwitchCard(
@@ -180,42 +181,23 @@ private fun MemoryTab(settings: SettingsRepository) {
         onCheckedChange = { settings.summaryCursorEnabled = it }
     )
     SettingsSwitchCard(
-        title = "Memory V2 分层记忆",
-        subtitle = "把聊天提取成 L1/L2/L3 结构化记忆，并写入向量库",
-        tip = "开启后私聊和群聊会把有价值信息沉淀为结构化记忆。会额外消耗少量AI额度。建议开启。",
+        title = "自动形成记忆",
+        subtitle = "把聊天整理为近期记录、长期记忆和角色记得的你",
+        tip = "开启后私聊和群聊会沉淀重要信息。角色可在私聊、群聊、动态和评论中自然引用自己知道的事。",
         checked = settings.memoryV2Enabled,
         onCheckedChange = { settings.memoryV2Enabled = it }
     )
     SettingsSwitchCard(
-        title = "动态/评论进入 Memory V2",
-        subtitle = "用户动态和评论会进入公开记忆，便于后续私聊自然提起",
-        tip = "开启后，用户发的动态和评论会被提取为公开事件记忆。动态默认全员可见。",
+        title = "动态和评论参与记忆",
+        subtitle = "公开动态与评论会成为角色可合理得知的公开资料",
+        tip = "动态和评论不逐条调用 AI 提取，而是作为轻量事件记录；重要内容会逐步形成长期记忆。",
         checked = settings.momentMemoryV2Enabled,
         onCheckedChange = { settings.momentMemoryV2Enabled = it }
     )
     ParamSlider(settings, "memory_v2_promote_l1_threshold", "L1 合并为 L2 阈值", 20, 5f..100f, "同一干员的 L1 记忆达到多少条后，合并成中期 L2 记忆。越小越频繁消耗额度，建议20。", step = 1f)
     ParamSlider(settings, "memory_v2_promote_l2_threshold", "L2 合并为 L3 阈值", 10, 3f..50f, "同一干员的 L2 记忆达到多少条后，合并成长期 L3 记忆。建议10。", step = 1f)
     Spacer(modifier = Modifier.height(12.dp))
-    SectionTitle("记忆注入")
-    var distinguishPrivateMemory by remember { mutableStateOf(settings.distinguishPrivateMemory) }
-    Row(
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Card).padding(12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("区分私密与公开信息", fontSize = 13.sp, color = TextPrimary)
-                HelpButton("开启：私聊中被标为私密的记忆只给当前干员自己使用，不会通过关系网、动态、评论、群聊等公开场景传给别人。关闭：私聊和公开来源的锚点都按普通记忆参与传递，关系网也可以读取私密锚点。默认建议开启，想让世界信息完全流通时可关闭。")
-            }
-            Text("关掉后，私聊记忆也会像公开记忆一样参与关系传递", fontSize = 11.sp, color = TextSecondary)
-        }
-        Switch(checked = distinguishPrivateMemory, onCheckedChange = {
-            distinguishPrivateMemory = it
-            settings.distinguishPrivateMemory = it
-        }, colors = SwitchDefaults.colors(checkedThumbColor = Blue400, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
-    }
-    Spacer(modifier = Modifier.height(8.dp))
+    SectionTitle("角色知识与召回")
     var sourceAwareMemory by remember { mutableStateOf(settings.sourceAwareMemoryEnabled) }
     Row(
         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Card).padding(12.dp),
@@ -235,22 +217,42 @@ private fun MemoryTab(settings: SettingsRepository) {
         }, colors = SwitchDefaults.colors(checkedThumbColor = Blue400, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
     }
     Spacer(modifier = Modifier.height(8.dp))
-    SettingsSwitchCard(
-        title = "全局公开记忆池",
-        subtitle = "动态、评论等公开内容可被任意干员私聊按话题召回",
-        tip = "开启后用户动态和评论会进入 global/public 公开池。私聊时会按当前话题召回相关公开信息。建议开启。",
-        checked = settings.globalPublicMemoryEnabled,
-        onCheckedChange = { settings.globalPublicMemoryEnabled = it }
-    )
-    ParamSlider(settings, "global_public_memory_count", "全局公开召回数量", 5, 0f..20f, "每次私聊最多额外召回多少条公开动态/评论/世界事件。设0可关闭公开池注入。建议3-5条。", step = 1f)
+    ChoiceSetting("共同经历引用", settings.personalMemoryReferenceStyle, listOf("restrained" to "克制", "natural" to "自然", "proactive" to "主动关联")) { settings.personalMemoryReferenceStyle = it }
+    Text("角色个人知道的私聊内容可在群聊、动态和评论中引用；其他角色只有在实际听到或从公开内容得知后才会知道。", fontSize = 11.sp, color = TextSecondary)
+    ChoiceSetting("记忆检索强度", settings.memoryRecallMode, listOf("fast" to "省电快速", "balanced" to "平衡推荐", "deep" to "深度回忆")) { settings.memoryRecallMode = it }
+    Text("深度回忆会搜索更多候选，更容易找回久远细节；省电快速优先近期与重要记忆。", fontSize = 11.sp, color = TextSecondary)
     Spacer(modifier = Modifier.height(8.dp))
-    ParamSlider(settings, "private_anchor_count", "私聊锚点数量", 5, 0f..20f, "每次私聊最多给AI看的关键记忆数量。越高聊天越有连续性，也越消耗AI额度。建议5-8条。", step = 1f)
+    ParamSlider(settings, "memory_recall_candidate_limit", "记忆候选上限", 300, 50f..1000f, "平衡模式下每次最多做语义匹配的记忆数。记忆很多时可调低以提升速度。", step = 50f)
     ParamSlider(settings, "private_shared_memory_count", "关系共享记忆", 3, 0f..20f, "私聊时，当前干员可能通过关系网「听说」其他干员的公开记忆。数值越高，能参考的关系记忆越多。只传公开记忆，不会直接泄露私聊秘密。设0可关闭。建议1-3条。", step = 1f)
     ParamSlider(settings, "private_group_context_count", "私聊群聊回顾", 2, 0f..10f, "私聊时最多回顾该干员最近参与过的群聊摘要数量。设0就不回顾群聊内容。建议1-2条。", step = 1f)
     ParamSlider(settings, "group_member_memory_count", "群成员记忆数量", 2, 0f..10f, "群聊生成时每名成员最多携带几条近期公开记忆。设大了帮助记住历史，也消耗更多额度。建议2-3条。", step = 1f)
     ParamSlider(settings, "moment_anchor_count", "动态参考记忆", 3, 0f..10f, "生成动态时最多参考几条公开记忆。设太多动态总是围绕旧事，设太少动态内容容易空洞。建议3-5条。", step = 1f)
     ParamSlider(settings, "comment_context_count", "评论上下文条数", 5, 0f..20f, "AI回复评论时最多回看几条评论区上下文。建议3-5条，多了消耗额度。", step = 1f)
     ParamSlider(settings, "diary_anchor_count", "日记参考记忆", 5, 0f..20f, "生成日记时最多参考几条关键记忆。建议3-5条，多了日记易成流水账。", step = 1f)
+    Spacer(modifier = Modifier.height(12.dp))
+    SectionTitle("记忆管理")
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Card).padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("管理全部统一记忆", fontSize = 13.sp, color = TextPrimary)
+            Text("查看角色、群和公开动态资料；支持筛选、删除和索引重建。", fontSize = 11.sp, color = TextSecondary)
+        }
+        TextButton(onClick = onManageMemories) { Text("打开") }
+    }
+}
+
+@Composable
+private fun ChoiceSetting(title: String, selected: String, options: List<Pair<String, String>>, onSelect: (String) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Card).padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Text(title, fontSize = 13.sp, color = TextPrimary)
+        Box {
+            TextButton(onClick = { expanded = true }) { Text(options.firstOrNull { it.first == selected }?.second ?: selected) }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                options.forEach { (value, label) -> DropdownMenuItem(text = { Text(label) }, onClick = { onSelect(value); expanded = false }) }
+            }
+        }
+    }
+    Spacer(modifier = Modifier.height(8.dp))
 }
 
 @Composable

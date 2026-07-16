@@ -315,6 +315,14 @@ data class OperatorMemoryRoute(val opId: String) : Screen {
     }
 }
 
+data object GlobalMemoryRoute : Screen {
+    @Composable
+    override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        com.rhodes.privatechat.ui.memory.GlobalMemoryScreen(koinViewModel(), onBack = { navigator.pop() })
+    }
+}
+
 // ──────────────────────────────────────────────
 // Features
 // ──────────────────────────────────────────────
@@ -691,7 +699,7 @@ data object ChatSettingsRoute : Screen {
     @Composable
     override fun Content() {
         val navigator = LocalNavigator.currentOrThrow
-        com.rhodes.privatechat.ui.chatsettings.ChatSettingsScreen(onBack = { navigator.pop() }, onPromptEditor = { navigator.push(PromptEditorRoute) })
+        com.rhodes.privatechat.ui.chatsettings.ChatSettingsScreen(onBack = { navigator.pop() }, onPromptEditor = { navigator.push(PromptEditorRoute) }, onManageMemories = { navigator.push(GlobalMemoryRoute) })
     }
 }
 

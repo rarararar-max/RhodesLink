@@ -191,7 +191,7 @@ class ChatViewModel(
 
 请融合“已有摘要”和“新增对话”，生成一份连续摘要和若干高价值记忆锚点。目标是让${session.operatorName}下次聊天时能自然想起具体事情，而不是背诵流水账。
 
-输出JSON：{"summary":"150~250字四段结构摘要；复杂时最多300字","anchors":[{"type":"event|preference|plan|emotion|taboo|relation","content":"具体内容","importance":"strong|medium|weak","sourceActor":"谁说的","sourceTarget":"指向谁","isPrivate":false}]}
+输出JSON：{"summary":"150~250字四段结构摘要；复杂时最多300字","anchors":[]}
 
             摘要规则：
             - summary：默认150~250字；仅当存在多项承诺、边界或未解决事项时可到300字。必须按以下四段输出：
@@ -203,7 +203,7 @@ class ChatViewModel(
 - 如果已有摘要和新增对话冲突，以新增对话为准，改写旧理解，不要并列保留矛盾信息。
 
 锚点规则：
-- anchors：0~5个。有明确记忆价值才提取；寒暄、附和、短测试、乱码、单纯语气词不要硬凑。
+- anchors：固定输出空数组。正式记忆由统一 L1/L2/L3 管道处理。
 - content：30字内，必须具体到“用户喜欢什么/约定了什么/发生了什么/谁对谁态度变化”，避免“聊得很开心”这种空泛句。
 - type：event=具体事件，preference=用户偏好，plan=约定/待办，emotion=重要情绪，taboo=禁忌/边界，relation=关系变化。
 - preference/taboo 只能记录用户明确表达的偏好和边界，不能把干员自己的习惯、职业、人设当作用户偏好。
@@ -222,11 +222,11 @@ ${text}""" else """
 
 请融合“已有摘要”和“新增对话”，生成一份连续的新摘要和高价值记忆锚点。目标是让${session.operatorName}下次聊天时能自然想起具体事情，而不是背诵流水账。
 
-输出JSON：{"summary":"150~250字四段结构摘要；复杂时最多300字","anchors":[{"type":"event|preference|plan|emotion|taboo|relation","content":"具体内容","isPrivate":false}]}
+输出JSON：{"summary":"150~250字四段结构摘要；复杂时最多300字","anchors":[]}
 
 字段说明：
 - summary：默认150~250字；仅当存在多项承诺、边界或未解决事项时可到300字。固定输出【稳定事实与偏好】【近期事件与情绪】【约定、提醒与未解决事项】【下次可自然接续的话题】四段；无内容的段写“无”。旧理解冲突时以新对话改写。
-- anchors：0~5个关键信息锚点。有明确记忆价值才提取；寒暄、附和、短测试、乱码、单纯语气词不要硬凑。
+- anchors：固定输出空数组。正式记忆由统一 L1/L2/L3 管道处理。
   - type：锚点类型。event=事件，preference=用户偏好，plan=用户约定，emotion=用户情绪或重要互动情绪，taboo=用户禁忌，relation=关系变化
   - content：具体内容，30字内，必须具体到“用户喜欢什么/约定了什么/发生了什么/谁对谁态度变化”，避免“聊得很开心”这种空泛句
   - isPrivate：涉及用户负面情绪、私密情感、自我怀疑时设为true；正面评价、公开约定、普通事件设为false
@@ -269,32 +269,6 @@ ${text}"""
                     createdAt = now,
                     expiresAt = MemoryPolicy.memoryExpiresAt(settings)
                 ))
-                if (parsed.anchors.isNotEmpty()) {
-                    val anchors = parsed.anchors.mapNotNull { a ->
-                        val type = try { AnchorType.valueOf(a.type.uppercase()) } catch (_: Exception) { AnchorType.EVENT }
-                        val cleanedContent = sanitizeAnchorContent(a.content)
-                        if (cleanedContent.isBlank()) return@mapNotNull null
-                        val finalType = normalizeAnchorType(type, cleanedContent)
-                        AnchorSourcePolicy.buildAnchor(
-                            source = AnchorSourcePolicy.PRIVATE_CHAT,
-                            sourceName = "与${session.operatorName}的私聊",
-                            sourceActor = a.sourceActor.ifBlank { appState.userProfile.value.nickname },
-                            sourceTarget = a.sourceTarget.ifBlank { session.operatorName },
-                            operatorId = session.operatorId,
-                            type = finalType,
-                            content = cleanedContent,
-                            importance = a.importance.ifBlank { if (a.isPrivate) AnchorSourcePolicy.STRONG else AnchorSourcePolicy.MEDIUM },
-                            sessionId = session.id,
-                            isPrivate = a.isPrivate,
-                            createdAt = now,
-                            expiresAt = MemoryPolicy.anchorExpiresAt(settings, finalType)
-                        )
-                    }
-                    anchors.forEach { a ->
-                        DebugLogger.log("Memory/Anchor", "摘要锚点: op=${a.operatorId}, type=${a.type}, private=${a.isPrivate}, content=${a.content.take(40)}")
-                    }
-                    saveAnchorsToVector(anchors)
-                }
                 ingestPrivateMemoryV2(session, older)
                 if (settings.summaryCursorEnabled) older.maxOfOrNull { it.id }?.let { settings.putSummaryCursor(session.id, it) }
             }
@@ -798,16 +772,6 @@ ${recentDialogues}
                         if (sessionCounter >= shortTermThreshold) {
                             generateShortTermSummary(session)
                             settings.putSessionMessageCounter(session.id, 0)
-                        }
-                        if (settings.autoImpressionUpdateEnabled) {
-                            val impKey = "impression_${session.operatorId}"
-                            val impCount = settings.getInt(impKey, 0) + 1
-                            settings.putInt(impKey, impCount)
-                            val impThreshold = settings.impressionThreshold
-                            if (impThreshold > 0 && impCount >= impThreshold) {
-                                generateLongTermImpression(session)
-                                settings.putInt(impKey, 0)
-                            }
                         }
                         markUnreadIfNotCurrent(session.id, aiResponseCount)
                         lastError = null
@@ -1564,10 +1528,6 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         val op = repository.getOperator(session.operatorId)
         val restartAt = settings.getSessionRestartAt(session.id)
         val shortTerm = repository.getShortTermMemory(session.id)?.takeIf { restartAt <= 0L || it.createdAt >= restartAt }
-        val longTerm = repository.getLongTermImpression(session.operatorId)
-        val sharedMemories = repository.getSharedMemoriesForOperator(session.operatorId)
-        val anchors = repository.getAnchors(session.operatorId).filter { restartAt <= 0L || it.createdAt >= restartAt }
-        val nearby = appState.operators.value.filter { it.id != session.operatorId && it.id != "amiya" }.take(3)
         val profile = appState.userProfile.value
         val analysisGuidance = analysisGuidanceBySession[session.id].orEmpty()
         val analysisBlock = if (settings.dualModel && analysisGuidance.isNotBlank()) "【AI分析指导】\n${analysisGuidance}\n" else ""
@@ -1582,61 +1542,36 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
 剩余${_hypnosisRounds.value}轮
 """ else ""
         val mode = _currentMode.value
-        // 群聊回顾：找出该干员参与的各群聊 3 天内的短摘要
-        val THREE_DAYS = 3 * 24 * 60 * 60 * 1000L
-        val cutoff = System.currentTimeMillis() - THREE_DAYS
-        val groupContext = sharedUtils.trimContextBlock(repository.getAllSessionsSync().filter { s ->
-            s.operatorId.startsWith("group_") &&
-            s.members.split(",").map { it.trim() }.any { it == op?.id || it == op?.name }
-        }.mapNotNull { s ->
-            val summary = repository.getShortTermMemory(s.id)
-            if (summary != null && summary.createdAt >= maxOf(cutoff, settings.getSessionRestartAt(s.id))) {
-                "- 在「${s.operatorName}」中：${summary.content.take(80)}"
-            } else null
-        }.take(settings.privateGroupContextCount).joinToString("\n").ifBlank { "无" }, sharedUtils.contextBlockLimit())
         val transitionNotice = if (modeTransitionNotice.isNotBlank()) "【场景变更】\n${modeTransitionNotice}\n" else ""
-        val pickedAnchors = sharedUtils.pickAnchorsForSurface(anchors, settings.privateAnchorCount, MemorySurface.PRIVATE_CHAT, userContent)
-        val vectorMemories = recallVectorMemories(session.operatorId, userContent)
         val wantsRecall = UnifiedMemoryContext.shouldIncludeTimeSummary(userContent)
+        val recallQuery = repository.getMessagesSync(session.id)
+            .takeLast(3)
+            .joinToString("\n") { message ->
+                "${if (message.isMe) "用户" else op?.name ?: session.operatorName}：${message.content.take(120)}"
+            }
+            .ifBlank { userContent }
         val memoryV2Context = sharedUtils.trimContextBlock(
             memoryV2Pipeline.buildPrivateMemoryContext(
                 operatorId = session.operatorId,
                 limitL1 = if (wantsRecall) settings.privateAnchorCount else 2,
                 limitL2 = if (wantsRecall) 5 else 3,
-                limitL3 = if (wantsRecall) 4 else 2
+                limitL3 = if (wantsRecall) 4 else 2,
+                query = recallQuery
             ).ifBlank { "无" },
             sharedUtils.contextBlockLimit()
         )
-        val sourceAwareMemories = sharedUtils.buildSourceAwareMemoryContext(anchors, settings.privateAnchorCount, MemorySurface.PRIVATE_CHAT, userContent)
+        val publicMemoryContext = memoryV2Pipeline.buildPublicMemoryContext(recallQuery, limit = 2).ifBlank { "无" }
         val eventConsumer = "private:${session.operatorId}"
         val unconsumedEvents = sharedUtils.buildUnconsumedEventContextForOperator(session.operatorId, op?.name ?: session.operatorName, eventConsumer, settings.eventContextCount, markConsumed = false)
-        val sharedMemoryLines = sharedUtils.trimContextBlock(sharedMemories.lines().filter { it.isNotBlank() }.take(settings.privateSharedMemoryCount).joinToString("\n"), sharedUtils.contextBlockLimit())
-        val relationNetworkMemories = buildRelationNetworkMemoryContext(session.operatorId, userContent)
-        val legacyAnchorLines = if (memoryV2Context == "无" && vectorMemories == "无") {
-            pickedAnchors.joinToString("\n") { "- ${sharedUtils.anchorTimeLabel(it)} ${it.content}" }
-        } else ""
-        val legacySourceLines = if (legacyAnchorLines.isNotBlank()) sourceAwareMemories else "无"
-        val dailySummary = if (wantsRecall) {
-            repository.getLatestPrivateDaily(session.operatorId)?.content ?: "无"
-        } else "无"
         val unifiedMemoryContext = UnifiedMemoryContext.mergeBlocks(
             maxChars = sharedUtils.contextBlockLimit(2),
             memoryV2Context,
-            vectorMemories,
-            sharedMemoryLines,
-            relationNetworkMemories,
-            unconsumedEvents,
-            legacyAnchorLines
-        )
-        val unifiedSourceContext = UnifiedMemoryContext.mergeBlocks(
-            maxChars = sharedUtils.contextBlockLimit(),
-            legacySourceLines,
-            if (relationNetworkMemories != "无") "关系网听说：\n$relationNetworkMemories" else "",
-            if (sharedMemoryLines.isNotBlank()) "关系网可自然听说：\n$sharedMemoryLines" else ""
+            publicMemoryContext.takeIf { it != "无" }?.let { "【公开动态与评论】\n$it" }.orEmpty(),
+            unconsumedEvents
         )
         DebugLogger.log(
             "Memory/Inject",
-            "私聊记忆注入: op=${session.operatorId}, mode=$mode, short=${shortTerm != null}, long=${longTerm != null}, unified=${unifiedMemoryContext != "无"}, anchors=${pickedAnchors.size}, v2=${memoryV2Context != "无"}, relationV2=${relationNetworkMemories != "无"}, sharedLines=${sharedMemoryLines.lines().filter { it.isNotBlank() }.size}, groupContext=${groupContext != "无"}, daily=${dailySummary != "无"}"
+            "统一记忆注入: op=${session.operatorId}, mode=$mode, summary=${shortTerm != null}, memory=${memoryV2Context != "无"}"
         )
         val replacements = mapOf(
             "CURRENT_TIME" to sharedUtils.beijingSdf("yyyy-MM-dd HH:mm").format(java.util.Date()),
@@ -1646,28 +1581,21 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             "OPERATOR_NAME" to (op?.name ?: session.operatorName), "OPERATOR_TITLE" to (op?.title ?: ""),
             "OPERATOR_PERSONA" to (op?.privatePrompt?.ifBlank { op.description } ?: ""),
             "OPERATOR_GENDER" to (op?.gender?.ifBlank { "" } ?: ""),
-            "LONG_TERM_IMPRESSION" to (longTerm?.content ?: "暂无"),
-            "USER_PREFS" to buildString {
-                longTerm?.preferences?.takeIf { it.isNotBlank() }?.let {
-                    append("已知偏好：${it.split(",").map { it.trim() }.joinToString("、")}\n")
-                }
-                longTerm?.taboos?.takeIf { it.isNotBlank() }?.let {
-                    append("已知禁忌：${it.split(",").map { it.trim() }.joinToString("、")}\n")
-                }
-            },
+            "LONG_TERM_IMPRESSION" to "无",
+            "USER_PREFS" to "无",
             "MEMORY_ANCHORS" to unifiedMemoryContext,
             "MEMORY_V2_CONTEXT" to memoryV2Context,
             "OPERATOR_MEMORY_INJECTION" to "",
-            "SOURCE_AWARE_MEMORIES" to unifiedSourceContext,
+            "SOURCE_AWARE_MEMORIES" to "无",
             "UNCONSUMED_EVENTS" to sharedUtils.trimContextBlock(unconsumedEvents, sharedUtils.contextBlockLimit()),
             "RECENT_SOCIAL_EVENTS" to unconsumedEvents,
             "EVENT_TRIGGERED_PRIVATE_CONTEXT" to unconsumedEvents,
-            "KNOWN_FROM_CONTEXT" to sourceAwareMemories,
+            "KNOWN_FROM_CONTEXT" to "无",
             "SOURCE_AWARE_RULES" to sharedUtils.sourceAwareUsageRule(MemorySurface.PRIVATE_CHAT),
-            "SHARED_MEMORIES" to sharedMemoryLines.ifBlank { "无" },
-            "DAILY_SUMMARY" to dailySummary,
+            "SHARED_MEMORIES" to "无",
+            "DAILY_SUMMARY" to "无",
             "SHORT_TERM_SUMMARY" to (shortTerm?.content ?: "无"),
-            "GROUP_CONTEXT" to groupContext,
+            "GROUP_CONTEXT" to "无",
             "USER_RELATION" to (op?.userRelation?.ifBlank { "未知" } ?: "未知"),
             "NAR_SEG_MIN" to settings.narSegMin.toString(), "NAR_SEG_MAX" to settings.narSegMax.toString(),
             "NAR_MIN" to settings.narMin.toString(), "NAR_MAX" to settings.narMax.toString(),
@@ -1694,13 +1622,10 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
                 "HYPNOSIS" to replacements["HYPNOSIS"].orEmpty(),
                 "TRANSITION_NOTICE" to replacements["TRANSITION_NOTICE"].orEmpty()
             ),
-            anchors = pickedAnchors,
             extra = mapOf(
                 "mode" to mode,
                 "user" to profile.nickname,
-                "privateAnchorCount" to settings.privateAnchorCount.toString(),
-                "privateSharedMemoryCount" to settings.privateSharedMemoryCount.toString(),
-                "privateGroupContextCount" to settings.privateGroupContextCount.toString()
+                "memoryRecallMode" to settings.memoryRecallMode
             )
         )
         // Custom templates keep literal placeholder semantics. The extra structured layers improve
@@ -1716,12 +1641,13 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         val context = """CACHE_CONTEXT_V1:private
             |当前时间：${sharedUtils.beijingSdf("yyyy-MM-dd HH时").format(java.util.Date())}
             |用户：${profile.nickname}，${profile.gender.ifBlank { "未知" }}，${profile.bio.ifBlank { "无" }}
-            |长期印象：${longTerm?.content ?: "无"}
+            |角色记得的你：$memoryV2Context
             |用户偏好与边界：${replacements["USER_PREFS"].orEmpty().ifBlank { "无" }}
             |滚动摘要：${shortTerm?.content ?: "无"}
             |相关记忆：$unifiedMemoryContext
-            |来源提示：$unifiedSourceContext
-            |群聊回顾：$groupContext
+            |共同经历引用风格：${when (settings.personalMemoryReferenceStyle) { "restrained" -> "只在用户明确问起或话题高度相关时提及"; "proactive" -> "话题有联系时可主动自然提及共同经历"; else -> "话题相关时自然提及共同经历，不要无故翻旧账" }}
+            |来源提示：无
+            |群聊回顾：无
             |待处理事件：$unconsumedEvents
             |临时指令：${listOf(analysisBlock, hypnosisBlock, transitionNotice).filter { it.isNotBlank() }.joinToString("\n").ifBlank { "无" }}
             |格式边界：${if (mode == "offline" || mode == "director") "必须至少有一条 dialogue；旁白段数为 ${settings.narSegMin} 到 ${settings.narSegMax} 段。动作、表情、环境只写 narration；dialogue 只写说出口台词，禁止括号动作。" else "只允许 dialogue；禁止旁白、动作和环境描写。"}

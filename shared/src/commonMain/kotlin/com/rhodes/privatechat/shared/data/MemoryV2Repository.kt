@@ -166,6 +166,12 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
         db.memoryItemsQueries.updateMemoryItemVectorId(vectorId, updatedAt, id)
     }
 
+    suspend fun getActiveMemoryCandidatesByLevel(ownerType: String, ownerId: String, level: MemoryLevel, now: Long, limit: Int): List<MemoryItem> = withContext(Dispatchers.Default) {
+        db.memoryItemsQueries.getActiveMemoryCandidatesByLevel(ownerType, ownerId, level.name, now, limit.toLong()) { id, ownerType_, ownerId_, memoryLevel, memoryType, sourceKind, sourceRefId, sessionId, content, nickname, importance, privacy, unmetNeed, location, emotionValence, eventTime, createdAt, updatedAt, expiresAt, status, scheduledTime, action, careType, topicKey, sourceActor, sourceTarget, lastUsedAt, usedCount, confidence, rawJson, vectorId ->
+            MemoryItem(id, ownerType_, ownerId_, try { MemoryLevel.valueOf(memoryLevel) } catch (_: Exception) { MemoryLevel.L1 }, memoryType, try { MemorySourceKind.valueOf(sourceKind) } catch (_: Exception) { MemorySourceKind.PRIVATE_CHAT }, sourceRefId, sessionId, content, nickname, importance.toInt(), privacy, unmetNeed != 0L, location, emotionValence, eventTime, createdAt, updatedAt, expiresAt, status, scheduledTime, action, careType, topicKey, sourceActor, sourceTarget, lastUsedAt, usedCount.toInt(), confidence, rawJson, vectorId)
+        }.executeAsList()
+    }
+
     suspend fun clearAllMemoryItemVectorIds() = withContext(Dispatchers.Default) {
         db.memoryItemsQueries.clearAllMemoryItemVectorIds()
     }
@@ -179,12 +185,14 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
     }
 
     suspend fun deleteMemoryItemsBySession(sessionId: String) = withContext(Dispatchers.Default) {
-        db.memoryItemsQueries.deleteMemoryItemsBySession(sessionId)
+        deleteBySession(sessionId)
     }
 
     /** Deletes the structured source records and all direct vector copies of that source. */
     suspend fun deleteBySource(sourceKind: MemorySourceKind, sourceRefId: String) = withContext(Dispatchers.Default) {
         db.transaction {
+            val invalidatedVectorIds = invalidateDerivedBySourceInternal(sourceKind, sourceRefId)
+            invalidatedVectorIds.forEach { vectorId -> db.vectorMemoriesQueries.deleteVectorMemory(vectorId) }
             // Structured items retain the exact vector IDs, avoiding collisions between
             // independently numbered moments and comments.
             db.vectorMemoriesQueries.deleteVectorsForMemorySource(sourceKind.name, sourceRefId)
@@ -192,6 +200,44 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
             db.memorySourceQueueQueries.deleteMemorySourcesBySource(sourceKind.name, sourceRefId)
             db.vectorMemoriesQueries.deleteVectorMemoriesBySourceTypeAndId(sourceKind.name.lowercase(), sourceRefId)
             db.memoryLinksQueries.deleteOrphanedMemoryLinks()
+        }
+    }
+
+    /**
+     * A deleted source invalidates every promoted conclusion that used it as evidence.  Those
+     * conclusions are archived rather than silently kept in recall; remaining evidence can form
+     * a new conclusion later.
+     */
+    private fun invalidateDerivedBySourceInternal(sourceKind: MemorySourceKind, sourceRefId: String): List<String> {
+        val pending = ArrayDeque<Long>()
+        db.memoryItemsQueries.getMemoryIdsBySource(sourceKind.name, sourceRefId).executeAsList().forEach(pending::addLast)
+        return invalidateDescendantsInternal(pending)
+    }
+
+    private fun invalidateDescendantsInternal(pending: ArrayDeque<Long>): List<String> {
+        val visited = mutableSetOf<Long>()
+        val vectorIds = mutableListOf<String>()
+        val now = System.currentTimeMillis()
+        while (pending.isNotEmpty()) {
+            val parentId = pending.removeFirst()
+            if (!visited.add(parentId)) continue
+            db.memoryLinksQueries.getChildMemoryIds(parentId).executeAsList().forEach { childId ->
+                if (childId !in visited) {
+                    db.memoryItemsQueries.getMemoryVectorId(childId).executeAsOneOrNull()
+                        ?.takeIf { it.isNotBlank() }?.let(vectorIds::add)
+                    db.memoryItemsQueries.archiveMemoryItem(now, childId)
+                    pending.addLast(childId)
+                }
+            }
+        }
+        return vectorIds
+    }
+
+    suspend fun invalidateDerivedBySession(sessionId: String) = withContext(Dispatchers.Default) {
+        db.transaction {
+            val pending = ArrayDeque<Long>()
+            db.memoryItemsQueries.getMemoryIdsBySession(sessionId).executeAsList().forEach(pending::addLast)
+            invalidateDescendantsInternal(pending).forEach { vectorId -> db.vectorMemoriesQueries.deleteVectorMemory(vectorId) }
         }
     }
 
@@ -222,11 +268,19 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
     }
 
     suspend fun deleteBySession(sessionId: String) = withContext(Dispatchers.Default) {
+        invalidateDerivedBySession(sessionId)
         db.memoryItemsQueries.deleteMemoryItemsBySession(sessionId)
         db.memorySourceQueueQueries.deleteMemorySourcesBySession(sessionId)
     }
 
     suspend fun deleteMemoryItem(id: Long) = withContext(Dispatchers.Default) {
+        db.transaction {
+            db.memoryItemsQueries.getMemoryVectorId(id).executeAsOneOrNull()
+                ?.takeIf { it.isNotBlank() }?.let { vectorId -> db.vectorMemoriesQueries.deleteVectorMemory(vectorId) }
+            val pending = ArrayDeque<Long>()
+            pending.addLast(id)
+            invalidateDescendantsInternal(pending).forEach { vectorId -> db.vectorMemoriesQueries.deleteVectorMemory(vectorId) }
+        }
         db.memoryLinksQueries.deleteMemoryLinksByParent(id)
         db.memoryLinksQueries.deleteMemoryLinksByChild(id)
         db.memoryItemsQueries.deleteMemoryItem(id)

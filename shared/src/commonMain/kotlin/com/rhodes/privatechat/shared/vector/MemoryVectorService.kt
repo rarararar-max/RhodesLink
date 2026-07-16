@@ -1,6 +1,13 @@
 package com.rhodes.privatechat.shared.vector
 
 import com.rhodes.privatechat.shared.settings.SettingsRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class MemoryVectorService(
     private val settings: SettingsRepository,
@@ -8,6 +15,12 @@ class MemoryVectorService(
 ) {
     private var gatewaySignature = ""
     private var gateway: EmbeddingGateway? = null
+    private val embeddingCache = object : LinkedHashMap<String, List<Double>>(32, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<Double>>?): Boolean = size > 32
+    }
+    private val embeddingCacheMutex = Mutex()
+    private val embeddingScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val inFlightEmbeddings = mutableMapOf<String, Deferred<List<Double>>>()
 
     private fun activeGateway(): EmbeddingGateway {
         val signature = listOf(settings.vectorProviderMode, settings.vectorBaseUrl, settings.vectorModelName, settings.vectorApiKey, settings.apiKey).joinToString("|")
@@ -18,13 +31,19 @@ class MemoryVectorService(
         return gateway!!
     }
 
+    private fun currentEmbeddingSignature(): String = listOf(
+        settings.vectorProviderMode,
+        settings.vectorBaseUrl.trim(),
+        settings.vectorModelName.trim(),
+    ).joinToString("|")
+
     suspend fun saveMemory(memory: VectorMemory) {
-        val embedding = activeGateway().embed(memory.content)
-        vectorStoreGateway.upsert(memory.copy(embedding = embedding))
+        val embedding = embedCached(memory.content)
+        vectorStoreGateway.upsert(memory.copy(embedding = embedding, embeddingSignature = currentEmbeddingSignature()))
     }
 
     suspend fun saveMemoryWithEmbedding(memory: VectorMemory) {
-        vectorStoreGateway.upsert(memory)
+        vectorStoreGateway.upsert(memory.copy(embeddingSignature = memory.embeddingSignature.ifBlank { currentEmbeddingSignature() }))
     }
 
     suspend fun recall(
@@ -36,7 +55,7 @@ class MemoryVectorService(
         minScore: Double = 0.0,
         now: Long = 0L,
     ): List<VectorMemory> {
-        val queryEmbedding = activeGateway().embed(query)
+        val queryEmbedding = embedCached(query)
         return vectorStoreGateway.search(
             VectorSearchRequest(
                 ownerType = ownerType,
@@ -47,13 +66,14 @@ class MemoryVectorService(
                 visibilities = visibilities,
                 minScore = minScore,
                 now = now,
+                embeddingSignature = currentEmbeddingSignature(),
             )
         )
     }
 
     suspend fun search(request: VectorSearchRequest): List<VectorMemory> {
-        val queryEmbedding = activeGateway().embed(request.query)
-        return vectorStoreGateway.search(request.copy(queryEmbedding = queryEmbedding))
+        val queryEmbedding = embedCached(request.query)
+        return vectorStoreGateway.search(request.copy(queryEmbedding = queryEmbedding, embeddingSignature = currentEmbeddingSignature()))
     }
 
     suspend fun clearAllMemories() = vectorStoreGateway.clearAllMemories()
@@ -65,4 +85,23 @@ class MemoryVectorService(
 
     suspend fun clearSessionMemory(ownerType: String, ownerId: String, sourceId: String) =
         vectorStoreGateway.deleteBySource(ownerType, ownerId, sourceId)
+
+    private suspend fun embedCached(text: String): List<Double> {
+        val normalized = text.trim()
+        if (normalized.isBlank()) return emptyList()
+        val gateway = activeGateway()
+        val key = "$gatewaySignature:$normalized"
+        embeddingCacheMutex.withLock { embeddingCache[key] }?.let { return it }
+        val request = embeddingCacheMutex.withLock {
+            embeddingCache[key]?.let { return it }
+            inFlightEmbeddings[key] ?: embeddingScope.async { gateway.embed(normalized) }.also { inFlightEmbeddings[key] = it }
+        }
+        return try {
+            request.await().also { embedding -> embeddingCacheMutex.withLock { embeddingCache[key] = embedding } }
+        } finally {
+            embeddingCacheMutex.withLock {
+                if (inFlightEmbeddings[key] === request && request.isCompleted) inFlightEmbeddings.remove(key)
+            }
+        }
+    }
 }

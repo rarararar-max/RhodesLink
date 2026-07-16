@@ -48,7 +48,12 @@ class DataViewModel(
             val diaryDays = settings.cleanDaysDiaries
             if (diaryDays > 0) repository.deleteOldDiaries(now - diaryDays * 86400000L)
             val momentDays = settings.cleanDaysMoments
-            if (momentDays > 0) repository.deleteOldMoments(now - momentDays * 86400000L)
+            // Moments and comments share one retention control in the current product UI.
+            if (momentDays > 0) repository.deleteExpiredSocialContent(
+                momentCutoff = if (momentDays > 0) now - momentDays * 86400000L else null,
+                commentCutoff = now - momentDays * 86400000L,
+                userName = settings.userName,
+            )
             val dispatchDays = settings.cleanDaysDispatches
             if (dispatchDays > 0) repository.deleteOldDispatches(now - dispatchDays * 86400000L)
             val worldDays = settings.cleanDaysWorldEvents

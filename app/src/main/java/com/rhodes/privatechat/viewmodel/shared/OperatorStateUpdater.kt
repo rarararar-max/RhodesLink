@@ -1,7 +1,5 @@
 package com.rhodes.privatechat.viewmodel.shared
 
-import com.rhodes.privatechat.shared.model.AnchorType
-import com.rhodes.privatechat.shared.model.MemoryAnchor
 import com.rhodes.privatechat.shared.model.Operator
 import com.rhodes.privatechat.shared.model.WorldEvent
 import com.rhodes.privatechat.shared.model.WorldEventType
@@ -34,7 +32,7 @@ class OperatorStateUpdater(
             sourceId = operatorId,
             content = "${op.name}现在在${newLoc}，正在${newAct}，情绪${newEmo}",
             createdAt = System.currentTimeMillis(),
-            expiresAt = MemoryPolicy.anchorExpiresAt(settings, AnchorType.EVENT)
+            expiresAt = MemoryPolicy.memoryExpiresAt(settings)
         ))
         onStatusUpdated?.invoke(operatorId, newLoc, newAct, newEmo)
         if (newLoc != op.location && newLoc.isNotBlank()) {
@@ -49,16 +47,8 @@ class OperatorStateUpdater(
             for (observer in allOps) {
                 if (observer.id == movedId) continue
                 if (observer.location == moved.location) {
-                    val anchor = MemoryAnchor(
-                        sessionId = "nearby_${System.currentTimeMillis()}",
-                        operatorId = observer.id,
-                        type = AnchorType.EVENT,
-                        content = "${moved.name}来到了${moved.location}，正在${moved.activity}，情绪${moved.emotion}",
-                        isPrivate = false,
-                        createdAt = System.currentTimeMillis(),
-                        expiresAt = MemoryPolicy.anchorExpiresAt(settings, AnchorType.EVENT)
-                    )
-                    repository.saveAnchor(anchor)
+                    // Live state is already available from the operator record.  Do not turn
+                    // every movement into a second, competing memory representation.
                 }
             }
         }

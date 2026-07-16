@@ -1,10 +1,7 @@
 package com.rhodes.privatechat.viewmodel
 
-import com.rhodes.privatechat.shared.model.AnchorType
 import com.rhodes.privatechat.shared.model.DispatchRecord
 import com.rhodes.privatechat.shared.model.DispatchEnd
-import com.rhodes.privatechat.shared.model.MemoryAnchor
-import com.rhodes.privatechat.shared.memory.AnchorSourcePolicy
 import com.rhodes.privatechat.util.DebugLogger
 import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.shared.network.AIService
@@ -12,11 +9,8 @@ import com.rhodes.privatechat.shared.model.AiMessage
 import com.rhodes.privatechat.viewmodel.shared.AppStateHolder
 import com.rhodes.privatechat.viewmodel.shared.OperatorStateUpdater
 import com.rhodes.privatechat.shared.settings.SettingsRepository
-import com.rhodes.privatechat.shared.vector.MemoryVectorService
-import com.rhodes.privatechat.shared.vector.VectorMemory
 import com.rhodes.privatechat.viewmodel.shared.SharedUtils
 import com.rhodes.privatechat.viewmodel.shared.UserProfile
-import com.rhodes.privatechat.viewmodel.shared.MemoryPolicy
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -48,7 +42,6 @@ class DispatchViewModel(
     private val scope: CoroutineScope,
     private val refreshAllOperatorStatus: suspend () -> Unit,
     private val getUserProfile: () -> UserProfile,
-    private val memoryVectorService: MemoryVectorService? = null
 ) {
     /** 启动互斥锁（防止重复 startDispatch） */
     private val startingLock = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -269,16 +262,9 @@ ${profiles}
                 val allOps = appState.operators.value
                 val memberIds = updated.operatorIds.split(",").map { it.trim() }.filter { it.isNotBlank() }
                 val memberNames = memberIds.mapNotNull { id -> allOps.find { it.id == id || it.name == id }?.name }.take(3).joinToString("、")
-                for (opId in memberIds) {
-                    val anchor = AnchorSourcePolicy.buildAnchor(source = AnchorSourcePolicy.DISPATCH, sourceName = updated.taskType, sourceActor = memberNames, sourceTarget = profile.nickname, operatorId = opId, type = AnchorType.EVENT, content = "${updated.taskType}任务完成，${memberNames}带回${items}，净收益${netProfit}龙门币", importance = AnchorSourcePolicy.MEDIUM, sessionId = "dispatch:${dispatchId}", createdAt = System.currentTimeMillis(), expiresAt = MemoryPolicy.anchorExpiresAt(settings, AnchorType.EVENT))
-                    repository.saveAnchor(anchor)
-                    memoryVectorService?.saveMemory(VectorMemory(
-                        id = "dispatch_${dispatchId}_${opId}", ownerType = "operator", ownerId = opId,
-                        sourceType = "dispatch", sourceId = dispatchId, content = anchor.content,
-                        importance = 0.6, tags = "EVENT,DISPATCH", visibility = "shared",
-                        createdAt = anchor.createdAt, expiresAt = anchor.expiresAt
-                    ))
-                }
+                // Dispatch history remains in its own domain.  It no longer creates a parallel
+                // Anchor/vector memory; important outcomes can be promoted through the unified
+                // event pipeline in a later dedicated product pass.
             } finally {
                 finishingIds.remove(dispatchId)
             }

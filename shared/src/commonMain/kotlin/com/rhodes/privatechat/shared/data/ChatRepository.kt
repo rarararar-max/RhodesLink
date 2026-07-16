@@ -106,16 +106,35 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun deleteMemoryV2ByOwnerAndSourceKind(ownerType: String, ownerId: String, sourceKind: MemorySourceKind) = memoryV2.deleteByOwnerAndSourceKind(ownerType, ownerId, sourceKind)
     suspend fun deleteMemoryItemsBySession(sessionId: String) = memoryV2.deleteMemoryItemsBySession(sessionId)
     suspend fun deleteMemoryV2BySource(sourceKind: MemorySourceKind, sourceRefId: String) = memoryV2.deleteBySource(sourceKind, sourceRefId)
+
+    /** Raw public content and its unified-memory projections must expire together. */
+    suspend fun deleteExpiredSocialContent(momentCutoff: Long?, commentCutoff: Long?, userName: String) = withContext(Dispatchers.Default) {
+        val db = wrapper.database
+        if (momentCutoff != null) {
+            val momentIds = db.momentsQueries.getOldMomentIds(momentCutoff).executeAsList()
+            momentIds.forEach { memoryV2.deleteBySource(MemorySourceKind.MOMENT, it.toString()) }
+            db.momentsQueries.deleteOldMoments(momentCutoff)
+        }
+        if (commentCutoff != null) {
+            val commentIds = db.momentCommentsQueries.getOldUserCommentIds(commentCutoff, userName).executeAsList()
+            commentIds.forEach { memoryV2.deleteBySource(MemorySourceKind.MOMENT_COMMENT, it.toString()) }
+            db.momentCommentsQueries.deleteOldUserComments(commentCutoff, userName)
+        }
+    }
     suspend fun saveSharedExperience(experience: SharedExperience, participants: List<String>) = sharedExperiences.saveIfAbsent(experience, participants)
     suspend fun deleteSharedExperiencesBySource(sourceKind: String, sourceRefId: String) = sharedExperiences.deleteBySource(sourceKind, sourceRefId)
 
     /** Removes a session and every derived record that can make its content reappear in recall. */
     suspend fun purgeSessionData(sessionId: String) = withContext(Dispatchers.Default) {
         val db = wrapper.database
+        memoryV2.invalidateDerivedBySession(sessionId)
         db.transaction {
             db.chatMessagesQueries.deleteSessionMessages(sessionId)
             db.memoriesQueries.deleteMemoriesBySession(sessionId)
             db.memoryAnchorsQueries.deleteAnchorsBySession(sessionId)
+            // Delete vectors while their owning memory rows still exist.  This catches both
+            // L1 and promoted L2/L3 records, including copied group-member knowledge.
+            db.vectorMemoriesQueries.deleteVectorsForMemorySession(sessionId)
             db.memoryItemsQueries.deleteMemoryItemsBySession(sessionId)
             db.memorySourceQueueQueries.deleteMemorySourcesBySession(sessionId)
             db.vectorMemoriesQueries.deleteVectorMemoriesBySourceId(sessionId)
@@ -271,6 +290,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun saveMemoryBatch(batch: MemoryBatch) = memoryV2.saveBatch(batch)
     suspend fun getMemoryItemsByLevel(ownerType: String, ownerId: String, level: MemoryLevel) = memoryV2.getMemoryItemsByLevel(ownerType, ownerId, level)
     suspend fun getActiveMemoryItemsByLevel(ownerType: String, ownerId: String, level: MemoryLevel, now: Long) = memoryV2.getActiveMemoryItemsByLevel(ownerType, ownerId, level, now)
+    suspend fun getActiveMemoryCandidatesByLevel(ownerType: String, ownerId: String, level: MemoryLevel, now: Long, limit: Int) = memoryV2.getActiveMemoryCandidatesByLevel(ownerType, ownerId, level, now, limit)
     suspend fun getMemoryItemsByOwner(ownerType: String, ownerId: String) = memoryV2.getMemoryItemsByOwner(ownerType, ownerId)
     suspend fun getAllMemoryItems() = memoryV2.getAllMemoryItems()
     suspend fun getMemoryItemsByType(ownerType: String, ownerId: String, type: String) = memoryV2.getMemoryItemsByType(ownerType, ownerId, type)

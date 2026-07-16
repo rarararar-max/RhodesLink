@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS memory_items (
     vectorId TEXT NOT NULL DEFAULT ''
 );
 
+CREATE INDEX IF NOT EXISTS memory_items_active_candidates
+ON memory_items(ownerType, ownerId, memoryLevel, status, expiresAt, importance DESC, createdAt DESC);
+
 getMemoryItemsByOwner:
 SELECT * FROM memory_items WHERE ownerType = ? AND ownerId = ? ORDER BY createdAt DESC;
 
@@ -46,11 +49,30 @@ SELECT * FROM memory_items
 WHERE ownerType = ? AND ownerId = ? AND memoryLevel = ? AND status = 'active' AND expiresAt > ?
 ORDER BY importance DESC, createdAt DESC;
 
+getActiveMemoryCandidatesByLevel:
+SELECT * FROM memory_items
+WHERE ownerType = ? AND ownerId = ? AND memoryLevel = ? AND status = 'active' AND expiresAt > ?
+ORDER BY
+  CASE WHEN scheduledTime IS NOT NULL AND scheduledTime != '' THEN 1 ELSE 0 END DESC,
+  importance DESC,
+  lastUsedAt DESC,
+  createdAt DESC
+LIMIT ?;
+
 getMemoryItemsByType:
 SELECT * FROM memory_items WHERE ownerType = ? AND ownerId = ? AND memoryType = ? ORDER BY createdAt DESC;
 
 getMemoryItemById:
 SELECT * FROM memory_items WHERE id = ?;
+
+getMemoryIdsBySource:
+SELECT id FROM memory_items WHERE sourceKind = ? AND sourceRefId = ?;
+
+getMemoryIdsBySession:
+SELECT id FROM memory_items WHERE sessionId = ?;
+
+getMemoryVectorId:
+SELECT vectorId FROM memory_items WHERE id = ?;
 
 getMemoryItemsBySource:
 SELECT * FROM memory_items WHERE sourceKind = ? AND sourceRefId = ?;

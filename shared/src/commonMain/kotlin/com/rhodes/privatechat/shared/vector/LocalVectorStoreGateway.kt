@@ -23,18 +23,34 @@ class LocalVectorStoreGateway(
             embeddingJson = json.encodeToString(memory.embedding),
             tags = memory.tags,
             visibility = memory.visibility,
+            embeddingSignature = memory.embeddingSignature,
             createdAt = memory.createdAt,
             expiresAt = memory.expiresAt,
         )
     }
 
     override suspend fun search(request: VectorSearchRequest): List<VectorMemory> {
-        val rows = db.vectorMemoriesQueries.getVectorMemoriesByOwner(request.ownerType, request.ownerId).executeAsList()
+        val now = request.now.takeIf { it > 0L } ?: System.currentTimeMillis()
+        val minCreatedAt = request.minCreatedAt.coerceAtLeast(0L)
+        val rows = if (request.candidateLimit > 0) {
+            db.vectorMemoriesQueries.getVectorCandidatesByOwner(
+                request.ownerType,
+                request.ownerId,
+                now,
+                minCreatedAt,
+                request.minImportance,
+                request.embeddingSignature,
+                request.candidateLimit.toLong(),
+            ).executeAsList()
+        } else {
+            db.vectorMemoriesQueries.getVectorMemoriesByOwner(request.ownerType, request.ownerId).executeAsList()
+        }
         val filtered = rows
             .asSequence()
             .filter { row -> request.sourceTypes.isEmpty() || row.sourceType in request.sourceTypes }
             .filter { row -> request.visibilities.isEmpty() || row.visibility in request.visibilities }
-            .filter { row -> request.now <= 0L || row.expiresAt > request.now }
+            .filter { row -> request.embeddingSignature.isBlank() || row.embeddingSignature == request.embeddingSignature }
+            .filter { row -> row.expiresAt > now }
             .toList()
         return filtered
             .mapNotNull { row ->
@@ -56,6 +72,7 @@ class LocalVectorStoreGateway(
                     embedding = embedding,
                     tags = row.tags,
                     visibility = row.visibility,
+                    embeddingSignature = row.embeddingSignature,
                     createdAt = row.createdAt,
                     expiresAt = row.expiresAt,
                 ) to score
@@ -79,6 +96,7 @@ class LocalVectorStoreGateway(
                 embedding = embedding,
                 tags = row.tags,
                 visibility = row.visibility,
+                embeddingSignature = row.embeddingSignature,
                 createdAt = row.createdAt,
                 expiresAt = row.expiresAt,
             )

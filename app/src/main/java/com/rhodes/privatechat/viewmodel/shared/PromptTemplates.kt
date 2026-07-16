@@ -617,9 +617,22 @@ object PromptTemplates {
 【群聊记忆】
 昨日群聊总结：{{DAILY_SUMMARY}}
 最近群聊摘要：{{SHORT_TERM_SUMMARY}}
-成员们对用户的长期印象：{{LONG_TERM_IMPRESSION}}
-{{USER_PREFS}}【各成员与用户最近的情况】
+【群成员共同知道的事】
+{{MEMORY_ANCHORS}}
+【各成员个人知识】
 {{MEMBER_PRIVATE_CONTEXT}}
+【知识边界】
+- 每位角色只能使用群共同知识和标注为自己个人知识的内容。
+- 不得让其他角色引用不属于自己的个人知识；本轮说出口的内容会成为之后群成员共同知道的事。
+【群成员共同知道的事】
+{{MEMORY_ANCHORS}}
+【各成员个人知识】
+{{MEMBER_PRIVATE_CONTEXT}}
+
+【知识边界】
+- 每位角色只能使用“群成员共同知道的事”和标注为自己个人知识的内容。
+- 不得让其他角色引用、追问或暗示不属于自己的个人知识。
+- 角色在本轮实际说出口的内容会成为群成员之后共同知道的事。
 
 【群成员档案 · 含群内角色定位】
 {{MEMBER_PROFILES}}
@@ -786,7 +799,7 @@ object PromptTemplates {
 - {{USER_NAME}}是群内用户；可以回应用户最新发言，但不要替{{USER_NAME}}发言
 
 【记忆使用规则】
-- 只能使用公开群聊记忆、公开锚点和成员可合理知道的信息。
+- 每位角色只能使用群共同知识和标注为自己个人知识的内容。
 - 这是线上文字群聊，可以说"之前群里聊过""上次你在群里提到"。
 - 不要暴露私聊隐私，不要说"系统记录"。
 
@@ -841,9 +854,13 @@ object PromptTemplates {
 【群聊记忆】
 昨日群聊总结：{{DAILY_SUMMARY}}
 最近群聊摘要：{{SHORT_TERM_SUMMARY}}
-成员们对用户的长期印象：{{LONG_TERM_IMPRESSION}}
-{{USER_PREFS}}【各成员与用户最近的情况】
+【群成员共同知道的事】
+{{MEMORY_ANCHORS}}
+【各成员个人知识】
 {{MEMBER_PRIVATE_CONTEXT}}
+【知识边界】
+- 每位角色只能使用群共同知识和标注为自己个人知识的内容。
+- 不得让其他角色引用不属于自己的个人知识；本轮说出口的内容会成为之后群成员共同知道的事。
 
 【群成员档案 · 含群内角色定位】
 {{MEMBER_PROFILES}}
@@ -898,6 +915,7 @@ object PromptTemplates {
 - 像朋友圈/内部动态一样：可以是一句观察、一点小抱怨、一个细节、一个临时想法。
 - 只写角色自然的工作、生活、观察或即时想法；不要编造外部事件来制造戏剧性。
 - 不要每条都围绕{{USER_NAME}}，私聊信息只能含蓄影响语气，不能公开复述隐私。
+- 关于与用户共同经历的引用：{{PERSONAL_MEMORY_REFERENCE_STYLE}}
 - 直接输出一条动态正文，不要加“今日动态：”“发布：”等前缀。
 
 动态字数：{{MOMENT_MIN_CHARS}}~{{MOMENT_MAX_CHARS}}字。
@@ -931,6 +949,9 @@ object PromptTemplates {
 {{MEMORY_V2_CONTEXT}}
 {{SOURCE_AWARE_MEMORIES}}
 {{SOURCE_AWARE_RULES}}
+
+【共同经历引用方式】
+{{PERSONAL_MEMORY_REFERENCE_STYLE}}
 
 【任务】
 任务类型：{{COMMENT_TASK}}

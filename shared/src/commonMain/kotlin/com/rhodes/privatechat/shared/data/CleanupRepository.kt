@@ -19,6 +19,5 @@ class CleanupRepository(private val wrapper: DatabaseWrapper) {
         db.vectorMemoriesQueries.deleteExpiredVectorMemories(now)
         // Extraction sources are temporary work records, not another permanent chat archive.
         db.memorySourceQueueQueries.deleteProcessedMemorySourcesBefore(now - 30L * 86_400_000L)
-        db.worldEventsQueries.deleteExpiredWorldEvents(now)
     }
 }

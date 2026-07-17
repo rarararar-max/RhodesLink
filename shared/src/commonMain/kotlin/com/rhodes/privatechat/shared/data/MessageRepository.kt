@@ -53,7 +53,8 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
         db.chatMessagesQueries.updateContent(content, id)
     }
 
-    suspend fun sendMessage(sessionId: String, message: ChatMessage) = withContext(Dispatchers.Default) {
+    suspend fun sendMessage(sessionId: String, message: ChatMessage) = idMutex.withLock { withContext(Dispatchers.Default) {
+        nextMessageId = maxOf(nextMessageId ?: 0L, message.id + 1)
         val ts = if (message.timestamp > 0) message.timestamp else Clock.System.now().toEpochMilliseconds()
         db.chatMessagesQueries.insertMessage(
             message.id, message.sessionId, message.senderId, message.senderName, message.content,
@@ -70,7 +71,19 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
             }
             db.chatSessionsQueries.updateLastMessage(preview, ts, sessionId)
         }
-    }
+    } }
+
+    /** Restores backups without allowing an old row ID to overwrite newer local content. */
+    suspend fun restoreMessage(message: ChatMessage) = idMutex.withLock { withContext(Dispatchers.Default) {
+        nextMessageId = maxOf(nextMessageId ?: 0L, message.id + 1)
+        val ts = if (message.timestamp > 0) message.timestamp else Clock.System.now().toEpochMilliseconds()
+        db.chatMessagesQueries.insertMessageIfAbsent(
+            message.id, message.sessionId, message.senderId, message.senderName, message.content,
+            message.type, message.mode, message.emotion, message.activity, message.location,
+            message.narration, message.segmentGroup, message.intimacyChange.toLong(), ts,
+            if (message.isMe) 1L else 0L
+        )
+    } }
 
     private fun previewFromAiJson(content: String): String {
         return try {

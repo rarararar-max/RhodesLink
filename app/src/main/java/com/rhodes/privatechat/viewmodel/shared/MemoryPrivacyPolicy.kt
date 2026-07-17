@@ -31,7 +31,7 @@ object MemoryPrivacyPolicy {
                 ownerId = ownerId,
                 writeGlobalPublic = false,
             )
-            MemorySourceKind.MOMENT, MemorySourceKind.MOMENT_COMMENT, MemorySourceKind.WORLD_EVENT -> MemoryVisibility(
+            MemorySourceKind.MOMENT, MemorySourceKind.MOMENT_COMMENT -> MemoryVisibility(
                 privacy = "public",
                 ownerType = ownerType,
                 ownerId = ownerId,

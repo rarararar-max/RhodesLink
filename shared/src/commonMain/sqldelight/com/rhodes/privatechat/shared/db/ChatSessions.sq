@@ -38,8 +38,14 @@ UPDATE chat_sessions SET lastMessage = ?, lastTime = ? WHERE id = ?;
 updateMode:
 UPDATE chat_sessions SET mode = ? WHERE id = ?;
 
+updatePinned:
+UPDATE chat_sessions SET isPinned = ? WHERE id = ?;
+
 incrementUnread:
 UPDATE chat_sessions SET unreadCount = unreadCount + ? WHERE id = ?;
+
+markSessionRead:
+UPDATE chat_sessions SET unreadCount = 0 WHERE id = ?;
 
 markAllRead:
 UPDATE chat_sessions SET unreadCount = 0;

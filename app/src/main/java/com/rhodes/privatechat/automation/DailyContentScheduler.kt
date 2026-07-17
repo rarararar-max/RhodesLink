@@ -51,6 +51,7 @@ object DailyContentScheduler {
             }
         }
         val candidates = operators.filter { op ->
+            settings.idleProactiveChatEnabled &&
             settings.getOperatorMsgPermission(op.id) && (0..99).random() < settings.dailyProactiveChance &&
                 hasConversationContext(repository, op.id)
         }.shuffled().take(settings.dailyProactiveMax)
@@ -93,7 +94,15 @@ object DailyContentScheduler {
     private fun scheduledTime(start: Long, end: Long, seed: String, now: Long): Long {
         val span = end - start - TimeUnit.HOURS.toMillis(1)
         val offset = (seed.hashCode().toLong() and Long.MAX_VALUE) % span
-        return (start + TimeUnit.MINUTES.toMillis(30L) + offset).let { if (it < now) now + TimeUnit.MINUTES.toMillis((2L + (seed.hashCode() and 15))) else it }
+        val planned = start + TimeUnit.MINUTES.toMillis(30L) + offset
+        if (planned >= now) return planned
+
+        // Planning can happen after the normal slot (first launch, restored worker, etc.).
+        // Spread overdue deliveries across the remaining day instead of firing them together.
+        val recoveryStart = now + TimeUnit.MINUTES.toMillis(5L)
+        val recoveryEnd = end - TimeUnit.MINUTES.toMillis(10L)
+        if (recoveryEnd <= recoveryStart) return recoveryStart
+        return recoveryStart + ((seed.hashCode().toLong() and Long.MAX_VALUE) % (recoveryEnd - recoveryStart))
     }
 
     private fun avoidQuietHours(at: Long, cycleEnd: Long, settings: SettingsRepository, now: Long): Long {

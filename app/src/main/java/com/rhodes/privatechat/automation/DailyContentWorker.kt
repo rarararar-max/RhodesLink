@@ -25,12 +25,12 @@ class DailyContentWorker(context: Context, params: WorkerParameters) : Coroutine
             val viewModel = MainViewModel(
                 applicationContext as Application, repository, settings,
                 get<AppStateHolder>(AppStateHolder::class.java), get<SharedUtils>(SharedUtils::class.java),
-                get<OperatorStateUpdater>(OperatorStateUpdater::class.java)
+                get<OperatorStateUpdater>(OperatorStateUpdater::class.java), startBackgroundWork = false
             )
             val operatorId = inputData.getString("operatorId") ?: return Result.success()
             val deliveryId = inputData.getString("deliveryId") ?: "0"
             val cycle = inputData.getString("cycle") ?: DailyContentScheduler.cycleId()
-            val delivered = when (inputData.getString("type")) {
+            when (inputData.getString("type")) {
                 DailyContentScheduler.TYPE_MOMENT -> viewModel.deliverScheduledMoment(operatorId, cycle, deliveryId)
                 DailyContentScheduler.TYPE_PRIVATE -> viewModel.deliverScheduledPrivate(operatorId, cycle)
                 else -> false

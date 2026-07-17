@@ -154,7 +154,7 @@ private fun GroupTab(settings: SettingsRepository) {
     ParamSlider(settings, "group_auto_max_rounds", "空闲连续轮数", 20, 1f..300f, "AI自己聊天最多连续聊多少轮后停下来。建议10-30。太低（低于5）刚聊起来就停了，太高（超过50）AI一直聊不停，刷屏严重。", step = 1f)
 
     Spacer(Modifier.height(12.dp)); SectionTitle("群聊旁白(线下/导演)")
-    Text("线下和导演模式中，每位活跃成员前面会自动加一段场景描写；成员越多，生成的文字也越多。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
+    Text("线下和导演模式里，AI会在需要时写一点动作、环境或气氛。不是每个人都一定有旁白；旁白越长，回复也会越长。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
     ParamSlider(settings, "group_nar_min", "旁白最小字数", 20, 0f..200f, "每段场景描写最少写几个字。建议20。太低（0）场景描写太短没画面感。", step = 5f, pairKey = "group_nar_max", isMinSide = true)
     ParamSlider(settings, "group_nar_max", "旁白最大字数", 100, 50f..300f, "每段场景描写最多写几个字。建议100。太高（超过200）群聊里大段旁白像在写小说而不是聊天。", step = 5f, pairKey = "group_nar_min", isMinSide = false)
 }
@@ -182,20 +182,21 @@ private fun MemoryTab(settings: SettingsRepository, onManageMemories: () -> Unit
     )
     SettingsSwitchCard(
         title = "自动形成记忆",
-        subtitle = "角色能记住聊过的重要事情",
-        tip = "开启后，私聊和群聊中重要的约定、偏好、事件会自动保存下来。角色在私聊、群聊和动态中都能自然引用这些记忆，不会每次都是新认识你。",
+        subtitle = "让角色记住你们聊过的重要事情",
+        tip = "开启后，角色会记住你们反复提到的重要事，比如约定、喜好和计划，以后聊天时能自然想起来。关闭后不再记新的内容；以前已经记住的内容会保留，可到下方“管理全部统一记忆”里删除。",
         checked = settings.memoryV2Enabled,
         onCheckedChange = { settings.memoryV2Enabled = it }
     )
     SettingsSwitchCard(
         title = "动态和评论参与记忆",
-        subtitle = "公开发的东西其他角色也能合理知道",
-        tip = "开启后，角色发的动态和评论会成为公开信息，其他角色可以在聊天中自然提到。不会每条都单独花钱提取，只有重要的才会沉淀下来。",
+        subtitle = "让公开动态和评论也能被角色记住",
+        tip = "开启后，角色会把动态和评论当作公开发生过的事。之后在聊天、群聊或评论里，相关时可以自然接上。普通内容不会被反复强调；反复出现或很重要的内容才会记得更久。",
         checked = settings.momentMemoryV2Enabled,
         onCheckedChange = { settings.momentMemoryV2Enabled = it }
     )
     ParamSlider(settings, "memory_v2_promote_l1_threshold", "短期记忆合并阈值", 20, 5f..100f, "同一话题的短期记忆积累到多少条后，合并成一条中期记忆。建议20。太低（低于10）频繁合并、花钱多；太高（超过50）记忆太零散，角色记不住重点。", step = 1f)
     ParamSlider(settings, "memory_v2_promote_l2_threshold", "中期记忆合并阈值", 10, 3f..50f, "同一话题的中期记忆积累到多少条后，合并成一条长期稳定记忆。建议10。太低（低于5）容易把一次聊天当成长期印象；太高（超过20）重要事情也沉淀不下来。", step = 1f)
+    ParamSlider(settings, "memory_v2_important_promotion_threshold", "重要记忆快速沉淀次数", 2, 2f..10f, "明确承诺、重要提醒、高重要度偏好等同一件事重复出现几次后，可提前合并。建议2。调高更谨慎、更省额度；调低会更快记住，但也更容易把一时的话当成长久记忆。", step = 1f)
     ParamSlider(settings, "private_memory_extraction_threshold", "私聊记忆提取条数", 12, 3f..30f, "每积累多少条新消息后，提取一次可检索的记忆。这个和滚动摘要是两回事——摘要负责连续性，这个负责可搜索。建议12。太低（低于5）每条消息都提取，花钱多；太高（超过20）聊了很多才提取一次，中间的可能来不及记住。", step = 1f)
     ParamSlider(settings, "group_memory_extraction_threshold", "群聊记忆提取条数", 12, 3f..30f, "每积累多少条新群消息后，提取一次群聊记忆，这样在私聊时也能想起群里的事。建议12。太低（低于5）花钱多，太高（超过20）群里的事要很久才进入角色记忆。", step = 1f)
     Spacer(modifier = Modifier.height(12.dp))
@@ -243,7 +244,7 @@ private fun MemoryTab(settings: SettingsRepository, onManageMemories: () -> Unit
     )
     Spacer(modifier = Modifier.height(8.dp))
     ParamSlider(settings, "memory_recall_candidate_limit", "记忆候选上限", 300, 50f..1000f, "每次搜索记忆时最多比对多少条。建议300。太低（低于100）容易漏掉相关记忆，太高（超过500）搜索变慢、耗电增加。只在均衡模式下生效。", step = 50f)
-    ParamSlider(settings, "private_group_context_count", "私聊群聊回顾", 2, 0f..10f, "私聊时角色能想起最近参与过的群聊内容（群聊滚动摘要）。建议2。太低（0）私聊完全不记得群聊的事，太高（超过5）每次私聊都带上一堆群消息，容易跑题。用户主动问起群里的旧事时，最多回顾这里设定的数量。", step = 1f)
+    ParamSlider(settings, "private_group_context_count", "私聊时回顾几个群", 2, 0f..10f, "私聊时，角色会看一眼自己最近参加过的群聊大意，不是逐条翻完整聊天记录。建议2。设为0时，私聊基本不会主动提群里的事；超过5时，容易把群里的话带太多进私聊，反而跑题。", step = 1f)
     ParamSlider(settings, "group_member_memory_count", "群成员按需回忆数量", 2, 0f..2f, "群聊中当有人提到某个成员名字时，最多为该成员查几条个人相关记忆。建议1-2。太高（超过3）群聊里不断有人翻旧账，对话不自然。普通闲聊不会查个人记忆，只靠群摘要。", step = 1f)
     Spacer(modifier = Modifier.height(12.dp))
     SectionTitle("记忆管理")

@@ -12,8 +12,6 @@ import com.rhodes.privatechat.shared.model.MomentComment
 import com.rhodes.privatechat.shared.model.MomentLike
 import com.rhodes.privatechat.shared.model.Relationship
 import com.rhodes.privatechat.shared.model.RelationshipType
-import com.rhodes.privatechat.shared.model.WorldEvent
-import com.rhodes.privatechat.shared.model.WorldEventType
 import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.shared.memory.AnchorSourcePolicy
@@ -259,21 +257,7 @@ ${recentText}
                 ))
             }
 
-            // 2. 写世界事件
-            repository.insertWorldEvent(WorldEvent(
-                type = WorldEventType.MAHJONG_EVENT,
-                actorId = "user",
-                actorName = settings.userName.ifBlank { "用户" },
-                targetId = participantIds.firstOrNull() ?: "",
-                targetName = winnerName,
-                source = "mahjong",
-                sourceId = "mahjong_${now}",
-                content = summary,
-                createdAt = now,
-                expiresAt = MemoryPolicy.memoryExpiresAt(settings)
-            ))
-
-            // 3. 更新关系：同桌打牌小幅增加熟悉度
+            // 2. 更新关系：同桌打牌小幅增加熟悉度
             for (opId in participantIds) {
                 try {
                     val existing = repository.getRelationship("user", opId)

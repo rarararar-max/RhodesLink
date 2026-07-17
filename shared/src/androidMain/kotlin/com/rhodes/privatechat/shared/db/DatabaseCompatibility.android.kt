@@ -92,30 +92,6 @@ object DatabaseCompatibility {
         )
         ensureColumns(
             db = db,
-            table = "world_events",
-            createSql = """
-                CREATE TABLE IF NOT EXISTS world_events (
-                    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-                    type TEXT NOT NULL,
-                    actorId TEXT NOT NULL DEFAULT '',
-                    actorName TEXT NOT NULL DEFAULT '',
-                    targetId TEXT NOT NULL DEFAULT '',
-                    targetName TEXT NOT NULL DEFAULT '',
-                    source TEXT NOT NULL DEFAULT '',
-                    sourceId TEXT NOT NULL DEFAULT '',
-                    content TEXT NOT NULL,
-                    createdAt INTEGER NOT NULL DEFAULT 0,
-                    expiresAt INTEGER NOT NULL DEFAULT 9223372036854775807,
-                    consumedBy TEXT NOT NULL DEFAULT '',
-                    originType TEXT NOT NULL DEFAULT '',
-                    chainDepth INTEGER NOT NULL DEFAULT 0,
-                    rootEventId INTEGER NOT NULL DEFAULT 0
-                )
-            """.trimIndent(),
-            columns = worldEventCompatibilityColumns
-        )
-        ensureColumns(
-            db = db,
             table = "memory_items",
             createSql = """
                 CREATE TABLE IF NOT EXISTS memory_items (
@@ -227,18 +203,15 @@ object DatabaseCompatibility {
 
     private fun hasFullCompatibilitySchema(db: SQLiteDatabase): Boolean {
         val memoryColumns = existingColumns(db, "memory_anchors")
-        val worldColumns = existingColumns(db, "world_events")
         val operatorColumns = existingColumns(db, "operators")
         return memoryAnchorCompatibilityColumns.all { it.first in memoryColumns } &&
-            worldEventCompatibilityColumns.all { it.first in worldColumns } &&
             (operatorColumns.isEmpty() || "memoryInjection" in operatorColumns)
     }
 
     private fun hasPartialCompatibilityArtifacts(db: SQLiteDatabase): Boolean {
         val memoryColumns = existingColumns(db, "memory_anchors")
-        val worldColumns = existingColumns(db, "world_events")
         val compatibilityMemoryColumns = memoryAnchorCompatibilityColumns.map { it.first }
-        return memoryColumns.any { it in compatibilityMemoryColumns } || worldColumns.isNotEmpty()
+        return memoryColumns.any { it in compatibilityMemoryColumns }
     }
 
     private val memoryAnchorCompatibilityColumns = listOf(
@@ -257,12 +230,6 @@ object DatabaseCompatibility {
         "lastUsedAt" to "INTEGER NOT NULL DEFAULT 0",
         "usedCount" to "INTEGER NOT NULL DEFAULT 0",
         "confidence" to "REAL NOT NULL DEFAULT 0.8"
-    )
-
-    private val worldEventCompatibilityColumns = listOf(
-        "originType" to "TEXT NOT NULL DEFAULT ''",
-        "chainDepth" to "INTEGER NOT NULL DEFAULT 0",
-        "rootEventId" to "INTEGER NOT NULL DEFAULT 0"
     )
 
     private fun ensureColumns(

@@ -4,7 +4,7 @@ object MemoryV2PromptTemplates {
     fun getL1(sourceKind: String): String = when (sourceKind) {
         "PRIVATE_CHAT" -> PRIVATE_L1
         "GROUP_CHAT" -> GROUP_L1
-        "MOMENT", "MOMENT_COMMENT", "WORLD_EVENT", "COMMENT" -> EVENT_L1
+        "MOMENT", "MOMENT_COMMENT", "COMMENT" -> EVENT_L1
         "DIARY" -> DIARY_L1
         else -> PRIVATE_L1
     }

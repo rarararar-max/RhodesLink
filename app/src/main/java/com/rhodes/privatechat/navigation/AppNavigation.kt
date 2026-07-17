@@ -190,6 +190,7 @@ private fun SettingsTabContent(navigator: Navigator) {
         onModel = { navigator.push(ModelSettingsRoute) },
         onChatParams = { navigator.push(ChatSettingsRoute) },
         onStory = { navigator.push(StorySettingsRoute) },
+        onDailyContent = { navigator.push(DailyContentSettingsRoute) },
         onDataManage = { navigator.push(DataManagementRoute) },
         onPermissions = { navigator.push(PermissionsRoute) },
         onCredits = { navigator.push(CreditsRoute) },

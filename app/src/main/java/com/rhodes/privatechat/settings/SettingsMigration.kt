@@ -27,16 +27,13 @@ object SettingsMigration {
         "group_speech_min", "group_speech_max", "group_nar_seg_min", "group_nar_seg_max",
         "group_nar_min", "group_nar_max", "comment_min_chars", "comment_max_chars",
         "clean_days_messages", "clean_days_anchors", "clean_days_diaries", "clean_days_moments",
-        "clean_days_dispatches", "clean_days_world_events", "hypnosis_round", "max_context_tokens",
+        "clean_days_dispatches", "hypnosis_round", "max_context_tokens",
         "impression_threshold", "private_anchor_count", "private_shared_memory_count", "private_group_context_count",
         "group_member_memory_count", "group_user_event_count", "moment_user_post_observer_count",
         "group_relationship_hint_count", "moment_recent_post_count", "moment_user_related_rate",
         "comment_context_count", "comment_memory_count", "comment_bystander_min", "comment_bystander_max",
         "diary_group_summary_count", "diary_relation_event_count",
-        "daily_world_event_limit", "daily_world_trigger_limit", "tick_world_trigger_limit", "daily_diary_operator_limit",
-        "daily_proactive_limit", "moment_trigger_strength", "group_trigger_strength", "event_group_rounds",
-        "event_group_cooldown_minutes", "event_max_groups_per_trigger", "event_context_count", "daily_auto_ai_limit",
-        "tick_auto_ai_limit", "comment_to_private_trigger_rate", "moment_to_group_trigger_rate", "group_auto_max_rounds",
+        "daily_diary_operator_limit", "daily_proactive_limit", "group_auto_max_rounds",
         "daily_intimacy_cap", "today_intimacy_count", "lmb", "daily_lmb_count", "lmb_daily_count",
         "last_seen_moment_id", "last_seen_comment_id"
     )

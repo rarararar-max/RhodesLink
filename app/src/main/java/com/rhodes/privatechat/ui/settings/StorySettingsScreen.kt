@@ -16,10 +16,6 @@ import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
@@ -32,7 +28,6 @@ import org.koin.compose.koinInject
 @Composable
 fun StorySettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     val settings: SettingsRepository = koinInject()
-    var autoEnabled by remember { mutableStateOf(settings.autoAiEnabled) }
     SaveableSettingsScaffold(
         title = "动态、日记与派遣",
         onBack = onBack,
@@ -41,14 +36,10 @@ fun StorySettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     ) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
             StoryInfoCard("这里影响什么？", "每日动态参数按北京时间自然日 00:00-23:59 统计；日记只在你手动点击生成时才写；派遣参数只影响派遣故事文本长度，不影响收益、成功率或耗时。")
-            SettingsSectionTitle("每日动态")
-            SettingsSwitchCard("后台自动 AI", "控制是否让角色自动发动态。关闭后角色不会自己发动态，但你手动聊天和手动刷新不受影响。", autoEnabled) { autoEnabled = it; settings.autoAiEnabled = it }
-            SettingsSwitchCard("每日自动动态", "开启后每天会给有权限的角色自动补发新动态。", settings.dailyAutoMomentEnabled, enabled = autoEnabled) { settings.dailyAutoMomentEnabled = it }
-            SettingsParamSlider(settings, "daily_auto_ai_limit", "每天自动对话次数上限", 40, 0f..500f, "自动动态、自动评论这类后台任务，每天总共能自动执行多少次。建议30-50。太低（低于10）基本不自动，太高（超过100）后台消耗很大。设为0就是不自动。", step = 5f, enabled = autoEnabled)
-            SettingsParamSlider(settings, "daily_moment_target", "每人每天自动动态数", 2, 0f..3f, "每个角色每天最多自动发几条新动态。建议1-2。太高（超过5）信息流会刷屏。设为0就不自动发。", step = 1f, enabled = autoEnabled)
-            SettingsParamSlider(settings, "moment_min_chars", "动态最少字数", 50, 20f..300f, "每条动态最少写几个字。建议20-50。太低（低于10）只有一句话太敷衍。", step = 5f, pairKey = "moment_max_chars", isMinSide = true, enabled = autoEnabled)
-            SettingsParamSlider(settings, "moment_max_chars", "动态最多字数", 200, 80f..500f, "每条动态最多写几个字。建议150-250。太高（超过400）每条都是小作文，不像朋友圈。", step = 5f, pairKey = "moment_min_chars", isMinSide = false, enabled = autoEnabled)
-            SettingsParamSlider(settings, "moment_recent_post_count", "近期动态参考", 3, 0f..10f, "写动态时会参考该角色最近几条旧动态，避免连续重复同一话题。建议2-3。太低（0）可能连着说同一件事，太高（超过5）参考太多反而放不开。", step = 1f, enabled = autoEnabled)
+            SettingsSectionTitle("动态文本")
+            SettingsParamSlider(settings, "moment_min_chars", "动态最少字数", 50, 20f..300f, "每条动态最少写几个字。建议20-50。太低（低于10）只有一句话太敷衍。", step = 5f, pairKey = "moment_max_chars", isMinSide = true)
+            SettingsParamSlider(settings, "moment_max_chars", "动态最多字数", 200, 80f..500f, "每条动态最多写几个字。建议150-250。太高（超过400）每条都是小作文，不像朋友圈。", step = 5f, pairKey = "moment_min_chars", isMinSide = false)
+            SettingsParamSlider(settings, "moment_recent_post_count", "近期动态参考", 3, 0f..10f, "写动态时会参考该角色最近几条旧动态，避免连续重复同一话题。建议2-3。太低（0）可能连着说同一件事，太高（超过5）参考太多反而放不开。", step = 1f)
 
             SettingsSectionTitle("日记生成")
             SettingsParamSlider(settings, "diary_min_chars", "日记最少字数", 50, 20f..500f, "每篇日记最少写几个字。建议50-100。太低（低于30）日记太短没内容。", step = 10f, pairKey = "diary_max_chars", isMinSide = true)

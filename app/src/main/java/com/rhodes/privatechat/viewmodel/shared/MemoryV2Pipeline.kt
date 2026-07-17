@@ -437,7 +437,7 @@ class MemoryV2Pipeline(
                 // while public posts/comments cannot be downgraded into a private hidden record.
                 val privacy = when (sourceKind) {
                     MemorySourceKind.PRIVATE_CHAT -> "private"
-                    MemorySourceKind.MOMENT, MemorySourceKind.MOMENT_COMMENT, MemorySourceKind.GROUP_CHAT, MemorySourceKind.WORLD_EVENT -> "public"
+                    MemorySourceKind.MOMENT, MemorySourceKind.MOMENT_COMMENT, MemorySourceKind.GROUP_CHAT -> "public"
                     else -> requestedPrivacy ?: policy.privacy
                 }
                 val unmetNeed = booleanValue(obj["unmet_need"])
@@ -514,10 +514,8 @@ class MemoryV2Pipeline(
                 repository.insertMemoryLink(MemoryLink(parentMemoryId = parent.id, childMemoryId = child.id, linkType = linkType, createdAt = now))
             }
         }
-        // The selected topic window is consumed as one promotion unit.  The model still links
-        // the exact evidence it used, but leaving uncited siblings active would make the same
-        // window qualify again and repeatedly create slightly different L2/L3 summaries.
-        parents.filter { it.id > 0 }.forEach { parent ->
+        val citedParentIds = children.flatMap { child -> evidenceIdsFrom(child.rawJson) }.toSet()
+        parents.filter { it.id in citedParentIds }.forEach { parent ->
             repository.archiveMemoryItem(parent.id, now)
             parent.vectorId.takeIf { it.isNotBlank() }?.let { memoryVectorService?.deleteMemory(it) }
         }
@@ -641,7 +639,7 @@ class MemoryV2Pipeline(
 
     private fun defaultPrivacy(sourceKind: MemorySourceKind): String = when (sourceKind) {
         MemorySourceKind.PRIVATE_CHAT -> "private"
-        MemorySourceKind.GROUP_CHAT, MemorySourceKind.MOMENT, MemorySourceKind.MOMENT_COMMENT, MemorySourceKind.WORLD_EVENT -> "public"
+        MemorySourceKind.GROUP_CHAT, MemorySourceKind.MOMENT, MemorySourceKind.MOMENT_COMMENT -> "public"
         else -> "shared"
     }
 
@@ -658,7 +656,6 @@ class MemoryV2Pipeline(
             MemorySourceKind.GROUP_CHAT -> "群聊"
             MemorySourceKind.MOMENT -> "动态"
             MemorySourceKind.MOMENT_COMMENT -> "评论"
-            MemorySourceKind.WORLD_EVENT -> "世界事件"
             MemorySourceKind.DIARY -> "日记"
             MemorySourceKind.MANUAL_MEMORY -> "手动记忆"
         }
@@ -693,7 +690,7 @@ class MemoryV2Pipeline(
 
     private fun topicThreshold(baseThreshold: Int, values: List<MemoryItem>): Int {
         val strong = values.any { it.importance >= 80 || it.unmetNeed || it.memoryType == "agreement_commitment" || it.memoryType == "care_reminder" }
-        return if (strong) 2 else (baseThreshold / 3).coerceIn(3, baseThreshold)
+        return if (strong) settings.memoryV2ImportantPromotionThreshold else (baseThreshold / 3).coerceIn(3, baseThreshold)
     }
 
     private fun promotionItemScore(item: MemoryItem): Long {

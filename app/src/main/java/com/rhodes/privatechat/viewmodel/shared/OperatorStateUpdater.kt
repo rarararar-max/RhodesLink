@@ -1,8 +1,6 @@
 package com.rhodes.privatechat.viewmodel.shared
 
 import com.rhodes.privatechat.shared.model.Operator
-import com.rhodes.privatechat.shared.model.WorldEvent
-import com.rhodes.privatechat.shared.model.WorldEventType
 import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 
@@ -24,16 +22,6 @@ class OperatorStateUpdater(
         val newAct = activity.ifBlank { op.activity }
         val newEmo = emotion.ifBlank { op.emotion }
         repository.updateOperator(op.copy(location = newLoc, activity = newAct, emotion = newEmo))
-        repository.insertWorldEvent(WorldEvent(
-            type = WorldEventType.STATUS_CHANGED,
-            actorId = operatorId,
-            actorName = op.name,
-            source = "status",
-            sourceId = operatorId,
-            content = "${op.name}现在在${newLoc}，正在${newAct}，情绪${newEmo}",
-            createdAt = System.currentTimeMillis(),
-            expiresAt = MemoryPolicy.memoryExpiresAt(settings)
-        ))
         onStatusUpdated?.invoke(operatorId, newLoc, newAct, newEmo)
         if (newLoc != op.location && newLoc.isNotBlank()) {
             notifyNearbyObservers(listOf(operatorId))

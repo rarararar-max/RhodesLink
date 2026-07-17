@@ -45,15 +45,12 @@ class SessionViewModel(
     fun pinSession(sessionId: String) {
         scope.launch {
             val session = repository.getSession(sessionId) ?: return@launch
-            repository.insertSession(session.copy(isPinned = !session.isPinned))
+            repository.updatePinned(sessionId, !session.isPinned)
         }
     }
 
     fun markSessionRead(sessionId: String) {
-        scope.launch {
-            val session = repository.getSession(sessionId) ?: return@launch
-            repository.insertSession(session.copy(unreadCount = 0))
-        }
+        scope.launch { repository.markSessionRead(sessionId) }
     }
 
     fun loadGroupData(groupId: String, callback: (String, List<Operator>, String, Set<String>) -> Unit) {

@@ -158,10 +158,6 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putInt("clean_days", value.coerceIn(0, 3650))
 
     // === 记忆注入设置 ===
-    var memoryMode: String
-        get() = getString("memory_mode", "standard")
-        set(value) = putString("memory_mode", value)
-
     var sourceAwareMemoryEnabled: Boolean
         get() = getBoolean("source_aware_memory_enabled", true)
         set(value) = putBoolean("source_aware_memory_enabled", value)
@@ -169,10 +165,6 @@ class SettingsRepository(private val settings: ObservableSettings) {
     var distinguishPrivateMemory: Boolean
         get() = getBoolean("distinguish_private_memory", true)
         set(value) = putBoolean("distinguish_private_memory", value)
-
-    var memorySourceStyle: String
-        get() = getString("memory_source_style", "natural")
-        set(value) = putString("memory_source_style", value)
 
     var unifiedMemoryEnabled: Boolean
         get() = getBoolean("unified_memory_enabled", true)
@@ -220,9 +212,10 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = getInt("memory_v2_promote_l2_threshold", 10).coerceIn(3, 100)
         set(value) = putInt("memory_v2_promote_l2_threshold", value.coerceIn(3, 100))
 
-    var momentPrivateMemoryUsage: String
-        get() = getString("moment_private_memory_usage", "subtle")
-        set(value) = putString("moment_private_memory_usage", value)
+    /** Repeated high-importance memories can settle sooner than ordinary memories. */
+    var memoryV2ImportantPromotionThreshold: Int
+        get() = getInt("memory_v2_important_promotion_threshold", 2).coerceIn(2, 20)
+        set(value) = putInt("memory_v2_important_promotion_threshold", value.coerceIn(2, 20))
 
     var privateGroupContextCount: Int
         get() = getInt("private_group_context_count", 2).coerceIn(0, 10)
@@ -284,14 +277,10 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = settings.getInt("diary_relation_event_count", 3).coerceIn(0, 10)
         set(value) = settings.putInt("diary_relation_event_count", value.coerceIn(0, 10))
 
-    // === 世界运行设置 ===
+    // === 自动内容设置 ===
     var autoAiEnabled: Boolean
         get() = getBoolean("auto_ai_enabled", true)
         set(value) = putBoolean("auto_ai_enabled", value)
-
-    var worldSchedulerEnabled: Boolean
-        get() = getBoolean("world_scheduler_enabled", false)
-        set(value) = putBoolean("world_scheduler_enabled", value)
 
     var dailyAutoMomentEnabled: Boolean
         get() = getBoolean("daily_auto_moment_enabled", true)
@@ -305,29 +294,9 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = getBoolean("auto_moment_enabled", false)
         set(value) = putBoolean("auto_moment_enabled", value)
 
-    var worldAutoGroupEnabled: Boolean
-        get() = getBoolean("world_auto_group_enabled", false)
-        set(value) = putBoolean("world_auto_group_enabled", value)
-
-    var worldProactiveChatEnabled: Boolean
-        get() = getBoolean("world_proactive_chat_enabled", false)
-        set(value) = putBoolean("world_proactive_chat_enabled", value)
-
     var autoDiaryEnabled: Boolean
         get() = getBoolean("auto_diary_enabled", false)
         set(value) = putBoolean("auto_diary_enabled", value)
-
-    var dailyWorldEventLimit: Int
-        get() = settings.getInt("daily_world_event_limit", 30).coerceIn(0, 200)
-        set(value) = settings.putInt("daily_world_event_limit", value.coerceIn(0, 200))
-
-    var dailyWorldTriggerLimit: Int
-        get() = settings.getInt("daily_world_trigger_limit", 20).coerceIn(0, 200)
-        set(value) = settings.putInt("daily_world_trigger_limit", value.coerceIn(0, 200))
-
-    var tickWorldTriggerLimit: Int
-        get() = settings.getInt("tick_world_trigger_limit", 2).coerceIn(0, 20)
-        set(value) = settings.putInt("tick_world_trigger_limit", value.coerceIn(0, 20))
 
     var dailyDiaryOperatorLimit: Int
         get() = settings.getInt("daily_diary_operator_limit", 3).coerceIn(0, 20)
@@ -349,49 +318,9 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = settings.getInt("proactive_operator_cooldown_minutes", 120).coerceIn(0, 1440)
         set(value) = settings.putInt("proactive_operator_cooldown_minutes", value.coerceIn(0, 1440))
 
-    var momentTriggerStrength: Int
-        get() = settings.getInt("moment_trigger_strength", 50).coerceIn(0, 100)
-        set(value) = settings.putInt("moment_trigger_strength", value.coerceIn(0, 100))
-
-    var groupTriggerStrength: Int
-        get() = settings.getInt("group_trigger_strength", 50).coerceIn(0, 100)
-        set(value) = settings.putInt("group_trigger_strength", value.coerceIn(0, 100))
-
-    var eventGroupRounds: Int
-        get() = settings.getInt("event_group_rounds", 2).coerceIn(1, 10)
-        set(value) = settings.putInt("event_group_rounds", value.coerceIn(1, 10))
-
-    var eventGroupCooldownMinutes: Int
-        get() = settings.getInt("event_group_cooldown_minutes", 45).coerceIn(1, 720)
-        set(value) = settings.putInt("event_group_cooldown_minutes", value.coerceIn(1, 720))
-
-    var eventMaxGroupsPerTrigger: Int
-        get() = settings.getInt("event_max_groups_per_trigger", 1).coerceIn(1, 10)
-        set(value) = settings.putInt("event_max_groups_per_trigger", value.coerceIn(1, 10))
-
-    var eventContextCount: Int
-        get() = settings.getInt("event_context_count", 5).coerceIn(0, 20)
-        set(value) = settings.putInt("event_context_count", value.coerceIn(0, 20))
-
     var contextMode: String
         get() = getString("context_mode", "custom")
         set(value) = putString("context_mode", value)
-
-    var dailyAutoAiLimit: Int
-        get() = getInt("daily_auto_ai_limit", 40).coerceIn(0, 500)
-        set(value) = putInt("daily_auto_ai_limit", value.coerceIn(0, 500))
-
-    var tickAutoAiLimit: Int
-        get() = settings.getInt("tick_auto_ai_limit", 3).coerceIn(0, 50)
-        set(value) = settings.putInt("tick_auto_ai_limit", value.coerceIn(0, 50))
-
-    var commentToPrivateTriggerRate: Int
-        get() = settings.getInt("comment_to_private_trigger_rate", 30).coerceIn(0, 100)
-        set(value) = settings.putInt("comment_to_private_trigger_rate", value.coerceIn(0, 100))
-
-    var momentToGroupTriggerRate: Int
-        get() = settings.getInt("moment_to_group_trigger_rate", 40).coerceIn(0, 100)
-        set(value) = settings.putInt("moment_to_group_trigger_rate", value.coerceIn(0, 100))
 
     fun getLastMode(operatorId: String): String =
         getString("last_mode_$operatorId", "online")
@@ -741,10 +670,6 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = settings.getInt("clean_days_dispatches", 30).coerceIn(0, 3650)
         set(value) = settings.putInt("clean_days_dispatches", value.coerceIn(0, 3650))
 
-    var cleanDaysWorldEvents: Int
-        get() = settings.getInt("clean_days_world_events", 7).coerceIn(0, 3650)
-        set(value) = settings.putInt("clean_days_world_events", value.coerceIn(0, 3650))
-
     // === 催眠设置 ===
     var hypnosisCmd: String
         get() = settings.getString("hypnosis_cmd", "")
@@ -783,10 +708,6 @@ class SettingsRepository(private val settings: ObservableSettings) {
     var mahjongHistoryJson: String
         get() = getString("mahjong_history_json", "")
         set(value) = putString("mahjong_history_json", value)
-
-    var worldLogJson: String
-        get() = getString("world_log_json", "[]")
-        set(value) = putString("world_log_json", value)
 
     var groupMsgMin: Int
         get() = getInt("group_msg_min", 10).coerceIn(1, getInt("group_msg_max", 100).coerceIn(1, 2000))
@@ -1005,8 +926,6 @@ class SettingsRepository(private val settings: ObservableSettings) {
                 putInt("daily_moment_target", 1)
                 autoDiaryEnabled = false
                 putInt("comment_bystander_max", 1)
-                putInt("daily_auto_ai_limit", 20)
-                putInt("tick_auto_ai_limit", 2)
             }
             "standard" -> {
                 historyMessages = 20
@@ -1016,8 +935,6 @@ class SettingsRepository(private val settings: ObservableSettings) {
                 putInt("daily_moment_target", 2)
                 autoDiaryEnabled = true
                 putInt("comment_bystander_max", 3)
-                putInt("daily_auto_ai_limit", 40)
-                putInt("tick_auto_ai_limit", 3)
             }
             "full" -> {
                 historyMessages = 40
@@ -1027,8 +944,6 @@ class SettingsRepository(private val settings: ObservableSettings) {
                 putInt("daily_moment_target", 3)
                 autoDiaryEnabled = true
                 putInt("comment_bystander_max", 4)
-                putInt("daily_auto_ai_limit", 80)
-                putInt("tick_auto_ai_limit", 5)
             }
         }
     }

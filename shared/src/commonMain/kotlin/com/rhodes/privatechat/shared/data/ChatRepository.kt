@@ -33,7 +33,6 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     val dispatches = DispatchRepository(wrapper)
     val mahjong = MahjongRepository(wrapper)
     val cleanup = CleanupRepository(wrapper)
-    val worldEvents = WorldEventRepository(wrapper)
     val memoryV2 = MemoryV2Repository(wrapper)
     val sharedExperiences = SharedExperienceRepository(wrapper)
 
@@ -52,9 +51,11 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun getOrCreateSession(operatorId: String, operatorName: String, avatarUri: String = "") = sessions.getOrCreateSession(operatorId, operatorName, avatarUri)
     suspend fun getSession(id: String) = sessions.getSession(id)
     suspend fun insertSession(session: ChatSession) = sessions.insertSession(session)
+    suspend fun updatePinned(sessionId: String, pinned: Boolean) = sessions.updatePinned(sessionId, pinned)
     suspend fun deleteSession(id: String) = sessions.deleteSession(id)
     suspend fun updateSessionMode(sessionId: String, mode: String) = sessions.updateSessionMode(sessionId, mode)
     suspend fun markAllRead() = sessions.markAllRead()
+    suspend fun markSessionRead(sessionId: String) = sessions.markSessionRead(sessionId)
     suspend fun incrementUnread(sessionId: String, delta: Int = 1) = sessions.incrementUnread(sessionId, delta)
     suspend fun getSessionCount() = sessions.getSessionCount()
     suspend fun getGroupCount() = sessions.getGroupCount()
@@ -72,6 +73,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun getMessagesBefore(sessionId: String, beforeTimestamp: Long, beforeId: Long, limit: Long = 100) = messages.getMessagesBefore(sessionId, beforeTimestamp, beforeId, limit)
     suspend fun updateMessageContent(id: Long, content: String) = messages.updateMessageContent(id, content)
     suspend fun sendMessage(sessionId: String, message: ChatMessage) = messages.sendMessage(sessionId, message)
+    suspend fun restoreMessage(message: ChatMessage) = messages.restoreMessage(message)
     suspend fun getNextMessageId() = messages.getNextMessageId()
     suspend fun deleteSessionMessages(sessionId: String) = messages.deleteSessionMessages(sessionId)
     suspend fun deleteMessage(id: Long) = messages.deleteMessage(id)
@@ -194,7 +196,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
         vectorIds
     }
 
-    suspend fun saveAnchor(anchor: MemoryAnchor) = anchors.saveAnchor(anchor)
+    suspend fun saveAnchor(anchor: MemoryAnchor): Boolean = anchors.saveAnchor(anchor)
     suspend fun saveAnchors(anchors: List<MemoryAnchor>) = this.anchors.saveAnchors(anchors)
     suspend fun getPublicAnchors(operatorId: String) = anchors.getPublicAnchors(operatorId)
     suspend fun getAnchors(operatorId: String) = anchors.getAnchors(operatorId)
@@ -268,21 +270,6 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun deleteMahjongSave() = mahjong.deleteMahjongSave()
 
     suspend fun cleanupExpiredData() = cleanup.cleanupExpiredData()
-
-    suspend fun insertWorldEvent(event: WorldEvent): Long = worldEvents.insertWorldEvent(event)
-    suspend fun getRecentWorldEvents(limit: Int = 20) = worldEvents.getRecentWorldEvents(limit)
-    suspend fun getWorldEventsByType(type: String, limit: Int = 20) = worldEvents.getWorldEventsByType(type, limit)
-    suspend fun getWorldEventsForOperator(operatorId: String, operatorName: String, limit: Int = 20) = worldEvents.getWorldEventsForOperator(operatorId, operatorName, limit)
-    suspend fun getUnconsumedWorldEventsForOperator(operatorId: String, operatorName: String, consumer: String, limit: Int = 10) = worldEvents.getUnconsumedWorldEventsForOperator(operatorId, operatorName, consumer, limit)
-    suspend fun getUnconsumedWorldEventsForGroup(groupId: String, memberIds: List<String>, memberNames: List<String>, limit: Int = 10) = worldEvents.getUnconsumedWorldEventsForGroup(groupId, memberIds, memberNames, limit)
-    suspend fun getUnconsumedWorldEventsByType(type: String, consumer: String, limit: Int = 10) = worldEvents.getUnconsumedWorldEventsByType(type, consumer, limit)
-    suspend fun countWorldEventsByTypeSince(type: String, since: Long) = worldEvents.countWorldEventsByTypeSince(type, since)
-    suspend fun countChainedWorldEventsByTypeSince(type: String, since: Long) = worldEvents.countChainedWorldEventsByTypeSince(type, since)
-    suspend fun markWorldEventConsumed(eventId: Long, consumer: String) = worldEvents.markWorldEventConsumed(eventId, consumer)
-    suspend fun getWorldEventCount() = worldEvents.getWorldEventCount()
-    suspend fun getAllWorldEventsForBackup() = worldEvents.getAllWorldEventsForBackup()
-    suspend fun deleteExpiredWorldEvents(cutoff: Long) = worldEvents.deleteExpiredWorldEvents(cutoff)
-    suspend fun deleteAllWorldEvents() = worldEvents.deleteAllWorldEvents()
 
     // --- Memory v2 ---
     suspend fun insertMemoryItem(item: MemoryItem) = memoryV2.insertMemoryItem(item)

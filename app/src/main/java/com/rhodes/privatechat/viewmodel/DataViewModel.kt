@@ -24,8 +24,7 @@ class DataViewModel(
 
     data class DataStats(
         val chatSessions: Int, val groups: Int, val diaries: Int, val anchors: Int,
-        val messages: Int, val operators: Int, val moments: Int = 0, val dispatches: Int = 0,
-        val worldEvents: Int = 0
+        val messages: Int, val operators: Int, val moments: Int = 0, val dispatches: Int = 0
     )
 
     suspend fun getDataStats(operatorsCount: Int, momentsCount: Int): DataStats = DataStats(
@@ -36,8 +35,7 @@ class DataViewModel(
         messages = repository.getMessageCount(),
         operators = operatorsCount,
         moments = momentsCount,
-        dispatches = repository.getHistoryDispatches().size,
-        worldEvents = repository.getWorldEventCount()
+        dispatches = repository.getHistoryDispatches().size
     )
 
     fun cleanupAllExpired() {
@@ -56,8 +54,6 @@ class DataViewModel(
             )
             val dispatchDays = settings.cleanDaysDispatches
             if (dispatchDays > 0) repository.deleteOldDispatches(now - dispatchDays * 86400000L)
-            val worldDays = settings.cleanDaysWorldEvents
-            if (worldDays > 0) repository.deleteExpiredWorldEvents(now - worldDays * 86400000L)
             val anchorDays = settings.cleanDaysAnchors
             if (anchorDays > 0) repository.deleteOldAnchors(now - anchorDays * 86400000L)
             if (now - lastCleanupLogAt > 5_000L) {
@@ -87,10 +83,6 @@ class DataViewModel(
     suspend fun deleteImpression(operatorId: String) = repository.deleteLongTermByOperator(operatorId)
 
     suspend fun updateImpression(impression: Memory) = repository.replaceLongTermImpression(impression)
-
-    fun deleteAllWorldEvents() {
-        scope.launch { repository.deleteAllWorldEvents() }
-    }
 
     suspend fun exportAllOperators(context: android.content.Context, operators: List<com.rhodes.privatechat.shared.model.Operator>): java.io.File {
         val ops = operators.map { OperatorExport.fromEntity(it) }
@@ -150,7 +142,6 @@ class DataViewModel(
             momentLikes = repository.getAllLikesForBackup(),
             momentComments = repository.getAllCommentsForBackup(),
             diaries = repository.getAllDiariesForBackup(),
-            worldEvents = repository.getAllWorldEventsForBackup(),
             memoryItems = repository.getAllMemoryItems(),
             settings = exportSettingsSnapshot()
         )
@@ -163,14 +154,13 @@ class DataViewModel(
             payload.operators.orEmpty().forEach { repository.insertOperator(it.toEntity()) }
             payload.relationships.orEmpty().forEach { repository.insertRelationship(it.toEntity()) }
             payload.sessions.orEmpty().forEach { repository.insertSession(it.toEntity()) }
-            payload.messages.orEmpty().forEach { repository.sendMessage(it.sessionId, it.toEntity()) }
+            payload.messages.orEmpty().forEach { repository.restoreMessage(it.toEntity()) }
             payload.memories.orEmpty().forEach { repository.saveMemory(it) }
             payload.anchors.orEmpty().forEach { repository.saveAnchor(it) }
             payload.moments.orEmpty().forEach { repository.insertMoment(it) }
             payload.momentLikes.orEmpty().forEach { repository.insertLike(it) }
             payload.momentComments.orEmpty().forEach { repository.insertComment(it) }
             payload.diaries.orEmpty().forEach { repository.insertDiary(it) }
-            payload.worldEvents.orEmpty().forEach { repository.insertWorldEvent(it) }
             // V2 row IDs and vectors are local implementation details. Restore canonical items and rebuild vectors later.
             payload.memoryItems.orEmpty().forEach { repository.insertMemoryItem(it.copy(id = 0, vectorId = "")) }
             importSettingsSnapshot(payload.settings.orEmpty())
@@ -182,8 +172,7 @@ class DataViewModel(
         "user_gender" to settings.userGender,
         "user_signature" to settings.userSignature,
         "hidden_ids" to settings.hiddenIds.joinToString(","),
-        "daily_summary_date" to settings.dailySummaryDate,
-        "world_log_json" to settings.worldLogJson
+        "daily_summary_date" to settings.dailySummaryDate
     )
 
     private fun importSettingsSnapshot(values: Map<String, String>) {
@@ -192,6 +181,5 @@ class DataViewModel(
         values["user_signature"]?.let { settings.userSignature = it }
         values["hidden_ids"]?.let { settings.hiddenIds = it.split(",").filter { id -> id.isNotBlank() }.toSet() }
         values["daily_summary_date"]?.let { settings.dailySummaryDate = it }
-        values["world_log_json"]?.let { settings.worldLogJson = it }
     }
 }

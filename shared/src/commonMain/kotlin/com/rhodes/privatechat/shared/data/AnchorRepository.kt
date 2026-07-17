@@ -15,12 +15,14 @@ class AnchorRepository(private val wrapper: DatabaseWrapper, private val setting
     private val db: RhodesDatabase get() = wrapper.database
 
     // --- Memory Anchors ---
-    suspend fun saveAnchor(anchor: MemoryAnchor) = withContext(Dispatchers.Default) {
+    suspend fun saveAnchor(anchor: MemoryAnchor): Boolean = withContext(Dispatchers.Default) {
         try {
-            if (isDuplicate(anchor)) return@withContext
+            if (isDuplicate(anchor)) return@withContext false
             db.memoryAnchorsQueries.insertAnchor(anchor.sessionId, anchor.operatorId, anchor.type.name, anchor.content, if (anchor.isPrivate) 1L else 0L, anchor.createdAt, anchor.expiresAt, anchor.source, anchor.sourceName, anchor.sourceActor, anchor.sourceTarget, anchor.importance, anchor.knownFrom)
+            true
         } catch (e: Exception) {
             Log.e("AnchorRepository", "保存锚点失败", e)
+            false
         }
     }
 

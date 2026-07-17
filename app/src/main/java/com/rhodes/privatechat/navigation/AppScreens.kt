@@ -711,6 +711,14 @@ data object StorySettingsRoute : Screen {
     }
 }
 
+data object DailyContentSettingsRoute : Screen {
+    @Composable
+    override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        com.rhodes.privatechat.ui.settings.DailyContentSettingsScreen(onBack = { navigator.pop() })
+    }
+}
+
 data object PromptEditorRoute : Screen {
     @Composable
     override fun Content() {

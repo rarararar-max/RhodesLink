@@ -64,7 +64,7 @@ WHERE sessionId = ?
 ORDER BY day DESC;
 
 insertMessage:
-INSERT OR REPLACE INTO chat_messages(id, sessionId, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe)
+INSERT INTO chat_messages(id, sessionId, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 deleteSessionMessages:
@@ -80,7 +80,11 @@ deleteAllMessages:
 DELETE FROM chat_messages;
 
 insertAllMessages:
-INSERT OR REPLACE INTO chat_messages(id, sessionId, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe)
+INSERT INTO chat_messages(id, sessionId, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+insertMessageIfAbsent:
+INSERT OR IGNORE INTO chat_messages(id, sessionId, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 updateContent:

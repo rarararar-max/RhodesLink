@@ -96,8 +96,6 @@ object PromptTemplates {
 【你记得的相关经历】
 {{MEMORY_V2_CONTEXT}}
 {{SOURCE_AWARE_RULES}}
-【最近与你有关的罗德岛事件】
-{{UNCONSUMED_EVENTS}}
 【最近聊天进展】
 {{SHORT_TERM_SUMMARY}}
 
@@ -312,7 +310,6 @@ object PromptTemplates {
 - 你是在主动联系用户，不要假装用户刚刚说了话。
 - 语气要自然，像真正发来一条消息，而不是写作文。
 - 主动消息必须让用户一眼知道你为什么现在发来：刚发生的相关事件、或双方最近聊过的具体话题。
-- 如果触发类型是 event，必须围绕事件触发背景里和用户直接相关的部分开口；不要把无关世界事件硬转成私聊。
 - 如果触发类型是 idle，只能从短期摘要或明确记忆锚点里选一个自然话题；不要泛泛说"突然想你了"。
 - 如果上下文较弱，宁可发很短的近况分享，也不要查岗式问候。
 - 不得编造用户说过的话、双方约定或共同经历；最近记录和记忆中没有依据时，不要发送泛泛问候。
@@ -349,7 +346,7 @@ object PromptTemplates {
 【记忆与上下文】
 最近聊天进展：{{SHORT_TERM_SUMMARY}}
 {{MEMORY_V2_CONTEXT}}
-事件触发背景：{{PROACTIVE_TRIGGER_CONTEXT}}
+主动联系背景：{{PROACTIVE_TRIGGER_CONTEXT}}
 
 以{{OPERATOR_NAME}}的身份输出 JSON。
 """.trimIndent()
@@ -445,12 +442,8 @@ object PromptTemplates {
 最近群聊摘要：{{SHORT_TERM_SUMMARY}}
 【群成员共同知道的相关经历】
 {{MEMORY_ANCHORS}}
-【本轮群聊触发事件】
-{{GROUP_TRIGGER_EVENT}}
-【群聊可接的话题】
-{{GROUP_UNCONSUMED_EVENTS}}
-【近期罗德岛事件】
-{{GROUP_RECENT_WORLD_EVENTS}}
+【成员与用户最近三天的公开动态和评论】
+{{RECENT_SOCIAL_CONTEXT}}
 【成员知道的信息来源】
 {{SOURCE_AWARE_MEMORIES}}
 {{SOURCE_AWARE_RULES}}
@@ -564,10 +557,12 @@ object PromptTemplates {
 {{MEMORY_ANCHORS}}
 【各成员个人知识】
 {{MEMBER_PRIVATE_CONTEXT}}
+【成员与用户最近三天的公开动态和评论】
+{{RECENT_SOCIAL_CONTEXT}}
 
 【知识边界】
-- 每位角色只能使用“群成员共同知道的事”和标注为自己个人知识的内容。
-- 不得让其他角色引用、追问或暗示不属于自己的个人知识。
+- 每位角色可以使用群成员共同知道的事，以及用户本轮明确提起的私聊背景。
+- 用户本轮明确提起的某成员私聊背景已成为本轮共同话题，所有成员可以自然回应；不要额外编造或扩展未提供的私聊细节。
 - 角色在本轮实际说出口的内容会成为群成员之后共同知道的事。
 
 【群成员档案 · 含群内角色定位】
@@ -600,10 +595,10 @@ object PromptTemplates {
 - speaker：发言者名字。干员发言时填干员名；旁白时必须固定填"旁白"
 - message：干员发言时填该干员说出口的台词；旁白时填第三人称场景描写（{{GROUP_NAR_MIN}}~{{GROUP_NAR_MAX}}字），只能写外部可见内容，不能写角色内心或自述
 - type：旁白条目必须填"narration"；干员发言填"dialogue"或省略
-- 线上模式彻底不允许旁白；线下/导演模式中每位成员必须有一条紧挨首次台词之前的旁白，旁白总数自动等于成员数。
+- 线上模式彻底不允许旁白；线下/导演模式中的旁白可选，仅在场景推进、动作衔接或氛围表达确实需要时使用。
 - type="narration"时speaker必须是"旁白"；speaker="旁白"时type必须是"narration"
 - type="dialogue"时message只能是角色说出口的话，禁止写环境描写、第三人称动作描写或牌桌/气氛描述
-- 线上模式禁止输出speaker="旁白"或type="narration"；离线/导演模式的旁白禁止第一人称、内心独白、角色口吻和自我叙述
+- 线上模式禁止输出speaker="旁白"或type="narration"；离线/导演模式的旁白通过可观察的环境、动作、停顿和表情传递氛围，禁止第一人称、内心独白、角色口吻和自我叙述
 
 【JSON格式铁律】
 - 只输出一行JSON数组，不加```json```标记或任何额外文字
@@ -666,7 +661,6 @@ object PromptTemplates {
 【自动触发原因】
 触发类型：{{AUTO_REASON}}
 说明：{{AUTO_REASON_TEXT}}
-- event：优先围绕「本轮群聊触发事件」和「群聊可接的话题」展开，但表达要像成员自然聊起，不要说"事件触发"。
 - idle：自然闲聊或延续上一轮话题，不要强行提近期事件。
 
 【群聊规则 · 用户自定义】
@@ -679,14 +673,8 @@ object PromptTemplates {
 昨日群聊总结：{{DAILY_SUMMARY}}
 最近群聊摘要：{{SHORT_TERM_SUMMARY}}
 
-【本轮群聊触发事件】
-{{GROUP_TRIGGER_EVENT}}
-
-【群聊可接的话题】
-{{GROUP_UNCONSUMED_EVENTS}}
-
-【近期罗德岛事件】
-{{GROUP_RECENT_WORLD_EVENTS}}
+【成员与用户最近三天的公开动态和评论】
+{{RECENT_SOCIAL_CONTEXT}}
 
 【成员知道的信息来源】
 {{SOURCE_AWARE_MEMORIES}}
@@ -792,11 +780,13 @@ object PromptTemplates {
 最近群聊摘要：{{SHORT_TERM_SUMMARY}}
 【群成员共同知道的事】
 {{MEMORY_ANCHORS}}
+【成员与用户最近三天的公开动态和评论】
+{{RECENT_SOCIAL_CONTEXT}}
 【各成员个人知识】
 {{MEMBER_PRIVATE_CONTEXT}}
 【知识边界】
-- 每位角色只能使用群共同知识和标注为自己个人知识的内容。
-- 不得让其他角色引用不属于自己的个人知识；本轮说出口的内容会成为之后群成员共同知道的事。
+- 每位角色可以使用群共同知识，以及用户本轮明确提起的私聊背景。
+- 用户本轮明确提起的某成员私聊背景已成为本轮共同话题，所有成员可以自然回应；不要额外编造或扩展未提供的私聊细节。本轮说出口的内容会成为之后群成员共同知道的事。
 
 【群成员档案 · 含群内角色定位】
 {{MEMBER_PROFILES}}
@@ -822,7 +812,6 @@ object PromptTemplates {
 【触发类型】
 {{MOMENT_TRIGGER_TYPE}}
 - daily：写普通日常或工作生活，不要强行围绕事件。
-- event：此模式已停用；如出现，仍写普通日常，不要编造事件。
 - manual：按当前上下文自由生成，避免重复即可。
 
 【当前信息】
@@ -831,6 +820,8 @@ object PromptTemplates {
 【背景】
 最近注意到的相关经历：
 {{RECENT_MEMORIES}}
+近期公开互动（仅在与这条动态自然相关时参考）：
+{{RECENT_SOCIAL_CONTEXT}}
 今日状态：{{WORLD_TODAY_STATE}}
 {{SOURCE_AWARE_RULES}}
 
@@ -879,6 +870,9 @@ object PromptTemplates {
 {{MEMORY_V2_CONTEXT}}
 {{SOURCE_AWARE_MEMORIES}}
 {{SOURCE_AWARE_RULES}}
+
+【近期相关公开互动】
+{{RECENT_SOCIAL_CONTEXT}}
 
 【共同经历引用方式】
 {{PERSONAL_MEMORY_REFERENCE_STYLE}}
@@ -934,17 +928,8 @@ object PromptTemplates {
 【昨天你注意到的一些事】
 {{RECENT_MEMORIES}}
 
-【昨天或最近一天内罗德岛发生的事】
-{{WORLD_DAY_EVENTS}}
-
-【昨天或最近一天内可整理进日记的事件】
-{{DIARY_EVENT_DIGEST}}
-
 【你自己的状态变化】
 {{SELF_STATUS_CHANGES}}
-
-【你参与或看到的社交互动】
-{{SOCIAL_INTERACTIONS}}
 
 {{SOURCE_AWARE_RULES}}
 

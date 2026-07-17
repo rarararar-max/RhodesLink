@@ -50,7 +50,6 @@ fun DataManagementScreen(
     var refreshKey by remember { mutableIntStateOf(0) }
     val context = LocalContext.current
     var showCleanupConfirm by remember { mutableStateOf(false) }
-    var showWorldEventsConfirm by remember { mutableStateOf(false) }
 
     LaunchedEffect(refreshKey) { stats = viewModel.getDataStats() }
 
@@ -60,7 +59,6 @@ fun DataManagementScreen(
             CleanupItem(Icons.Default.Forum, "聊天摘要", stats.messages, "clean_days_messages", 30),
             CleanupItem(Icons.AutoMirrored.Filled.MenuBook, "干员日记", stats.diaries, "clean_days_diaries", 30),
             CleanupItem(Icons.Default.Share, "动态记录", stats.moments, "clean_days_moments", 30),
-            CleanupItem(Icons.Default.AutoFixHigh, "世界事件", stats.worldEvents, "clean_days_world_events", 7),
             CleanupItem(Icons.AutoMirrored.Filled.SendToMobile, "派遣历史", stats.dispatches, "clean_days_dispatches", 30)
         )
     }
@@ -131,12 +129,6 @@ fun DataManagementScreen(
                 Spacer(Modifier.width(6.dp))
                 Text("立即清理所有过期数据", fontWeight = FontWeight.SemiBold)
             }
-            Spacer(Modifier.height(8.dp))
-            OutlinedButton(onClick = { showWorldEventsConfirm = true }, modifier = Modifier.fillMaxWidth().height(44.dp), shape = RoundedCornerShape(10.dp)) {
-                Icon(Icons.Default.Delete, null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("清空世界事件", fontWeight = FontWeight.SemiBold)
-            }
         }
     }
     }
@@ -147,15 +139,6 @@ fun DataManagementScreen(
             text = { Text("将立即清理所有已超过当前保留期限的数据，此操作无法恢复。", color = TextSecondary) },
             confirmButton = { TextButton(onClick = { viewModel.cleanupAllExpired(); refreshKey++; showCleanupConfirm = false; android.widget.Toast.makeText(context, "已清理所有过期数据", android.widget.Toast.LENGTH_SHORT).show() }) { Text("确认清理", color = ErrorRed) } },
             dismissButton = { TextButton(onClick = { showCleanupConfirm = false }) { Text("取消", color = TextSecondary) } }
-        )
-    }
-    if (showWorldEventsConfirm) {
-        AlertDialog(
-            onDismissRequest = { showWorldEventsConfirm = false },
-            title = { Text("确认清空世界事件", color = TextPrimary) },
-            text = { Text("将删除全部世界事件，且无法恢复。", color = TextSecondary) },
-            confirmButton = { TextButton(onClick = { viewModel.deleteAllWorldEvents(); refreshKey++; showWorldEventsConfirm = false; android.widget.Toast.makeText(context, "已清空世界事件", android.widget.Toast.LENGTH_SHORT).show() }) { Text("确认清空", color = ErrorRed) } },
-            dismissButton = { TextButton(onClick = { showWorldEventsConfirm = false }) { Text("取消", color = TextSecondary) } }
         )
     }
 }

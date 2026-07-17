@@ -52,6 +52,7 @@ fun SaveableSettingsScaffold(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     icon: (@Composable () -> Unit)? = null,
+    onSaveRequest: ((completeSave: () -> Unit) -> Unit)? = null,
     content: @Composable () -> Unit
 ) {
     val settings: SettingsRepository = org.koin.compose.koinInject()
@@ -61,19 +62,28 @@ fun SaveableSettingsScaffold(
         if (settings.hasDraftChanges()) showDiscardDialog = true else onBack()
     }
 
+    fun completeSave() {
+        settings.saveDraft()
+        onBack()
+    }
+
+    fun requestSave() {
+        onSaveRequest?.invoke(::completeSave) ?: completeSave()
+    }
+
     androidx.compose.runtime.LaunchedEffect(Unit) { settings.beginDraft() }
     androidx.compose.runtime.DisposableEffect(Unit) { onDispose { settings.discardDraft() } }
     BackHandler { requestBack() }
 
     Column(modifier = modifier.fillMaxWidth()) {
         GradientHeader(title = title, onBack = { requestBack() }, actions = {
-            Button(onClick = { settings.saveDraft(); onBack() }, colors = ButtonDefaults.buttonColors(containerColor = Blue400), shape = RoundedCornerShape(999.dp)) { Text("保存", color = androidx.compose.ui.graphics.Color.White, fontSize = 13.sp) }
+            Button(onClick = { requestSave() }, colors = ButtonDefaults.buttonColors(containerColor = Blue400), shape = RoundedCornerShape(999.dp)) { Text("保存", color = androidx.compose.ui.graphics.Color.White, fontSize = 13.sp) }
         })
         content()
     }
 
     if (showDiscardDialog) {
-        AlertDialog(onDismissRequest = { showDiscardDialog = false }, containerColor = ElevatedSurface, shape = RoundedCornerShape(24.dp), title = { Text("有未保存的修改", color = TextPrimary) }, text = { Text("你已经修改了设置。要保存后离开，还是放弃这些修改？", color = TextSecondary) }, confirmButton = { TextButton(onClick = { settings.saveDraft(); showDiscardDialog = false; onBack() }) { Text("保存修改", color = Primary) } }, dismissButton = { Row { TextButton(onClick = { settings.discardDraft(); showDiscardDialog = false; onBack() }) { Text("放弃修改", color = ErrorRed) }; TextButton(onClick = { showDiscardDialog = false }) { Text("继续编辑", color = TextSecondary) } } })
+        AlertDialog(onDismissRequest = { showDiscardDialog = false }, containerColor = ElevatedSurface, shape = RoundedCornerShape(24.dp), title = { Text("有未保存的修改", color = TextPrimary) }, text = { Text("你已经修改了设置。要保存后离开，还是放弃这些修改？", color = TextSecondary) }, confirmButton = { TextButton(onClick = { showDiscardDialog = false; requestSave() }) { Text("保存修改", color = Primary) } }, dismissButton = { Row { TextButton(onClick = { settings.discardDraft(); showDiscardDialog = false; onBack() }) { Text("放弃修改", color = ErrorRed) }; TextButton(onClick = { showDiscardDialog = false }) { Text("继续编辑", color = TextSecondary) } } })
     }
 }
 

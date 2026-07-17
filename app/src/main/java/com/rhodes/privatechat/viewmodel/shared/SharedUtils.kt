@@ -4,8 +4,6 @@ import com.rhodes.privatechat.shared.model.AnchorType
 import com.rhodes.privatechat.shared.model.MemoryAnchor
 import com.rhodes.privatechat.shared.model.RelationshipType
 import com.rhodes.privatechat.shared.model.AiMessage
-import com.rhodes.privatechat.shared.model.WorldEvent
-import com.rhodes.privatechat.shared.model.WorldEventType
 import android.util.Log
 import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.shared.memory.AnchorSourcePolicy
@@ -21,12 +19,50 @@ class SharedUtils(
 ) {
     companion object {
         const val DEBUG = false
+        private const val RECENT_SOCIAL_WINDOW_MS = 3L * 86_400_000L
+    }
+
+    /** Keeps public social context small: specified people, the last three days, and related items only. */
+    suspend fun buildRecentSocialContext(participantIds: Set<String>, query: String, limit: Int = 3): String {
+        val cutoff = System.currentTimeMillis() - RECENT_SOCIAL_WINDOW_MS
+        val allowed = participantIds + "user"
+        val posts = repository.getAllMomentsSync()
+            .asSequence()
+            .filter { it.createdAt >= cutoff && it.operatorId in allowed }
+            .map { "${it.operatorName}发动态：${it.content.take(90)}" to it.createdAt }
+        val comments = repository.getAllCommentsForBackup()
+            .asSequence()
+            .filter { it.createdAt >= cutoff && it.operatorId in allowed }
+            .map { "${it.operatorName}评论：${it.content.take(70)}" to it.createdAt }
+        val keywords = socialKeywords(query)
+        val ranked = (posts + comments).map { item ->
+            item to keywords.count { item.first.lowercase().contains(it) }
+        }.filter { (_, score) -> score > 0 }.toList()
+        val candidates = if (ranked.isNotEmpty()) ranked else (posts + comments).map { it to 0 }.toList()
+        val resultLimit = if (ranked.isNotEmpty()) limit else minOf(limit, 2)
+        return candidates
+            .sortedWith(compareByDescending<Pair<Pair<String, Long>, Int>> { it.second }
+                .thenByDescending { it.first.second })
+            .take(resultLimit)
+            .joinToString("\n") { "- ${it.first.first}" }
+            .ifBlank { "无" }
+    }
+
+    private fun socialKeywords(query: String): Set<String> {
+        val ignored = setOf("今天", "昨天", "刚才", "这个", "那个", "什么", "怎么", "真的", "就是", "一下", "可以", "我们", "你们", "他们", "感觉", "事情")
+        return query.lowercase().split(Regex("[^\\p{L}\\p{N}]+"))
+            .flatMap { part ->
+                if (part.length <= 4) listOf(part) else part.windowed(2, 1)
+            }
+            .filter { it.length >= 2 && it !in ignored }
+            .toSet()
     }
 
     // === AI 调用 ===
 
     /** 非流式聊天：发送请求，等待完整响应后返回 */
     suspend fun chat(messages: List<AiMessage>, logTag: String = "Chat"): String {
+        validateChatConfiguration()
         val temp = settings.aiTemperature
         val prompt = messages.firstOrNull()?.content ?: ""
         logAiCall("→$logTag", prompt, "(requesting...)", messages)
@@ -39,6 +75,7 @@ class SharedUtils(
 
     /** 非流式聊天 + JSON解析重试：解析失败时重新请求，最多重试3次 */
     suspend fun chatWithRetry(messages: List<AiMessage>, logTag: String = "Chat", category: String = ""): com.rhodes.privatechat.shared.model.OfflineModeResponse {
+        validateChatConfiguration()
         val temp = settings.aiTemperature
         val prompt = messages.firstOrNull()?.content ?: ""
         logAiCall("→$logTag", prompt, "(requesting with retry...)", messages)
@@ -125,6 +162,12 @@ class SharedUtils(
     fun getModelName(): String = settings.modelName
     fun getCustomUrl(): String = settings.customUrl
 
+    private fun validateChatConfiguration() {
+        require(settings.apiKey.isNotBlank()) { "请先在设置中配置 API Key" }
+        require(settings.modelName.isNotBlank()) { "请先在设置中配置模型名称" }
+        require(settings.provider != "custom" || settings.customUrl.isNotBlank()) { "请先在设置中配置自定义 API 地址" }
+    }
+
     // === 纯工具函数 ===
 
     fun applyTemplate(template: String, replacements: Map<String, String>): String {
@@ -153,7 +196,7 @@ class SharedUtils(
         val groupInjection = listOf(
             map["RELATION_HINTS"], map["GROUP_RELATION_HINTS"], map["MEMBER_PRIVATE_CONTEXT"],
             map["GROUP_SUMMARY"], map["DAILY_SUMMARY"], map["LONG_TERM_IMPRESSION"],
-            map["SOURCE_AWARE_MEMORIES"], map["GROUP_UNCONSUMED_EVENTS"]
+            map["SOURCE_AWARE_MEMORIES"]
         ).filterNotNull().filter { it.isNotBlank() }.joinToString("\n")
         map.putIfAbsent("MEMORY_INJECTION", memoryInjection.ifBlank { "无" })
         map.putIfAbsent("MEMORY_V2_CONTEXT", "无")
@@ -174,33 +217,21 @@ class SharedUtils(
         map.putIfAbsent("PROACTIVE_TRIGGER_CONTEXT", "无")
         map.putIfAbsent("USER_CONTENT", "")
         map.putIfAbsent("SOURCE_AWARE_RULES", "")
-        map.putIfAbsent("UNCONSUMED_EVENTS", "无")
-        map.putIfAbsent("RECENT_SOCIAL_EVENTS", "无")
-        map.putIfAbsent("EVENT_TRIGGERED_PRIVATE_CONTEXT", "无")
         map.putIfAbsent("KNOWN_FROM_CONTEXT", "无")
-        map.putIfAbsent("GROUP_TRIGGER_EVENT", "群聊自然延续")
-        map.putIfAbsent("GROUP_RECENT_WORLD_EVENTS", "无")
-        map.putIfAbsent("GROUP_UNCONSUMED_EVENTS", "无")
-        map.putIfAbsent("GROUP_TOPIC_SEED", "无")
         map.putIfAbsent("GROUP_MODE_FORMAT", "")
         map.putIfAbsent("USER_OBSERVING", "")
         map.putIfAbsent("AUTO_REASON", "manual")
         map.putIfAbsent("AUTO_REASON_TEXT", "用户主动发言。")
-        map.putIfAbsent("MOMENT_EVENT_SEED", "无")
-        map.putIfAbsent("MOMENT_TRIGGER_REASON", "普通日常分享")
         map.putIfAbsent("MOMENT_TRIGGER_TYPE", "manual")
-        map.putIfAbsent("RECENT_WORLD_EVENTS", "无")
         map.putIfAbsent("RECENT_POSTS", "无")
+        map.putIfAbsent("RECENT_SOCIAL_CONTEXT", "无")
         map.putIfAbsent("RECENT_DAILY_SUMMARY", "无")
         map.putIfAbsent("WORLD_TODAY_STATE", "无")
         map.putIfAbsent("PRIVATE_DAILY_SUMMARY", "无")
         map.putIfAbsent("PRIVATE_SUMMARY", "无")
         map.putIfAbsent("GROUP_SUMMARIES", "无")
         map.putIfAbsent("RECENT_MEMORIES", "无")
-        map.putIfAbsent("WORLD_DAY_EVENTS", "无")
-        map.putIfAbsent("DIARY_EVENT_DIGEST", "无")
         map.putIfAbsent("SELF_STATUS_CHANGES", "无")
-        map.putIfAbsent("SOCIAL_INTERACTIONS", "无")
         map.putIfAbsent("RELATION_EVENTS", "无")
         return map
     }
@@ -320,61 +351,6 @@ class SharedUtils(
             MemorySurface.COMMENT -> "$base 评论区只需轻轻带过，不要长篇解释来源。"
             MemorySurface.DIARY -> "$base 日记可以更直接写清楚自己从哪里知道这些事。"
         }
-    }
-
-    suspend fun buildWorldEventContext(operatorId: String = "", operatorName: String = "", limit: Int = 5): String {
-        val events = if (operatorId.isNotBlank()) {
-            repository.getWorldEventsForOperator(operatorId, operatorName, limit)
-        } else {
-            repository.getRecentWorldEvents(limit)
-        }
-        if (events.isEmpty()) return "无"
-        return events.joinToString("\n") { event -> formatWorldEventForPrompt(event, 100) }
-    }
-
-    fun formatWorldEventForPrompt(event: WorldEvent, contentLimit: Int = 120): String {
-        val time = anchorTimeLabel(MemoryAnchor(sessionId = event.sourceId, operatorId = event.actorId, type = AnchorType.EVENT, content = event.content, createdAt = event.createdAt))
-        val actor = event.actorName.ifBlank { event.actorId.ifBlank { "罗德岛" } }
-        val target = event.targetName.ifBlank { event.targetId.ifBlank { "无" } }
-        val actorKind = if (event.actorId == "user") "用户" else if (event.actorId.startsWith("group_")) "群聊" else "干员"
-        val typeLabel = when (event.type) {
-            WorldEventType.MOMENT_POSTED -> if (event.actorId == "user") "用户动态" else "干员动态"
-            WorldEventType.COMMENT_POSTED -> if (event.actorId == "user") "用户评论" else "干员评论"
-            WorldEventType.GROUP_TOPIC -> "群聊话题"
-            WorldEventType.PRIVATE_TRIGGER -> "私信触发"
-            WorldEventType.STATUS_CHANGED -> "状态变化"
-            WorldEventType.DIARY_WRITTEN -> "日记"
-            WorldEventType.DISPATCH_EVENT -> "派遣事件"
-            WorldEventType.MAHJONG_EVENT -> "麻将事件"
-            else -> event.type
-        }
-        return "- $time [事件类型:$typeLabel][发起者:$actor][发起者身份:$actorKind][目标:$target] ${event.content.take(contentLimit)}"
-    }
-
-    suspend fun buildUnconsumedEventContextForOperator(
-        operatorId: String,
-        operatorName: String,
-        consumer: String,
-        limit: Int = 5,
-        markConsumed: Boolean = false
-    ): String {
-        val events = repository.getUnconsumedWorldEventsForOperator(operatorId, operatorName, consumer, limit)
-        if (events.isEmpty()) return "无"
-        if (markConsumed) events.forEach { repository.markWorldEventConsumed(it.id, consumer) }
-        return events.joinToString("\n") { event -> formatWorldEventForPrompt(event, 120) }
-    }
-
-    suspend fun buildUnconsumedEventContextForGroup(
-        groupId: String,
-        memberIds: List<String>,
-        memberNames: List<String>,
-        limit: Int = 8,
-        markConsumed: Boolean = false
-    ): String {
-        val events = repository.getUnconsumedWorldEventsForGroup(groupId, memberIds, memberNames, limit)
-        if (events.isEmpty()) return "无"
-        if (markConsumed) events.forEach { repository.markWorldEventConsumed(it.id, "group:$groupId") }
-        return events.joinToString("\n") { event -> formatWorldEventForPrompt(event, 120) }
     }
 
     @Suppress("unused")

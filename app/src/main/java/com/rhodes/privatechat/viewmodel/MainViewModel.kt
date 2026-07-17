@@ -34,8 +34,6 @@ import com.rhodes.privatechat.shared.model.MomentComment
 import com.rhodes.privatechat.shared.model.Moment
 import com.rhodes.privatechat.shared.model.MomentLike
 import com.rhodes.privatechat.shared.model.Operator
-import com.rhodes.privatechat.shared.model.WorldEvent
-import com.rhodes.privatechat.shared.model.WorldEventType
 import com.rhodes.privatechat.util.DebugLogger
 import com.rhodes.privatechat.automation.DailyContentScheduler
 import com.rhodes.privatechat.notification.RhodesNotificationCenter
@@ -92,10 +90,9 @@ data class IndexRebuildResult(
 )
 @Serializable
 private data class MomentMemoryContext(
-    val chatSummary: String,
     val memories: String,
     val sourceAwareMemories: String,
-    val privateDaily: String
+    val recentSocialContext: String
 )
 
 private enum class MomentTriggerType { MANUAL, AUTO }
@@ -109,7 +106,8 @@ class MainViewModel(
     val settings: SettingsRepository,
     val appState: AppStateHolder,
     val sharedUtils: SharedUtils,
-    val operatorStateUpdater: OperatorStateUpdater
+    val operatorStateUpdater: OperatorStateUpdater,
+    private val startBackgroundWork: Boolean = true
 ) : AndroidViewModel(application) {
     data class DataStats(
         val chatSessions: Int, val groups: Int, val diaries: Int, val anchors: Int,
@@ -162,26 +160,8 @@ class MainViewModel(
         sessionMessageCounter,
         memoryVectorService,
         visionGateway,
-        { title, content, sessionId -> com.rhodes.privatechat.notification.RhodesNotificationCenter.show(application, title, content, sessionId, isGroup = true) },
-        { reason -> tryConsumeAutoAiBudget(reason) }
+        { title, content, sessionId -> com.rhodes.privatechat.notification.RhodesNotificationCenter.show(application, title, content, sessionId, isGroup = true) }
     )
-    private val worldScheduler by lazy {
-        WorldScheduler(repository, settings, appState, viewModelScope,
-            generateOneMoment = {
-                appState.operators.value.filter { settings.getOperatorDynPermission(it.id) }
-                    .randomOrNull()?.let { generateOneForOpSync(it, MomentTriggerType.AUTO) != null } ?: false
-            },
-            triggerEventGroups = { event ->
-                val groups = appState.sessions.value.filter { it.operatorId.startsWith("group_") && settings.getGroupAuto(it.id) }
-                groups.forEach { group -> groupChatViewModel.sendGroupMessage(group.id, group.operatorName, event?.content.orEmpty(), settings.getGroupMode(group.id), autoSpeak = true, isAuto = true) }
-                groups.isNotEmpty()
-            },
-            generateDiary = { generateDiarySync(it, auto = true) },
-            triggerProactivePrivate = { triggerProactivePrivateFromEvent(it) },
-            canUseWorldTrigger = { true },
-            consumeWorldTrigger = { tryConsumeAutoAiBudget(it) }
-        )
-    }
 
     private val _momentGenerateStatus: MutableStateFlow<MomentGenerateStatus> get() = _globalMomentStatus
     val momentGenerateStatus: StateFlow<MomentGenerateStatus> = _momentGenerateStatus.asStateFlow()
@@ -241,7 +221,6 @@ class MainViewModel(
     private var lastDbUpdate = 0L
     private var analysisGuidance = ""
     private var modeTransitionNotice = ""
-    private var currentAutoAiTickCount = 0
 
     private var messagesJob: kotlinx.coroutines.Job? = null
 
@@ -294,6 +273,7 @@ class MainViewModel(
     }
 
     init {
+        if (startBackgroundWork) {
         viewModelScope.launch {
             repository.insertPresetOperators()
             // 只在首次安装时设置默认权限，不覆盖用户手动修改
@@ -326,6 +306,7 @@ class MainViewModel(
             }
             cleanupExpired()
             DailyContentScheduler.ensureTodayPlan(application, repository, settings)
+            refreshAutoGroupChats()
         }
         // WorkManager delivers planned daily content even while the app is closed.
         loadHypnosis()
@@ -353,6 +334,7 @@ class MainViewModel(
             }
         }
         dataViewModel.cleanupAllExpired()
+        }
     }
 
     private suspend fun refreshDailyLmb() = mahjongViewModel.refreshDailyLmb()
@@ -445,12 +427,9 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         viewModelScope.launch {
             while (true) {
                 kotlinx.coroutines.delay(15 * 60 * 1000L) // 每15分钟
-                currentAutoAiTickCount = 0
-                settings.putInt("world_trigger_tick_count", 0)
                 if (settings.autoAiEnabled) {
                     autoGenerateTodayMoments()
                 }
-                worldScheduler.tick()
             }
         }
     }
@@ -509,50 +488,10 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         }
     }
 
-    private suspend fun triggerProactivePrivateFromEvent(event: WorldEvent): Boolean {
-        if (!PROACTIVE_PRIVATE_ENABLED) return false
-        if (!settings.autoAiEnabled) return false
-        if (!settings.worldProactiveChatEnabled) return false
-        if (!isStrongUserRelatedPrivateTrigger(event)) return false
-        val op = _operators.value.find { it.id == event.actorId || it.name == event.actorName } ?: return false
-        if (!settings.getOperatorMsgPermission(op.id)) return false
-        val now = System.currentTimeMillis()
-        if (isGlobalProactiveCoolingDown(now)) return false
-        val session = repository.getSessionByOperator(op.id)
-        val lastUserMsgTime = session?.let { repository.getLastUserMessageTime(it.id) }
-        if (isOperatorQuietAfterUser(lastUserMsgTime, now)) return false
-        val lastSent = getLastProactiveSentAt(op.id)
-        if (now - lastSent < operatorProactiveCooldownMs()) return false
-        if (!tryConsumeAutoAiBudget("proactive_private")) return false
-        return sendProactiveMessage(op, buildPrivateEventContext(event))
-    }
-
-    private fun isStrongUserRelatedPrivateTrigger(event: WorldEvent): Boolean {
-        if (event.type != WorldEventType.PRIVATE_TRIGGER) return false
-        if (event.targetId != "user") return false
-        val sourceOk = event.source == "comment" || event.source == "moment"
-        if (!sourceOk) return false
-        val userName = getUserProfile().nickname
-        val text = event.content
-        return text.contains(userName) || text.contains("用户") || text.contains("博士")
-    }
-
-    private fun buildPrivateEventContext(event: WorldEvent): String {
-        val structured = sharedUtils.formatWorldEventForPrompt(event, 180)
-        val userAction = when {
-            event.type == WorldEventType.MOMENT_POSTED && event.actorId == "user" -> "这是用户本人发布的动态，可以说“你刚刚发的动态”。"
-            event.type == WorldEventType.COMMENT_POSTED && event.actorId == "user" -> "这是用户本人发表的评论，只能说“你在评论区说的/我看到你的评论”，不要说用户发了动态。"
-            event.actorId == "user" -> "这是用户本人触发的事件，可以用“你刚刚/你之前”指代。"
-            else -> "这不是用户本人发布的动态或发言。严禁说“你刚刚发的动态/你发的动态”。如果要提及，只能说看到${event.actorName.ifBlank { "其他干员" }}的动态、评论或公开事件。"
-        }
-        return "$structured\n【事件归因规则】$userAction"
-    }
-
-    private suspend fun sendProactiveMessage(op: Operator, eventContext: String = ""): Boolean {
+    private suspend fun sendProactiveMessage(op: Operator): Boolean {
         if (!settings.autoAiEnabled) return false
         if (!settings.getOperatorMsgPermission(op.id)) return false
-        if (eventContext.isBlank() && !settings.idleProactiveChatEnabled) return false
-        if (eventContext.isNotBlank() && !settings.worldProactiveChatEnabled) return false
+        if (!settings.idleProactiveChatEnabled) return false
         if (getApiKey().isBlank()) return false
         val profile = getUserProfile()
         val now = beijingSdf("yyyy-MM-dd HH:mm").format(java.util.Date())
@@ -560,11 +499,10 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         // 构建替换映射
         val shortTerm = repository.getShortTermMemory(session.id)
         val analysisBlock = if (isDualModel() && analysisGuidance.isNotBlank()) "【AI分析指导】\n${analysisGuidance}\n" else ""
-        val v2Memories = memoryV2Pipeline.buildPrivateMemoryContext(op.id, limitL1 = 1, limitL2 = 2, limitL3 = 2, query = eventContext.ifBlank { op.name }).ifBlank { "无" }
+        val v2Memories = memoryV2Pipeline.buildPrivateMemoryContext(op.id, limitL1 = 1, limitL2 = 2, limitL3 = 2, query = op.name).ifBlank { "无" }
         val unifiedMemory = UnifiedMemoryContext.mergeBlocks(
             sharedUtils.contextBlockLimit(2),
             v2Memories,
-            eventContext,
         )
         DebugLogger.log(
             "Memory/Inject",
@@ -576,8 +514,8 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             "USER_GENDER" to profile.gender.ifBlank { "未知" },
             "USER_BIO" to profile.bio.ifBlank { "无" },
             "USER_CONTENT" to "(用户没有说话)",
-            "PROACTIVE_TRIGGER_TYPE" to (if (eventContext.isBlank()) "idle" else "event"),
-            "PROACTIVE_TRIGGER_CONTEXT" to eventContext,
+            "PROACTIVE_TRIGGER_TYPE" to "idle",
+            "PROACTIVE_TRIGGER_CONTEXT" to "无",
             "AI_ANALYSIS" to analysisBlock,
             "HYPNOSIS" to "",
             "MIND_READ" to "",
@@ -588,9 +526,6 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             "LONG_TERM_IMPRESSION" to "无",
             "USER_PREFS" to "无",
             "MEMORY_ANCHORS" to unifiedMemory,
-            "UNCONSUMED_EVENTS" to eventContext.ifBlank { "无" },
-            "RECENT_SOCIAL_EVENTS" to eventContext.ifBlank { "无" },
-            "EVENT_TRIGGERED_PRIVATE_CONTEXT" to eventContext.ifBlank { "无" },
             "SHARED_MEMORIES" to "无",
             "DAILY_SUMMARY" to "无",
             "SHORT_TERM_SUMMARY" to (shortTerm?.content ?: "无"),
@@ -658,31 +593,28 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         if (!settings.getOperatorDynPermission(op.id)) return false
         val countKey = "daily_content_moment_count_${cycle}_${op.id}"
         if (settings.getInt(countKey, 0) >= settings.dailyMomentTarget) return false
-        if (!tryConsumeAutoAiBudget("scheduled_moment")) return false
         val momentId = generateOneForOpSync(op, MomentTriggerType.AUTO) ?: return false
         settings.putInt(countKey, settings.getInt(countKey, 0) + 1)
         settings.putBoolean(key, true)
-        generateLikesAndComments(momentId, op, consumeBudget = true)
+        generateLikesAndComments(momentId, op)
         refreshMomentsNow()
         return true
     }
 
     /** Called from WorkManager after a plan-selected character reaches its individual delivery time. */
     suspend fun deliverScheduledPrivate(operatorId: String, cycle: String): Boolean {
-        if (!settings.autoAiEnabled) return false
+        if (!settings.autoAiEnabled || !settings.idleProactiveChatEnabled) return false
         val key = "daily_content_private_${cycle}_$operatorId"
         if (settings.getBoolean(key, false)) return true
         val sentKey = "daily_content_private_sent_$cycle"
         if (settings.getInt(sentKey, 0) >= settings.dailyProactiveMax) return false
         val op = repository.getOperator(operatorId) ?: return false
         if (!settings.getOperatorMsgPermission(op.id)) return false
+        if (isGlobalProactiveCoolingDown(System.currentTimeMillis())) return false
         val session = repository.getSessionByOperator(op.id) ?: return false
         val lastUser = repository.getLastUserMessageTime(session.id)
         if (lastUser != null && System.currentTimeMillis() - lastUser < 15 * 60_000L) return false
-        // The daily planner selected the character; temporarily use the existing private prompt path.
-        val enabledBefore = settings.idleProactiveChatEnabled
-        settings.idleProactiveChatEnabled = true
-        val sent = try { sendProactiveMessage(op) } finally { settings.idleProactiveChatEnabled = enabledBefore }
+        val sent = sendProactiveMessage(op)
         if (sent) {
             settings.putBoolean(key, true)
             settings.putInt(sentKey, settings.getInt(sentKey, 0) + 1)
@@ -1265,33 +1197,6 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
 
     private fun intPref(key: String, default: Int): Int = settings.getInt(key, default)
 
-    private fun tryConsumeAutoAiBudget(reason: String): Boolean {
-        if (!settings.autoAiEnabled) {
-            DebugLogger.log("World/Budget", "后台自动AI总开关已关闭: $reason")
-            return false
-        }
-        val dailyLimit = settings.dailyAutoAiLimit
-        if (dailyLimit <= 0) {
-            DebugLogger.log("World/Budget", "自动AI已关闭: $reason")
-            return false
-        }
-        val today = beijingSdf("yyyyMMdd").format(java.util.Date())
-        val key = "auto_ai_count_$today"
-        val usedToday = settings.getInt(key, 0)
-        if (usedToday >= dailyLimit) {
-            DebugLogger.log("World/Budget", "达到每日自动AI上限: $usedToday/$dailyLimit reason=$reason")
-            return false
-        }
-        val tickLimit = settings.tickAutoAiLimit
-        if (tickLimit > 0 && currentAutoAiTickCount >= tickLimit) {
-            DebugLogger.log("World/Budget", "达到单次调度自动AI上限: $currentAutoAiTickCount/$tickLimit reason=$reason")
-            return false
-        }
-        settings.putInt(key, usedToday + 1)
-        currentAutoAiTickCount += 1
-        return true
-    }
-
     private fun trackTokens(category: String, prompt: String, response: String) =
         sharedUtils.trackTokens(category, prompt, response)
 
@@ -1318,7 +1223,9 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     private fun normalizeAnchorType(type: AnchorType, content: String): AnchorType {
         if (type != AnchorType.PREFERENCE && type != AnchorType.TABOO) return type
         val userSignals = listOf("用户", getUserProfile().nickname, "我喜欢", "我讨厌", "我不喜欢", "别", "不要", "偏好", "禁忌")
-        val operatorSignals = listOf("Misery", "干员", "偏好专注", "正在", "工作", "推演", "装备")
+        val operatorSignals = _selectedOperator.value?.name?.takeIf { it.isNotBlank() }
+            ?.let { listOf(it, "干员", "偏好专注", "正在", "工作", "推演", "装备") }
+            ?: listOf("干员", "偏好专注", "正在", "工作", "推演", "装备")
         val isUserRelated = userSignals.any { content.contains(it) }
         val isOperatorState = operatorSignals.any { content.contains(it) }
         return if (!isUserRelated || isOperatorState) AnchorType.EVENT else type
@@ -1400,6 +1307,11 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
 
     fun deleteOperator(operatorId: String) = operatorViewModel.deleteOperator(operatorId)
 
+    fun deleteOperators(operatorIds: Collection<String>, onComplete: () -> Unit = {}) {
+        if (chatViewModel.selectedOperator.value?.id in operatorIds) chatViewModel.clearSelection()
+        operatorViewModel.deleteOperators(operatorIds, onComplete)
+    }
+
     suspend fun exportAllOperators(context: android.content.Context): java.io.File =
         dataViewModel.exportAllOperators(context, _operators.value)
 
@@ -1454,24 +1366,14 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             query = op.name,
         ).ifBlank { "无" }
         return MomentMemoryContext(
-            chatSummary = "无",
             memories = memories,
             sourceAwareMemories = "无",
-            privateDaily = "无"
+            recentSocialContext = sharedUtils.buildRecentSocialContext(setOf(op.id), op.name)
         ).let { ctx ->
             if (mentionUser) ctx else ctx.copy(
-                chatSummary = "无",
-                memories = "无",
                 sourceAwareMemories = "无",
-                privateDaily = "无"
             )
         }
-    }
-
-    private suspend fun consumeOperatorEvents(operatorId: String, operatorName: String, consumer: String) {
-        try {
-            sharedUtils.buildUnconsumedEventContextForOperator(operatorId, operatorName, consumer, settings.eventContextCount, markConsumed = true)
-        } catch (_: Exception) { }
     }
 
     private suspend fun buildCommenterMemoryContext(operatorId: String, surface: MemorySurface, query: String, includePrivateConversation: Boolean = false): Pair<String, String> {
@@ -1525,12 +1427,9 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                     val timeOfDay = allSlots[slotIdx].second
                     // 自动模式：只生成当前时间之前（含当前小时）的时段
                     if (isAuto && hour > currentHour) continue
-                    if (isAuto && !tryConsumeAutoAiBudget("auto_moment_item")) break
                     onProgress("发布中...")
                     try {
                         val profile = getUserProfile()
-                        val worldEvents = sharedUtils.trimContextBlock(sharedUtils.buildWorldEventContext(op.id, op.name, 5), sharedUtils.contextBlockLimit())
-                        val unconsumedEvents = sharedUtils.trimContextBlock(sharedUtils.buildUnconsumedEventContextForOperator(op.id, op.name, "moment:${op.id}", settings.eventContextCount, markConsumed = false), sharedUtils.contextBlockLimit())
                         val existingPosts = repository.getMomentsPaged(10, 0).filter { it.operatorId == op.id }
                         val recentPosts = existingPosts.take(settings.momentRecentPostCount).joinToString("\n") { "- ${it.content.take(50)}" }.ifBlank { "无" }
                         // 构造伪造的时间戳
@@ -1550,21 +1449,16 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                         val mmtReplacements = mapOf(
                             "OPERATOR_NAME" to op.name, "OPERATOR_PERSONA" to op.privatePrompt.ifBlank { op.description },
                             "TIME_OF_DAY" to timeOfDay, "LONG_TERM_IMPRESSION" to "无",
-                            "RECENT_CHAT_SUMMARY" to if (mentionUser) momentMemory.chatSummary else "无",
                             "RECENT_MEMORIES" to momentMemory.memories,
                             "MEMORY_V2_CONTEXT" to momentMemory.memories,
+                            "RECENT_SOCIAL_CONTEXT" to momentMemory.recentSocialContext,
                             "PERSONAL_MEMORY_REFERENCE_STYLE" to personalMemoryReferenceRule(),
                             "SOURCE_AWARE_MEMORIES" to momentMemory.sourceAwareMemories,
-                            "RECENT_WORLD_EVENTS" to worldEvents,
-                            "UNCONSUMED_EVENTS" to unconsumedEvents,
-                            "MOMENT_EVENT_SEED" to unconsumedEvents,
                             "MOMENT_TRIGGER_TYPE" to (if (isAuto) "daily" else "manual"),
                             "WORLD_TODAY_STATE" to "${op.name}现在在${op.location}，正在${op.activity}，情绪${op.emotion}",
-                            "MOMENT_TRIGGER_REASON" to worldEvents.lines().firstOrNull { it.isNotBlank() }?.removePrefix("- ").orEmpty().ifBlank { "普通日常分享" },
                             "KNOWN_FROM_CONTEXT" to momentMemory.sourceAwareMemories,
                             "SOURCE_AWARE_RULES" to sharedUtils.sourceAwareUsageRule(MemorySurface.MOMENT),
                             "RECENT_POSTS" to recentPosts,
-                            "RECENT_DAILY_SUMMARY" to if (mentionUser) momentMemory.privateDaily else "无",
                             "CURRENT_DATE" to beijingSdf("yyyy年MM月dd日").format(fakeTs),
                             "USER_NAME" to if (mentionUser) profile.nickname else "博士",
                             "USER_GENDER" to if (mentionUser) profile.gender.ifBlank { "" } else "",
@@ -1576,10 +1470,9 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                             title = "${op.name}/${op.id}",
                             placeholders = mapOf(
                                 "LONG_TERM_IMPRESSION" to mmtReplacements["LONG_TERM_IMPRESSION"].orEmpty(),
-                                "RECENT_CHAT_SUMMARY" to mmtReplacements["RECENT_CHAT_SUMMARY"].orEmpty(),
                                 "RECENT_MEMORIES" to mmtReplacements["RECENT_MEMORIES"].orEmpty(),
                                 "SOURCE_AWARE_MEMORIES" to mmtReplacements["SOURCE_AWARE_MEMORIES"].orEmpty(),
-                                "RECENT_DAILY_SUMMARY" to mmtReplacements["RECENT_DAILY_SUMMARY"].orEmpty(),
+                                "RECENT_SOCIAL_CONTEXT" to mmtReplacements["RECENT_SOCIAL_CONTEXT"].orEmpty(),
                                 "RECENT_POSTS" to mmtReplacements["RECENT_POSTS"].orEmpty()
                             ),
                             extra = mapOf(
@@ -1614,9 +1507,6 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                             totalGenerated++
                             DebugLogger.log("MomentGen", "插入动态: operator=${op.name}, id=$momentId, total=$totalGenerated")
                             refreshMomentsNow()
-                            if (unconsumedEvents != "无") {
-                                consumeOperatorEvents(op.id, op.name, "moment:${op.id}")
-                            }
                             generated++
                             // 互动异步化：点赞和评论在后台生成，不阻塞下一条动态
                             val opId = op.id; val c = content
@@ -1629,7 +1519,6 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                                      val cmtTpl = getPromptTemplate("moment_comment")
                                      var actualComments = 0
                                      commenters.forEach { commenter ->
-                                        if (!tryConsumeAutoAiBudget("auto_moment_comment")) return@forEach
                                           try {
                                             val recentComments = try {
                                                 withTimeout(500) { repository.getComments(momentId).first() }
@@ -1637,6 +1526,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                                                     .joinToString("\n") { "${it.operatorName}：${it.content.take(60)}" }
                                             } catch (_: Exception) { "" }
                                             val (commenterMemory, sourceAwareMemory) = buildCommenterMemoryContext(commenter.id, MemorySurface.COMMENT, c)
+                                            val recentSocialContext = sharedUtils.buildRecentSocialContext(setOf(commenter.id, op.id), c)
                                             val cmtReplacements = mapOf(
                                                 "COMMENTER_NAME" to commenter.name, "COMMENTER_PERSONA" to publicCommentPersona(commenter),
                                                 "POST_AUTHOR_NAME" to op.name,
@@ -1646,6 +1536,8 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                                                 "COMMENTER_EMOTION" to commenter.emotion,
                                                 "COMMENT_CONTEXT" to recentComments.ifBlank { "暂无" },
                                                 "COMMENTER_MEMORY" to commenterMemory,
+                                                "MEMORY_V2_CONTEXT" to commenterMemory,
+                                                "RECENT_SOCIAL_CONTEXT" to recentSocialContext,
                                                 "PERSONAL_MEMORY_REFERENCE_STYLE" to personalMemoryReferenceRule(),
                                                 "SOURCE_AWARE_MEMORIES" to sourceAwareMemory,
                                                 "SOURCE_AWARE_RULES" to sharedUtils.sourceAwareUsageRule(MemorySurface.COMMENT),
@@ -1698,7 +1590,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 onProgress("发布中...", false)
                 val momentId = generateOneForOpSync(op, MomentTriggerType.MANUAL)
                 if (momentId != null) {
-                    generateLikesAndComments(momentId, op, consumeBudget = false)
+                    generateLikesAndComments(momentId, op)
                     refreshMomentsNow()
                 }
             } finally {
@@ -1726,8 +1618,6 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         Log.d("RHODES_MOMENT", "generateOneForOpSync: 开始 op=${op.name} triggerType=$triggerType")
         return try {
             val profile = getUserProfile()
-            val worldEvents = sharedUtils.buildWorldEventContext(op.id, op.name, 5)
-            val unconsumedEvents = sharedUtils.buildUnconsumedEventContextForOperator(op.id, op.name, "moment:${op.id}", settings.eventContextCount, markConsumed = false)
             val existingPosts = repository.getMomentsPaged(10, 0).filter { it.operatorId == op.id }
             val recentPosts = existingPosts.take(settings.momentRecentPostCount).joinToString("\n") { "- ${it.content.take(50)}" }.ifBlank { "无" }
             val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
@@ -1741,20 +1631,16 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             val mmtReplacements = mapOf(
                 "OPERATOR_NAME" to op.name, "OPERATOR_PERSONA" to op.privatePrompt.ifBlank { op.description },
                 "TIME_OF_DAY" to timeOfDay, "LONG_TERM_IMPRESSION" to "无",
-                "RECENT_CHAT_SUMMARY" to momentMemory.chatSummary,
                 "RECENT_MEMORIES" to momentMemory.memories,
+                "MEMORY_V2_CONTEXT" to momentMemory.memories,
+                "RECENT_SOCIAL_CONTEXT" to momentMemory.recentSocialContext,
                 "PERSONAL_MEMORY_REFERENCE_STYLE" to personalMemoryReferenceRule(),
                 "SOURCE_AWARE_MEMORIES" to momentMemory.sourceAwareMemories,
-                "RECENT_WORLD_EVENTS" to worldEvents,
-                "UNCONSUMED_EVENTS" to unconsumedEvents,
-                "MOMENT_EVENT_SEED" to unconsumedEvents,
                 "MOMENT_TRIGGER_TYPE" to triggerType.name.lowercase(),
                 "WORLD_TODAY_STATE" to "${op.name}现在在${op.location}，正在${op.activity}，情绪${op.emotion}",
-                "MOMENT_TRIGGER_REASON" to worldEvents.lines().firstOrNull { it.isNotBlank() }?.removePrefix("- ").orEmpty().ifBlank { "普通日常分享" },
                 "KNOWN_FROM_CONTEXT" to momentMemory.sourceAwareMemories,
                 "SOURCE_AWARE_RULES" to sharedUtils.sourceAwareUsageRule(MemorySurface.MOMENT),
                 "RECENT_POSTS" to recentPosts,
-                "RECENT_DAILY_SUMMARY" to momentMemory.privateDaily,
                 "CURRENT_DATE" to beijingSdf("yyyy年MM月dd日").format(fakeTs),
                 "USER_NAME" to if (mentionUser) profile.nickname else "博士",
                 "USER_GENDER" to if (mentionUser) profile.gender.ifBlank { "" } else "",
@@ -1766,10 +1652,9 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 title = "${op.name}/${op.id}",
                 placeholders = mapOf(
                     "LONG_TERM_IMPRESSION" to mmtReplacements["LONG_TERM_IMPRESSION"].orEmpty(),
-                    "RECENT_CHAT_SUMMARY" to mmtReplacements["RECENT_CHAT_SUMMARY"].orEmpty(),
                     "RECENT_MEMORIES" to mmtReplacements["RECENT_MEMORIES"].orEmpty(),
                     "SOURCE_AWARE_MEMORIES" to mmtReplacements["SOURCE_AWARE_MEMORIES"].orEmpty(),
-                    "RECENT_DAILY_SUMMARY" to mmtReplacements["RECENT_DAILY_SUMMARY"].orEmpty(),
+                    "RECENT_SOCIAL_CONTEXT" to mmtReplacements["RECENT_SOCIAL_CONTEXT"].orEmpty(),
                     "RECENT_POSTS" to mmtReplacements["RECENT_POSTS"].orEmpty()
                 ),
                 extra = mapOf(
@@ -1803,9 +1688,6 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 if (settings.memoryV2Enabled && settings.momentMemoryV2Enabled) {
                     memoryV2Pipeline.ingestMoment(moment.copy(id = momentId))
                 }
-                if (unconsumedEvents != "无") {
-                    consumeOperatorEvents(op.id, op.name, "moment:${op.id}")
-                }
                 momentId
             } else {
                 Log.w("RHODES_MOMENT", "generateOneForOpSync: AI结果为空 op=${op.name}")
@@ -1821,8 +1703,8 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     }
 
     /** 异步生成点赞和评论（不阻塞调用方） */
-    private fun generateLikesAndComments(momentId: Long, op: Operator, consumeBudget: Boolean = false, parentEvent: WorldEvent? = null) {
-        Log.d("RHODES_MOMENT", "generateLikesAndComments: 开始 momentId=$momentId op=${op.name} consumeBudget=$consumeBudget")
+    private fun generateLikesAndComments(momentId: Long, op: Operator) {
+        Log.d("RHODES_MOMENT", "generateLikesAndComments: 开始 momentId=$momentId op=${op.name}")
         appScope.launch {
             try {
                 val profile = getUserProfile()
@@ -1837,10 +1719,6 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 val cmtTpl = getPromptTemplate("moment_comment")
                 var actualComments = 0
                 commenters.forEach { commenter ->
-                    if (consumeBudget && !tryConsumeAutoAiBudget("moment_comment")) {
-                        Log.w("RHODES_MOMENT", "generateLikesAndComments: 评论跳过(预算不足) commenter=${commenter.name}")
-                        return@forEach
-                    }
                     try {
                         val recentComments = try {
                             withTimeout(500) { repository.getComments(momentId).first() }
@@ -1848,6 +1726,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                                 .joinToString("\n") { "${it.operatorName}：${it.content.take(60)}" }
                         } catch (_: Exception) { "" }
                         val (commenterMemory, sourceAwareMemory) = buildCommenterMemoryContext(commenter.id, MemorySurface.COMMENT, postContent)
+                        val recentSocialContext = sharedUtils.buildRecentSocialContext(setOf(commenter.id, op.id), postContent)
                         val cmtReplacements = commentTimeReplacements() + mapOf(
                             "COMMENTER_NAME" to commenter.name, "COMMENTER_PERSONA" to publicCommentPersona(commenter),
                             "POST_AUTHOR_NAME" to op.name,
@@ -1857,6 +1736,8 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                             "COMMENTER_EMOTION" to commenter.emotion,
                             "COMMENT_CONTEXT" to recentComments.ifBlank { "暂无" },
                             "COMMENTER_MEMORY" to commenterMemory,
+                            "MEMORY_V2_CONTEXT" to commenterMemory,
+                            "RECENT_SOCIAL_CONTEXT" to recentSocialContext,
                             "PERSONAL_MEMORY_REFERENCE_STYLE" to personalMemoryReferenceRule(),
                             "SOURCE_AWARE_MEMORIES" to sourceAwareMemory,
                             "SOURCE_AWARE_RULES" to sharedUtils.sourceAwareUsageRule(MemorySurface.COMMENT),
@@ -2054,6 +1935,10 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                     memory.takeIf { it.isNotBlank() }?.let { "【你的相关记忆】\n$it" },
                     sourceAwareMemory.takeIf { it.isNotBlank() && it != "无" }?.let { "【你知道这些事的来源】\n$it\n${sharedUtils.sourceAwareUsageRule(MemorySurface.COMMENT)}" }
                 ).joinToString("\n")
+                val recentSocialContext = sharedUtils.buildRecentSocialContext(
+                    setOfNotNull(realOp?.id, moment?.operatorId),
+                    listOf(userContent, moment?.content.orEmpty(), recentComments).joinToString("\n")
+                )
                 sharedUtils.logMemoryContext(
                     surface = "comment",
                     title = "$speakerName/moment_$momentId",
@@ -2085,6 +1970,8 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                     "POST_CONTENT" to (moment?.content ?: "无"),
                     "COMMENT_CONTEXT" to recentComments.ifBlank { "无" },
                     "COMMENTER_MEMORY" to memory.ifBlank { "无" },
+                    "MEMORY_V2_CONTEXT" to memory.ifBlank { "无" },
+                    "RECENT_SOCIAL_CONTEXT" to recentSocialContext,
                     "PERSONAL_MEMORY_REFERENCE_STYLE" to personalMemoryReferenceRule(),
                     "SOURCE_AWARE_MEMORIES" to sourceAwareMemory.ifBlank { "无" },
                     "SOURCE_AWARE_RULES" to sharedUtils.sourceAwareUsageRule(MemorySurface.COMMENT),
@@ -2225,7 +2112,6 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     // === Data delegation ===
     suspend fun getDataStats(): DataViewModel.DataStats = dataViewModel.getDataStats(_operators.value.size, _moments.value.size)
     fun cleanupAllExpired() = dataViewModel.cleanupAllExpired()
-    fun deleteAllWorldEvents() = dataViewModel.deleteAllWorldEvents()
     suspend fun getMessageRanking(): List<SenderCount> = dataViewModel.getMessageRanking()
     suspend fun getDailyRanking(): List<SenderCount> = dataViewModel.getDailyRanking()
     fun forceGenerateMoments() {
@@ -2250,7 +2136,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                         if (momentId != null) {
                             generated++
                             Log.d("RHODES_MOMENT", "forceGenerateMoments: 生成成功 op=${op.name} id=${momentId}")
-                            generateLikesAndComments(momentId, op, consumeBudget = false)
+                            generateLikesAndComments(momentId, op)
                             refreshMomentsNow()
                         } else {
                             Log.w("RHODES_MOMENT", "forceGenerateMoments: 生成失败 op=${op.name} (返回null)")
@@ -2352,7 +2238,6 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     }
 
     private suspend fun generateDiaryText(operatorId: String, auto: Boolean = false): String {
-        if (auto && !tryConsumeAutoAiBudget("diary")) return ""
         val op = repository.getOperator(operatorId) ?: run {
             DebugLogger.log("Diary", "干员不存在: $operatorId")
             return ""
@@ -2378,12 +2263,23 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                     .take(settings.diaryGroupSummaryCount)
                     .joinToString("\n").ifBlank { "无" }
                 val diaryV2Memories = memoryV2Pipeline.buildPrivateMemoryContext(operatorId, limitL1 = 3, limitL2 = 4, limitL3 = 3, query = "日记 回顾 ${op.name}").ifBlank { "无" }
+                val privateSummary = repository.getAllSessionsSync()
+                    .firstOrNull { it.operatorId == operatorId }
+                    ?.let { privateSession ->
+                        repository.getMessagesSync(privateSession.id)
+                            .filter { it.timestamp in yesterdayStart until yesterdayEnd && it.type != "system" }
+                            .takeLast(12)
+                            .joinToString("\n") { message ->
+                                "${if (message.isMe) profile.nickname else op.name}：${message.content.take(90)}"
+                            }
+                    }
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { "昨天你与${profile.nickname}的私聊：\n$it" }
+                    ?: ""
                 val recentMemories = UnifiedMemoryContext.mergeBlocks(
                     sharedUtils.contextBlockLimit(2),
                     diaryV2Memories,
                 )
-                val worldEvents = repository.getRecentWorldEvents(40).filter { it.createdAt in yesterdayStart until yesterdayEnd }.take(8).joinToString("\n") { "- ${it.content.take(160)}" }.ifBlank { "无" }
-                val unconsumedEvents = sharedUtils.buildUnconsumedEventContextForOperator(operatorId, op.name, "diary:$operatorId", settings.eventContextCount, markConsumed = false)
                 val diaryTpl = getPromptTemplate("diary")
                 val dReplacements = mapOf(
                     "OPERATOR_NAME" to op.name,
@@ -2400,15 +2296,11 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                     "LONG_TERM_IMPRESSION" to "无",
                     "DAILY_SUMMARY" to "无",
                     "PRIVATE_DAILY_SUMMARY" to "无",
-                    "PRIVATE_SUMMARY" to "无",
+                    "PRIVATE_SUMMARY" to privateSummary,
                     "GROUP_SUMMARIES" to groupSummaries,
                     "RECENT_MEMORIES" to recentMemories,
                     "SOURCE_AWARE_MEMORIES" to "无",
-                    "WORLD_DAY_EVENTS" to worldEvents,
-                    "DIARY_EVENT_DIGEST" to unconsumedEvents,
-                    "UNRESOLVED_THOUGHTS" to unconsumedEvents,
                     "SELF_STATUS_CHANGES" to "${op.name}最近在${op.location}，正在${op.activity}，情绪${op.emotion}",
-                    "SOCIAL_INTERACTIONS" to worldEvents,
                     "KNOWN_FROM_CONTEXT" to "无",
                     "SOURCE_AWARE_RULES" to sharedUtils.sourceAwareUsageRule(MemorySurface.DIARY),
                     "RELATION_EVENTS" to sharedUtils.getRelationEvents(operatorId).lines().filter { it.isNotBlank() }.take(settings.diaryRelationEventCount).joinToString("\n").ifBlank { "无" }
@@ -2452,9 +2344,6 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                     repository.insertDiary(Diary(operatorId = operatorId, operatorName = op.name, content = text, date = yesterdayStr, createdAt = now))
                     if (settings.memoryV2Enabled) {
                         memoryV2Pipeline.ingestDiary(operatorId, op.name, "diary_$now", text)
-                    }
-                    if (unconsumedEvents != "无") {
-                        consumeOperatorEvents(operatorId, op.name, "diary:$operatorId")
                     }
                     DebugLogger.log("Diary", "日记生成成功: ${text.take(50)}")
                     return text

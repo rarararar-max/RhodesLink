@@ -70,14 +70,31 @@ class OperatorViewModel(
     }
 
     fun deleteOperator(operatorId: String) {
+        deleteOperators(listOf(operatorId))
+    }
+
+    fun deleteOperators(operatorIds: Collection<String>, onComplete: () -> Unit = {}) {
+        val ids = operatorIds.filter { it.isNotBlank() }.distinct()
+        if (ids.isEmpty()) {
+            onComplete()
+            return
+        }
         scope.launch {
-            val session = repository.getSessionByOperator(operatorId)
-            if (session != null) {
-                repository.purgeSessionData(session.id)
-                repository.deleteSession(session.id)
+            try {
+                ids.forEach { operatorId ->
+                    val session = repository.getSessionByOperator(operatorId)
+                    if (session != null) {
+                        repository.purgeSessionData(session.id)
+                        repository.deleteSession(session.id)
+                    }
+                    repository.purgeOperatorData(operatorId)
+                    repository.deleteOperator(operatorId)
+                    settings.remove("dyn_$operatorId")
+                    settings.remove("msg_$operatorId")
+                }
+            } finally {
+                onComplete()
             }
-            repository.purgeOperatorData(operatorId)
-            repository.deleteOperator(operatorId)
         }
     }
 

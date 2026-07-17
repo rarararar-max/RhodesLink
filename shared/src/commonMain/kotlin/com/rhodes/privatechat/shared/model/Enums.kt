@@ -12,7 +12,7 @@ enum class AnchorType { PLAN, PREFERENCE, TABOO, EVENT, EMOTION, RELATION }
 enum class MemoryLevel { L1, L2, L3 }
 
 @Serializable
-enum class MemorySourceKind { PRIVATE_CHAT, GROUP_CHAT, MOMENT, MOMENT_COMMENT, WORLD_EVENT, DIARY, MANUAL_MEMORY }
+enum class MemorySourceKind { PRIVATE_CHAT, GROUP_CHAT, MOMENT, MOMENT_COMMENT, DIARY, MANUAL_MEMORY }
 
 @Serializable
 enum class RelationshipType {

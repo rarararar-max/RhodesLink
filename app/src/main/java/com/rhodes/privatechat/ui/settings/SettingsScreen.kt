@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.DarkMode
@@ -64,7 +65,7 @@ fun SettingsScreen(
     onProfile: () -> Unit = {}, onModel: () -> Unit = {},
     onChatParams: () -> Unit = {}, onDataManage: () -> Unit = {},
     onPermissions: () -> Unit = {}, onCredits: () -> Unit = {},
-    onAppearance: () -> Unit = {}, onStory: () -> Unit = {},
+    onAppearance: () -> Unit = {}, onStory: () -> Unit = {}, onDailyContent: () -> Unit = {},
     onDebugLog: () -> Unit = {},
     userNickname: String = "博士", userGender: String = "", userAvatarUri: String = "", modifier: Modifier = Modifier
 ) {
@@ -105,6 +106,7 @@ fun SettingsScreen(
             WechatListGroup {
                 SettingItem(SettingEntry(Icons.Default.Tune, "聊天表现", "回复长短、上下文记忆、角色说话风格", iconColor = Color(0xFF00BCD4)), onClick = onChatParams)
                 SettingItem(SettingEntry(Icons.AutoMirrored.Filled.MenuBook, "动态、日记与派遣", "每日动态、日记文本、派遣故事长度", iconColor = Color(0xFF795548)), onClick = onStory)
+                SettingItem(SettingEntry(Icons.Default.AutoAwesome, "每日自动内容", "计划动态、主动私聊和免打扰时段", iconColor = Color(0xFF7C3AED)), onClick = onDailyContent)
                 SettingItem(SettingEntry(Icons.Default.Build, "权限管理", "干员主动消息、动态和群聊权限", iconColor = Color(0xFFFF9800)), onClick = onPermissions)
             }
             Spacer(Modifier.height(8.dp))

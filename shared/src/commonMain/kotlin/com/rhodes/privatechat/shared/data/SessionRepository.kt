@@ -70,7 +70,12 @@ class SessionRepository(private val wrapper: DatabaseWrapper) {
         db.chatSessionsQueries.updateMode(mode, sessionId)
     }
 
+    suspend fun updatePinned(sessionId: String, pinned: Boolean) = withContext(Dispatchers.Default) {
+        db.chatSessionsQueries.updatePinned(if (pinned) 1L else 0L, sessionId)
+    }
+
     suspend fun markAllRead() = withContext(Dispatchers.Default) { db.chatSessionsQueries.markAllRead() }
+    suspend fun markSessionRead(sessionId: String) = withContext(Dispatchers.Default) { db.chatSessionsQueries.markSessionRead(sessionId) }
     suspend fun incrementUnread(sessionId: String, delta: Int = 1) = withContext(Dispatchers.Default) { db.chatSessionsQueries.incrementUnread(delta.toLong(), sessionId) }
     suspend fun getSessionCount(): Int = withContext(Dispatchers.Default) { db.chatSessionsQueries.getSessionCount().executeAsOne().toInt() }
     suspend fun getGroupCount(): Int = withContext(Dispatchers.Default) { db.chatSessionsQueries.getGroupCount().executeAsOne().toInt() }

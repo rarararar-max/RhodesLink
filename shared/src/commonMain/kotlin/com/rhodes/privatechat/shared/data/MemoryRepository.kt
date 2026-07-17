@@ -35,8 +35,10 @@ class MemoryRepository(private val wrapper: DatabaseWrapper) {
     }
 
     suspend fun replaceShortTermMemory(memory: Memory) = withContext(Dispatchers.Default) {
-        db.memoriesQueries.deleteShortTermMemories(memory.sessionId)
-        db.memoriesQueries.insertMemory(memory.sessionId, memory.operatorId, MemoryType.SHORT_TERM.name, memory.content, memory.keywords, memory.preferences, memory.taboos, memory.createdAt, memory.expiresAt)
+        db.transaction {
+            db.memoriesQueries.deleteShortTermMemories(memory.sessionId)
+            db.memoriesQueries.insertMemory(memory.sessionId, memory.operatorId, MemoryType.SHORT_TERM.name, memory.content, memory.keywords, memory.preferences, memory.taboos, memory.createdAt, memory.expiresAt)
+        }
     }
 
     /** Keeps exactly one current long-term impression for each operator. */
@@ -84,12 +86,14 @@ class MemoryRepository(private val wrapper: DatabaseWrapper) {
     }
 
     suspend fun replaceDailyBySessionAndDate(memory: Memory, dateKey: String) = withContext(Dispatchers.Default) {
-        db.memoriesQueries.getDailyBySessionAndDate(memory.sessionId, dateKey) { id, _, _, _, _, _, _, _, _, _ -> id }
-            .executeAsOneOrNull()
-            ?.let { db.memoriesQueries.deleteMemory(it) }
-        db.memoriesQueries.replaceDailyBySessionAndDate(
-            memory.sessionId, memory.operatorId, memory.content, dateKey, memory.createdAt, memory.expiresAt
-        )
+        db.transaction {
+            db.memoriesQueries.getDailyBySessionAndDate(memory.sessionId, dateKey) { id, _, _, _, _, _, _, _, _, _ -> id }
+                .executeAsOneOrNull()
+                ?.let { db.memoriesQueries.deleteMemory(it) }
+            db.memoriesQueries.replaceDailyBySessionAndDate(
+                memory.sessionId, memory.operatorId, memory.content, dateKey, memory.createdAt, memory.expiresAt
+            )
+        }
     }
 
     suspend fun enforceMemoryRetain(sessionId: String, keepCount: Int) = withContext(Dispatchers.Default) {

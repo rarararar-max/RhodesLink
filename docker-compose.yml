@@ -15,6 +15,7 @@ services:
     volumes:
       - .:/app                                  # 源码挂载（实时反映本地修改）
       - gradle-cache:/opt/gradle-cache          # Gradle 依赖缓存（跨 run 持久化）
+      - ./build-tools-34/34.0.0:/opt/android-sdk/build-tools/34.0.0:ro  # Linux版build-tools 34（腾讯镜像下载）
     working_dir: /app
     entrypoint: ["./scripts/build-apk.sh"]
     command: ["all", "debug"]

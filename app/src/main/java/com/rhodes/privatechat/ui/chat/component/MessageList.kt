@@ -114,8 +114,11 @@ fun MessageList(
                     displayCount = currentSize
                 } else {
                     for (i in lastMessageCount until currentSize) {
-                        if (i > lastMessageCount) {
-                            kotlinx.coroutines.delay((500L + (Math.random() * 500)).toLong())
+                        // One AI response can expand into several private or group bubbles.
+                        // Keep its first segment immediate, then reveal later segments like a person typing in parts.
+                        if (i > lastMessageCount && !messages[i].isMe &&
+                            messages[i].originalMessageId == messages[i - 1].originalMessageId) {
+                            kotlinx.coroutines.delay((1_000L + (Math.random() * 500)).toLong())
                         }
                         displayCount = i + 1
                     }

@@ -313,9 +313,7 @@ class GroupChatViewModel(
         autoGroupChatJobs.remove(groupId)
         val generation = (autoChatGenerations[groupId] ?: 0L) + 1L
         autoChatGenerations[groupId] = generation
-        val minMs = settings.groupChatMinInterval * 1000L
-        val maxMs = settings.groupChatMaxInterval * 1000L
-        DebugLogger.log("GroupChat/Auto", "启动: id=$groupId, gen=$generation, min=${minMs/1000}秒, max=${maxMs/1000}秒")
+        DebugLogger.log("GroupChat/Auto", "启动: id=$groupId, gen=$generation")
         autoGroupChatJobs[groupId] = scope.launch {
             try {
                 while (isAutoGroupChatEnabled(groupId)) {
@@ -329,15 +327,26 @@ class GroupChatViewModel(
                         DebugLogger.log("GroupChat/Auto", "gen变化退出: id=$groupId")
                         break
                     }
-                    // 先等待完整间隔，再发消息（首次也一样）
-                    val interval = minMs + (Math.random() * (maxMs - minMs).coerceAtLeast(0L)).toLong()
+                    // Read the latest values every round so setting changes take effect without toggling auto chat.
+                    val minMs = settings.groupChatMinInterval * 1000L
+                    val maxMs = settings.groupChatMaxInterval * 1000L
+                    var interval = minMs + (Math.random() * (maxMs - minMs).coerceAtLeast(0L)).toLong()
                     DebugLogger.log("GroupChat/Auto", "第${nextRound}轮: id=$groupId, 等待${interval/1000}秒, gen=$generation")
                     val tickMs = 1000L
                     var remaining = interval
+                    var elapsed = 0L
                     while (remaining > 0 && isAutoGroupChatEnabled(groupId)) {
                         if (autoChatGenerations[groupId] != generation) break
-                        delay(minOf(remaining, tickMs))
-                        remaining -= tickMs
+                        val waited = minOf(remaining, tickMs)
+                        delay(waited)
+                        remaining -= waited
+                        elapsed += waited
+                        // Never fire earlier than a newly raised minimum while this timer is running.
+                        val latestMinMs = settings.groupChatMinInterval * 1000L
+                        if (interval < latestMinMs) {
+                            interval = latestMinMs
+                            remaining = (interval - elapsed).coerceAtLeast(0L)
+                        }
                     }
                     if (autoChatGenerations[groupId] != generation) break
                     // 等够间隔，发消息
@@ -345,7 +354,11 @@ class GroupChatViewModel(
                     DebugLogger.log("GroupChat/Auto", "发消息: id=$groupId, round=$nextRound")
                     val session = repository.getSession(groupId) ?: break
                     val mode = getGroupChatMode(groupId)
-                    sendGroupMessage(groupId, groupName, "", mode, isAuto = true)
+                    var responseCompleted = false
+                    sendGroupMessage(groupId, groupName, "", mode, isAuto = true, onResponseComplete = { responseCompleted = true })
+                    while (!responseCompleted && isAutoGroupChatEnabled(groupId) && autoChatGenerations[groupId] == generation) {
+                        delay(100)
+                    }
                 }
             } finally {
                 if (autoChatGenerations[groupId] == generation) {
@@ -404,9 +417,9 @@ class GroupChatViewModel(
             }
     }
 
-    fun sendGroupMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online", autoSpeak: Boolean = false, isAuto: Boolean = false, userMessageAlreadyStored: Boolean = false, onMessageSent: () -> Unit = {}) {
-        if (isAuto && !settings.autoAiEnabled) return
-        if (isAuto && groupAiJobs[groupSessionId]?.isActive == true) return
+    fun sendGroupMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online", autoSpeak: Boolean = false, isAuto: Boolean = false, userMessageAlreadyStored: Boolean = false, onMessageSent: () -> Unit = {}, onResponseComplete: () -> Unit = {}) {
+        if (isAuto && !settings.autoAiEnabled) { onResponseComplete(); return }
+        if (isAuto && groupAiJobs[groupSessionId]?.isActive == true) { onResponseComplete(); return }
         synchronized(groupJobLock) {
             // User sends queue behind the current reply. Idle chat never preempts a user request.
             val generation = groupGenerations[groupSessionId] ?: 0L
@@ -739,6 +752,7 @@ class GroupChatViewModel(
                 setGroupLoading(groupSessionId, false)
                 if (groupAiJobs[groupSessionId] == coroutineContext[Job]) groupAiJobs.remove(groupSessionId)
                 if (mutexLocked) mutexFor(groupSessionId).unlock()
+                onResponseComplete()
             }
             }
         }

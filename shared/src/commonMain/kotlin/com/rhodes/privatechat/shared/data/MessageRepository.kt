@@ -55,7 +55,8 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
 
     suspend fun updateMessageContentAndPreview(sessionId: String, id: Long, content: String, timestamp: Long) = withContext(Dispatchers.Default) {
         db.chatMessagesQueries.updateContent(content, id)
-        db.chatSessionsQueries.updateLastMessage(previewFromAiJson(content), timestamp, sessionId)
+        // Regenerating an older reply must not replace a newer chat-list preview or move the session backward.
+        db.chatSessionsQueries.updateLastMessageIfNotNewer(previewFromAiJson(content), timestamp, sessionId, timestamp)
     }
 
     suspend fun sendMessage(sessionId: String, message: ChatMessage) = idMutex.withLock { withContext(Dispatchers.Default) {

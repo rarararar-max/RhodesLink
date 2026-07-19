@@ -50,6 +50,7 @@ kotlin {
 android {
     namespace = "com.rhodes.privatechat.shared"
     compileSdk = 35
+    buildToolsVersion = "35.0.0"
 
     defaultConfig {
         minSdk = 26

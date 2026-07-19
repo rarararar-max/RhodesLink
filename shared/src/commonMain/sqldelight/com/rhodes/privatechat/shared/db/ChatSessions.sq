@@ -35,6 +35,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 updateLastMessage:
 UPDATE chat_sessions SET lastMessage = ?, lastTime = ? WHERE id = ?;
 
+updateLastMessageIfNotNewer:
+UPDATE chat_sessions SET lastMessage = ?, lastTime = ? WHERE id = ? AND lastTime <= ?;
+
 updateMode:
 UPDATE chat_sessions SET mode = ? WHERE id = ?;
 

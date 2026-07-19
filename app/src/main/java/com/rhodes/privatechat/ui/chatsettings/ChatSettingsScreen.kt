@@ -149,7 +149,7 @@ private fun GroupTab(settings: SettingsRepository) {
     ParamSlider(settings, "group_speech_max", "每轮每人最多发言", 2, 1f..5f, "每轮群聊每人最多说几次。建议2。太高（超过4）话多的人一直刷屏，其他人插不上嘴。", pairKey = "group_speech_min", pairDefaultVal = 1, isMinSide = false)
 
     Spacer(Modifier.height(12.dp)); SectionTitle("空闲自动聊天")
-    ParamSlider(settings, "group_chat_min_interval", "空闲最小间隔(秒)", 60, 5f..600f, "没人说话后，最快等多久AI会自动接话。建议60。太低（低于30）AI接得太快像在抢话，太高（超过300）冷场太久聊天接不上。", step = 5f, pairKey = "group_chat_max_interval", pairDefaultVal = 180, isMinSide = true)
+    ParamSlider(settings, "group_chat_min_interval", "空闲最小间隔(秒)", 60, 5f..600f, "上一轮自动群聊完整回复结束后，最快还要等待多久才会开始下一轮。修改后请点击页面顶部保存；建议60。太低（低于30）AI接得太快像在抢话，太高（超过300）冷场太久聊天接不上。", step = 5f, pairKey = "group_chat_max_interval", pairDefaultVal = 180, isMinSide = true)
     ParamSlider(settings, "group_chat_max_interval", "空闲最大间隔(秒)", 180, 30f..900f, "没人说话后，最晚等多久AI一定会接话。建议180-300。太低（低于60）AI总是急着说话，太高（超过600）冷场太久才有人开口。", step = 10f, pairKey = "group_chat_min_interval", pairDefaultVal = 60, isMinSide = false)
     ParamSlider(settings, "group_auto_max_rounds", "空闲连续轮数", 20, 1f..300f, "AI自己聊天最多连续聊多少轮后停下来。建议10-30。太低（低于5）刚聊起来就停了，太高（超过50）AI一直聊不停，刷屏严重。", step = 1f)
 

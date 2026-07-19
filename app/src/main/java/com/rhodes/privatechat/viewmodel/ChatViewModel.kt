@@ -1199,16 +1199,18 @@ ${recentDialogues}
         val idx = messageSnapshot.indexOfFirst { it.id == msgId }
         if (idx < 0) return
         val userMsg = messageSnapshot.take(idx).lastOrNull { it.isMe } ?: return
-        val previousReply = messageSnapshot.getOrNull(idx)?.content.orEmpty()
+        val originalReply = messageSnapshot.getOrNull(idx) ?: return
+        val previousReply = originalReply.content
         val mode = _currentMode.value
         chatAiJobs[session.id]?.cancel()
         val requestId = requestSequence.incrementAndGet()
         val job = viewModelScope.launch {
-            // 插入占位消息（API 成功前不删原文）
-            val placeholderId = repository.getNextMessageId()
-            val placeholder = ChatMessage(id = placeholderId, sessionId = session.id, senderName = session.operatorName, content = "正在重新生成...", type = "text", mode = mode, isMe = false)
-            repository.sendMessage(session.id, placeholder)
-            _messages.value = _messages.value + placeholder
+            val regeneratingContent = """{"segments":[{"type":"dialogue","content":"正在重新生成..."}]}"""
+            // Replace the selected reply in place so its position and conversational turn remain stable.
+            repository.updateMessageContent(originalReply.id, regeneratingContent)
+            _messages.value = _messages.value.map { message ->
+                if (message.id == originalReply.id) originalReply.copy(content = regeneratingContent) else message
+            }
 
             var mutexLocked = false
             try {
@@ -1218,7 +1220,7 @@ ${recentDialogues}
                 val apiMessages = buildRegenerateApiMessages(
                     userContent = userMsg.content,
                     previousReply = previousReply,
-                    excludeMessageIds = setOf(msgId, placeholderId),
+                    excludeMessageIds = setOf(msgId),
                     historyBeforeMessageId = msgId,
                     mode = mode
                 )
@@ -1229,23 +1231,26 @@ ${recentDialogues}
                 val rawJson = sharedUtils.aiService.cleanJson(serializedJson)
                 if (rawJson.isNotBlank() && visiblePrivateSegmentCount(parsed, mode) > 0) {
                     // Preserve the original row and timestamp so regeneration stays in place.
-                    repository.updateMessageContent(msgId, rawJson)
-                    repository.deleteMessage(placeholderId)
+                    repository.updateMessageContentAndPreview(session.id, msgId, rawJson, originalReply.timestamp)
                     markUnreadIfNotCurrent(session.id)
-                    _messages.value = _messages.value.filter { it.id != msgId && it.id != placeholderId }
+                    _messages.value = _messages.value.map { message ->
+                        if (message.id == msgId) originalReply.copy(content = rawJson) else message
+                    }
                 } else {
-                    repository.deleteMessage(placeholderId)
+                    repository.updateMessageContent(msgId, previousReply)
                     savePrivateFailure(session.id, repository.getNextMessageId(), mode)
-                    _messages.value = _messages.value.filter { it.id != placeholderId }
+                    _messages.value = _messages.value.map { message ->
+                        if (message.id == msgId) originalReply else message
+                    }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
-                repository.deleteMessage(placeholderId)
-                _messages.value = _messages.value.filter { it.id != placeholderId }
+                repository.updateMessageContent(msgId, previousReply)
+                _messages.value = _messages.value.map { message -> if (message.id == msgId) originalReply else message }
                 throw e
             } catch (e: Exception) {
                 // Keep the original reply available when regeneration fails.
-                repository.deleteMessage(placeholderId)
-                _messages.value = _messages.value.filter { it.id != placeholderId }
+                repository.updateMessageContent(msgId, previousReply)
+                _messages.value = _messages.value.map { message -> if (message.id == msgId) originalReply else message }
                 DebugLogger.log("Chat/Regenerate", "重新生成失败: ${e.message?.take(100)}")
                 savePrivateFailure(session.id, repository.getNextMessageId(), mode)
             } finally { finishLoading(session.id, requestId); if (mutexLocked) aiMutexFor(session.id).unlock(); modeTransitionNotice = "" }

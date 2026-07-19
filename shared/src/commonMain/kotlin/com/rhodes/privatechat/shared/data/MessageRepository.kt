@@ -53,6 +53,11 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
         db.chatMessagesQueries.updateContent(content, id)
     }
 
+    suspend fun updateMessageContentAndPreview(sessionId: String, id: Long, content: String, timestamp: Long) = withContext(Dispatchers.Default) {
+        db.chatMessagesQueries.updateContent(content, id)
+        db.chatSessionsQueries.updateLastMessage(previewFromAiJson(content), timestamp, sessionId)
+    }
+
     suspend fun sendMessage(sessionId: String, message: ChatMessage) = idMutex.withLock { withContext(Dispatchers.Default) {
         nextMessageId = maxOf(nextMessageId ?: 0L, message.id + 1)
         val ts = if (message.timestamp > 0) message.timestamp else Clock.System.now().toEpochMilliseconds()
@@ -93,7 +98,7 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
                     val speaker = (last?.get("speaker") as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
                     val text = (last?.get("message") as? kotlinx.serialization.json.JsonPrimitive)?.content
                         ?: (last?.get("content") as? kotlinx.serialization.json.JsonPrimitive)?.content
-                    if (!text.isNullOrBlank()) listOf(speaker.takeIf { it.isNotBlank() }, text.take(50)).filterNotNull().joinToString("：") else content.take(50)
+                    if (!text.isNullOrBlank()) listOf(speaker.takeIf { it.isNotBlank() }, text.take(50)).filterNotNull().joinToString("：") else "AI 回复"
                 }
                 is kotlinx.serialization.json.JsonObject -> {
                     val segArray = root["segments"] as? kotlinx.serialization.json.JsonArray
@@ -106,13 +111,13 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
                         }
                     lastText?.take(50)
                         ?: (root["dialogue"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.take(50)
-                        ?: content.take(50)
+                        ?: "AI 回复"
                 }
-                else -> content.take(50)
+                else -> "AI 回复"
             }
         } catch (_: Exception) {
             Regex("\"(?:content|message)\"\\s*:\\s*\"([^\"]{1,80})").findAll(content).lastOrNull()?.groupValues?.getOrNull(1)?.take(50)
-                ?: content.take(50)
+                ?: "AI 回复"
         }
     }
 

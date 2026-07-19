@@ -72,6 +72,8 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun getRecentMessagesSync(sessionId: String, limit: Long = 200) = messages.getRecentMessagesSync(sessionId, limit)
     suspend fun getMessagesBefore(sessionId: String, beforeTimestamp: Long, beforeId: Long, limit: Long = 100) = messages.getMessagesBefore(sessionId, beforeTimestamp, beforeId, limit)
     suspend fun updateMessageContent(id: Long, content: String) = messages.updateMessageContent(id, content)
+    suspend fun updateMessageContentAndPreview(sessionId: String, id: Long, content: String, timestamp: Long) =
+        messages.updateMessageContentAndPreview(sessionId, id, content, timestamp)
     suspend fun sendMessage(sessionId: String, message: ChatMessage) = messages.sendMessage(sessionId, message)
     suspend fun restoreMessage(message: ChatMessage) = messages.restoreMessage(message)
     suspend fun getNextMessageId() = messages.getNextMessageId()

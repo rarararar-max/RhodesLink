@@ -18,17 +18,19 @@ fun SettingsRepository.voiceCallSetupMessage(voiceId: String): String? = when {
 fun SettingsRepository.effectiveVoiceId(operatorVoiceId: String): String =
     operatorVoiceId.ifBlank { ttsDefaultVoiceId }
 
-fun createTtsGateway(endpoint: String, apiKey: String, modelName: String): TtsGateway {
+fun createTtsGateway(endpoint: String, apiKey: String, modelName: String, provider: String = ""): TtsGateway {
     return if (endpoint.isNotBlank() && apiKey.isNotBlank() && modelName.isNotBlank()) {
-        MinimaxTtsGateway(endpoint = endpoint, apiKey = apiKey, modelName = modelName)
+        if (provider == "xiaomi" || endpoint.contains("api.xiaomimimo.com")) XiaomiMimoTtsGateway(endpoint, apiKey, modelName)
+        else MinimaxTtsGateway(endpoint = endpoint, apiKey = apiKey, modelName = modelName)
     } else {
         DisabledTtsGateway()
     }
 }
 
-fun createAsrGateway(endpoint: String, apiKey: String, modelName: String): AsrGateway {
+fun createAsrGateway(endpoint: String, apiKey: String, modelName: String, provider: String = ""): AsrGateway {
     return if (endpoint.isNotBlank() && apiKey.isNotBlank() && modelName.isNotBlank()) {
-        AliyunDashScopeAsrGateway(endpoint = endpoint, apiKey = apiKey, modelName = modelName)
+        if (provider == "xiaomi" || endpoint.contains("api.xiaomimimo.com")) XiaomiMimoAsrGateway(endpoint, apiKey, modelName)
+        else AliyunDashScopeAsrGateway(endpoint = endpoint, apiKey = apiKey, modelName = modelName)
     } else {
         DisabledAsrGateway()
     }

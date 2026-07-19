@@ -34,7 +34,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.shared.model.ChatMessage
@@ -61,12 +63,13 @@ private data class GroupHistoryEntry(
     val speaker: String,
     val content: String,
     val timestamp: Long,
-    val isMe: Boolean
+    val isMe: Boolean,
+    val isNarration: Boolean = false,
 )
 
 private val historyJson = Json { ignoreUnknownKeys = true }
 
-private fun parseGroupHistoryJson(content: String): List<Pair<String, String>> {
+private fun parseGroupHistoryJson(content: String): List<Pair<String, Pair<String, Boolean>>> {
     return try {
         val root = historyJson.parseToJsonElement(content)
         val arr = when (root) {
@@ -78,8 +81,8 @@ private fun parseGroupHistoryJson(content: String): List<Pair<String, String>> {
             val obj = el.jsonObject
             val name = obj["speaker"]?.jsonPrimitive?.content ?: obj["sender"]?.jsonPrimitive?.content ?: return@mapNotNull null
             val text = obj["message"]?.jsonPrimitive?.content ?: obj["content"]?.jsonPrimitive?.content ?: obj["text"]?.jsonPrimitive?.content ?: return@mapNotNull null
-            if (name == "旁白") return@mapNotNull null
-            name to text
+            val narration = name == "旁白" || obj["type"]?.jsonPrimitive?.content.equals("narration", true)
+            (if (narration) "旁白" else name) to (text to narration)
         }
     } catch (_: Exception) {
         emptyList()
@@ -128,8 +131,8 @@ fun GroupChatHistoryScreen(
     LaunchedEffect(results) {
         entries = results.flatMap { msg ->
             if (msg.type == "ai_json") {
-                parseGroupHistoryJson(msg.content).map { (speaker, text) ->
-                    GroupHistoryEntry(speaker, text, msg.timestamp, false)
+                parseGroupHistoryJson(msg.content).map { (speaker, value) ->
+                    GroupHistoryEntry(speaker, value.first, msg.timestamp, false, value.second)
                 }
             } else {
                 listOf(GroupHistoryEntry(
@@ -198,6 +201,10 @@ fun GroupChatHistoryScreen(
 
 @Composable
 private fun GroupHistoryEntryItem(entry: GroupHistoryEntry) {
+    if (entry.isNarration) {
+        Text(entry.content, color = TextTertiary, fontSize = 13.sp, fontStyle = FontStyle.Italic, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp, horizontal = 16.dp), textAlign = TextAlign.Center)
+        return
+    }
     val color = if (entry.isMe) Primary else senderColor(entry.speaker)
     Column(
         Modifier.fillMaxWidth()

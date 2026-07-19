@@ -263,8 +263,12 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
 
     suspend fun deleteBySession(sessionId: String) = withContext(Dispatchers.Default) {
         invalidateDerivedBySession(sessionId)
-        db.memoryItemsQueries.deleteMemoryItemsBySession(sessionId)
-        db.memorySourceQueueQueries.deleteMemorySourcesBySession(sessionId)
+        db.transaction {
+            db.vectorMemoriesQueries.deleteVectorsForMemorySession(sessionId)
+            db.memoryItemsQueries.deleteMemoryItemsBySession(sessionId)
+            db.memorySourceQueueQueries.deleteMemorySourcesBySession(sessionId)
+            db.memoryLinksQueries.deleteOrphanedMemoryLinks()
+        }
     }
 
     suspend fun deleteMemoryItem(id: Long) = withContext(Dispatchers.Default) {

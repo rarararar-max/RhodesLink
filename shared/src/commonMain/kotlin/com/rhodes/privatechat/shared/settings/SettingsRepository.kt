@@ -323,10 +323,10 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putString("context_mode", value)
 
     fun getLastMode(operatorId: String): String =
-        getString("last_mode_$operatorId", "online")
+        getString("last_mode_$operatorId", "online").trim().lowercase().takeIf { it in setOf("online", "offline", "director") } ?: "online"
 
     fun putLastMode(operatorId: String, value: String) =
-        putString("last_mode_$operatorId", value)
+        putString("last_mode_$operatorId", value.trim().lowercase().takeIf { it in setOf("online", "offline", "director") } ?: "online")
 
     // === 旁白设置 ===
     var narSegMin: Int
@@ -499,7 +499,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     // === 动态设置 ===
     var dailyMomentTarget: Int
-        get() = settings.getInt("daily_moment_target", 2).coerceIn(0, 3)
+        get() = settings.getInt("daily_moment_target", 1).coerceIn(0, 3)
         set(value) = settings.putInt("daily_moment_target", value.coerceIn(0, 3))
 
     var dailyProactiveChance: Int
@@ -776,10 +776,10 @@ class SettingsRepository(private val settings: ObservableSettings) {
         putBoolean("group_event_auto_$groupId", value)
 
     fun getGroupMode(groupId: String): String =
-        getString("group_mode_$groupId", "online")
+        getString("group_mode_$groupId", "online").trim().lowercase().takeIf { it in setOf("online", "offline", "director") } ?: "online"
 
     fun putGroupMode(groupId: String, value: String) =
-        putString("group_mode_$groupId", value)
+        putString("group_mode_$groupId", value.trim().lowercase().takeIf { it in setOf("online", "offline", "director") } ?: "online")
 
     fun getSessionMessageCounter(sessionId: String): Int =
         getInt("msg_counter_$sessionId", 0)
@@ -932,7 +932,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
                 putInt("private_group_context_count", 2)
                 putInt("group_member_memory_count", 2)
                 putInt("event_context_count", 5)
-                putInt("daily_moment_target", 2)
+                putInt("daily_moment_target", 1)
                 autoDiaryEnabled = true
                 putInt("comment_bystander_max", 3)
             }

@@ -28,6 +28,13 @@ val providers = mapOf(
         models = listOf("gemini-1.5-pro", "gemini-1.5-flash"),
         isOpenAICompat = false
     ),
+    "anthropic" to ProviderConfig(
+        id = "anthropic",
+        name = "Anthropic Claude",
+        baseUrl = "https://api.anthropic.com/v1/messages",
+        models = listOf("claude-sonnet-4-20250514", "claude-3-7-sonnet-20250219"),
+        isOpenAICompat = false
+    ),
     "ali" to ProviderConfig(
         id = "ali",
         name = "阿里千问",
@@ -46,15 +53,21 @@ val providers = mapOf(
         baseUrl = "https://api.siliconflow.cn/v1/chat/completions",
         models = listOf("Qwen/Qwen2.5-7B-Instruct", "Qwen/Qwen2.5-32B-Instruct", "deepseek-ai/DeepSeek-R1")
     ),
+    "xiaomi" to ProviderConfig(
+        id = "xiaomi",
+        name = "小米 MiMo",
+        baseUrl = "https://api.xiaomimimo.com/v1/chat/completions",
+        models = listOf("mimo-v2.5", "mimo-v2.5-pro")
+    ),
     "openai_compat" to ProviderConfig(
         id = "openai_compat",
-        name = "OpenAI兼容",
+        name = "OpenAI",
         baseUrl = "https://api.openai.com/v1/chat/completions",
         models = listOf("gpt-4o", "gpt-4o-mini")
     ),
     "custom" to ProviderConfig(
         id = "custom",
-        name = "自填",
+        name = "其他厂商（OpenAI 兼容）",
         baseUrl = "",
         models = listOf("自填")
     )

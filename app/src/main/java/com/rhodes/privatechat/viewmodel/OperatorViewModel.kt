@@ -14,6 +14,7 @@ class OperatorViewModel(
     private val settings: SettingsRepository,
     private val appState: AppStateHolder,
     private val scope: CoroutineScope,
+    private val onSessionDeleting: (String) -> Unit = {},
     private val onSelectedOperatorUpdated: ((Operator?) -> Unit)? = null
 ) {
     fun saveOperator(
@@ -84,6 +85,7 @@ class OperatorViewModel(
                 ids.forEach { operatorId ->
                     val session = repository.getSessionByOperator(operatorId)
                     if (session != null) {
+                        onSessionDeleting(session.id)
                         repository.purgeSessionData(session.id)
                         repository.deleteSession(session.id)
                     }

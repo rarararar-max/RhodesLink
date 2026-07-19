@@ -48,7 +48,11 @@ fun DailyContentSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier
         title = "每日自动内容",
         onBack = onBack,
         modifier = modifier.fillMaxSize().background(BG).systemBarsPadding(),
-        icon = { Icon(Icons.Default.AutoAwesome, null, tint = Primary) }
+        icon = { Icon(Icons.Default.AutoAwesome, null, tint = Primary) },
+        onSaveRequest = { completeSave ->
+            completeSave()
+            viewModel.refreshAutoGroupChats()
+        }
     ) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp).imePadding().navigationBarsPadding()) {
             DailyContentInfoCard("固定日计划", "每天按北京时间 00:00 开始新的内容周期。动态和私聊会预先分散安排，并在应用关闭时由系统后台任务投递；系统省电策略可能让实际到达时间略晚。")
@@ -56,7 +60,6 @@ fun DailyContentSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier
             SettingsSwitchCard("自动内容", "关闭后不再生成计划动态或主动私聊；手动聊天、手动催发动态不受影响。", autoEnabled) {
                 autoEnabled = it
                 settings.autoAiEnabled = it
-                viewModel.refreshAutoGroupChats()
             }
             SettingsSectionTitle("每日动态")
             SettingsSwitchCard("每日固定动态", "开启动态权限的角色每天会生成设定数量的公开动态。", dailyMomentsEnabled, enabled = autoEnabled) {

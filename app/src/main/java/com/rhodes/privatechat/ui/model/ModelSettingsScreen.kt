@@ -86,6 +86,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     var rebuildVectorResult by remember { mutableStateOf("") }
     var rebuildVectorProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var rebuildEligibleCount by remember { mutableStateOf<Int?>(null) }
+    var pendingVectorSignature by remember { mutableStateOf("") }
     var asrBaseUrl by remember { mutableStateOf(settings.asrBaseUrl) }
     var asrProvider by remember { mutableStateOf(settings.asrProvider) }
     var asrModelName by remember { mutableStateOf(settings.asrModelName) }
@@ -114,6 +115,10 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         ttsProvider != settings.ttsProvider || ttsBaseUrl.trim() != settings.ttsBaseUrl || ttsModelName.trim() != settings.ttsModelName || ttsApiKey.trim() != settings.ttsApiKey || ttsDefaultVoiceId.trim() != settings.ttsDefaultVoiceId
 
     fun validateSettings(): String? {
+        fun hasScheme(value: String, vararg schemes: String): Boolean = runCatching {
+            val scheme = java.net.URI(value.trim()).scheme?.lowercase()
+            scheme != null && scheme in schemes
+        }.getOrDefault(false)
         val modelName = if (isCustom || selectedModelIdx >= currentConfig.models.size) {
             customModelName.trim()
         } else {
@@ -124,12 +129,12 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         if (isCustom) {
             val url = customUrl.trim()
             if (url.isBlank()) return "请填写 API 地址"
-            if (!url.startsWith("http://") && !url.startsWith("https://")) return "API 地址需以 http:// 或 https:// 开头"
+            if (!hasScheme(url, "http", "https")) return "API 地址需以 http:// 或 https:// 开头"
         }
-        if (visionBaseUrl.isNotBlank() && !visionBaseUrl.trim().startsWith("http")) return "识图 API 地址需以 http:// 或 https:// 开头"
-        if (vectorProviderMode == "third_party" && vectorBaseUrl.isNotBlank() && !vectorBaseUrl.trim().startsWith("http")) return "向量 API 地址需以 http:// 或 https:// 开头"
-        if (asrBaseUrl.isNotBlank() && !asrBaseUrl.trim().startsWith("ws")) return "语音识别地址需以 ws:// 或 wss:// 开头"
-        if (ttsBaseUrl.isNotBlank() && !ttsBaseUrl.trim().startsWith("ws")) return "文字转语音地址需以 ws:// 或 wss:// 开头"
+        if (visionBaseUrl.isNotBlank() && !hasScheme(visionBaseUrl, "http", "https")) return "识图 API 地址需以 http:// 或 https:// 开头"
+        if (vectorProviderMode == "third_party" && vectorBaseUrl.isNotBlank() && !hasScheme(vectorBaseUrl, "http", "https")) return "向量 API 地址需以 http:// 或 https:// 开头"
+        if (asrBaseUrl.isNotBlank() && if (asrProvider == "xiaomi") !hasScheme(asrBaseUrl, "http", "https") else !hasScheme(asrBaseUrl, "ws", "wss")) return if (asrProvider == "xiaomi") "小米语音识别地址需以 http:// 或 https:// 开头" else "语音识别地址需以 ws:// 或 wss:// 开头"
+        if (ttsBaseUrl.isNotBlank() && if (ttsProvider == "xiaomi") !hasScheme(ttsBaseUrl, "http", "https") else !hasScheme(ttsBaseUrl, "ws", "wss")) return if (ttsProvider == "xiaomi") "小米文字转语音地址需以 http:// 或 https:// 开头" else "文字转语音地址需以 ws:// 或 wss:// 开头"
         return null
     }
 
@@ -165,6 +170,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             val newVectorSignature = if (vectorProviderMode == "local") "local-hash-384-v1" else "${vectorProvider}:${vectorBaseUrl.trim()}:${vectorModelName.trim()}"
             val vectorSignatureChanged = settings.vectorIndexSignature != newVectorSignature
             if (vectorSignatureChanged) {
+                pendingVectorSignature = newVectorSignature
                 vectorIndexFlowPending = true
                 invalidatingVectorIndex = true
                 scope.launch {
@@ -179,7 +185,6 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                     }
                 }
             }
-            settings.vectorIndexSignature = newVectorSignature
             errorText = ""
             vectorSignatureChanged
         }
@@ -249,12 +254,12 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         scope.launch {
             try {
                 val key = ttsApiKey.trim().ifBlank { apiKey.trim() }
-                require(ttsBaseUrl.trim().startsWith("ws")) { "文字转语音地址需要以 ws:// 或 wss:// 开头" }
+                require(if (ttsProvider == "xiaomi") ttsBaseUrl.trim().startsWith("http") else ttsBaseUrl.trim().startsWith("ws")) { if (ttsProvider == "xiaomi") "小米文字转语音地址需要以 http:// 或 https:// 开头" else "文字转语音地址需要以 ws:// 或 wss:// 开头" }
                 require(ttsModelName.trim().isNotBlank()) { "请填写文字转语音模型名" }
                 require(key.isNotBlank()) { "请填写文字转语音密钥，或先填写聊天密钥" }
                 val testVoiceId = ttsDefaultVoiceId.trim()
                 require(testVoiceId.isNotBlank()) { "请填写默认音色 ID，或到角色编辑页测试角色音色" }
-                val audioBytes = createTtsGateway(ttsBaseUrl.trim(), key, ttsModelName.trim())
+                val audioBytes = createTtsGateway(ttsBaseUrl.trim(), key, ttsModelName.trim(), ttsProvider)
                     .synthesize(TtsRequest("测试成功", testVoiceId)).audioBytes
                 if (audioBytes == null || audioBytes.isEmpty()) {
                     ttsTestResult = "测试失败：服务没有返回音频数据"
@@ -306,10 +311,10 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         scope.launch {
             try {
                 val key = asrApiKey.trim().ifBlank { apiKey.trim() }
-                require(asrBaseUrl.trim().startsWith("ws")) { "语音识别地址需要以 ws:// 或 wss:// 开头" }
+                require(if (asrProvider == "xiaomi") asrBaseUrl.trim().startsWith("http") else asrBaseUrl.trim().startsWith("ws")) { if (asrProvider == "xiaomi") "小米语音识别地址需要以 http:// 或 https:// 开头" else "语音识别地址需要以 ws:// 或 wss:// 开头" }
                 require(asrModelName.trim().isNotBlank()) { "请填写语音识别模型配置" }
                 require(key.isNotBlank()) { "请填写语音识别密钥，或先填写聊天密钥" }
-                createAsrGateway(asrBaseUrl.trim(), key, asrModelName.trim()).transcribe(AsrRequest(ByteArray(3200)))
+                createAsrGateway(asrBaseUrl.trim(), key, asrModelName.trim(), asrProvider).transcribe(AsrRequest(ByteArray(3200)))
                 asrTestResult = "连接成功"
             } catch (e: Exception) {
                 asrTestResult = "测试失败：${e.message?.take(100) ?: "请检查语音识别配置"}"
@@ -350,7 +355,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
 
             // Custom URL
             if (isCustom) {
-                LabeledField("API 地址") {
+                LabeledField("完整 Chat Completions API 地址") {
                     Row { OutlinedTextField(value = customUrl, onValueChange = { customUrl = it; errorText = "" }, modifier = Modifier.weight(1f), singleLine = true, shape = RoundedCornerShape(8.dp), colors = fieldColors()); Spacer(Modifier.width(4.dp)); PasteBtn(ctx) { customUrl = it; errorText = "" } }
                 }
                 Spacer(Modifier.height(12.dp))
@@ -367,15 +372,22 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             Spacer(Modifier.height(12.dp))
 
             SettingsSection("识图模型") {
-                DropDown("服务商", listOf("阿里千问", "豆包", "OpenAI 兼容/自填"), when (visionProvider) { "ali" -> 0; "doubao" -> 1; else -> 2 }) { index ->
-                    visionProvider = listOf("ali", "doubao", "openai")[index]
+                DropDown("服务商", listOf("阿里千问", "豆包", "小米 MiMo", "Anthropic Claude", "OpenAI 兼容/自填"), when (visionProvider) { "ali" -> 0; "doubao" -> 1; "xiaomi" -> 2; "anthropic" -> 3; else -> 4 }) { index ->
+                    visionProvider = listOf("ali", "doubao", "xiaomi", "anthropic", "openai")[index]
                     when (visionProvider) {
                         "ali" -> { visionBaseUrl = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"; visionModelName = "qwen3-vl-plus" }
                         "doubao" -> { visionBaseUrl = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"; visionModelName = "" }
+                        "xiaomi" -> { visionBaseUrl = "https://api.xiaomimimo.com/v1/chat/completions"; visionModelName = "mimo-v2.5" }
+                        "anthropic" -> { visionBaseUrl = "https://api.anthropic.com/v1/messages"; visionModelName = "claude-sonnet-4-20250514" }
                     }
                 }
                 Spacer(Modifier.height(10.dp))
-                Text(if (visionProvider == "ali") "使用阿里千问视觉接口。" else "请选择支持图片理解的模型。", fontSize = 12.sp, color = TextSecondary)
+                Text(when (visionProvider) {
+                    "ali" -> "使用阿里千问视觉接口。"
+                    "xiaomi" -> "使用小米 MiMo 图片理解接口，API Key 使用 api-key 请求头。"
+                    "anthropic" -> "使用 Anthropic Messages 图片理解接口，要求传入 Base64 图片。"
+                    else -> "请选择支持图片理解的模型。"
+                }, fontSize = 12.sp, color = TextSecondary)
                 Spacer(Modifier.height(8.dp))
                 LabeledField("API 地址") { TextInput(visionBaseUrl, { visionBaseUrl = it }, ctx) }
                 Spacer(Modifier.height(10.dp))
@@ -411,10 +423,13 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             }
 
             SettingsSection("语音识别 ASR") {
-                DropDown("服务商", listOf("阿里千问实时识别", "自填（阿里兼容）"), if (asrProvider == "ali") 0 else 1) { asrProvider = if (it == 0) "ali" else "custom" }
-                Text("自填服务必须兼容阿里实时 WebSocket 协议与音频格式。", fontSize = 12.sp, color = TextSecondary)
+                DropDown("服务商", listOf("阿里千问实时识别", "小米 MiMo", "自填（阿里兼容）"), when (asrProvider) { "ali" -> 0; "xiaomi" -> 1; else -> 2 }) { index ->
+                    asrProvider = listOf("ali", "xiaomi", "custom")[index]
+                    if (asrProvider == "xiaomi") { asrBaseUrl = "https://api.xiaomimimo.com/v1/chat/completions"; asrModelName = "mimo-v2.5-asr" }
+                }
+                Text(if (asrProvider == "xiaomi") "小米 MiMo 使用 HTTP 非流式识别，应用会将录音 PCM 自动封装为 WAV 后上传。" else "自填服务必须兼容阿里实时 WebSocket 协议与音频格式。", fontSize = 12.sp, color = TextSecondary)
                 Spacer(Modifier.height(10.dp))
-                LabeledField("WebSocket 地址") { TextInput(asrBaseUrl, { asrBaseUrl = it }, ctx) }
+                LabeledField(if (asrProvider == "xiaomi") "API 地址" else "WebSocket 地址") { TextInput(asrBaseUrl, { asrBaseUrl = it }, ctx) }
                 Spacer(Modifier.height(10.dp))
                 LabeledField("模型配置") { TextInput(asrModelName, { asrModelName = it }, ctx, placeholder = "realtime|transcription") }
                 Spacer(Modifier.height(10.dp))
@@ -423,13 +438,14 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             }
 
             SettingsSection("文字转语音 TTS") {
-                DropDown("服务商", listOf("MiniMax", "自填（MiniMax 兼容）"), if (ttsProvider == "minimax") 0 else 1) { index ->
-                    ttsProvider = if (index == 0) "minimax" else "custom"
+                DropDown("服务商", listOf("MiniMax", "小米 MiMo", "自填（MiniMax 兼容）"), when (ttsProvider) { "minimax" -> 0; "xiaomi" -> 1; else -> 2 }) { index ->
+                    ttsProvider = listOf("minimax", "xiaomi", "custom")[index]
                     if (index == 0) { ttsBaseUrl = "wss://api.minimaxi.com/ws/v1/t2a_v2"; ttsModelName = "speech-2.8-hd" }
+                    if (index == 1) { ttsBaseUrl = "https://api.xiaomimimo.com/v1/chat/completions"; ttsModelName = "mimo-v2.5-tts"; if (ttsDefaultVoiceId.isBlank()) ttsDefaultVoiceId = "mimo_default" }
                 }
-                Text("自填服务必须兼容 MiniMax WebSocket TTS 协议。", fontSize = 12.sp, color = TextSecondary)
+                Text(if (ttsProvider == "xiaomi") "小米 MiMo 使用 HTTP 非流式 TTS，支持 mimo_default、冰糖、茉莉、苏打等预置音色。" else "自填服务必须兼容 MiniMax WebSocket TTS 协议。", fontSize = 12.sp, color = TextSecondary)
                 Spacer(Modifier.height(10.dp))
-                LabeledField("API 地址") { TextInput(ttsBaseUrl, { ttsBaseUrl = it }, ctx) }
+                LabeledField(if (ttsProvider == "xiaomi") "API 地址" else "WebSocket 地址") { TextInput(ttsBaseUrl, { ttsBaseUrl = it }, ctx) }
                 Spacer(Modifier.height(10.dp))
                 LabeledField("模型名") { TextInput(ttsModelName, { ttsModelName = it }, ctx, placeholder = "speech-2.8-hd") }
                 Spacer(Modifier.height(10.dp))
@@ -445,7 +461,12 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             onDismissRequest = { showUnsavedDialog = false },
             title = { Text("有未保存的修改", color = TextPrimary) },
             text = { Text("你已经修改了模型设置。要保存后离开，还是放弃这些修改？", color = TextSecondary) },
-            confirmButton = { TextButton(onClick = { if (saveSettings()) { showUnsavedDialog = false; onBack() } }) { Text("保存修改", color = Primary) } },
+            confirmButton = { TextButton(onClick = {
+                if (validateSettings() != null) return@TextButton
+                val stayForVectorFlow = saveSettings()
+                showUnsavedDialog = false
+                if (!stayForVectorFlow) onBack()
+            }) { Text("保存修改", color = Primary) } },
             dismissButton = {
                 Row {
                     TextButton(onClick = { showUnsavedDialog = false; onBack() }) { Text("放弃修改", color = ErrorRed) }
@@ -483,6 +504,9 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                     "索引重建完成：有效 ${it.eligible}，成功 ${it.succeeded}，失败 ${it.failed}，跳过 ${it.skipped}" +
                         if (it.errors.isNotEmpty()) "。错误：${it.errors.joinToString("；")}" else ""
                 } ?: "索引重建失败，请稍后在角色记忆页重试"
+                if (result != null && result.failed == 0) {
+                    settings.vectorIndexSignature = pendingVectorSignature
+                }
                 rebuildingVectorIndex = false
                 rebuildVectorProgress = null
                 vectorIndexFlowPending = false

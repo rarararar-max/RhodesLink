@@ -132,11 +132,18 @@ class MainViewModel(
     val dataViewModel = DataViewModel(repository, settings, viewModelScope)
     val mahjongViewModel = MahjongViewModel(repository, settings, sharedUtils, viewModelScope) { appState.operators.value }
     val sessionViewModel = SessionViewModel(repository, settings, appState, viewModelScope)
-    val operatorViewModel = OperatorViewModel(repository, settings, appState, viewModelScope) { op ->
-        if (op != null && op.id == chatViewModel.selectedOperator.value?.id) {
-            chatViewModel.updateSelectedOperator(op)
+    val operatorViewModel = OperatorViewModel(
+        repository = repository,
+        settings = settings,
+        appState = appState,
+        scope = viewModelScope,
+        onSessionDeleting = { sessionId -> chatViewModel.cancelSessionRequests(sessionId) },
+        onSelectedOperatorUpdated = { op ->
+            if (op != null && op.id == chatViewModel.selectedOperator.value?.id) {
+                chatViewModel.updateSelectedOperator(op)
+            }
         }
-    }
+    )
     val chatViewModel = ChatViewModel(application, repository, settings, sharedUtils, operatorStateUpdater, appState,
         memoryVectorService = memoryVectorService,
         visionGateway = visionGateway,
@@ -234,12 +241,19 @@ class MainViewModel(
 
     fun getPromptTemplate(type: String, mode: String = ""): String {
         val key = if (mode.isNotBlank()) "prompt_${type}_${mode}" else "prompt_$type"
-        return settings.getString(key, "")?.ifBlank { null } ?: defaultTemplate(type, mode)
+        val saved = settings.getString(key, "").orEmpty()
+        val customFlag = "${key}_custom"
+        if (saved.isNotBlank() && !settings.getBoolean(customFlag, false)) {
+            // Older releases did not record edit state; preserve any stored template rather than overwrite it.
+            settings.putBoolean(customFlag, true)
+        }
+        return saved.ifBlank { defaultTemplate(type, mode) }
     }
 
     fun savePromptTemplate(type: String, mode: String, template: String): List<String> {
         val key = if (mode.isNotBlank()) "prompt_${type}_${mode}" else "prompt_$type"
         settings.putString(key, template)
+        settings.putBoolean("${key}_custom", true)
         val allowed = PromptPlaceholderRegistry.allowed(type)
         val unsupported = Regex("\\{\\{([A-Z0-9_]+)}}").findAll(template).map { it.groupValues[1] }
             .filter { it !in allowed }.distinct().sorted()
@@ -250,6 +264,7 @@ class MainViewModel(
     fun resetPromptTemplate(type: String, mode: String = "") {
         val key = if (mode.isNotBlank()) "prompt_${type}_${mode}" else "prompt_$type"
         settings.remove(key)
+        settings.remove("${key}_custom")
     }
 
     fun applyTemplate(template: String, replacements: Map<String, String>): String =
@@ -494,7 +509,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         if (!settings.idleProactiveChatEnabled) return false
         if (getApiKey().isBlank()) return false
         val profile = getUserProfile()
-        val now = beijingSdf("yyyy-MM-dd HH:mm").format(java.util.Date())
+        val now = sharedUtils.beijingPromptTime()
         val session = repository.getOrCreateSession(op.id, op.name, op.avatarUri)
         // 构建替换映射
         val shortTerm = repository.getShortTermMemory(session.id)
@@ -557,7 +572,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             val parsed = withTimeout(60_000) { sharedUtils.chatWithRetry(conversation, "ProactivePrivate") }
             val normalized = normalizeProactiveResponse(parsed)
             val raw = json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), normalized)
-            if (raw.isNotBlank()) {
+            if (normalized.segments.orEmpty().any { it.type.equals("dialogue", true) && it.content.isNotBlank() }) {
                 val msgId = repository.getNextMessageId()
                 repository.sendMessage(session.id, ChatMessage(
                     id = msgId, sessionId = session.id,
@@ -631,7 +646,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         val source = response.segments.orEmpty().filter { it.content.isNotBlank() }
         val dialogue = source.firstOrNull { it.type.equals("dialogue", true) }
             ?: response.dialogue.takeIf { it.isNotBlank() }?.let { com.rhodes.privatechat.shared.model.Segment(type = "dialogue", content = it) }
-            ?: com.rhodes.privatechat.shared.model.Segment(type = "dialogue", content = "刚刚想到你，就想发来看看。")
+            ?: return response.copy(dialogue = "", narration = "", segments = emptyList())
         val result = listOf(com.rhodes.privatechat.shared.model.Segment(type = "dialogue", content = dialogue.content))
         return response.copy(dialogue = "", narration = "", segments = result)
     }
@@ -735,7 +750,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         viewModelScope.launch {
             try {
                 val dateKey = beijingSdf("yyyyMMdd").format(java.util.Date())
-                val target = intPref("daily_moment_target", 2)
+                val target = settings.dailyMomentTarget
                 val permCount = _operators.value.count { settings.getOperatorDynPermission(it.id) }
                 DebugLogger.log("MomentGen", "调用 generateAllMoments target=$target dateKey=$dateKey")
                 if (target <= 0) return@launch
@@ -916,7 +931,10 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
 
     fun markAllRead() = sessionViewModel.markAllRead()
 
-    fun deleteSession(sessionId: String) = sessionViewModel.deleteSession(sessionId)
+    fun deleteSession(sessionId: String) {
+        chatViewModel.cancelSessionRequests(sessionId)
+        sessionViewModel.deleteSession(sessionId)
+    }
 
     fun hideSession(sessionId: String) {
         val hidden = settings.hiddenIds.toMutableSet()
@@ -1393,7 +1411,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         val timeOfDay = when (hour) {
             in 5..8 -> "清晨"; in 9..11 -> "上午"; in 12..13 -> "中午"; in 14..17 -> "下午"; in 18..20 -> "傍晚"; in 21..23 -> "深夜"; else -> "凌晨"
         }
-        return mapOf("CURRENT_TIME" to beijingSdf("yyyy-MM-dd HH:mm").format(java.util.Date(now)), "CURRENT_DATE" to beijingSdf("yyyy-MM-dd").format(java.util.Date(now)), "TIME_OF_DAY" to timeOfDay)
+        return mapOf("CURRENT_TIME" to sharedUtils.beijingPromptTime(now), "CURRENT_DATE" to beijingSdf("yyyy-MM-dd").format(java.util.Date(now)), "TIME_OF_DAY" to timeOfDay)
     }
 
     suspend fun generateAllMoments(target: Int = 1, dateKey: String = "", force: Boolean = false, onProgress: (String) -> Unit = {}) {
@@ -1795,9 +1813,15 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             } else 0L
             val userComment = MomentComment(momentId = momentId, operatorId = operatorId, operatorName = operatorName, content = cleanContent, parentCommentId = rootParentId, replyToName = replyToName, createdAt = System.currentTimeMillis(), isRead = operatorId == "user")
             val userCommentId = repository.insertComment(userComment)
+            val persistedUserComment = userComment.copy(id = userCommentId)
             Log.d("RHODES_MOMENT", "commentOnMoment: 评论已写入 id=$userCommentId")
             refreshMomentCommentCount(momentId)
             DebugLogger.log("Moment/DB", "评论已写入DB, momentId=$momentId, commentId=$userCommentId")
+            if (operatorId == "user" && settings.memoryV2Enabled && settings.momentMemoryV2Enabled) {
+                // Public user comments deserve the same recall treatment as AI public comments.
+                runCatching { memoryV2Pipeline.ingestMomentComment(persistedUserComment, momentId) }
+                    .onFailure { DebugLogger.log("MemoryV2", "用户公开评论记忆写入失败: ${it.message?.take(80)}") }
+            }
             if (operatorId != "user") return@launch
             val moment = _moments.value.find { it.id == momentId } ?: repository.getMoment(momentId) ?: return@launch
             val userName = getUserProfile().nickname
@@ -1810,10 +1834,11 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 alreadyReplied.add(replyToName)
             }
 
-            // 动态主人回复→用 userCommentId 作为 parentCommentId，嵌套在用户评论下
+            // Keep replies beneath one visible root; top-level comments use the new user row itself.
+            val replyParentId = rootParentId.takeIf { it > 0 } ?: userCommentId
             if (moment.operatorName != "我" && moment.operatorName.trim() != userName.trim() && moment.operatorName !in alreadyReplied) {
                 Log.d("RHODES_MOMENT", "commentOnMoment: 动态主人回复 start=${moment.operatorName}")
-                scheduleAiComment(momentId, moment.operatorName, content, userCommentId, userName, "你是${moment.operatorName}。用户${userName}在你的动态下评论了：「${content}」。请用10-50字自然回复。只输出回复内容本身，不要加任何前缀如「回复xxx」或冒号。直接输出纯文本。", immediate = true)
+                scheduleAiComment(momentId, moment.operatorName, content, replyParentId, userName, "你是${moment.operatorName}。用户${userName}在你的动态下评论了：「${content}」。请用10-50字自然回复。只输出回复内容本身，不要加任何前缀如「回复xxx」或冒号。直接输出纯文本。", immediate = true)
                 alreadyReplied.add(moment.operatorName)
             }
 
@@ -1834,7 +1859,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 } else {
                     "你是${bystander}。你刚看到${moment.operatorName}的动态下，用户${userName}评论了「${content}」。请用10-40字凑热闹式地回复这条评论（看戏、调侃、起哄风格）。直接输出纯文本。"
                 }
-                scheduleAiComment(momentId, bystander, content, 0L, userName, bp)
+                scheduleAiComment(momentId, bystander, content, replyParentId, userName, bp)
             }
         }
     }

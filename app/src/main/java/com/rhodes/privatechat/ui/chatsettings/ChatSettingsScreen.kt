@@ -128,7 +128,7 @@ private fun PrivateTab(settings: SettingsRepository) {
     Spacer(modifier = Modifier.height(12.dp))
 
     SectionTitle("旁白（线下/导演模式）")
-    ParamSlider(settings, "nar_seg_min", "最少旁白段数", 0, 0f..10f, "每次回复最少带几段环境描写。建议0（需要时自然加入）。太高会每轮都强行写场景，像在灌水。线上模式用不到这个。")
+    ParamSlider(settings, "nar_seg_min", "最少旁白段数", 1, 0f..10f, "线下和导演模式每轮至少会保留一段旁白；此设置用于提示模型额外增加旁白的数量。线上模式用不到这个。")
     ParamSlider(settings, "nar_seg_max", "最多旁白段数", 3, 1f..10f, "每次回复最多带几段环境描写。建议2-3。太高（超过5）旁白比台词还多，像在读剧本不像在聊天。")
     ParamSlider(settings, "nar_min", "旁白最少字数", 20, 0f..1000f, "每段环境描写最少写几个字。建议20-50。太低写不出画面感，太高（超过100）一段动作描写就占了大半篇幅。", step = 5f, pairKey = "nar_max", isMinSide = true)
     ParamSlider(settings, "nar_max", "旁白最多字数", 300, 1f..1000f, "每段环境描写最多写几个字。建议200-300。太高（超过400）旁白抢了台词的风头，而且每次回复花的钱也更多。", step = 5f, pairKey = "nar_min", isMinSide = false)
@@ -154,7 +154,7 @@ private fun GroupTab(settings: SettingsRepository) {
     ParamSlider(settings, "group_auto_max_rounds", "空闲连续轮数", 20, 1f..300f, "AI自己聊天最多连续聊多少轮后停下来。建议10-30。太低（低于5）刚聊起来就停了，太高（超过50）AI一直聊不停，刷屏严重。", step = 1f)
 
     Spacer(Modifier.height(12.dp)); SectionTitle("群聊旁白(线下/导演)")
-    Text("线下和导演模式里，AI会在需要时写一点动作、环境或气氛。不是每个人都一定有旁白；旁白越长，回复也会越长。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
+    Text("线下和导演模式每轮至少有一条旁白，用于动作、环境或气氛衔接；不是每个人都一定有旁白。旁白越长，回复也会越长。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
     ParamSlider(settings, "group_nar_min", "旁白最小字数", 20, 0f..200f, "每段场景描写最少写几个字。建议20。太低（0）场景描写太短没画面感。", step = 5f, pairKey = "group_nar_max", isMinSide = true)
     ParamSlider(settings, "group_nar_max", "旁白最大字数", 100, 50f..300f, "每段场景描写最多写几个字。建议100。太高（超过200）群聊里大段旁白像在写小说而不是聊天。", step = 5f, pairKey = "group_nar_min", isMinSide = false)
 }

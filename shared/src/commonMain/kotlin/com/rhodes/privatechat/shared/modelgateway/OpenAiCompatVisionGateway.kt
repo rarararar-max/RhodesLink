@@ -3,6 +3,7 @@ package com.rhodes.privatechat.shared.modelgateway
 import com.rhodes.privatechat.shared.network.createHttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.bearerAuth
+import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.http.ContentType
@@ -13,12 +14,13 @@ class OpenAiCompatVisionGateway(
     private val endpoint: String,
     private val apiKey: String,
     private val modelName: String,
+    private val useApiKeyHeader: Boolean = false,
 ) : VisionGateway {
     private val client = createHttpClient()
 
     override suspend fun analyzeImage(request: VisionAnalyzeRequest): VisionAnalyzeResponse {
         val response = client.post(endpoint) {
-            bearerAuth(apiKey)
+            if (useApiKeyHeader) header("api-key", apiKey) else bearerAuth(apiKey)
             contentType(ContentType.Application.Json)
             setBody(VisionChatRequest(modelName, listOf(VisionChatMessage(content = listOf(
                 VisionPart(type = "image_url", imageUrl = VisionImageUrl(request.imageUrlOrBase64)),

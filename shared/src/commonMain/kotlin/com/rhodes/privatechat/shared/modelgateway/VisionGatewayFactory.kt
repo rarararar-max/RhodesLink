@@ -11,6 +11,8 @@ fun createVisionGateway(provider: String, endpoint: String, apiKey: String, mode
     return if (endpoint.isNotBlank() && apiKey.isNotBlank() && modelName.isNotBlank()) {
         when (provider) {
             "ali" -> AliyunQwenVlGateway(endpoint, apiKey, modelName)
+            "anthropic" -> AnthropicVisionGateway(endpoint, apiKey, modelName)
+            "xiaomi" -> OpenAiCompatVisionGateway(endpoint, apiKey, modelName, useApiKeyHeader = true)
             "doubao", "openai" -> OpenAiCompatVisionGateway(endpoint, apiKey, modelName)
             else -> OpenAiCompatVisionGateway(endpoint, apiKey, modelName)
         }

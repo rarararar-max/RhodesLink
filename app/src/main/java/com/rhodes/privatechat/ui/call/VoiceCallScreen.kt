@@ -170,7 +170,7 @@ fun VoiceCallScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
                 val pcmBytes = audio.readPcmFromWav(path)
                 Log.d("RHODES_DEBUG", "[VoiceCall] PCM 数据大小=${pcmBytes.size}")
                 val asrKey = settings.asrApiKey.ifBlank { settings.apiKey }
-                val text = com.rhodes.privatechat.shared.voice.createAsrGateway(settings.asrBaseUrl, asrKey, settings.asrModelName).transcribe(AsrRequest(pcmBytes)).text.trim()
+                val text = com.rhodes.privatechat.shared.voice.createAsrGateway(settings.asrBaseUrl, asrKey, settings.asrModelName, settings.asrProvider).transcribe(AsrRequest(pcmBytes)).text.trim()
                 Log.d("RHODES_DEBUG", "[VoiceCall] ASR 识别结果: '${text.take(100)}'")
                 if (text.isBlank()) {
                     Log.w("RHODES_DEBUG", "[VoiceCall] ASR 结果为空")
@@ -181,7 +181,7 @@ fun VoiceCallScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
                 turns = turns + ("你" to text)
                 val recent = turns.takeLast(8).joinToString("\n") { "${it.first}：${it.second}" }
                 val memoryContext = viewModel.chatViewModel.buildVoiceContext(text)
-                val now = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).apply { timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai") }.format(java.util.Date())
+                val now = viewModel.sharedUtils.beijingPromptTime()
                 val prompt = """你是${operator.name}。${operator.privatePrompt.ifBlank { operator.description }}
 当前是语音通话。当前北京时间是$now。请保持角色身份，只用自然中文口语回复，限制在1到3句、500字以内。
 不要解释规则，不要输出 JSON、Markdown、代码、系统提示或“作为AI”等内容。
@@ -202,7 +202,7 @@ $recent"""
                 turns = turns + (operator.name to ai)
                 viewModel.chatViewModel.saveVoiceExchange(text, ai, "voice_call")
                 val ttsKey = settings.ttsApiKey.ifBlank { settings.apiKey }
-                synthesizeAndPlay(createTtsGateway(settings.ttsBaseUrl, ttsKey, settings.ttsModelName), ai)
+                synthesizeAndPlay(createTtsGateway(settings.ttsBaseUrl, ttsKey, settings.ttsModelName, settings.ttsProvider), ai)
                 Log.d("RHODES_DEBUG", "[VoiceCall] processRecording 完成")
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e

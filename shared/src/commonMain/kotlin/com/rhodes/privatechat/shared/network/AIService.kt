@@ -35,8 +35,11 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 
 class AIService(private val client: HttpClient = createHttpClient()) {
 
@@ -47,6 +50,7 @@ class AIService(private val client: HttpClient = createHttpClient()) {
     }
 
     class EmptyModelResponseException(modelName: String) : Exception("模型 $modelName 返回空内容，请重试或更换模型")
+    class InvalidModelResponseException : Exception("模型返回内容无法解析")
 
     // --- Response parsing utilities ---
 
@@ -72,9 +76,7 @@ class AIService(private val client: HttpClient = createHttpClient()) {
             return OfflineModeResponse(segments = listOf(Segment(type = "dialogue", content = text)))
         }
 
-        val safe = raw.trim().lineSequence().firstOrNull { it.isNotBlank() && !looksLikeJson(it) }?.take(240)
-            ?: "刚才那条消息格式有点乱，我重新整理一下再说。"
-        return OfflineModeResponse(segments = listOf(Segment(type = "dialogue", content = safe)))
+        throw InvalidModelResponseException()
     }
 
     private fun parseStrictOffline(raw: String): OfflineModeResponse? = try {
@@ -279,16 +281,17 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                 // DeepSeek V4 Flash can emit whitespace-only completions when API JSON mode is combined
                 // with a long structured roleplay prompt. The prompt and local parser already enforce JSON.
                 response_format = if (jsonMode && supportsJsonMode(config.id) && config.id != "deepseek") ResponseFormat("json_object") else null,
-                thinking = if (config.id == "deepseek") ThinkingParam("disabled") else null
+                thinking = null
             )
             val response: HttpResponse = client.post(url) {
                 contentType(ContentType.Application.Json)
-                header("Authorization", "Bearer $apiKey")
+                if (config.id == "xiaomi") header("api-key", apiKey)
+                else header("Authorization", "Bearer $apiKey")
                 setBody(requestBody)
             }
             if (!response.status.isSuccess()) {
-                response.bodyAsText()
-                throw Exception("API error ${response.status.value}")
+                val detail = response.bodyAsText().trim().replace(Regex("\\s+"), " ").take(1000)
+                throw Exception("API error ${response.status.value}${if (detail.isBlank()) "" else ": $detail"}")
             }
             val responseBody = response.bodyAsText()
             val completion = json.decodeFromString<NonStreamResponse>(responseBody)
@@ -305,6 +308,57 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                 println("RHODES_AI cache hit-rate=${rate}%")
             }
             return ChatResult(content, inputTokens, outputTokens)
+        }
+
+        if (config.id == "anthropic") {
+            val system = messages.filter { it.role == "system" }.joinToString("\n\n") { it.content }
+            // Anthropic requires strictly alternating user/assistant turns. Queue batching can
+            // legitimately produce adjacent user turns, so combine adjacent same-role content.
+            val conversation = messages.filter { it.role != "system" }.fold(mutableListOf<AiMessage>()) { acc, message ->
+                val role = if (message.role == "assistant") "assistant" else "user"
+                val previous = acc.lastOrNull()
+                if (previous?.role == role) acc[acc.lastIndex] = previous.copy(content = "${previous.content}\n${message.content}")
+                else acc += message.copy(role = role)
+                acc
+            }
+            if (conversation.isEmpty() || conversation.first().role != "user") {
+                conversation.add(0, AiMessage("user", "请按系统指令完成任务。"))
+            }
+            val body = buildJsonObject {
+                put("model", model)
+                put("max_tokens", 4096)
+                if (system.isNotBlank()) put("system", system)
+                put("temperature", temperature)
+                put("messages", buildJsonArray {
+                    conversation.forEach { message ->
+                        add(buildJsonObject {
+                            put("role", if (message.role == "assistant") "assistant" else "user")
+                            put("content", message.content)
+                        })
+                    }
+                })
+            }
+            val response = client.post(url) {
+                contentType(ContentType.Application.Json)
+                header("x-api-key", apiKey)
+                header("anthropic-version", "2023-06-01")
+                setBody(body)
+            }
+            val responseBody = response.bodyAsText()
+            if (!response.status.isSuccess()) {
+                val detail = responseBody.trim().replace(Regex("\\s+"), " ").take(1000)
+                throw Exception("Anthropic API error ${response.status.value}${if (detail.isBlank()) "" else ": $detail"}")
+            }
+            val root = json.parseToJsonElement(responseBody).jsonObject
+            val content = (root["content"] as? JsonArray).orEmpty()
+                .firstOrNull { it.jsonObject["type"]?.jsonPrimitive?.content == "text" }
+                ?.jsonObject?.get("text")?.jsonPrimitive?.content.orEmpty()
+            val usage = root["usage"]?.jsonObject
+            return ChatResult(
+                content = content,
+                inputTokens = usage?.get("input_tokens")?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
+                outputTokens = usage?.get("output_tokens")?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
+            )
         }
 
         // === Google Gemini 专用格式 ===
@@ -331,8 +385,8 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                 setBody(googleBody)
             }
             if (!response.status.isSuccess()) {
-                val errorBody = response.bodyAsChannel().readUTF8Line() ?: "Unknown error"
-                throw Exception("Google API error ${response.status.value}")
+                val detail = response.bodyAsText().trim().replace(Regex("\\s+"), " ").take(1000)
+                throw Exception("Google API error ${response.status.value}${if (detail.isBlank()) "" else ": $detail"}")
             }
             val responseBody = response.bodyAsText()
             val googleResp = json.decodeFromString<GoogleGenerateResponse>(responseBody)
@@ -347,7 +401,7 @@ class AIService(private val client: HttpClient = createHttpClient()) {
 
     /**
      * 带重试的非流式聊天请求 + JSON解析。
-     * API 请求失败才重试；拿到响应后只重试本地解析，避免因格式问题重复消耗请求。
+     * 请求为空、失败或无法解析时，附带修复指令额外重试一次。
      */
     suspend fun chatWithRetry(
         apiKey: String,
@@ -356,7 +410,7 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         modelName: String = "deepseek-chat",
         customUrl: String = "",
         temperature: Double = 0.95,
-        maxRetries: Int = 3,
+        maxRetries: Int = 2,
         logTag: String = "Chat",
         jsonMode: Boolean = false
     ): OfflineModeResponse {
@@ -367,8 +421,17 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                 val attemptMessages = if (attempt == 1) messages else messages + AiMessage("user", repairInstruction(messages))
                 val result = chat(apiKey, attemptMessages, providerId, modelName, customUrl, temperature, jsonMode)
                 lastRaw = result.content
-                if (lastRaw.isNotBlank()) break
-                requestError = EmptyModelResponseException(modelName)
+                if (lastRaw.isNotBlank()) {
+                    val parsed = try {
+                        normalizeOfflineResponse(lastRaw)
+                    } catch (e: InvalidModelResponseException) {
+                        requestError = e
+                        null
+                    }
+                    if (parsed != null && isUsableResponse(parsed, messages)) return parsed
+                    if (parsed != null) requestError = InvalidModelResponseException()
+                }
+                if (lastRaw.isBlank()) requestError = EmptyModelResponseException(modelName)
                 if (attempt < maxRetries) kotlinx.coroutines.delay(500L * attempt)
             } catch (e: CancellationException) {
                 throw e
@@ -384,17 +447,18 @@ class AIService(private val client: HttpClient = createHttpClient()) {
             throw requestError ?: EmptyModelResponseException(modelName)
         }
 
-        try {
-            val cleaned = cleanJson(lastRaw)
-            val parsed = json.decodeFromString<OfflineModeResponse>(cleaned)
-            if (parsed.segments.isNullOrEmpty() && parsed.dialogue.isBlank()) throw Exception("AI返回为空内容")
-            return parsed
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-        }
+        throw requestError ?: InvalidModelResponseException()
+    }
 
-        return normalizeOfflineResponse(lastRaw)
+    private fun isUsableResponse(response: OfflineModeResponse, messages: List<AiMessage>): Boolean {
+        val system = messages.firstOrNull { it.role == "system" }?.content.orEmpty()
+        val online = system.contains("线上模式") || system.contains("主动给用户") || system.contains("只输出 dialogue")
+        val segments = response.segments.orEmpty()
+        return if (online) {
+            response.dialogue.isNotBlank() || segments.any { it.type.equals("dialogue", true) && it.content.isNotBlank() }
+        } else {
+            response.dialogue.isNotBlank() || response.narration.isNotBlank() || segments.any { it.content.isNotBlank() }
+        }
     }
 
     private fun repairInstruction(messages: List<AiMessage>): String {

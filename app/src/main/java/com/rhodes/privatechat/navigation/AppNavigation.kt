@@ -128,6 +128,7 @@ private fun ChatTabContent(navigator: Navigator) {
             } else {
                 val op = viewModel.operators.value.find { it.id == s.operatorId }
                 if (op != null) navigator.push(ChatOperator(op.id))
+                else com.rhodes.privatechat.util.DebugLogger.log("Navigation", "会话 ${s.id} 的角色 ${s.operatorId} 已不存在")
             }
         },
         onPin = { viewModel.pinSession(it) },
@@ -215,18 +216,25 @@ fun AppNavigation() {
             val sessionId = intent.getStringExtra("nav_session_id") ?: return@LaunchedEffect
             val isGroup = intent.getBooleanExtra("nav_is_group", false)
             if (sessionId.isBlank()) return@LaunchedEffect
-            delay(800)
             try {
                 val viewModel = org.koin.core.context.GlobalContext.get().get<MainViewModel>()
-                val sessions = viewModel.allSessions.value
-                val session = sessions.find { it.id == sessionId }
-                if (session != null) {
-                    if (isGroup) {
-                        navigator.push(GroupChatRoute(session.operatorName.ifBlank { "群聊" }, session.id))
-                    } else {
+                val deadline = System.currentTimeMillis() + 10_000L
+                while (System.currentTimeMillis() < deadline) {
+                    // Do not interrupt a screen the user opened while cold-start data was loading.
+                    if (navigator.lastItem !is MainScreen) break
+                    val session = viewModel.allSessions.value.find { it.id == sessionId }
+                    if (session != null) {
+                        if (isGroup) {
+                            navigator.push(GroupChatRoute(session.operatorName.ifBlank { "群聊" }, session.id))
+                            break
+                        }
                         val op = viewModel.operators.value.find { it.id == session.operatorId }
-                        if (op != null) navigator.push(ChatOperator(op.id))
+                        if (op != null) {
+                            navigator.push(ChatOperator(op.id))
+                            break
+                        }
                     }
+                    delay(200)
                 }
             } catch (_: Exception) {}
             activity?.intent?.removeExtra("nav_session_id")

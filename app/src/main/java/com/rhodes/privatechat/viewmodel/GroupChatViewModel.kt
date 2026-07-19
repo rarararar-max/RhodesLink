@@ -67,6 +67,8 @@ class GroupChatViewModel(
     companion object {
         const val DEBUG = false
         private const val CHAT_PAGE_SIZE = 50L
+        private const val MAX_MERGED_USER_MESSAGES = 2
+        private const val MAX_MERGED_USER_CHARS = 600
     }
 
     private val autoChatGenerations = ConcurrentHashMap<String, Long>()
@@ -106,6 +108,15 @@ class GroupChatViewModel(
     private val autoRoundCounts = ConcurrentHashMap<String, Int>()
     private val groupAiJobs = ConcurrentHashMap<String, Job>()
     private val groupJobLock = Any()
+    private val absorbedUserMessageIds = ConcurrentHashMap.newKeySet<Long>()
+    private val groupGenerations = ConcurrentHashMap<String, Long>()
+
+    private fun cancelGroupRequests(groupId: String) {
+        groupGenerations.merge(groupId, 1L) { old, increment -> old + increment }
+        groupAiJobs.remove(groupId)?.cancel()
+        autoGroupChatJobs.remove(groupId)?.cancel()
+        setGroupLoading(groupId, false)
+    }
 
     private fun setGroupLoading(groupId: String, loading: Boolean) {
         if (loading) groupLoadingStates[groupId] = true else groupLoadingStates.remove(groupId)
@@ -239,10 +250,13 @@ class GroupChatViewModel(
 
     fun restartGroupSession(groupId: String) {
         if (groupId.isBlank()) return
+        cancelGroupRequests(groupId)
         scope.launch {
             val now = System.currentTimeMillis()
+            repository.deleteMemoryV2BySession(groupId)
             settings.putSessionRestartAt(groupId, now)
             settings.putSummaryCursor(groupId, 0L)
+            settings.putMemoryExtractionCursor(groupId, 0L)
             if (_currentGroupId.value == groupId) _groupRestartAt.value = now
             repository.sendMessage(groupId, ChatMessage(
                 id = repository.getNextMessageId(),
@@ -257,6 +271,7 @@ class GroupChatViewModel(
     }
 
     fun deleteGroup(groupSessionId: String, onComplete: () -> Unit = {}) {
+        cancelGroupRequests(groupSessionId)
         stopAutoGroupChat(groupSessionId)
         settings.remove("group_auto_$groupSessionId")
         settings.remove("group_event_auto_$groupSessionId")
@@ -390,12 +405,16 @@ class GroupChatViewModel(
 
     fun sendGroupMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online", autoSpeak: Boolean = false, isAuto: Boolean = false, userMessageAlreadyStored: Boolean = false, onMessageSent: () -> Unit = {}) {
         if (isAuto && !settings.autoAiEnabled) return
+        if (isAuto && groupAiJobs[groupSessionId]?.isActive == true) return
         synchronized(groupJobLock) {
-            groupAiJobs[groupSessionId]?.cancel()
-            groupAiJobs[groupSessionId] = scope.launch {
+            // User sends queue behind the current reply. Idle chat never preempts a user request.
+            val generation = groupGenerations[groupSessionId] ?: 0L
+            scope.launch {
             // 步骤1: 用户消息立即插入（不持锁），消息即时显示
+            var userMessageId: Long? = null
             if (!isAuto && !userMessageAlreadyStored && text.isNotBlank()) {
                 val userMsgId = repository.getNextMessageId()
+                userMessageId = userMsgId
                 repository.sendMessage(groupSessionId, ChatMessage(
                     id = userMsgId, sessionId = groupSessionId,
                     senderName = "我", content = text, type = "text", mode = mode, isMe = true
@@ -404,8 +423,6 @@ class GroupChatViewModel(
                 onMessageSent()
                 resetAutoGroupChatTimer(groupSessionId)
                 unhideSession(groupSessionId)
-                val today = sharedUtils.beijingSdf("yyyyMMdd").format(java.util.Date())
-                settings.grantDailyLmb(today, 10)
             }
 
             // 步骤2: AI 处理 — 串行化（持锁）
@@ -413,6 +430,36 @@ class GroupChatViewModel(
             try {
                 mutexFor(groupSessionId).lock()
                 mutexLocked = true
+                if ((groupGenerations[groupSessionId] ?: 0L) != generation) return@launch
+                if (!isAuto) delay(250)
+                var batchIds = emptySet<Long>()
+                val requestText = if (!isAuto && text.isNotBlank() && !userMessageAlreadyStored && userMessageId != null) {
+                    // Image/voice paths may have persisted their user row before calling here.
+                    // In that case there is no text row to merge, but the supplied prompt must
+                    // still reach the model.
+                    val firstMessageId = userMessageId!!
+                    val batch = repository.getMessagesSync(groupSessionId)
+                        .asSequence()
+                        .filter { it.isMe && it.type == "text" && it.mode == mode }
+                        .filter { firstMessageId <= 0L || it.id >= firstMessageId }
+                        .take(MAX_MERGED_USER_MESSAGES)
+                        .fold(mutableListOf<ChatMessage>()) { acc, message ->
+                            if (acc.isEmpty() || acc.sumOf { it.content.length } + message.content.length <= MAX_MERGED_USER_CHARS) acc += message
+                            acc
+                        }
+                    val ids = batch.map { it.id }
+                    if (ids.any { absorbedUserMessageIds.remove(it) }) return@launch
+                    batchIds = ids.toSet()
+                    if (ids.size > 1) {
+                        absorbedUserMessageIds.addAll(ids.drop(1))
+                        "用户连续补充了以下消息，请按顺序视为同一轮表达并综合回应：\n" +
+                            batch.mapIndexed { index, message -> "[${index + 1}] ${message.content}" }.joinToString("\n")
+                    } else text
+                } else {
+                    batchIds = emptySet()
+                    text
+                }
+                groupAiJobs[groupSessionId] = coroutineContext[Job]!!
                 setGroupLoading(groupSessionId, true)
                 val session = repository.getSession(groupSessionId) ?: run {
                     DebugLogger.log("GroupChat", "⚠️ 群session不存在: $groupSessionId")
@@ -445,18 +492,21 @@ class GroupChatViewModel(
                 // Personal chat background becomes shared only when the user explicitly names
                 // that member in this round; vague recall questions must not expose it.
                 val recalledMembers = activeMembers.filter { member ->
-                    text.contains(member.name)
+                    requestText.contains(member.name)
                 }.take(settings.groupMemberMemoryCount.coerceAtMost(2))
                 val memberPrivateContext = buildString {
                     recalledMembers.forEach { member ->
-                        val knowledge = memoryV2Pipeline.buildPrivateMemoryContext(member.id, 1, 1, 1, text)
+                        val knowledge = memoryV2Pipeline.buildPrivateMemoryContext(member.id, 1, 1, 1, requestText)
                         if (knowledge.isNotBlank()) {
                             appendLine("【用户本轮提起的${member.name}私聊背景，所有成员可自然回应】")
                             appendLine(knowledge)
                         }
                     }
                 }.ifBlank { "无" }
-                val groupSummary = repository.getShortTermMemory(groupSessionId)?.content?.takeIf { it.isNotBlank() } ?: ""
+                val restartAt = settings.getSessionRestartAt(groupSessionId)
+                val groupSummary = repository.getShortTermMemory(groupSessionId)
+                    ?.takeIf { restartAt <= 0L || it.createdAt >= restartAt }
+                    ?.content?.takeIf { it.isNotBlank() } ?: ""
                 val memberMemoryContext = ""
                 val sourceAwareMemories = "无"
                 val groupVectorMemories = memoryV2Pipeline.buildOwnerMemoryContext(
@@ -465,15 +515,15 @@ class GroupChatViewModel(
                     limitL1 = 3,
                     limitL2 = 0,
                     limitL3 = 0,
-                    query = text,
+                    query = requestText,
                 ).ifBlank { "无" }
                 val recentSocialContext = sharedUtils.buildRecentSocialContext(
                     activeMembers.map { it.id }.toSet(),
-                    text,
+                    requestText,
                     limit = if (isAuto) 2 else 3
                 )
                 val groupDailySummary = if (UnifiedMemoryContext.shouldIncludeTimeSummary(text)) {
-                    (repository.getLatestDailyBySession(groupSessionId) ?: repository.getLatestDaily())?.content ?: "无"
+                    repository.getLatestDailyBySession(groupSessionId)?.content ?: "无"
                 } else "无"
                 val legacyMemberMemory = ""
                 val unifiedGroupMemory = UnifiedMemoryContext.mergeBlocks(
@@ -499,7 +549,7 @@ class GroupChatViewModel(
                         append("${m.name}（${act}${genderStr}${titleStr}）：${m.groupPrompt.ifBlank { m.privatePrompt.ifBlank { m.description } }}\n")
                     }
                 }
-                val userMessage = if (isAuto) "（用户没有新发言。请只根据最近群聊自然延续话题，不要替用户发言。）" else if (autoSpeak) "（群聊已空闲一段时间，干员们自然地闲聊起来，无需等待用户发言。）" else text
+                val userMessage = if (isAuto) "（用户没有新发言。请只根据最近群聊自然延续话题，不要替用户发言。）" else if (autoSpeak) "（群聊已空闲一段时间，干员们自然地闲聊起来，无需等待用户发言。）" else requestText
                 val grpTpl = getPromptTemplate("group", mode)
                 val userObserving = if (isAuto) when (mode) {
                     "offline" -> "用户坐在一旁，安静地听着大家的对话，没有插话。"
@@ -510,7 +560,7 @@ class GroupChatViewModel(
                     "offline", "director" -> "\n允许旁白条目（speaker为\"旁白\"，type为\"narration\"），对话条目type为\"dialogue\"。"
                     else -> ""
                 } else ""
-                val now = sharedUtils.beijingSdf("yyyy-MM-dd HH:mm").format(java.util.Date())
+                val now = sharedUtils.beijingPromptTime()
                 val grpReplacements = mapOf(
                     "CURRENT_TIME" to now, "GROUP_NAME" to groupName,
                     "AUTO_REASON" to (if (isAuto) "idle" else "manual"),
@@ -572,10 +622,10 @@ class GroupChatViewModel(
                     val restartAt = settings.getSessionRestartAt(groupSessionId)
                     val currentConversation = if (restartAt > 0L) msgs.filter { it.timestamp >= restartAt } else msgs
                     val limited = if (historyLimit > 0) currentConversation.takeLast(historyLimit) else currentConversation
-                    limited.filter { msg -> msg.isMe || msg.type == "system" || msg.type == "ai_json" || msg.senderName in activeNames }
+                    limited.filter { msg -> (msg.id !in batchIds) && (msg.isMe || msg.type == "system" || msg.type == "ai_json" || msg.senderName in activeNames) }
                 }.toMutableList()
-                // 去掉最后一条用户消息，避免与下文重复
-                if (!isAuto && allHistory.lastOrNull()?.isMe == true) {
+                // Keep the pre-stored media row in history, but remove a non-batched trailing text row.
+                if (!isAuto && batchIds.isEmpty() && !userMessageAlreadyStored && allHistory.lastOrNull()?.isMe == true) {
                     allHistory.removeAt(allHistory.lastIndex)
                 }
                 val apiMessages = mutableListOf(AiMessage("system", finalSystemPrompt))
@@ -586,7 +636,7 @@ class GroupChatViewModel(
                     }
                 }
                 if (!isAuto) {
-                    val userMsg = if (autoSpeak) "（群聊已空闲一段时间，干员们自然地闲聊起来，无需等待用户发言。）" else text
+                    val userMsg = if (autoSpeak) "（群聊已空闲一段时间，干员们自然地闲聊起来，无需等待用户发言。）" else requestText
                     apiMessages.add(AiMessage("user", "用户：$userMsg"))
                 }
                 // 估算总 token，超限则丢弃最早的历史消息
@@ -605,7 +655,6 @@ class GroupChatViewModel(
                 val validSpeakers = activeMembers.map { it.name }.toSet() + "旁白"
                 var rawBase = ""
                 var filtered: List<GroupMsgResult> = emptyList()
-                var firstPass: List<GroupMsgResult> = emptyList()
                 var requestMessages = apiMessages.toList()
                 repeat(2) { attempt ->
                     if (filtered.isNotEmpty()) return@repeat
@@ -614,30 +663,24 @@ class GroupChatViewModel(
                     sharedUtils.trackTokens("group", requestMessages, rawBase)
                     if (DEBUG) sharedUtils.logAiCall("GroupChat", promptText, rawBase, requestMessages)
                     val results = extractGroupResults(rawBase)
-                    val normalized = normalizeGroupResults(results, validSpeakers, mode)
-                    if (attempt == 0) firstPass = normalized
-                    filtered = if (attempt == 0) normalized else firstPass + normalized
-                    if (!hasRequiredGroupTurn(filtered, activeMembers.map { it.name }, mode)) filtered = emptyList()
+                    filtered = normalizeGroupResults(results, validSpeakers, mode)
                     if (filtered.isEmpty() && attempt == 0) {
                         requestMessages = apiMessages + AiMessage(
                             "user",
-                            if (mode == "online") {
-                                "请只补充以下尚未发言成员的非空 dialogue：${missingMemberNames(firstPass, activeMembers.map { it.name }).joinToString("、")}。严格输出 JSON 数组；speaker 只能从名单中选择，message 必须是纯文字台词。不要重复已有发言、不要旁白、动作、神态、场景描写或解释。"
-                            } else {
-                                "请只补充以下尚未发言成员的台词：${missingMemberNames(firstPass, activeMembers.map { it.name }).joinToString("、")}。可为这些成员补充贴近其台词的旁白；严格输出 JSON 数组，不要重复已有成员发言、不要输出名单外角色或解释。"
-                            }
+                            "上一轮输出无法使用。保留当前角色、上下文和历史，只输出可解析的 JSON 数组，不要 Markdown 或解释。"
                         )
                     }
                 }
                 if (filtered.isEmpty()) {
+                    if ((groupGenerations[groupSessionId] ?: 0L) != generation) return@launch
                     repository.sendMessage(groupSessionId, ChatMessage(
                         id = repository.getNextMessageId(), sessionId = groupSessionId,
-                        senderName = "系统", content = "群聊回复格式错误或发言者不在当前群成员中，请重试。",
+                        senderName = "系统", content = "通讯出现波动，再发一遍吧",
                         type = "system", mode = mode, isMe = false
                     ))
-                    markGroupUnreadIfNotCurrent(groupSessionId)
                 }
                 if (filtered.isNotEmpty()) {
+                    if ((groupGenerations[groupSessionId] ?: 0L) != generation) return@launch
                     val aiMsgId = repository.getNextMessageId()
                     val storedContent = if (filtered.isNotEmpty()) {
                         try {
@@ -652,32 +695,38 @@ class GroupChatViewModel(
                     notifyIfBackground(groupName, filtered.firstOrNull()?.let { "${it.speaker}：${it.message}" } ?: "群聊有新消息", groupSessionId)
                     val last = filtered.last()
                     repository.updateLastMessage(groupSessionId, "${last.speaker}：${last.message.take(50)}", System.currentTimeMillis())
+                    if (!isAuto) {
+                        val today = sharedUtils.beijingSdf("yyyyMMdd").format(java.util.Date())
+                        settings.grantDailyLmb(today, 10)
+                    }
                 }
                 if (filtered.isNotEmpty()) markGroupUnreadIfNotCurrent(groupSessionId, visibleGroupMessageCount(filtered, mode))
                 if (filtered.isNotEmpty()) extractGroupMemoryIfNeeded(groupSessionId, groupName)
-                val gc = sessionMessageCounter.merge(groupSessionId, 1) { old, inc -> old + inc } ?: 1
-                if (gc >= settings.summaryThreshold && groupSessionId.isNotBlank()) {
-                    val gs = repository.getSession(groupSessionId)
-                    if (gs != null) {
-                        if (generateGroupShortTermSummary(groupSessionId, gs.operatorName)) {
-                            sessionMessageCounter[groupSessionId] = 0
+                if (filtered.isNotEmpty()) {
+                    val gc = sessionMessageCounter.merge(groupSessionId, 1) { old, inc -> old + inc } ?: 1
+                    if (gc >= settings.summaryThreshold && groupSessionId.isNotBlank()) {
+                        val gs = repository.getSession(groupSessionId)
+                        if (gs != null) {
+                            if (generateGroupShortTermSummary(groupSessionId, gs.operatorName)) {
+                                sessionMessageCounter[groupSessionId] = 0
+                            }
+                            // 生成群聊每日摘要（昨日消息 >1 条时）
+                            generateGroupDailySummary(groupSessionId, gs.operatorName)
                         }
-                        // 生成群聊每日摘要（昨日消息 >1 条时）
-                        generateGroupDailySummary(groupSessionId, gs.operatorName)
                     }
                 }
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                if ((groupGenerations[groupSessionId] ?: 0L) != generation) return@launch
                 Log.e("GroupChat", "Timeout: ${e.message}")
-                repository.sendMessage(groupSessionId, ChatMessage(id = repository.getNextMessageId(), sessionId = groupSessionId, senderName = "系统", content = "响应超时，请重试", type = "system", mode = mode, isMe = false))
-                markGroupUnreadIfNotCurrent(groupSessionId)
+                repository.sendMessage(groupSessionId, ChatMessage(id = repository.getNextMessageId(), sessionId = groupSessionId, senderName = "系统", content = "通讯出现波动，再发一遍吧", type = "system", mode = mode, isMe = false))
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // 被新消息取消，不做任何事
             } catch (e: Exception) {
-                val errMsg = classifyGroupError(e)
+                if ((groupGenerations[groupSessionId] ?: 0L) != generation) return@launch
+                val errMsg = "通讯出现波动，再发一遍吧"
                 Log.e("GroupChat", "Error: ${e.message}", e)
                 DebugLogger.log("GroupChat/Error", "发送失败: $errMsg")
                 repository.sendMessage(groupSessionId, ChatMessage(id = repository.getNextMessageId(), sessionId = groupSessionId, senderName = "系统", content = errMsg, type = "system", mode = mode, isMe = false))
-                markGroupUnreadIfNotCurrent(groupSessionId)
                 _lastSendError.value = errMsg
             } finally {
                 setGroupLoading(groupSessionId, false)
@@ -732,11 +781,6 @@ class GroupChatViewModel(
             if (speaker == "旁白") type = "narration"
             if (type == "narration") speaker = "旁白"
             if (type == "narration" && containsFirstPersonNarration(message)) return@mapNotNull null
-            if (type == "dialogue" && looksNarrationLike(message)) {
-                if (containsFirstPersonNarration(message)) return@mapNotNull null
-                speaker = "旁白"
-                type = "narration"
-            }
             if (mode == "online" && type == "narration") return@mapNotNull null
             if (message.isBlank() || speaker !in validSpeakers) return@mapNotNull null
             GroupMsgResult(speaker = speaker, message = message, type = type)
@@ -746,11 +790,6 @@ class GroupChatViewModel(
     private fun stripSpeakerPrefix(content: String): Pair<String, String> {
         val idx = listOf(content.indexOf('：'), content.indexOf(':')).filter { it in 1..12 }.minOrNull() ?: return "" to content
         return content.substring(0, idx).trim(' ', '“', '”', '"') to content.substring(idx + 1).trim()
-    }
-
-    private fun looksNarrationLike(content: String): Boolean {
-        val text = content.take(80)
-        return listOf("牌桌上", "气氛", "众人", "看向", "走到", "坐在", "站在", "抬手", "转身", "垂眸", "低头", "环顾", "风", "灯光").any { text.contains(it) }
     }
 
     private fun containsFirstPersonNarration(content: String): Boolean {
@@ -776,8 +815,10 @@ class GroupChatViewModel(
             onResult(false)
             return
         }
+        val generation = groupGenerations[groupSessionId] ?: 0L
         scope.launch {
             try {
+                if ((groupGenerations[groupSessionId] ?: 0L) != generation) return@launch
                 val id = repository.getNextMessageId()
                 val placeholderJson = json.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), kotlinx.serialization.json.JsonObject(mapOf(
                     "imageUri" to kotlinx.serialization.json.JsonPrimitive(imageUri),
@@ -796,6 +837,7 @@ class GroupChatViewModel(
                 // The message is safely persisted now. The composer must never wait for vision/AI work.
                 onMessageSent()
                 onResult(true)
+                if ((groupGenerations[groupSessionId] ?: 0L) != generation) return@launch
                 val visionText = try {
                     currentVisionGateway().analyzeImage(VisionAnalyzeRequest(
                         imageUrlOrBase64 = imageForModel,
@@ -822,6 +864,7 @@ class GroupChatViewModel(
                     onResult(false)
                     return@launch
                 }
+                if ((groupGenerations[groupSessionId] ?: 0L) != generation) return@launch
                 val cleanText = visionText.trim().removePrefix("```json").removePrefix("```").trim().removeSuffix("```").trim()
                 val visionSummary = runCatching {
                     json.parseToJsonElement(cleanText).jsonObject["visibleSummary"]?.jsonPrimitive?.content
@@ -841,6 +884,7 @@ class GroupChatViewModel(
                 }
                 saveVisionVectorMemory(groupSessionId, caption, visionSummary ?: visionText)
                 // The image message above is the only user-visible record. The vision result is AI-only context.
+                if ((groupGenerations[groupSessionId] ?: 0L) != generation) return@launch
                 sendGroupMessage(groupSessionId, groupName, promptText, mode, userMessageAlreadyStored = true)
             } catch (e: Exception) {
                 _lastSendError.value = classifyGroupError(e)
@@ -848,14 +892,6 @@ class GroupChatViewModel(
             }
         }
     }
-
-    private fun hasRequiredGroupTurn(results: List<GroupMsgResult>, activeNames: List<String>, mode: String): Boolean {
-        // Narration placement is a style preference. Only real dialogue from every active member is blocking.
-        return activeNames.none { name -> results.none { it.speaker == name && it.type == "dialogue" && it.message.isNotBlank() } }
-    }
-
-    private fun missingMemberNames(results: List<GroupMsgResult>, activeNames: List<String>): List<String> =
-        activeNames.filter { name -> results.none { it.speaker == name && it.type == "dialogue" && it.message.isNotBlank() } }
 
     private fun formatGroupImageForPrompt(msg: ChatMessage): String = try {
         val obj = json.parseToJsonElement(msg.content).jsonObject
@@ -959,7 +995,7 @@ class GroupChatViewModel(
     }
 
     private fun visibleGroupMessageCount(items: List<GroupMsgResult>, mode: String): Int =
-        items.count { mode != "online" || (it.type != "narration" && it.speaker != "旁白") }.coerceAtLeast(1)
+        items.count { mode != "online" || (it.type != "narration" && it.speaker != "旁白") }
 
     private fun classifyGroupError(e: Exception): String = when {
         e.message?.contains("401") == true || e.message?.contains("api key", true) == true -> "API Key 无效或已过期，请在设置中检查"
@@ -1036,14 +1072,18 @@ class GroupChatViewModel(
         try {
             val retain = settings.summaryRetain.coerceAtLeast(5)
             val window = (settings.summaryThreshold + retain).coerceAtLeast(retain + 3)
+            val restartAt = settings.getSessionRestartAt(groupSessionId)
             val allMessages = repository.getMessagesSync(groupSessionId)
+                .filter { restartAt <= 0L || it.timestamp >= restartAt }
             val cursor = if (settings.summaryCursorEnabled) settings.getSummaryCursor(groupSessionId) else 0L
             val source = (if (cursor > 0L) allMessages.filter { it.id > cursor } else allMessages).takeLast(window)
             val msgs = if (source.size > retain) source.dropLast(retain) else source
             if (msgs.size <= 2) return false
             val text = msgs.mapNotNull { formatGroupMessageForMemory(it, 120).takeIf { line -> line.isNotBlank() } }.joinToString("\n")
             if (text.isBlank()) return false
-            val oldSummary = repository.getShortTermMemory(groupSessionId)?.content?.takeIf { it.isNotBlank() } ?: "无"
+            val oldSummary = repository.getShortTermMemory(groupSessionId)
+                ?.takeIf { restartAt <= 0L || it.createdAt >= restartAt }
+                ?.content?.takeIf { it.isNotBlank() } ?: "无"
             val prompt = """请融合群聊「${groupName}」的已有摘要和新增对话，生成一份连续短期摘要。输出80-180字纯文本，不要编造。
 
 要求：
@@ -1114,8 +1154,9 @@ $text"""
     private suspend fun extractGroupMemoryIfNeeded(groupSessionId: String, groupName: String) {
         if (!settings.memoryV2Enabled) return
         val cursor = settings.getMemoryExtractionCursor(groupSessionId)
+        val restartAt = settings.getSessionRestartAt(groupSessionId)
         val pending = repository.getMessagesSync(groupSessionId)
-            .filter { it.id > cursor && it.type != "system" }
+            .filter { it.id > cursor && it.type != "system" && (restartAt <= 0L || it.timestamp >= restartAt) }
             .take(settings.groupMemoryExtractionThreshold.coerceAtMost(30))
         if (pending.size < settings.groupMemoryExtractionThreshold) return
         if (ingestGroupMemoryV2(groupSessionId, groupName, pending)) {

@@ -74,14 +74,14 @@ class SharedUtils(
     }
 
     /** 非流式聊天 + JSON解析重试：解析失败时重新请求，最多重试3次 */
-    suspend fun chatWithRetry(messages: List<AiMessage>, logTag: String = "Chat", category: String = ""): com.rhodes.privatechat.shared.model.OfflineModeResponse {
+    suspend fun chatWithRetry(messages: List<AiMessage>, logTag: String = "Chat", category: String = "", maxRetries: Int = 2): com.rhodes.privatechat.shared.model.OfflineModeResponse {
         validateChatConfiguration()
         val temp = settings.aiTemperature
         val prompt = messages.firstOrNull()?.content ?: ""
         logAiCall("→$logTag", prompt, "(requesting with retry...)", messages)
         val result = aiService.chatWithRetry(
             settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl,
-            temperature = temp, logTag = logTag, jsonMode = true
+            temperature = temp, maxRetries = maxRetries, logTag = logTag, jsonMode = true
         )
         if (DEBUG) logAiCall("←$logTag", prompt, result.toString(), messages)
         return result
@@ -275,6 +275,12 @@ class SharedUtils(
 
     fun beijingSdf(pattern: String) = java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault())
         .apply { timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai") }
+
+    fun beijingPromptTime(timestamp: Long = System.currentTimeMillis()): String {
+        val calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai")).apply { timeInMillis = timestamp }
+        val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
+        return "${beijingSdf("yyyy-MM-dd HH:mm").format(java.util.Date(timestamp))}（${getTimeOfDay(hour)}）"
+    }
 
     fun getTimeOfDay(hour: Int): String = when {
         hour in 5..7 -> "清晨"

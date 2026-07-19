@@ -110,10 +110,9 @@ object MessageParser {
                 val obj = el.jsonObject
                 val rawName = obj["speaker"]?.jsonPrimitive?.content ?: obj["sender"]?.jsonPrimitive?.content ?: obj["name"]?.jsonPrimitive?.content ?: return@mapIndexedNotNull null
                 val rawContent = obj["message"]?.jsonPrimitive?.content ?: obj["content"]?.jsonPrimitive?.content ?: obj["text"]?.jsonPrimitive?.content ?: return@mapIndexedNotNull null
-                val normalized = normalizeGroupBubble(rawName, obj["type"]?.jsonPrimitive?.content ?: "dialogue", rawContent)
-                val name = normalized.first
-                val msgType = normalized.second
-                val content = normalized.third
+                val msgType = if (rawName == "旁白" || obj["type"]?.jsonPrimitive?.content.equals("narration", true)) "narration" else "dialogue"
+                val name = if (msgType == "narration") "旁白" else rawName
+                val content = rawContent.trim()
                 if (content.isBlank()) return@mapIndexedNotNull null
                 if (isOnline && (msgType == "narration" || name == "旁白")) return@mapIndexedNotNull null
                 val uid = msg.id * 1000 + idx
@@ -255,33 +254,6 @@ object MessageParser {
             }
         }
         return if (segments.isEmpty()) null to emptyList() else emotion to segments
-    }
-
-    private fun normalizeGroupBubble(name: String, type: String, content: String): Triple<String, String, String> {
-        val stripped = stripSpeakerPrefix(content)
-        var finalName = name.trim().ifBlank { "旁白" }
-        var finalType = if (type.equals("narration", true) || type == "旁白") "narration" else "dialogue"
-        var finalContent = stripped.second.trim().ifBlank { content.trim() }
-        if (stripped.first.isNotBlank() && finalName == "旁白") finalName = stripped.first
-        if (finalName == "旁白") finalType = "narration"
-        if (finalType == "narration") finalName = "旁白"
-        if (finalType == "dialogue" && looksNarrationLike(finalContent)) {
-            finalName = "旁白"
-            finalType = "narration"
-        }
-        return Triple(finalName, finalType, finalContent)
-    }
-
-    private fun stripSpeakerPrefix(content: String): Pair<String, String> {
-        val idx = listOf(content.indexOf('：'), content.indexOf(':')).filter { it in 1..12 }.minOrNull() ?: return "" to content
-        val prefix = content.substring(0, idx).trim(' ', '“', '”', '"')
-        val rest = content.substring(idx + 1).trim()
-        return prefix to rest
-    }
-
-    private fun looksNarrationLike(content: String): Boolean {
-        val text = content.take(80)
-        return listOf("牌桌上", "气氛", "众人", "看向", "走到", "坐在", "站在", "叹了口气", "笑了笑", "皱了皱", "沉默了").any { text.contains(it) }
     }
 
     private fun safeDisplayText(content: String): String {

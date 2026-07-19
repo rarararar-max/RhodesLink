@@ -159,6 +159,7 @@ class DataViewModel(
             payload.anchors.orEmpty().forEach { repository.saveAnchor(it) }
             payload.moments.orEmpty().forEach { repository.insertMoment(it) }
             payload.momentLikes.orEmpty().forEach { repository.insertLike(it) }
+            repository.backfillLikeCounts()
             payload.momentComments.orEmpty().forEach { repository.insertComment(it) }
             payload.diaries.orEmpty().forEach { repository.insertDiary(it) }
             // V2 row IDs and vectors are local implementation details. Restore canonical items and rebuild vectors later.

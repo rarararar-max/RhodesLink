@@ -267,7 +267,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                                 } else {
                                     scope.launch {
                                         try {
-                                            val asr = com.rhodes.privatechat.shared.voice.createAsrGateway(settings.asrBaseUrl, settings.asrApiKey.ifBlank { settings.apiKey }, settings.asrModelName)
+                                            val asr = com.rhodes.privatechat.shared.voice.createAsrGateway(settings.asrBaseUrl, settings.asrApiKey.ifBlank { settings.apiKey }, settings.asrModelName, settings.asrProvider)
                                             val text = asr.transcribe(AsrRequest(audioController.readPcmFromWav(recorded.path))).text
                                             if (text.isBlank()) android.widget.Toast.makeText(ctx, "没有识别到文字", android.widget.Toast.LENGTH_SHORT).show() else inputText = text
                                         } catch (e: Exception) {

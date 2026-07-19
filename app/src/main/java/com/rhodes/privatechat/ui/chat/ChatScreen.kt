@@ -336,7 +336,7 @@ fun ChatScreen(
                                 } else {
                                     scope.launch {
                                         try {
-                                            val asr = com.rhodes.privatechat.shared.voice.createAsrGateway(settings.asrBaseUrl, settings.asrApiKey.ifBlank { settings.apiKey }, settings.asrModelName)
+                                            val asr = com.rhodes.privatechat.shared.voice.createAsrGateway(settings.asrBaseUrl, settings.asrApiKey.ifBlank { settings.apiKey }, settings.asrModelName, settings.asrProvider)
                                             val text = asr.transcribe(AsrRequest(audioController.readPcmFromWav(recorded.path))).text
                                             if (text.isBlank()) Toast.makeText(context, "没有识别到文字", Toast.LENGTH_SHORT).show() else viewModel.updateInputText(text)
                                         } catch (e: Exception) {
@@ -506,7 +506,7 @@ private fun PropShopDialog(
 人设：${persona}
 
 【当前场景】
-现在的时间是：${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).apply { timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai") }.format(java.util.Date())}
+现在的时间是：${viewModel.sharedUtils.beijingPromptTime()}
 你所在的位置是：${loc}
 你正在做的事情是：${stateDesc}
 你此刻的情绪是：${mood}

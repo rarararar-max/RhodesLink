@@ -251,7 +251,7 @@ fun GroupEditScreen(
             confirmButton = {
                 TextButton(onClick = {
                     showDismissConfirm = false
-                    viewModel.deleteGroup(groupId) { onBack() }
+                    viewModel.deleteGroup(groupId) { onBack(); onBack() }
                 }) { Text("确认解散", color = ErrorRed) }
             },
             dismissButton = { TextButton(onClick = { showDismissConfirm = false }) { Text("取消", color = TextSecondary) } }

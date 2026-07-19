@@ -77,6 +77,8 @@ class ChatViewModel(
     companion object {
         const val DEBUG = false
         private const val CHAT_PAGE_SIZE = 50L
+        private const val MAX_MERGED_USER_MESSAGES = 2
+        private const val MAX_MERGED_USER_CHARS = 600
     }
 
     // === Chat state ===
@@ -101,7 +103,7 @@ class ChatViewModel(
     private val _scrollToMessageId = MutableStateFlow<Long?>(null)
     val scrollToMessageId: StateFlow<Long?> = _scrollToMessageId.asStateFlow()
 
-    private val _currentMode = MutableStateFlow("offline")
+    private val _currentMode = MutableStateFlow("online")
     val currentMode: StateFlow<String> = _currentMode.asStateFlow()
 
     private val _inputText = MutableStateFlow("")
@@ -142,6 +144,8 @@ class ChatViewModel(
     private var modeTransitionRetryPending = false
     private var messagesJob: Job? = null
     private val chatAiJobs = ConcurrentHashMap<String, Job>()
+    private val absorbedUserMessageIds = ConcurrentHashMap.newKeySet<Long>()
+    private val sessionGenerations = ConcurrentHashMap<String, Long>()
     private val pageSize: Long get() = CHAT_PAGE_SIZE
     private val memoryV2Pipeline = MemoryV2Pipeline(repository, settings, sharedUtils.aiService, memoryVectorService) { appState.userProfile.value.nickname }
 
@@ -166,12 +170,20 @@ class ChatViewModel(
 
     fun getPromptTemplate(type: String, mode: String = ""): String {
         val key = if (mode.isNotBlank()) "prompt_${type}_${mode}" else "prompt_$type"
-        return settings.getString(key, "")?.ifBlank { null } ?: PromptTemplates.get(type, mode)
+        val saved = settings.getString(key, "").orEmpty()
+        val customFlag = "${key}_custom"
+        if (saved.isNotBlank() && !settings.getBoolean(customFlag, false)) {
+            // Older releases did not record edit state; preserve any stored template rather than overwrite it.
+            settings.putBoolean(customFlag, true)
+        }
+        return saved.ifBlank { PromptTemplates.get(type, mode) }
     }
 
     suspend fun generateShortTermSummary(session: ChatSession, messageSource: List<ChatMessage>? = null): Boolean {
         try {
-            val allMsgs = messageSource ?: repository.getMessagesSync(session.id)
+            val restartAt = settings.getSessionRestartAt(session.id)
+            val allMsgs = (messageSource ?: repository.getMessagesSync(session.id))
+                .filter { restartAt <= 0L || it.timestamp >= restartAt }
             val retain = settings.summaryRetain.coerceAtLeast(1)
             val cursor = if (settings.summaryCursorEnabled && messageSource == null) settings.getSummaryCursor(session.id) else 0L
             val scopedMsgs = if (cursor > 0L) allMsgs.filter { it.id > cursor } else allMsgs
@@ -391,13 +403,13 @@ ${text}"""
 
     fun restartSession() {
         val session = _currentSession.value ?: return
+        cancelSessionRequests(session.id)
         viewModelScope.launch {
-            chatAiJobs.remove(session.id)?.cancel()
-            activeRequestBySession.remove(session.id)
-            _loadingSessions.update { it - session.id }
             val now = System.currentTimeMillis()
+            repository.deleteMemoryV2BySession(session.id)
             settings.putSessionRestartAt(session.id, now)
             settings.putSummaryCursor(session.id, 0L)
+            settings.putMemoryExtractionCursor(session.id, 0L)
             _sessionRestartAt.value = now
             repository.clearSessionPreview(session.id, now)
             repository.sendMessage(session.id, ChatMessage(
@@ -415,10 +427,8 @@ ${text}"""
 
     fun erasePrivateSessionAndRestart() {
         val session = _currentSession.value ?: return
+        cancelSessionRequests(session.id)
         viewModelScope.launch {
-            chatAiJobs.remove(session.id)?.cancel()
-            activeRequestBySession.remove(session.id)
-            _loadingSessions.update { it - session.id }
             runCatching {
                 val now = System.currentTimeMillis()
                 val privateV2Vectors = repository.erasePrivateRelationship(
@@ -580,18 +590,24 @@ ${text}"""
     private fun visiblePrivateSegmentCount(parsed: com.rhodes.privatechat.shared.model.OfflineModeResponse, mode: String): Int {
         val segments = parsed.segments.orEmpty().filter { it.content.isNotBlank() }
         val count = if (mode == "online") segments.count { it.type != "narration" } else segments.size
-        return count.coerceAtLeast(if (parsed.dialogue.isNotBlank()) 1 else 0).coerceAtLeast(1)
+        return count
     }
 
     private fun ensureVisiblePrivateReply(
         parsed: com.rhodes.privatechat.shared.model.OfflineModeResponse,
         mode: String
     ): com.rhodes.privatechat.shared.model.OfflineModeResponse {
-        val source = parsed.segments.orEmpty().filter { it.content.isNotBlank() }
+        val source = parsed.segments.orEmpty().mapNotNull { segment ->
+            val content = segment.content.trim()
+            if (content.isBlank()) null else com.rhodes.privatechat.shared.model.Segment(
+                type = if (segment.type.equals("narration", true) || segment.type == "旁白") "narration" else "dialogue",
+                content = content
+            )
+        }
         if (mode == "online") {
-            val dialogue = source.filterNot { it.type.equals("narration", true) }
-            val fallback = parsed.dialogue.ifBlank { dialogue.firstOrNull()?.content.orEmpty() }.trim()
-            return if (fallback.isBlank()) parsed else parsed.copy(dialogue = "", segments = listOf(com.rhodes.privatechat.shared.model.Segment(type = "dialogue", content = fallback)))
+            val dialogue = source.filter { it.type == "dialogue" }
+                .ifEmpty { parsed.dialogue.trim().takeIf { it.isNotBlank() }?.let { listOf(com.rhodes.privatechat.shared.model.Segment("dialogue", it)) }.orEmpty() }
+            return if (dialogue.isEmpty()) parsed else parsed.copy(dialogue = "", narration = "", segments = dialogue)
         }
         if (source.isEmpty()) return parsed
         val normalized = mutableListOf<com.rhodes.privatechat.shared.model.Segment>()
@@ -611,22 +627,32 @@ ${text}"""
                 normalized += com.rhodes.privatechat.shared.model.Segment("narration", content)
             }
         }
-        val merged = normalized.fold(mutableListOf<com.rhodes.privatechat.shared.model.Segment>()) { acc, segment ->
-            val previous = acc.lastOrNull()
-            if (previous?.type == segment.type) acc[acc.lastIndex] = previous.copy(content = "${previous.content}\n${segment.content}") else acc += segment
-            acc
-        }
-        if (merged.none { it.type == "dialogue" }) return parsed
-        if (merged.lastOrNull()?.type != "dialogue") {
-            val fallback = parsed.dialogue.ifBlank { "嗯，我在听。" }
-            merged += com.rhodes.privatechat.shared.model.Segment("dialogue", fallback)
-        }
-        return parsed.copy(dialogue = "", narration = "", segments = merged)
+        if (normalized.none { it.type == "dialogue" }) return parsed
+        return parsed.copy(dialogue = "", narration = "", segments = normalized)
+    }
+
+    fun cancelSessionRequests(sessionId: String) {
+        sessionGenerations.merge(sessionId, 1L) { old, increment -> old + increment }
+        chatAiJobs.remove(sessionId)?.cancel()
+        activeRequestBySession.remove(sessionId)
+        _loadingSessions.update { it - sessionId }
+    }
+
+    private suspend fun savePrivateFailure(sessionId: String, messageId: Long, mode: String) {
+        repository.sendMessage(sessionId, ChatMessage(
+            id = messageId,
+            sessionId = sessionId,
+            senderName = "系统",
+            content = "通讯出现波动，再发一遍吧",
+            type = "system",
+            mode = mode,
+            isMe = false
+        ))
     }
 
     fun sendMessage() {
         if (DEBUG) dumpDebugState()
-        val text = _inputText.value.trim()
+        var text = _inputText.value.trim()
         val session = _currentSession.value ?: return
         if (text.isEmpty()) return
         if (sharedUtils.getApiKey().isBlank()) {
@@ -636,13 +662,10 @@ ${text}"""
         _inputText.value = ""
         generateDailyIfNeeded()
 
-        // 取消该会话上一条正在处理的 AI
-        chatAiJobs[session.id]?.cancel()
         val requestId = requestSequence.incrementAndGet()
+        val generation = sessionGenerations[session.id] ?: 0L
         val job = viewModelScope.launch {
             analysisGuidanceBySession[session.id] = ""
-                val sessionCounter = settings.getSessionMessageCounter(session.id) + 1
-                settings.putSessionMessageCounter(session.id, sessionCounter)
             val msgId = repository.getNextMessageId()
             val mode = _currentMode.value
             var aiMsgId = 0L
@@ -655,10 +678,28 @@ ${text}"""
                 DebugLogger.log("Chat/DB", "用户消息已写入, session=${session.id}, id=$msgId, length=${text.length}")
                 aiMsgId = repository.getNextMessageId()
                 DebugLogger.log("Chat/DB", "AI消息ID已获取, aiMsgId=$aiMsgId")
-                beginLoading(session.id, requestId)
-
                 aiMutexFor(session.id).lock()
                 mutexLocked = true
+                if (absorbedUserMessageIds.remove(msgId)) return@launch
+                if ((sessionGenerations[session.id] ?: 0L) != generation) return@launch
+                chatAiJobs[session.id] = coroutineContext[Job]!!
+                beginLoading(session.id, requestId)
+                // Allow a short natural follow-up before creating this response batch.
+                delay(250)
+                val batchMessages = repository.getMessagesSync(session.id)
+                    .asSequence()
+                    .filter { it.isMe && it.type == "text" && it.mode == mode && it.id >= msgId }
+                    .take(MAX_MERGED_USER_MESSAGES)
+                    .fold(mutableListOf<ChatMessage>()) { acc, message ->
+                        if (acc.isEmpty() || acc.sumOf { it.content.length } + message.content.length <= MAX_MERGED_USER_CHARS) acc += message
+                        acc
+                    }
+                val batchIds = batchMessages.map { it.id }.ifEmpty { listOf(msgId) }
+                if (batchIds.size > 1) {
+                    absorbedUserMessageIds.addAll(batchIds.drop(1))
+                    val combined = batchMessages.mapIndexed { index, message -> "[${index + 1}] ${message.content}" }.joinToString("\n")
+                    text = "用户连续补充了以下消息，请按顺序视为同一轮表达并综合回应：\n$combined"
+                }
 
                 if (settings.dualModel) {
                     analysisGuidanceBySession[session.id] = ""
@@ -711,7 +752,7 @@ ${text}"""
 - 所有字段必须填写，不得省略
 
 以下是你需要分析的信息：
-当前系统时间：${sharedUtils.beijingSdf("HH:mm").format(java.util.Date())}
+当前系统时间：${sharedUtils.beijingPromptTime()}
 用户最新消息：${text}
 用户信息：${profile.nickname}，${profile.gender}
 干员：${session.operatorName}
@@ -739,7 +780,7 @@ ${recentDialogues}
                 var effectiveHistoryMessages = settings.historyMessages
                 while (retryCount < maxRetries) {
                     try {
-                        val apiMessages = buildApiMessages(text, effectiveHistoryMessages)
+                        val apiMessages = buildApiMessages(text, effectiveHistoryMessages, batchIds.toSet(), mode = mode)
                         DebugLogger.log("Chat/AI", "请求AI, session=${session.id}, mode=$mode, prompt长度=${apiMessages.size}")
                         logPrivatePromptTrace(
                             stage = "REQUEST",
@@ -768,6 +809,7 @@ ${recentDialogues}
                         val hasVisibleReply = rawJson.isNotBlank() && visiblePrivateSegmentCount(parsed, mode) > 0
                         val aiResponseCount = if (hasVisibleReply) visiblePrivateSegmentCount(parsed, mode) else 0
                         if (hasVisibleReply) {
+                            if ((sessionGenerations[session.id] ?: 0L) != generation) return@launch
                             repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = rawJson, type = "ai_json", mode = mode, isMe = false))
                             notifyIfBackground(session.operatorName, replyPreview(parsed).ifBlank { "发来一条消息" })
                             DebugLogger.log("Chat/DB", "AI响应已写入, session=${session.id}, id=$aiMsgId")
@@ -779,6 +821,8 @@ ${recentDialogues}
                             operatorStateUpdater.updateOperatorIntimacy(session.operatorId, affectionMod.coerceIn(0, 4))
                             settings.grantDailyLmb(currentDate, 10)
                             decrementHypnosis()
+                            val sessionCounter = settings.getSessionMessageCounter(session.id) + 1
+                            settings.putSessionMessageCounter(session.id, sessionCounter)
                             if (sessionCounter >= shortTermThreshold && generateShortTermSummary(session)) {
                                 settings.putSessionMessageCounter(session.id, 0)
                             }
@@ -786,6 +830,7 @@ ${recentDialogues}
                             markUnreadIfNotCurrent(session.id, aiResponseCount)
                         } else {
                             DebugLogger.log("Chat/AI", "AI没有生成可见回复，不结算互动: session=${session.id}")
+                            savePrivateFailure(session.id, aiMsgId, mode)
                             if (modeTransitionRetryPending) {
                                 modeTransitionNotice = ""
                                 modeTransitionRetryPending = false
@@ -797,8 +842,8 @@ ${recentDialogues}
                         break  // 成功，退出重试循环
                     } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                         DebugLogger.log("Chat/AI", "AI超时, session=${session.id}")
-                        repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = classifyError(e), type = "text", mode = mode, isMe = false))
-                        markUnreadIfNotCurrent(session.id)
+                        if ((sessionGenerations[session.id] ?: 0L) != generation) return@launch
+                        savePrivateFailure(session.id, aiMsgId, mode)
                         break
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         DebugLogger.log("Chat/AI", "AI被取消, session=${session.id}")
@@ -822,16 +867,17 @@ ${recentDialogues}
                     }
                 }
                 if (lastError != null) {
+                    if ((sessionGenerations[session.id] ?: 0L) != generation) return@launch
                     Log.e("ChatVM", "私聊AI最终错误 session=${session.id} err=${lastError.message?.take(120)}")
                     DebugLogger.log("Chat/AI", "AI错误: ${lastError.message?.take(100)}, session=${session.id}")
-                    val errorMsg = if (retryCount > 0) "上下文超限，本次已临时降级至${effectiveHistoryMessages}轮后仍失败：${classifyError(lastError)}"
-                                   else classifyError(lastError)
-                    repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = errorMsg, type = "text", mode = mode, isMe = false))
-                    markUnreadIfNotCurrent(session.id)
+                    savePrivateFailure(session.id, aiMsgId, mode)
                 }
-            } finally { finishLoading(session.id, requestId); if (mutexLocked) aiMutexFor(session.id).unlock() }
+            } finally {
+                finishLoading(session.id, requestId)
+                if (chatAiJobs[session.id] == coroutineContext[Job]) chatAiJobs.remove(session.id)
+                if (mutexLocked) aiMutexFor(session.id).unlock()
+            }
         }
-        chatAiJobs[session.id] = job
     }
 
     fun sendImageMessage(imageUri: String, imageForModel: String?, caption: String = "", onResult: (Boolean) -> Unit = {}) {
@@ -860,8 +906,8 @@ ${recentDialogues}
         Log.d("RHODES_VISION", "imageForModel 长度=${imageForModel.length}")
         _inputText.value = ""
         generateDailyIfNeeded()
-        chatAiJobs[session.id]?.cancel()
         val requestId = requestSequence.incrementAndGet()
+        val generation = sessionGenerations[session.id] ?: 0L
 
         // 异步：先保存图片占位 → 分析图片 → 更新消息 → AI 回复
         val job = viewModelScope.launch {
@@ -881,6 +927,10 @@ ${recentDialogues}
             var mutexLocked = false
             beginLoading(session.id, requestId)
             try {
+                // Serialize image analysis and role replies with ordinary text replies.
+                aiMutexFor(session.id).lock()
+                mutexLocked = true
+                if ((sessionGenerations[session.id] ?: 0L) != generation) return@launch
                 val gateway = currentVisionGateway()
                 Log.d("RHODES_VISION", "开始调用 vision API: gatewayClass=${gateway::class.simpleName}")
                 val visionText = try {
@@ -899,6 +949,7 @@ ${recentDialogues}
                     Log.d("RHODES_VISION", "vision API 返回 length=${result.text.length}")
                     result?.text?.take(2000).orEmpty().ifBlank { throw IllegalStateException("没有识别到图片内容") }
                 } catch (e: Exception) {
+                    if ((sessionGenerations[session.id] ?: 0L) != generation) return@launch
                     Log.e("RHODES_VISION", "vision API 异常: ${e.message}", e)
                     DebugLogger.log("Vision", "私聊识图失败: ${e.message?.take(100)}")
                     val failedJson = json.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), JsonObject(mapOf(
@@ -923,8 +974,7 @@ ${recentDialogues}
                 repository.updateMessageContent(imageMsgId, updatedJson)
                 Log.d("RHODES_VISION", "图片消息更新完成 msgId=$imageMsgId")
 
-                aiMutexFor(session.id).lock()
-                mutexLocked = true
+                chatAiJobs[session.id] = coroutineContext[Job]!!
 
                 val cleanText = visionText.trim().removePrefix("```json").removePrefix("```").trim().removeSuffix("```").trim()
                 val visionSummary = runCatching {
@@ -940,33 +990,34 @@ ${recentDialogues}
                 }
                 Log.d("RHODES_VISION", "userContent(前300): ${userContent.take(300)}")
 
-                val apiMessages = buildApiMessages(userContent, settings.historyMessages)
+                val apiMessages = buildApiMessages(userContent, settings.historyMessages, mode = mode)
                 Log.d("RHODES_VISION", "开始 AI 调用: apiMessages 数量=${apiMessages.size}")
                 var parsed = withTimeout(90_000) { sharedUtils.chatWithRetry(apiMessages) }
                 Log.d("RHODES_VISION", "图片角色回复解析成功")
                 parsed = ensureVisiblePrivateReply(parsed, mode)
                 val rawJson = sharedUtils.aiService.cleanJson(json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed))
                 val aiMsgId = repository.getNextMessageId()
-                if (rawJson.isNotBlank()) {
+                val hasVisibleReply = rawJson.isNotBlank() && visiblePrivateSegmentCount(parsed, mode) > 0
+                if (hasVisibleReply) {
+                    if ((sessionGenerations[session.id] ?: 0L) != generation) return@launch
                     repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = rawJson, type = "ai_json", mode = mode, isMe = false))
                     notifyIfBackground(session.operatorName, replyPreview(parsed).ifBlank { "发来一条消息" })
                     Log.d("RHODES_VISION", "AI 回复已保存 msgId=$aiMsgId")
-                }
-                saveVisionMemory(session, caption, visionText)
-                markUnreadIfNotCurrent(session.id, visiblePrivateSegmentCount(parsed, mode))
+                    saveVisionMemory(session, caption, visionText)
+                    markUnreadIfNotCurrent(session.id, visiblePrivateSegmentCount(parsed, mode))
+                } else savePrivateFailure(session.id, aiMsgId, mode)
                 Log.d("RHODES_VISION", "sendImageMessage 完成")
             } catch (e: Exception) {
                 Log.e("RHODES_VISION", "sendImageMessage 异常: ${e.message}", e)
                 val errId = repository.getNextMessageId()
-                repository.sendMessage(session.id, ChatMessage(id = errId, sessionId = session.id, senderName = session.operatorName, content = classifyError(e), type = "text", mode = mode, isMe = false))
-                markUnreadIfNotCurrent(session.id)
+                savePrivateFailure(session.id, errId, mode)
                 onResult(false)
             } finally {
                 if (mutexLocked) aiMutexFor(session.id).unlock()
                 finishLoading(session.id, requestId)
+                if (chatAiJobs[session.id] == coroutineContext[Job]) chatAiJobs.remove(session.id)
             }
         }
-        chatAiJobs[session.id] = job
     }
 
     private fun isVisionConfigured(): Boolean {
@@ -1164,19 +1215,24 @@ ${recentDialogues}
                     userContent = userMsg.content,
                     previousReply = previousReply,
                     excludeMessageIds = setOf(msgId, placeholderId),
-                    historyBeforeMessageId = msgId
+                    historyBeforeMessageId = msgId,
+                    mode = mode
                 )
                 var parsed = withTimeout(90_000) { sharedUtils.chatWithRetry(apiMessages) }
                 parsed = ensureVisiblePrivateReply(parsed, mode)
                 sharedUtils.trackTokens("private", apiMessages, parsed.toString())
                 val serializedJson = try { json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed) } catch (_: Exception) { parsed.toString() }
                 val rawJson = sharedUtils.aiService.cleanJson(serializedJson)
-                if (rawJson.isNotBlank()) {
+                if (rawJson.isNotBlank() && visiblePrivateSegmentCount(parsed, mode) > 0) {
                     // Preserve the original row and timestamp so regeneration stays in place.
                     repository.updateMessageContent(msgId, rawJson)
                     repository.deleteMessage(placeholderId)
                     markUnreadIfNotCurrent(session.id)
                     _messages.value = _messages.value.filter { it.id != msgId && it.id != placeholderId }
+                } else {
+                    repository.deleteMessage(placeholderId)
+                    savePrivateFailure(session.id, repository.getNextMessageId(), mode)
+                    _messages.value = _messages.value.filter { it.id != placeholderId }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 repository.deleteMessage(placeholderId)
@@ -1187,6 +1243,7 @@ ${recentDialogues}
                 repository.deleteMessage(placeholderId)
                 _messages.value = _messages.value.filter { it.id != placeholderId }
                 DebugLogger.log("Chat/Regenerate", "重新生成失败: ${e.message?.take(100)}")
+                savePrivateFailure(session.id, repository.getNextMessageId(), mode)
             } finally { finishLoading(session.id, requestId); if (mutexLocked) aiMutexFor(session.id).unlock(); modeTransitionNotice = "" }
         }
         chatAiJobs[session.id] = job
@@ -1246,7 +1303,7 @@ ${recentDialogues}
 - affection_mod 必须是整数，综合判断用户态度
 
 以下是你需要分析的信息：
-当前系统时间：${sharedUtils.beijingSdf("HH:mm").format(java.util.Date())}
+当前系统时间：${sharedUtils.beijingPromptTime()}
 用户最新消息：${previousUser.content}
 用户信息：${profile.nickname}，${profile.gender}
 干员：${session.operatorName}
@@ -1266,16 +1323,22 @@ ${recentDialogues}
                     } catch (_: Exception) { analysisGuidanceBySession[session.id] = "" }
                 }
 
-                val apiMessages = buildApiMessages(previousUser?.content ?: "")
+                val apiMessages = buildApiMessages(previousUser?.content ?: "", mode = mode)
                 var parsed = withTimeout(90_000) { sharedUtils.chatWithRetry(apiMessages) }
                 parsed = ensureVisiblePrivateReply(parsed, mode)
                 sharedUtils.trackTokens("private", apiMessages, parsed.toString())
                 val serializedJson = try { json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed) } catch (_: Exception) { parsed.toString() }
-                repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = serializedJson, type = "ai_json", mode = mode, isMe = false))
-                markUnreadIfNotCurrent(session.id)
+                if (visiblePrivateSegmentCount(parsed, mode) > 0) {
+                    repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = serializedJson, type = "ai_json", mode = mode, isMe = false))
+                    markUnreadIfNotCurrent(session.id)
+                } else {
+                    savePrivateFailure(session.id, aiMsgId, mode)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                DebugLogger.log("Chat/Continue", "继续说被取消, session=${session.id}")
+                throw e
             } catch (e: Exception) {
-                repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = classifyError(e), type = "text", mode = mode, isMe = false))
-                markUnreadIfNotCurrent(session.id)
+                savePrivateFailure(session.id, aiMsgId, mode)
             }
             finally { finishLoading(session.id, requestId); if (mutexLocked) aiMutexFor(session.id).unlock(); modeTransitionNotice = "" }
         }
@@ -1291,7 +1354,7 @@ ${recentDialogues}
         viewModelScope.launch {
             try {
                 val profile = appState.userProfile.value
-                val now = sharedUtils.beijingSdf("yyyy-MM-dd HH:mm").format(java.util.Date())
+                val now = sharedUtils.beijingPromptTime()
                 val hour = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai")).get(java.util.Calendar.HOUR_OF_DAY)
                 val recent = _messages.value.takeLast(15).joinToString("\n") { "${if (it.isMe) profile.nickname else it.senderName}：${it.content.take(60)}" }
                 val lastOpMsg = _messages.value.lastOrNull { !it.isMe }?.content?.take(60) ?: ""
@@ -1356,6 +1419,8 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
     private fun classifyError(e: Exception): String = when {
         e.message?.contains("返回空内容") == true -> "模型没有返回有效内容，请重试；若持续出现，请更换模型或降低提示词复杂度"
         e.message?.contains("401") == true || e.message?.contains("api key", true) == true -> "API Key 无效或已过期，请在设置中检查"
+        e.message?.contains("403") == true -> "当前 API Key 没有模型或服务权限，请检查账号授权"
+        e.message?.contains("404") == true || e.message?.contains("model_not_found", true) == true -> "接口地址或模型不存在，请检查完整 API 地址和模型名"
         e.message?.contains("402") == true || e.message?.contains("insufficient", true) == true || e.message?.contains("quota") == true -> "API 余额不足，请充值后重试"
         e.message?.contains("429") == true -> "AI 服务请求太频繁，请稍后重试"
         e.message?.contains("5") == true && e.message?.contains("50") == true -> "AI 服务暂时不可用，请稍后重试"
@@ -1466,8 +1531,9 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
     private suspend fun extractPrivateMemoryIfNeeded(session: ChatSession) {
         if (!settings.memoryV2Enabled) return
         val cursor = settings.getMemoryExtractionCursor(session.id)
+        val restartAt = settings.getSessionRestartAt(session.id)
         val pending = repository.getMessagesSync(session.id)
-            .filter { it.id > cursor && it.type != "system" }
+            .filter { it.id > cursor && it.type != "system" && (restartAt <= 0L || it.timestamp >= restartAt) }
             .take(settings.privateMemoryExtractionThreshold.coerceAtMost(30))
         if (pending.size < settings.privateMemoryExtractionThreshold) return
         if (ingestPrivateMemoryV2(session, pending)) {
@@ -1542,7 +1608,8 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         userContent: String = "",
         historyLimitOverride: Int? = null,
         excludeMessageIds: Set<Long> = emptySet(),
-        historyBeforeMessageId: Long? = null
+        historyBeforeMessageId: Long? = null,
+        mode: String = _currentMode.value
     ): List<AiMessage> {
         val session = _currentSession.value ?: return emptyList()
         val op = repository.getOperator(session.operatorId)
@@ -1561,7 +1628,6 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
 - 不要直接说“我被催眠了”，除非用户指令要求。
 剩余${_hypnosisRounds.value}轮
 """ else ""
-        val mode = _currentMode.value
         val transitionNotice = if (modeTransitionNotice.isNotBlank()) "【场景变更】\n${modeTransitionNotice}\n" else ""
         val wantsRecall = UnifiedMemoryContext.shouldIncludeTimeSummary(userContent)
         val recallQuery = repository.getMessagesSync(session.id)
@@ -1594,7 +1660,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             "统一记忆注入: op=${session.operatorId}, mode=$mode, summary=${shortTerm != null}, memory=${memoryV2Context != "无"}"
         )
         val replacements = mapOf(
-            "CURRENT_TIME" to sharedUtils.beijingSdf("yyyy-MM-dd HH:mm").format(java.util.Date()),
+            "CURRENT_TIME" to sharedUtils.beijingPromptTime(),
             "USER_NAME" to profile.nickname, "USER_GENDER" to profile.gender.ifBlank { "未知" }, "USER_BIO" to profile.bio.ifBlank { "无" },
             "AI_ANALYSIS" to analysisBlock,             "HYPNOSIS" to hypnosisBlock,
             "TRANSITION_NOTICE" to transitionNotice,
@@ -1655,7 +1721,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             |与用户关系：${op?.userRelation.orEmpty().ifBlank { "未知" }}
         """.trimMargin()
         val context = """CACHE_CONTEXT_V1:private
-            |当前时间：${sharedUtils.beijingSdf("yyyy-MM-dd HH时").format(java.util.Date())}
+            |当前时间：${sharedUtils.beijingPromptTime()}
             |用户：${profile.nickname}，${profile.gender.ifBlank { "未知" }}，${profile.bio.ifBlank { "无" }}
             |共同经历引用风格：${when (settings.personalMemoryReferenceStyle) { "restrained" -> "只在用户明确问起或话题高度相关时提及"; "proactive" -> "话题有联系时可主动自然提及共同经历"; else -> "话题相关时自然提及共同经历，不要无故翻旧账" }}
             |临时指令：${listOf(analysisBlock, hypnosisBlock, transitionNotice).filter { it.isNotBlank() }.joinToString("\n").ifBlank { "无" }}
@@ -1710,7 +1776,10 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             listOf("群", "大家", "群里", "谁说", "谁提", "之前").any(query::contains)
         val candidates = if (expandedRecall) groups.take(settings.privateGroupContextCount) else groups.take(1)
         val lines = candidates.mapNotNull { group ->
-            repository.getShortTermMemory(group.id)?.content?.takeIf { it.isNotBlank() }
+            val restartAt = settings.getSessionRestartAt(group.id)
+            repository.getShortTermMemory(group.id)
+                ?.takeIf { restartAt <= 0L || it.createdAt >= restartAt }
+                ?.content?.takeIf { it.isNotBlank() }
                 ?.let { "- 在群聊「${group.operatorName}」中：${it.take(220)}" }
         }
         return lines.joinToString("\n").ifBlank { "无" }
@@ -1720,7 +1789,8 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         userContent: String,
         previousReply: String,
         excludeMessageIds: Set<Long> = emptySet(),
-        historyBeforeMessageId: Long? = null
+        historyBeforeMessageId: Long? = null,
+        mode: String
     ): List<AiMessage> {
         val angle = listOf(
             "从行动推进切入，减少解释，把场景往前推一步",
@@ -1748,7 +1818,8 @@ $avoid
         return buildApiMessages(
             userContent = userContent,
             excludeMessageIds = excludeMessageIds,
-            historyBeforeMessageId = historyBeforeMessageId
+            historyBeforeMessageId = historyBeforeMessageId,
+            mode = mode
         )
     }
 

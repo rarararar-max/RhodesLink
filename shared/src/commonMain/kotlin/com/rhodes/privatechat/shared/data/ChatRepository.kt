@@ -236,6 +236,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun updateCommentCount(momentId: Long, count: Int) = moments.updateCommentCount(momentId, count)
     suspend fun getCommentCount(momentId: Long) = moments.getCommentCount(momentId)
     suspend fun getLikeCount(momentId: Long) = moments.getLikeCount(momentId)
+    suspend fun backfillLikeCounts() = moments.backfillLikeCounts()
     suspend fun getLike(momentId: Long, operatorId: String) = moments.getLike(momentId, operatorId)
     suspend fun getMomentsPaged(limit: Int, offset: Int) = moments.getMomentsPaged(limit, offset)
     suspend fun getMomentsBefore(createdAt: Long, id: Long, limit: Int) = moments.getMomentsBefore(createdAt, id, limit)

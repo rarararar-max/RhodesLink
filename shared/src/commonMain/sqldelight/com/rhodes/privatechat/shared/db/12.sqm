@@ -1,0 +1,7 @@
+CREATE INDEX IF NOT EXISTS idx_moments_operator_created ON moments(operatorId, createdAt DESC);
+CREATE INDEX IF NOT EXISTS idx_moments_created_id ON moments(createdAt DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_moment_comments_moment_created ON moment_comments(momentId, createdAt);
+CREATE INDEX IF NOT EXISTS idx_moment_likes_moment ON moment_likes(momentId);
+DELETE FROM moment_likes
+WHERE id NOT IN (SELECT MIN(id) FROM moment_likes GROUP BY momentId, operatorId);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_moment_likes_moment_operator ON moment_likes(momentId, operatorId);

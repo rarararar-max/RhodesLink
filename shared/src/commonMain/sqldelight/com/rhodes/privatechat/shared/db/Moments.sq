@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS moments (
     createdAt INTEGER NOT NULL DEFAULT 0
 );
 
+
 getAllMoments:
 SELECT * FROM moments ORDER BY createdAt DESC;
 
@@ -52,3 +53,7 @@ DELETE FROM moments WHERE operatorId = ?;
 
 getLastInsertRowId:
 SELECT last_insert_rowid();
+
+backfillLikeCounts:
+UPDATE moments
+SET likeCount = (SELECT COUNT(*) FROM moment_likes WHERE moment_likes.momentId = moments.id);

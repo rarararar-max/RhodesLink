@@ -24,6 +24,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -67,12 +68,20 @@ fun GlobalMemoryScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     }
     LaunchedEffect(Unit) { reload() }
 
-    val ownerOptions = remember(allItems) {
+    val operators by viewModel.operators.collectAsState()
+    val sessions by viewModel.allSessions.collectAsState()
+    val operatorNames = remember(operators) { operators.associate { it.id to it.name } }
+    val groupNames = remember(sessions) {
+        sessions.filter { it.operatorId.startsWith("group") || it.id.startsWith("group") }
+            .associate { it.id to it.operatorName }
+    }
+
+    val ownerOptions = remember(allItems, operatorNames, groupNames) {
         listOf("全部范围", "角色个人知识", "群共同知识", "公开动态资料") +
             allItems.mapNotNull { item ->
                 when (item.ownerType) {
-                    "operator" -> "角色：${item.ownerId}"
-                    "group" -> "群：${item.ownerId}"
+                    "operator" -> "角色：${operatorNames[item.ownerId] ?: item.ownerId}"
+                    "group" -> "群：${groupNames[item.ownerId] ?: item.ownerId}"
                     else -> null
                 }
             }.distinct().sorted()
@@ -83,7 +92,8 @@ fun GlobalMemoryScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             "角色个人知识" -> item.ownerType == "operator"
             "群共同知识" -> item.ownerType == "group"
             "公开动态资料" -> item.ownerType == "global" && item.ownerId == "public"
-            else -> ownerFilter == "角色：${item.ownerId}" || ownerFilter == "群：${item.ownerId}"
+            else -> ownerFilter == "角色：${operatorNames[item.ownerId] ?: item.ownerId}" ||
+                ownerFilter == "群：${groupNames[item.ownerId] ?: item.ownerId}"
         }
         val levelMatches = levelFilter == "全部等级" || item.memoryLevel.name == levelFilter
         val statusMatches = when (statusFilter) {
@@ -92,7 +102,7 @@ fun GlobalMemoryScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             "已归档" -> item.status == "archived"
             else -> true
         }
-        val sourceMatches = sourceFilter == "全部来源" || item.sourceKind.name == sourceFilter
+        val sourceMatches = sourceFilter == "全部来源" || sourceLabel(item) == sourceFilter
         val keywordMatches = keyword.isBlank() || item.content.contains(keyword.trim(), ignoreCase = true) || item.sourceActor.contains(keyword.trim(), ignoreCase = true)
         ownerMatches && levelMatches && statusMatches && sourceMatches && keywordMatches
     }.sortedByDescending { it.createdAt }
@@ -133,7 +143,7 @@ fun GlobalMemoryScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                         Column(Modifier.padding(12.dp)) {
                             Text(item.content, fontSize = 14.sp, color = TextPrimary)
                             Spacer(Modifier.height(5.dp))
-                            Text("${levelLabel(item.memoryLevel)} · ${ownerLabel(item)} · ${sourceLabel(item)} · ${if (item.status == "active") "正在使用" else "已归档"}", fontSize = 11.sp, color = TextSecondary)
+                            Text("${levelLabel(item.memoryLevel)} · ${ownerLabel(item, operatorNames, groupNames)} · ${sourceLabel(item)} · ${if (item.status == "active") "正在使用" else "已归档"}", fontSize = 11.sp, color = TextSecondary)
                             if (item.eventTime?.isNotBlank() == true || item.scheduledTime?.isNotBlank() == true) {
                                 Text(listOfNotNull(item.eventTime?.takeIf { it.isNotBlank() }, item.scheduledTime?.takeIf { it.isNotBlank() }?.let { "约定：$it" }).joinToString(" · "), fontSize = 11.sp, color = TextSecondary)
                             }
@@ -230,9 +240,9 @@ private fun levelLabel(level: MemoryLevel): String = when (level) {
     MemoryLevel.L3 -> "角色记得的你"
 }
 
-private fun ownerLabel(item: MemoryItem): String = when (item.ownerType) {
-    "operator" -> "角色：${item.ownerId}"
-    "group" -> "群：${item.ownerId}"
+private fun ownerLabel(item: MemoryItem, operatorNames: Map<String, String>, groupNames: Map<String, String>): String = when (item.ownerType) {
+    "operator" -> "角色：${operatorNames[item.ownerId] ?: item.ownerId}"
+    "group" -> "群：${groupNames[item.ownerId] ?: item.ownerId}"
     "global" -> "公开资料"
     else -> "${item.ownerType}:${item.ownerId}"
 }

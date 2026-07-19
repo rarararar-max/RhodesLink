@@ -40,6 +40,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
@@ -76,6 +77,7 @@ fun PromptEditorScreen(
     var grpModeIdx by remember { mutableIntStateOf(0) }
 
     val textMap = remember { mutableStateMapOf<String, TextFieldValue>() }
+    val dirtyKeys = remember { mutableStateListOf<String>() }
 
     fun loadTemplate(type: String, mode: String) = viewModel.getPromptTemplate(type, mode)
 
@@ -108,9 +110,10 @@ fun PromptEditorScreen(
     }
 
     val saveCurrent: () -> Unit = {
-        if (tabIndex < 5) {
+        if (tabIndex < 5 && currentKey() in dirtyKeys) {
             textMap[currentKey()] = textFieldValue
             val warnings = viewModel.savePromptTemplate(currentType(), currentMode(), textFieldValue.text)
+            dirtyKeys.remove(currentKey())
             if (warnings.isNotEmpty()) {
                 android.widget.Toast.makeText(context, warnings.joinToString("\n"), android.widget.Toast.LENGTH_LONG).show()
             }
@@ -119,11 +122,12 @@ fun PromptEditorScreen(
     val saveAllEdited: () -> Unit = {
         if (tabIndex < 5) textMap[currentKey()] = textFieldValue
         val warnings = mutableListOf<String>()
-        textMap.forEach { (templateKey, value) ->
+        textMap.filterKeys { it in dirtyKeys }.forEach { (templateKey, value) ->
             val type = templateKey.substringBefore(":")
             val mode = templateKey.substringAfter(":", "")
             warnings += viewModel.savePromptTemplate(type, mode, value.text)
         }
+        dirtyKeys.clear()
         if (warnings.isNotEmpty()) {
             android.widget.Toast.makeText(context, warnings.distinct().joinToString("\n"), android.widget.Toast.LENGTH_LONG).show()
         }
@@ -172,7 +176,7 @@ fun PromptEditorScreen(
         "{{RELATION_HINTS}}" to "群成员之间的玩家自建关系提示",
         "{{GROUP_RELATION_HINTS}}" to "群关系提示（等价于RELATION_HINTS）",
         "{{MEMBER_PROFILES}}" to "成员简介与人设（自动生成）",
-        "{{MEMBER_PRIVATE_CONTEXT}}" to "已停用：为避免私聊串线，当前群聊不会注入此内容",
+        "{{MEMBER_PRIVATE_CONTEXT}}" to "仅当用户本轮明确点名该成员时注入的相关私聊背景；注入后作为群聊共享上下文使用",
         "{{GROUP_SUMMARY}}" to "群聊短期摘要",
         "{{GROUP_RULES}}" to "群聊自定义规则",
         "{{MEMBER_NAMES}}" to "群成员名单",
@@ -317,7 +321,10 @@ fun PromptEditorScreen(
             Column(modifier = Modifier.weight(1f).padding(12.dp)) {
                 OutlinedTextField(
                     value = textFieldValue,
-                    onValueChange = { textFieldValue = it },
+                    onValueChange = {
+                        textFieldValue = it
+                        if (currentKey() !in dirtyKeys) dirtyKeys += currentKey()
+                    },
                     modifier = Modifier.fillMaxWidth().weight(1f),
                     shape = RoundedCornerShape(8.dp),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -334,6 +341,7 @@ fun PromptEditorScreen(
                             val clip = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
                             clip?.primaryClip?.getItemAt(0)?.text?.toString()?.let {
                                 textFieldValue = TextFieldValue(it)
+                                if (currentKey() !in dirtyKeys) dirtyKeys += currentKey()
                             }
                         },
                         modifier = Modifier.height(32.dp),
@@ -411,6 +419,7 @@ fun PromptEditorScreen(
                     val fresh = TextFieldValue(viewModel.getPromptTemplate(currentType(), currentMode()))
                     textMap[currentKey()] = fresh
                     textFieldValue = fresh
+                    dirtyKeys.remove(currentKey())
                     showResetDialog = false
                 }) { Text("确定", color = Color(0xFFFF9500), fontWeight = FontWeight.SemiBold) }
             },

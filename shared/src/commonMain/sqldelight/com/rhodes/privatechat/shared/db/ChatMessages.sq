@@ -58,7 +58,7 @@ WHERE sessionId = ? AND timestamp BETWEEN ? AND ?
 ORDER BY timestamp ASC, id ASC;
 
 getMessageDatesBySession:
-SELECT DISTINCT strftime('%Y-%m-%d', timestamp / 1000, 'unixepoch', 'localtime') AS day
+SELECT DISTINCT strftime('%Y-%m-%d', timestamp / 1000, 'unixepoch', '+8 hours') AS day
 FROM chat_messages
 WHERE sessionId = ?
 ORDER BY day DESC;

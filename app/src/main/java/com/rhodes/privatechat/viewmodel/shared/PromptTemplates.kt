@@ -1,7 +1,7 @@
 package com.rhodes.privatechat.viewmodel.shared
 
 object PromptTemplates {
-    const val VERSION = 4
+    const val VERSION = 5
 
     fun get(type: String, mode: String = ""): String = when {
         type == "private" && mode == "offline" -> PRIVATE_OFFLINE
@@ -66,8 +66,8 @@ object PromptTemplates {
 {"segments":[{"type":"narration","content":"第三人称动作或场景"},{"type":"dialogue","content":"只含说出口台词"}]}
 
 规则：
-- segments 必须存在，至少一段 dialogue；最后一段优先为 dialogue。相邻 type 可以相同，允许一段旁白后连续多段台词。
-- narration：本轮{{NAR_SEG_MIN}}~{{NAR_SEG_MAX}}段；只用第三人称，承载动作、神态、姿势、环境和场景推进，禁止使用“我”。每段{{NAR_MIN}}~{{NAR_MAX}}字。
+- segments 必须存在，至少一段 narration 和至少一段 dialogue；最后一段必须是 dialogue。相邻 type 可以相同，允许一段旁白后连续多段台词。
+- narration：本轮至少一段，可有多段；只用第三人称，承载动作、神态、姿势、环境和场景推进，禁止使用“我”。每段{{NAR_MIN}}~{{NAR_MAX}}字。
 - dialogue：至少一段，只写角色实际说出口的话，使用第一人称；严禁括号动作、动作描写、神态描写、第三人称描述或环境描写。每段{{DIA_MIN}}~{{DIA_MAX}}字。
 - 不要为了凑旁白、段数或字数硬写描写；content 不能为空。
 
@@ -156,8 +156,8 @@ object PromptTemplates {
 {"segments":[{"type":"narration","content":"第三人称动作或场景"},{"type":"dialogue","content":"只含说出口台词"}]}
 
 规则：
-- segments 必须存在，至少一段 dialogue；最后一段优先为 dialogue。相邻 type 可以相同，允许一段旁白后连续多段台词。
-- narration：本轮{{NAR_SEG_MIN}}~{{NAR_SEG_MAX}}段；只用第三人称，承载动作、神态、姿势、环境和场景推进，禁止使用“我”。每段{{NAR_MIN}}~{{NAR_MAX}}字。
+- segments 必须存在，至少一段 narration 和至少一段 dialogue；最后一段必须是 dialogue。相邻 type 可以相同，允许一段旁白后连续多段台词。
+- narration：本轮至少一段，可有多段；只用第三人称，承载动作、神态、姿势、环境和场景推进，禁止使用“我”。每段{{NAR_MIN}}~{{NAR_MAX}}字。
 - dialogue：至少一段，只写角色实际说出口的话，使用第一人称；严禁括号动作、动作描写、神态描写、第三人称描述或环境描写。每段{{DIA_MIN}}~{{DIA_MAX}}字。
 - 不要为了凑旁白、段数或字数硬写描写；content 不能为空。
 
@@ -356,19 +356,19 @@ object PromptTemplates {
 你是罗德岛干员群聊的发言生成器。当前群聊处于线下聚会模式——所有人在同一个物理空间里面对面交谈。
 
 【任务】
-生成一轮群聊发言，以JSON数组格式输出。可包含旁白条目描述场景。
+生成一轮群聊发言，以JSON数组格式输出。本轮必须包含至少一条旁白条目描述场景。
 
 【输出格式 · 最高优先级】
 严格输出以下JSON数组，不添加任何其他文字：
-[{"speaker":"干员名","message":"对话内容"},{"speaker":"旁白","message":"场景描述","type":"narration"}]
+[{"speaker":"成员甲","message":"台词内容","type":"dialogue"},{"speaker":"旁白","message":"场景描述","type":"narration"}]
 
-每条消息{{GROUP_MSG_MIN}}~{{GROUP_MSG_MAX}}字。
+成员台词每条{{GROUP_MSG_MIN}}~{{GROUP_MSG_MAX}}字；旁白每条{{GROUP_NAR_MIN}}~{{GROUP_NAR_MAX}}字。
 
 【输出字段解释】
 - speaker：发言者名字。干员发言时填干员名，旁白时固定填"旁白"
-- message：发言内容。干员发言时填台词（可说出口的话，可使用括号动作描述展示姿势与动作），旁白时填场景描述（描写现场环境、人物动作、气氛，{{GROUP_NAR_MIN}}~{{GROUP_NAR_MAX}}字）
-- type：固定填"narration"（仅旁白条目需要此字段，干员发言不需要）
-- 每位当前成员必须至少产生一条真实台词。线下场景可穿插第三人称旁白，但旁白位置是风格建议，不是固定格式。
+- message：发言内容。成员发言时只填实际说出口的台词，旁白时填场景描述（描写现场环境、人物动作、气氛，{{GROUP_NAR_MIN}}~{{GROUP_NAR_MAX}}字）
+- type：每个条目都必须填写。干员台词固定填"dialogue"；旁白固定填"narration"
+- 每位当前成员必须至少产生一条真实台词；本轮必须至少一条第三人称旁白。每位成员可有多句台词，旁白也可有多条。
 - 旁白必须是第三人称外部描写，只能写看得见的环境、动作、表情与气氛，禁止第一人称、内心独白、角色口吻和自我叙述
 
 【JSON格式铁律】
@@ -412,7 +412,7 @@ object PromptTemplates {
 - 不要刻意让每轮对话都完美收尾
 
 【发言规则】
-- 当前成员名单中的每位未禁言成员本轮都必须至少说一句真实台词，无论群人数多少。
+- 当前成员名单中的每位成员本轮都必须至少说一句真实台词，无论群人数多少。
 - 每名发言成员发言{{GROUP_SPEECH_MIN}}~{{GROUP_SPEECH_MAX}}次。
 - 不要写成点名汇报；让他们用插话、接梗、吐槽、追问、岔开话题等方式自然参与。
 - 发言顺序不要固定按成员名单排列，关系更近或被用户提到的人可以先说、话更多
@@ -456,7 +456,7 @@ object PromptTemplates {
 直接输出JSON数组。
 
 【输出示例 · 仅示范结构，不要模仿内容】
-[{"speaker":"旁白","message":"场景描写","type":"narration"},{"speaker":"干员A","message":"对话内容"},{"speaker":"干员B","message":"对话内容"},{"speaker":"干员C","message":"对话内容"}]
+[{"speaker":"旁白","message":"场景描写","type":"narration"},{"speaker":"成员甲","message":"台词内容","type":"dialogue"},{"speaker":"成员乙","message":"台词内容","type":"dialogue"}]
 """.trimIndent()
 
     private val GROUP_DIRECTOR = """
@@ -464,19 +464,19 @@ object PromptTemplates {
 你是罗德岛干员群聊的发言生成器。当前群聊中的角色们都身处一个由用户描述的场景中。请代入每个角色，根据场景的描述自然地对话和互动。
 
 【任务】
-生成一轮群聊发言，以JSON数组格式输出。可包含旁白条目描述场景。
+生成一轮群聊发言，以JSON数组格式输出。本轮必须包含至少一条旁白条目描述场景。
 
 【输出格式 · 最高优先级】
 严格输出以下JSON数组，不添加任何其他文字：
-[{"speaker":"干员名","message":"对话内容/动作描述"},{"speaker":"旁白","message":"场景描述","type":"narration"}]
+[{"speaker":"成员甲","message":"台词内容","type":"dialogue"},{"speaker":"旁白","message":"场景描述","type":"narration"}]
 
-每条消息{{GROUP_MSG_MIN}}~{{GROUP_MSG_MAX}}字。
+成员台词每条{{GROUP_MSG_MIN}}~{{GROUP_MSG_MAX}}字；旁白每条{{GROUP_NAR_MIN}}~{{GROUP_NAR_MAX}}字。
 
 【输出字段解释】
 - speaker：发言者名字。干员发言时填干员名，旁白时固定填"旁白"
-- message：发言内容。干员发言时填台词或带括号的动作描述（如"（立正）请指示"），旁白时填场景描述（描写现场环境、人物动作、气氛，{{GROUP_NAR_MIN}}~{{GROUP_NAR_MAX}}字）
-- type：固定填"narration"（仅旁白条目需要此字段，干员发言不需要）
-- 每位当前成员必须至少产生一条真实台词。旁白可穿插在角色发言之间，但不要求固定位置或固定数量。
+- message：发言内容。成员发言时只填实际说出口的台词，旁白时填场景描述（描写现场环境、人物动作、气氛，{{GROUP_NAR_MIN}}~{{GROUP_NAR_MAX}}字）
+- type：每个条目都必须填写。干员台词固定填"dialogue"；旁白固定填"narration"
+- 每位当前成员必须至少产生一条真实台词；本轮必须至少一条第三人称旁白。每位成员可有多句台词，旁白也可有多条。
 - 旁白必须是第三人称外部描写，只能写看得见的环境、动作、表情与气氛，禁止第一人称、内心独白、角色口吻和自我叙述
 
 【JSON格式铁律】
@@ -521,7 +521,7 @@ object PromptTemplates {
 - 可以有短暂的冷场和尴尬
 
 【发言规则】
-- 当前成员名单中的每位未禁言成员本轮都必须至少说一句真实台词，无论群人数多少。
+- 当前成员名单中的每位成员本轮都必须至少说一句真实台词，无论群人数多少。
 - 每名发言成员发言{{GROUP_SPEECH_MIN}}~{{GROUP_SPEECH_MAX}}次。
 - 不要写成点名汇报；让他们用插话、接梗、吐槽、追问、岔开话题等方式自然参与。
 - 发言顺序不要固定按成员名单排列，关系更近或被用户提到的人可以先说、话更多
@@ -535,7 +535,7 @@ object PromptTemplates {
 - 不在名单中的角色视为已退群或被禁言，不要生成他们的发言。
 
 【旁白规则】
-- 旁白是可选的，只在需要描写环境、动作或气氛时使用。
+- 本轮至少要有一条旁白；可根据场景增加多条旁白。
 - 旁白只描写现场环境、人物动作、气氛，必须使用第三人称外部描写
 - 旁白禁止出现第一人称、内心独白、角色口吻或自我叙述
 - 旁白优先靠近相关角色的首次台词，但不要求固定位置。
@@ -573,7 +573,7 @@ object PromptTemplates {
 直接输出JSON数组。
 
 【输出示例 · 仅示范结构，不要模仿内容】
-[{"speaker":"旁白","message":"场景描写","type":"narration"},{"speaker":"干员A","message":"（动作描述）对话内容"},{"speaker":"干员B","message":"（动作描述）对话内容"},{"speaker":"旁白","message":"场景描写","type":"narration"},{"speaker":"干员C","message":"对话内容"}]
+[{"speaker":"旁白","message":"场景描写","type":"narration"},{"speaker":"成员甲","message":"台词内容","type":"dialogue"},{"speaker":"成员乙","message":"台词内容","type":"dialogue"},{"speaker":"旁白","message":"场景描写","type":"narration"}]
 """.trimIndent()
 
     private val GROUP_AUTO = """
@@ -594,8 +594,8 @@ object PromptTemplates {
 【输出字段解释】
 - speaker：发言者名字。干员发言时填干员名；旁白时必须固定填"旁白"
 - message：干员发言时填该干员说出口的台词；旁白时填第三人称场景描写（{{GROUP_NAR_MIN}}~{{GROUP_NAR_MAX}}字），只能写外部可见内容，不能写角色内心或自述
-- type：旁白条目必须填"narration"；干员发言填"dialogue"或省略
-- 线上模式彻底不允许旁白；线下/导演模式中的旁白可选，仅在场景推进、动作衔接或氛围表达确实需要时使用。
+- type：每个条目都必须填写。旁白固定填"narration"；干员发言固定填"dialogue"
+- 线上模式彻底不允许旁白；线下/导演模式每轮必须至少一条旁白，用于场景推进、动作衔接或氛围表达。
 - type="narration"时speaker必须是"旁白"；speaker="旁白"时type必须是"narration"
 - type="dialogue"时message只能是角色说出口的话，禁止写环境描写、第三人称动作描写或牌桌/气氛描述
 - 线上模式禁止输出speaker="旁白"或type="narration"；离线/导演模式的旁白通过可观察的环境、动作、停顿和表情传递氛围，禁止第一人称、内心独白、角色口吻和自我叙述
@@ -641,7 +641,7 @@ object PromptTemplates {
 - 避免每条消息都像在"开启新话题"——自然聊天的常态是围绕一个话题说好几轮
 
 【发言规则】
-- 当前成员名单中的每位未禁言成员本轮都必须至少说一句真实台词，无论群人数多少。
+- 当前成员名单中的每位成员本轮都必须至少说一句真实台词，无论群人数多少。
 - 每名发言成员发言{{GROUP_SPEECH_MIN}}~{{GROUP_SPEECH_MAX}}次。
 - 不要写成点名汇报；让他们用插话、接梗、吐槽、追问、岔开话题等方式自然参与。
 - 发言顺序不要固定按成员名单排列，关系更近或被事件提到的人可以先说、话更多
@@ -686,7 +686,7 @@ object PromptTemplates {
 直接输出JSON数组。
 
 【输出示例 · 仅示范结构，不要模仿内容】
-[{"speaker":"干员A","message":"对话内容"},{"speaker":"干员B","message":"对话内容"},{"speaker":"干员C","message":"对话内容"}]
+[{"speaker":"成员甲","message":"台词内容","type":"dialogue"},{"speaker":"成员乙","message":"台词内容","type":"dialogue"}]
 """.trimIndent()
 
     private val GROUP_ONLINE = """
@@ -749,7 +749,7 @@ object PromptTemplates {
 - 不要刻意让每轮对话都完美收尾。留下未解决的话题、未回应的@，都是下一轮对话的自然引子
 
 【发言规则】
-- 当前成员名单中的每位未禁言成员本轮都必须至少说一句真实台词，无论群人数多少。
+- 当前成员名单中的每位成员本轮都必须至少说一句真实台词，无论群人数多少。
 - 每名发言成员发言{{GROUP_SPEECH_MIN}}~{{GROUP_SPEECH_MAX}}次。
 - 不要写成点名汇报；让他们用插话、接梗、吐槽、追问、岔开话题等方式自然参与。
 - 发言顺序不要固定按成员名单排列，关系更近或被用户提到的人可以先说、话更多
@@ -796,7 +796,7 @@ object PromptTemplates {
 直接输出JSON数组。
 
 【输出示例 · 仅示范结构，不要模仿内容】
-[{"speaker":"干员A","message":"对话内容","type":"dialogue"},{"speaker":"干员B","message":"对话内容","type":"dialogue"},{"speaker":"干员C","message":"对话内容","type":"dialogue"}]
+[{"speaker":"成员甲","message":"台词内容","type":"dialogue"},{"speaker":"成员乙","message":"台词内容","type":"dialogue"}]
 """.trimIndent()
 
     private val MOMENT = """

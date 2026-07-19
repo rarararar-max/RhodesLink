@@ -79,6 +79,7 @@ class MomentRepository(private val wrapper: DatabaseWrapper) {
     suspend fun updateCommentCount(momentId: Long, count: Int) = withContext(Dispatchers.Default) { db.momentsQueries.updateCommentCount(count.toLong(), momentId) }
     suspend fun getCommentCount(momentId: Long): Int = withContext(Dispatchers.Default) { db.momentCommentsQueries.getCommentCount(momentId).executeAsOne().toInt() }
     suspend fun getLikeCount(momentId: Long): Int = withContext(Dispatchers.Default) { db.momentLikesQueries.getLikeCount(momentId).executeAsOne().toInt() }
+    suspend fun backfillLikeCounts() = withContext(Dispatchers.Default) { db.momentsQueries.backfillLikeCounts() }
 
     suspend fun getLike(momentId: Long, operatorId: String): MomentLike? = withContext(Dispatchers.Default) {
         db.momentLikesQueries.getLike(momentId, operatorId) { id, mId, opId, opName, createdAt ->

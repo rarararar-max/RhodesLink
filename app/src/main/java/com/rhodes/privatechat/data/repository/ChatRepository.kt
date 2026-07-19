@@ -99,6 +99,7 @@ class ChatRepository(
     suspend fun updateCommentCount(momentId: Long, count: Int) = shared.updateCommentCount(momentId, count)
 
     suspend fun getLikeCount(momentId: Long): Int = shared.getLikeCount(momentId)
+    suspend fun backfillLikeCounts() = shared.backfillLikeCounts()
 
     suspend fun getLike(momentId: Long, operatorId: String): MomentLike? = shared.getLike(momentId, operatorId)
 

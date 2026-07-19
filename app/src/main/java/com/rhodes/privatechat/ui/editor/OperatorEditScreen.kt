@@ -289,7 +289,7 @@ fun OperatorEditScreen(
                                     android.widget.Toast.makeText(context, "请先在模型设置中配置 TTS", android.widget.Toast.LENGTH_SHORT).show()
                                     return@launch
                                 }
-                                val audioBytes = com.rhodes.privatechat.shared.voice.createTtsGateway(settings.ttsBaseUrl, key, settings.ttsModelName)
+                                val audioBytes = com.rhodes.privatechat.shared.voice.createTtsGateway(settings.ttsBaseUrl, key, settings.ttsModelName, settings.ttsProvider)
                                     .synthesize(com.rhodes.privatechat.shared.voice.TtsRequest("你好", testVoiceId)).audioBytes
                                 if (audioBytes != null && audioBytes.isNotEmpty()) {
                                     val file = java.io.File(context.cacheDir, "tts_test_voice.mp3")

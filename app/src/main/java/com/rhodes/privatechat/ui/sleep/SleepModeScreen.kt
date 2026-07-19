@@ -166,7 +166,7 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
         Log.d("RHODES_AUDIO", "speak: text前50=${text.take(50)} ttsBaseUrl='${settings.ttsBaseUrl}' ttsModelName='${settings.ttsModelName}' apiKey非空=${ttsKey.isNotBlank()}")
         val voiceId = settings.effectiveVoiceId(operator.voiceName)
         Log.d("RHODES_AUDIO", "voiceId=$voiceId operator.voiceName='${operator.voiceName}' ttsDefaultVoiceId='${settings.ttsDefaultVoiceId}'")
-        val tts = createTtsGateway(settings.ttsBaseUrl, ttsKey, settings.ttsModelName)
+        val tts = createTtsGateway(settings.ttsBaseUrl, ttsKey, settings.ttsModelName, settings.ttsProvider)
         Log.d("RHODES_AUDIO", "TTS实例类: ${tts::class.simpleName}")
         callState = com.rhodes.privatechat.shared.call.CallState.AiSpeaking
         val bytes = tts.synthesize(TtsRequest(text = speech, voiceId = voiceId, speed = operator.voiceSpeed.toDoubleOrNull() ?: 1.0)).audioBytes
@@ -260,7 +260,7 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
                 callState = com.rhodes.privatechat.shared.call.CallState.Thinking
                 transcript = "正在识别..."
                 val pcm = audio.readPcmFromWav(recorded.path)
-                val asr = createAsrGateway(settings.asrBaseUrl, settings.asrApiKey.ifBlank { settings.apiKey }, settings.asrModelName)
+                val asr = createAsrGateway(settings.asrBaseUrl, settings.asrApiKey.ifBlank { settings.apiKey }, settings.asrModelName, settings.asrProvider)
                 val text = asr.transcribe(AsrRequest(pcm)).text.trim()
                 if (text.isBlank()) {
                     transcript = "未能识别，请重试"
@@ -665,7 +665,15 @@ private fun primaryButtonText(visualState: SleepVisualState, recording: Boolean,
     else -> "开始说话"
 }
 
-private fun formatClockTime(timeMillis: Long): String = SimpleDateFormat("HH:mm", Locale.CHINA).format(Date(timeMillis))
+private fun formatClockTime(timeMillis: Long): String {
+    val calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai")).apply { timeInMillis = timeMillis }
+    val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
+    val time = SimpleDateFormat("HH:mm", Locale.CHINA).apply { timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai") }.format(Date(timeMillis))
+    val period = when (hour) {
+        in 5..7 -> "清晨"; in 8..11 -> "上午"; in 12..13 -> "中午"; in 14..17 -> "下午"; in 18..21 -> "晚上"; in 22..23 -> "深夜"; else -> "凌晨"
+    }
+    return "$time（$period）"
+}
 private fun formatAlarmCompact(targetAtMillis: Long): String = "闹钟 ${formatClockTime(targetAtMillis)} · ${formatRemainingTime(targetAtMillis)}"
 private fun formatAlarmSummary(targetAtMillis: Long): String {
     val day = if (isSameDay(targetAtMillis, System.currentTimeMillis())) "今天" else "明天"

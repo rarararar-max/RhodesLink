@@ -261,6 +261,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 require(ttsBaseUrl.trim().isNotBlank()) { "请填写文字转语音地址" }
                 require(ttsModelName.trim().isNotBlank()) { "请填写文字转语音模型名" }
                 require(key.isNotBlank()) { "请填写文字转语音密钥，或先填写聊天密钥" }
+                require(ttsProvider != "vocu") { "Vocu 没有公共默认音色，请在角色编辑页填写音色 ID 后测试" }
                 val audioBytes = createTtsGateway(ttsBaseUrl.trim(), key, ttsModelName.trim(), ttsProvider)
                     .synthesize(TtsRequest("测试成功", defaultTtsVoiceId(ttsProvider))).audioBytes
                 if (audioBytes == null || audioBytes.isEmpty()) {
@@ -440,16 +441,25 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             }
 
             SettingsSection("文字转语音 TTS") {
-                DropDown("服务商", listOf("MiniMax", "小米 MiMo", "自填（MiniMax 兼容）"), when (ttsProvider) { "minimax" -> 0; "xiaomi" -> 1; else -> 2 }) { index ->
-                    ttsProvider = listOf("minimax", "xiaomi", "custom")[index]
+                DropDown("服务商", listOf("MiniMax", "小米 MiMo", "Vocu", "自填（MiniMax 兼容）"), when (ttsProvider) { "minimax" -> 0; "xiaomi" -> 1; "vocu" -> 2; else -> 3 }) { index ->
+                    ttsProvider = listOf("minimax", "xiaomi", "vocu", "custom")[index]
                     if (index == 0) { ttsBaseUrl = "wss://api.minimaxi.com/ws/v1/t2a_v2"; ttsModelName = "speech-2.8-hd" }
                     if (index == 1) { ttsBaseUrl = "https://api.xiaomimimo.com/v1/chat/completions"; ttsModelName = "mimo-v2.5-tts" }
+                    if (index == 2) { ttsBaseUrl = "https://v1.vocu.ai/api/tts/simple-generate"; ttsModelName = "v3.0" }
                 }
-                Text(if (ttsProvider == "xiaomi") "小米 MiMo 使用 HTTP 非流式 TTS，支持 mimo_default、冰糖、茉莉、苏打等预置音色。" else "自填服务必须兼容 MiniMax WebSocket TTS 协议。", fontSize = 12.sp, color = TextSecondary)
+                Text(when (ttsProvider) {
+                    "xiaomi" -> "小米 MiMo 使用 HTTP 非流式 TTS，支持 mimo_default、冰糖、茉莉、苏打等预置音色。"
+                    "vocu" -> "Vocu 使用同步 HTTP TTS。请在角色编辑页填写 Vocu 的 Voice ID（UUID）并测试，生成和测试都会消耗点数。"
+                    else -> "自填服务必须兼容 MiniMax WebSocket TTS 协议。"
+                }, fontSize = 12.sp, color = TextSecondary)
                 Spacer(Modifier.height(10.dp))
-                LabeledField(if (ttsProvider == "xiaomi") "API 地址" else "WebSocket 地址") { TextInput(ttsBaseUrl, { ttsBaseUrl = it }, ctx) }
+                LabeledField(if (ttsProvider == "minimax" || ttsProvider == "custom") "WebSocket 地址" else "API 地址") { TextInput(ttsBaseUrl, { ttsBaseUrl = it }, ctx) }
                 Spacer(Modifier.height(10.dp))
-                LabeledField("模型名") { TextInput(ttsModelName, { ttsModelName = it }, ctx, placeholder = "speech-2.8-hd") }
+                if (ttsProvider == "vocu") {
+                    Text("Vocu 接口不需要填写模型名。", fontSize = 12.sp, color = TextSecondary)
+                } else {
+                    LabeledField("模型名") { TextInput(ttsModelName, { ttsModelName = it }, ctx, placeholder = "speech-2.8-hd") }
+                }
                 Spacer(Modifier.height(10.dp))
                 LabeledField("API Key（空则复用聊天 API Key）") { SecretInput(ttsApiKey, { ttsApiKey = it }, ctx) }
                 TestButton("测试文字转语音", testing == "tts", ttsTestResult, onClick = ::testTts)

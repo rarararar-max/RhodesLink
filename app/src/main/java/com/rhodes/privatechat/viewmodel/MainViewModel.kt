@@ -934,8 +934,8 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         val hidden = settings.hiddenIds.toMutableSet()
         if (hidden.remove(sessionId)) {
             settings.hiddenIds = hidden
-            // 更新会话模式，触发会话列表刷新
-            repository.updateSessionMode(sessionId, "")
+            // Hidden IDs are not observable by the session database flow, so refresh immediately.
+            appState.refreshAllSessions(repository.getAllSessionsSync(), hidden)
         }
     }
 

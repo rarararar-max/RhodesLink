@@ -11,6 +11,7 @@ fun SettingsRepository.hasTtsConfiguration(): Boolean =
 fun SettingsRepository.voiceCallSetupMessage(voiceId: String): String? = when {
     !hasAsrConfiguration() -> "请先在模型设置中填写语音识别模型和密钥。"
     !hasTtsConfiguration() -> "请先在模型设置中填写文字转语音模型和密钥。"
+    ttsProvider == "vocu" && voiceId.isBlank() -> "Vocu 需要在角色编辑页填写音色 ID。"
     else -> null
 }
 
@@ -18,12 +19,19 @@ fun SettingsRepository.effectiveVoiceId(operatorVoiceId: String): String =
     operatorVoiceId
 
 fun defaultTtsVoiceId(provider: String): String =
-    if (provider == "xiaomi") "mimo_default" else "male-qn-qingse"
+    when (provider) {
+        "xiaomi" -> "mimo_default"
+        "vocu" -> ""
+        else -> "male-qn-qingse"
+    }
 
 fun createTtsGateway(endpoint: String, apiKey: String, modelName: String, provider: String = ""): TtsGateway {
     return if (endpoint.isNotBlank() && apiKey.isNotBlank() && modelName.isNotBlank()) {
-        if (provider == "xiaomi" || endpoint.contains("api.xiaomimimo.com")) XiaomiMimoTtsGateway(endpoint, apiKey, modelName)
-        else MinimaxTtsGateway(endpoint = endpoint, apiKey = apiKey, modelName = modelName)
+        when {
+            provider == "vocu" || endpoint.contains("vocu.ai") -> VocuTtsGateway(endpoint, apiKey)
+            provider == "xiaomi" || endpoint.contains("api.xiaomimimo.com") -> XiaomiMimoTtsGateway(endpoint, apiKey, modelName)
+            else -> MinimaxTtsGateway(endpoint = endpoint, apiKey = apiKey, modelName = modelName)
+        }
     } else {
         DisabledTtsGateway()
     }

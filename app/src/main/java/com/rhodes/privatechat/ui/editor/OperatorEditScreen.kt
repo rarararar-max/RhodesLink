@@ -274,13 +274,12 @@ fun OperatorEditScreen(
                         shape = RoundedCornerShape(8.dp),
                         colors = fieldColors(),
                         singleLine = true,
-                        placeholder = { Text("如：male-qn-qingse", fontSize = 13.sp, color = TextTertiary) }
+                        placeholder = { Text("如：male-qn-qingse 或 Vocu Voice ID", fontSize = 13.sp, color = TextTertiary) }
                     )
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Button(
                     onClick = {
-                        val testVoiceId = voiceName.ifBlank { "male-qn-qingse" }
                         scope.launch {
                             try {
                                 val settings = org.koin.java.KoinJavaComponent.get<com.rhodes.privatechat.shared.settings.SettingsRepository>(com.rhodes.privatechat.shared.settings.SettingsRepository::class.java)
@@ -288,6 +287,13 @@ fun OperatorEditScreen(
                                 if (settings.ttsBaseUrl.isBlank() || key.isBlank()) {
                                     android.widget.Toast.makeText(context, "请先在模型设置中配置 TTS", android.widget.Toast.LENGTH_SHORT).show()
                                     return@launch
+                                }
+                                val testVoiceId = voiceName.ifBlank {
+                                    if (settings.ttsProvider == "vocu") {
+                                        android.widget.Toast.makeText(context, "Vocu 请先填写该角色的 Voice ID", android.widget.Toast.LENGTH_SHORT).show()
+                                        return@launch
+                                    }
+                                    "male-qn-qingse"
                                 }
                                 val audioBytes = com.rhodes.privatechat.shared.voice.createTtsGateway(settings.ttsBaseUrl, key, settings.ttsModelName, settings.ttsProvider)
                                     .synthesize(com.rhodes.privatechat.shared.voice.TtsRequest("你好", testVoiceId)).audioBytes

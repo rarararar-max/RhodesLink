@@ -25,6 +25,7 @@ RUN yes | sdkmanager --licenses > /dev/null 2>&1 && \
     "platform-tools" \
     "platforms;android-35" \
     "build-tools;35.0.0" \
+    "build-tools;34.0.0" \
     "ndk;27.2.12479018"
 
 WORKDIR /app

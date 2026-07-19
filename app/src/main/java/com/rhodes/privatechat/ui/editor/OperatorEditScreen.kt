@@ -302,7 +302,7 @@ fun OperatorEditScreen(
                                     }
                                 }
                             } catch (e: Exception) {
-                                android.widget.Toast.makeText(context, "音色测试失败：${e.message?.take(40)}", android.widget.Toast.LENGTH_SHORT).show()
+                                android.widget.Toast.makeText(context, "音色测试失败：${e.message?.take(180) ?: "未知错误"}", android.widget.Toast.LENGTH_LONG).show()
                             }
                         }
                     },
@@ -424,9 +424,10 @@ fun OperatorEditScreen(
             text = { Text("确定要删除${operator?.name ?: ""}吗？删除后相关数据将永久丢失且无法恢复。", color = TextSecondary) },
             confirmButton = {
                 TextButton(onClick = {
-                    viewModel.deleteOperator(operator?.id ?: "")
+                    val operatorId = operator?.id.orEmpty()
+                    if (operatorId.isBlank()) return@TextButton
                     showDeleteConfirm = false
-                    onBack()
+                    viewModel.deleteOperators(listOf(operatorId)) { onBack() }
                 }) { Text("确认删除", color = ErrorRed) }
             },
             dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("取消", color = TextSecondary) } }

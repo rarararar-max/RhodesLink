@@ -291,6 +291,9 @@ class MainViewModel(
         if (startBackgroundWork) {
         viewModelScope.launch {
             repository.insertPresetOperators()
+            settings.getStringSet("deleted_preset_operator_ids").forEach { operatorId ->
+                repository.deleteOperator(operatorId)
+            }
             // 只在首次安装时设置默认权限，不覆盖用户手动修改
             val permissionsDone = settings.getBoolean("permissions_initialized", false)
             if (!permissionsDone) {

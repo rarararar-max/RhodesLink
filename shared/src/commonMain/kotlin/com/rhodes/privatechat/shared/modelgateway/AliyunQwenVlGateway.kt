@@ -6,11 +6,16 @@ import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
+import io.ktor.http.isSuccess
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import com.rhodes.privatechat.shared.network.createHttpClient
 
 class AliyunQwenVlGateway(
@@ -34,7 +39,7 @@ class AliyunQwenVlGateway(
 
     override suspend fun analyzeImage(request: VisionAnalyzeRequest): VisionAnalyzeResponse {
         println("RHODES_VISION AliyunQwenVlGateway.analyzeImage: endpoint=$endpoint model=$modelName imageLen=${request.imageUrlOrBase64.length}")
-        val raw = client.post(endpoint) {
+        val response = client.post(endpoint) {
             bearerAuth(apiKey)
             header("X-DashScope-SSE", "enable")
             header("Accept", "text/event-stream")
@@ -49,7 +54,11 @@ class AliyunQwenVlGateway(
                 )),
                 parameters = NativeVisionParameters(enableThinking = false, incrementalOutput = true, thinkingBudget = 0),
             ))
-        }.body<String>()
+        }
+        val raw = response.bodyAsText()
+        if (!response.status.isSuccess()) {
+            error("识图服务错误 ${response.status.value}: ${raw.take(500)}")
+        }
 
         println("RHODES_VISION 原始响应(前500): ${raw.take(500)}")
         val parsed = parseResponse(raw)
@@ -58,6 +67,15 @@ class AliyunQwenVlGateway(
     }
 
     private fun parseResponse(raw: String): VisionAnalyzeResponse {
+        val openAiCompatible = runCatching {
+            json.parseToJsonElement(raw).jsonObject["choices"]?.jsonArray
+                ?.firstOrNull()?.jsonObject?.get("message")?.jsonObject
+                ?.get("content")?.jsonPrimitive?.content.orEmpty()
+        }.getOrDefault("")
+        if (openAiCompatible.isNotBlank()) {
+            println("RHODES_VISION parseResponse: OpenAI 兼容 JSON 解析成功, text长度=${openAiCompatible.length}")
+            return VisionAnalyzeResponse(text = openAiCompatible)
+        }
         val single = runCatching { json.decodeFromString(NativeVisionResponse.serializer(), raw) }
             .getOrNull()
             ?.output?.choices?.firstOrNull()?.message?.content
@@ -85,8 +103,7 @@ class AliyunQwenVlGateway(
             println("RHODES_VISION parseResponse: SSE 解析成功, text长度=${text.length}")
             return VisionAnalyzeResponse(text = text)
         }
-        println("RHODES_VISION parseResponse: 两种解析均失败, 返回结构化 fallback")
-        return VisionAnalyzeResponse(text = """{"visibleSummary":"图片内容未能识别","userStateGuess":"unknown","sceneQuality":"unknown","confidence":0.0}""")
+        error("识图服务返回了无法解析的响应: ${raw.take(500)}")
     }
 }
 

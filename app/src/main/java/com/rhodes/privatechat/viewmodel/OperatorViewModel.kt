@@ -93,6 +93,10 @@ class OperatorViewModel(
                     repository.deleteOperator(operatorId)
                     settings.remove("dyn_$operatorId")
                     settings.remove("msg_$operatorId")
+                    settings.putStringSet(
+                        "deleted_preset_operator_ids",
+                        settings.getStringSet("deleted_preset_operator_ids") + operatorId
+                    )
                 }
             } finally {
                 onComplete()

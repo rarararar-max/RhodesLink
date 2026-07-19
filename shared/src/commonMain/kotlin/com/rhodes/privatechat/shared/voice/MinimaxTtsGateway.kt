@@ -11,6 +11,9 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 class MinimaxTtsGateway(
     private val endpoint: String,
@@ -31,7 +34,7 @@ class MinimaxTtsGateway(
             val connectedEvent = connected?.readText().orEmpty()
             if (!connectedEvent.contains("connected_success")) {
                 println("RHODES_AUDIO MinimaxWS 连接失败: ${connectedEvent.ifBlank { "empty event" }}")
-                error("Minimax TTS 连接失败")
+                error(minimaxErrorMessage("Minimax TTS 连接失败", connectedEvent))
             }
 
             send(Frame.Text(json.encodeToString(MinimaxTaskStart(
@@ -43,7 +46,7 @@ class MinimaxTtsGateway(
             val startedEvent = started?.readText().orEmpty()
             if (!startedEvent.contains("task_started")) {
                 println("RHODES_AUDIO MinimaxWS task_start 失败: ${startedEvent.ifBlank { "empty event" }}")
-                error("Minimax TTS 任务启动失败")
+                error(minimaxErrorMessage("Minimax TTS 任务启动失败", startedEvent))
             }
 
             send(Frame.Text(json.encodeToString(MinimaxTaskContinue(text = speechText))))
@@ -52,7 +55,7 @@ class MinimaxTtsGateway(
                 val frame = incoming.receiveCatching().getOrNull() ?: break
                 val text = (frame as? Frame.Text)?.readText() ?: continue
                 if (text.contains("error", ignoreCase = true) || text.contains("failed", ignoreCase = true)) {
-                    error("Minimax TTS 流错误: $text")
+                    error(minimaxErrorMessage("MiniMax TTS 流错误", text))
                 }
                 val event = runCatching { json.decodeFromString(MinimaxStreamEvent.serializer(), text) }.getOrNull()
                 event?.data?.audio?.takeIf { it.isNotBlank() }?.let { hex ->
@@ -120,6 +123,20 @@ private fun hexToBytes(hex: String): ByteArray {
     val normalized = if (clean.length % 2 == 1) "${clean}0" else clean
     return ByteArray(normalized.length / 2) { index ->
         normalized.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+    }
+}
+
+private fun minimaxErrorMessage(prefix: String, raw: String): String {
+    val baseResponse = runCatching {
+        json.parseToJsonElement(raw).jsonObject["base_resp"]?.jsonObject
+    }.getOrNull()
+    val statusCode = baseResponse?.get("status_code")?.jsonPrimitive?.contentOrNull
+    val statusMessage = baseResponse?.get("status_msg")?.jsonPrimitive?.contentOrNull
+    return when {
+        !statusMessage.isNullOrBlank() && !statusCode.isNullOrBlank() -> "$prefix（$statusCode）：$statusMessage"
+        !statusMessage.isNullOrBlank() -> "$prefix：$statusMessage"
+        raw.isNotBlank() -> "$prefix：${raw.take(500)}"
+        else -> prefix
     }
 }
 

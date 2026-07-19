@@ -557,7 +557,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putString("vector_model_name", value)
 
     var vectorBaseUrl: String
-        get() = getString("vector_base_url", "")
+        get() = getString("vector_base_url", "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/embeddings").ifBlank { "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/embeddings" }
         set(value) = putString("vector_base_url", value)
 
     var vectorApiKey: String
@@ -601,11 +601,11 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putString("asr_provider", value)
 
     var ttsModelName: String
-        get() = getString("tts_model_name", "speech-2.8-hd")
+        get() = getString("tts_model_name", "speech-2.8-hd").ifBlank { "speech-2.8-hd" }
         set(value) = putString("tts_model_name", value)
 
     var ttsBaseUrl: String
-        get() = getString("tts_base_url", "")
+        get() = getString("tts_base_url", "wss://api.minimaxi.com/ws/v1/t2a_v2").ifBlank { "wss://api.minimaxi.com/ws/v1/t2a_v2" }
         set(value) = putString("tts_base_url", value)
 
     var ttsApiKey: String
@@ -615,10 +615,6 @@ class SettingsRepository(private val settings: ObservableSettings) {
     var ttsProvider: String
         get() = getString("tts_provider", "minimax")
         set(value) = putString("tts_provider", value)
-
-    var ttsDefaultVoiceId: String
-        get() = getString("tts_default_voice_id", "")
-        set(value) = putString("tts_default_voice_id", value)
 
     // === 陪睡设置 ===
     var sleepAlarmHour: Int
@@ -857,6 +853,45 @@ class SettingsRepository(private val settings: ObservableSettings) {
             remove("token_out_$cat")
             remove("daily_in_${cat}_$today")
             remove("daily_out_${cat}_$today")
+        }
+    }
+
+    /** Model settings must persist immediately even when a parent settings screen has an open draft. */
+    fun saveModelConfiguration(
+        provider: String,
+        modelName: String,
+        customUrl: String,
+        apiKey: String,
+        visionBaseUrl: String,
+        visionProvider: String,
+        visionModelName: String,
+        visionApiKey: String,
+        vectorProviderMode: String,
+        vectorProvider: String,
+        vectorBaseUrl: String,
+        vectorModelName: String,
+        vectorApiKey: String,
+        asrBaseUrl: String,
+        asrProvider: String,
+        asrModelName: String,
+        asrApiKey: String,
+        ttsBaseUrl: String,
+        ttsProvider: String,
+        ttsModelName: String,
+        ttsApiKey: String,
+    ) {
+        val values = mapOf(
+            "provider" to provider, "model_name" to modelName, "custom_url" to customUrl, "api_key" to apiKey,
+            "vision_base_url" to visionBaseUrl, "vision_provider" to visionProvider, "vision_model_name" to visionModelName, "vision_api_key" to visionApiKey,
+            "vector_provider_mode" to vectorProviderMode, "vector_provider" to vectorProvider, "vector_base_url" to vectorBaseUrl, "vector_model_name" to vectorModelName, "vector_api_key" to vectorApiKey,
+            "asr_base_url" to asrBaseUrl, "asr_provider" to asrProvider, "asr_model_name" to asrModelName, "asr_api_key" to asrApiKey,
+            "tts_base_url" to ttsBaseUrl, "tts_provider" to ttsProvider, "tts_model_name" to ttsModelName, "tts_api_key" to ttsApiKey,
+        )
+        synchronized(draftLock) {
+            values.forEach { (key, value) ->
+                draftValues.remove(key)
+                settings.putString(key, value)
+            }
         }
     }
 

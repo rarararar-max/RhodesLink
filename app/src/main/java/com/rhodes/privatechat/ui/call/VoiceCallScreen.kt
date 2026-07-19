@@ -125,7 +125,7 @@ fun VoiceCallScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
         val voiceId = settings.effectiveVoiceId(operator.voiceName)
         val speed = operator.voiceSpeed.toDoubleOrNull() ?: 1.0
         Log.d("RHODES_AUDIO", "synthesizeAndPlay: voiceId=$voiceId speed=$speed text前50=${text.take(50)}")
-        Log.d("RHODES_AUDIO", "effectiveVoiceId来源: operator.voiceName='${operator.voiceName}' ttsDefaultVoiceId='${settings.ttsDefaultVoiceId}'")
+        Log.d("RHODES_AUDIO", "effectiveVoiceId来源: operator.voiceName='${operator.voiceName}'")
         speaking = true
         try {
             val parts = splitTtsSentences(prepareTtsSpeech(text, 500, "我在。"))

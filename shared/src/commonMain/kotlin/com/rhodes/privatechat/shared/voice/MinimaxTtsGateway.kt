@@ -36,7 +36,7 @@ class MinimaxTtsGateway(
 
             send(Frame.Text(json.encodeToString(MinimaxTaskStart(
                 model = modelName,
-                voiceSetting = MinimaxVoiceSetting(voiceId = request.voiceId, speed = request.speed),
+                voiceSetting = MinimaxVoiceSetting(voiceId = request.voiceId.ifBlank { "male-qn-qingse" }, speed = request.speed),
                 audioSetting = MinimaxAudioSetting(format = request.format),
             ))))
             val started = incoming.receiveCatching().getOrNull() as? Frame.Text

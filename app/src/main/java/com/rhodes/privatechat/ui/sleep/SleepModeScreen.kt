@@ -165,7 +165,7 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
         val ttsKey = settings.ttsApiKey.ifBlank { settings.apiKey }
         Log.d("RHODES_AUDIO", "speak: text前50=${text.take(50)} ttsBaseUrl='${settings.ttsBaseUrl}' ttsModelName='${settings.ttsModelName}' apiKey非空=${ttsKey.isNotBlank()}")
         val voiceId = settings.effectiveVoiceId(operator.voiceName)
-        Log.d("RHODES_AUDIO", "voiceId=$voiceId operator.voiceName='${operator.voiceName}' ttsDefaultVoiceId='${settings.ttsDefaultVoiceId}'")
+        Log.d("RHODES_AUDIO", "voiceId=$voiceId operator.voiceName='${operator.voiceName}'")
         val tts = createTtsGateway(settings.ttsBaseUrl, ttsKey, settings.ttsModelName, settings.ttsProvider)
         Log.d("RHODES_AUDIO", "TTS实例类: ${tts::class.simpleName}")
         callState = com.rhodes.privatechat.shared.call.CallState.AiSpeaking

@@ -264,7 +264,7 @@ fun OperatorEditScreen(
             Spacer(modifier = Modifier.height(12.dp))
             SectionCard {
                 SectionTitle("语音音色")
-                Text("语音通话、陪睡和 TTS 会使用这里填写的音色ID。未填写音色ID的角色不能发起语音通话。", fontSize = 12.sp, color = TextSecondary, lineHeight = 18.sp)
+                Text("语音通话、陪睡和 TTS 会优先使用这里填写的音色ID；未填写时使用当前 TTS 服务商提供的默认音色。", fontSize = 12.sp, color = TextSecondary, lineHeight = 18.sp)
                 Spacer(modifier = Modifier.height(10.dp))
                 LabeledField("音色ID") {
                     OutlinedTextField(

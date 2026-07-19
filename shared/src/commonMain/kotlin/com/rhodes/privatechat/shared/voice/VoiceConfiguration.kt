@@ -11,12 +11,14 @@ fun SettingsRepository.hasTtsConfiguration(): Boolean =
 fun SettingsRepository.voiceCallSetupMessage(voiceId: String): String? = when {
     !hasAsrConfiguration() -> "请先在模型设置中填写语音识别模型和密钥。"
     !hasTtsConfiguration() -> "请先在模型设置中填写文字转语音模型和密钥。"
-    effectiveVoiceId(voiceId).isBlank() -> "请先在角色编辑页面填写音色 ID，或在模型设置中填写默认音色 ID。"
     else -> null
 }
 
 fun SettingsRepository.effectiveVoiceId(operatorVoiceId: String): String =
-    operatorVoiceId.ifBlank { ttsDefaultVoiceId }
+    operatorVoiceId
+
+fun defaultTtsVoiceId(provider: String): String =
+    if (provider == "xiaomi") "mimo_default" else "male-qn-qingse"
 
 fun createTtsGateway(endpoint: String, apiKey: String, modelName: String, provider: String = ""): TtsGateway {
     return if (endpoint.isNotBlank() && apiKey.isNotBlank() && modelName.isNotBlank()) {

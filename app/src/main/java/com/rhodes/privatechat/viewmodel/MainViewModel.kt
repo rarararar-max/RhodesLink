@@ -255,7 +255,7 @@ class MainViewModel(
         settings.putString(key, template)
         settings.putBoolean("${key}_custom", true)
         val allowed = PromptPlaceholderRegistry.allowed(type)
-        val unsupported = Regex("\\{\\{([A-Z0-9_]+)}}").findAll(template).map { it.groupValues[1] }
+        val unsupported = Regex("\\{\\{([A-Z0-9_]+)\\}\\}").findAll(template).map { it.groupValues[1] }
             .filter { it !in allowed }.distinct().sorted()
             .map { "{{$it}} 不适用于当前模板，运行时会保留原文。" }
         return unsupported.toList()
@@ -309,7 +309,14 @@ class MainViewModel(
                 settings.putBoolean("permissions_initialized", true)
             }
             repository.migrateOldRelationships()
-            repository.initPresetGroups()
+            if (!settings.getBoolean("preset_groups_initialized", false)) {
+                // Existing installations may already have deleted the preset group.
+                // Only seed it for a genuinely new installation.
+                if (!settings.getBoolean("initial_hidden_done", false)) {
+                    repository.initPresetGroups()
+                }
+                settings.putBoolean("preset_groups_initialized", true)
+            }
             // 新群组默认从主页隐藏，仅在通讯录显示（只执行一次）
             val initialHiddenDone = settings.getBoolean("initial_hidden_done", false)
             if (!initialHiddenDone) {

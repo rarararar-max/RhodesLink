@@ -34,6 +34,7 @@ import com.rhodes.privatechat.shared.modelgateway.VisionAnalyzeRequest
 import com.rhodes.privatechat.shared.modelgateway.createVisionGateway
 import com.rhodes.privatechat.shared.voice.TtsRequest
 import com.rhodes.privatechat.shared.voice.createTtsGateway
+import com.rhodes.privatechat.shared.voice.defaultTtsVoiceId
 import com.rhodes.privatechat.shared.voice.AsrRequest
 import com.rhodes.privatechat.shared.voice.createAsrGateway
 import com.rhodes.privatechat.shared.vector.testEmbeddingGateway
@@ -95,7 +96,6 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     var ttsProvider by remember { mutableStateOf(settings.ttsProvider) }
     var ttsModelName by remember { mutableStateOf(settings.ttsModelName) }
     var ttsApiKey by remember { mutableStateOf(settings.ttsApiKey) }
-    var ttsDefaultVoiceId by remember { mutableStateOf(settings.ttsDefaultVoiceId) }
     var errorText by remember { mutableStateOf("") }
     var showUnsavedDialog by remember { mutableStateOf(false) }
     var testing by remember { mutableStateOf<String?>(null) }
@@ -104,6 +104,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     var asrTestResult by remember { mutableStateOf("") }
     var ttsTestResult by remember { mutableStateOf("") }
     var vectorTestResult by remember { mutableStateOf("") }
+    var didSave by remember { mutableStateOf(false) }
 
     val isCustom = currentProviderId == "custom"
     val modelOptions = if (isCustom) listOf("自填") else currentConfig.models + "自填"
@@ -112,7 +113,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         visionProvider != settings.visionProvider || visionBaseUrl.trim() != settings.visionBaseUrl || visionModelName.trim() != settings.visionModelName || visionApiKey.trim() != settings.visionApiKey ||
         vectorProviderMode != settings.vectorProviderMode || vectorProvider != settings.vectorProvider || vectorBaseUrl.trim() != settings.vectorBaseUrl || vectorModelName.trim() != settings.vectorModelName || vectorApiKey.trim() != settings.vectorApiKey ||
         asrProvider != settings.asrProvider || asrBaseUrl.trim() != settings.asrBaseUrl || asrModelName.trim() != settings.asrModelName || asrApiKey.trim() != settings.asrApiKey ||
-        ttsProvider != settings.ttsProvider || ttsBaseUrl.trim() != settings.ttsBaseUrl || ttsModelName.trim() != settings.ttsModelName || ttsApiKey.trim() != settings.ttsApiKey || ttsDefaultVoiceId.trim() != settings.ttsDefaultVoiceId
+        ttsProvider != settings.ttsProvider || ttsBaseUrl.trim() != settings.ttsBaseUrl || ttsModelName.trim() != settings.ttsModelName || ttsApiKey.trim() != settings.ttsApiKey
 
     fun validateSettings(): String? {
         fun hasScheme(value: String, vararg schemes: String): Boolean = runCatching {
@@ -134,60 +135,63 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         if (visionBaseUrl.isNotBlank() && !hasScheme(visionBaseUrl, "http", "https")) return "识图 API 地址需以 http:// 或 https:// 开头"
         if (vectorProviderMode == "third_party" && vectorBaseUrl.isNotBlank() && !hasScheme(vectorBaseUrl, "http", "https")) return "向量 API 地址需以 http:// 或 https:// 开头"
         if (asrBaseUrl.isNotBlank() && if (asrProvider == "xiaomi") !hasScheme(asrBaseUrl, "http", "https") else !hasScheme(asrBaseUrl, "ws", "wss")) return if (asrProvider == "xiaomi") "小米语音识别地址需以 http:// 或 https:// 开头" else "语音识别地址需以 ws:// 或 wss:// 开头"
-        if (ttsBaseUrl.isNotBlank() && if (ttsProvider == "xiaomi") !hasScheme(ttsBaseUrl, "http", "https") else !hasScheme(ttsBaseUrl, "ws", "wss")) return if (ttsProvider == "xiaomi") "小米文字转语音地址需以 http:// 或 https:// 开头" else "文字转语音地址需以 ws:// 或 wss:// 开头"
         return null
     }
 
     val saveSettings: () -> Boolean = {
-        val validationError = validateSettings()
-        if (validationError != null) {
-            errorText = validationError
-            false
-        } else {
-            val modelName = currentModelName
-            settings.provider = currentProviderId
-            settings.modelName = modelName
-            settings.customUrl = customUrl.trim()
-            settings.apiKey = apiKey.trim()
-            settings.visionBaseUrl = visionBaseUrl.trim()
-            settings.visionProvider = visionProvider
-            settings.visionModelName = visionModelName.trim()
-            settings.visionApiKey = visionApiKey.trim()
-            settings.vectorProviderMode = vectorProviderMode
-            settings.vectorProvider = vectorProvider
-            settings.vectorBaseUrl = vectorBaseUrl.trim()
-            settings.vectorModelName = vectorModelName.trim()
-            settings.vectorApiKey = vectorApiKey.trim()
-            settings.asrBaseUrl = asrBaseUrl.trim()
-            settings.asrProvider = asrProvider
-            settings.asrModelName = asrModelName.trim()
-            settings.asrApiKey = asrApiKey.trim()
-            settings.ttsBaseUrl = ttsBaseUrl.trim()
-            settings.ttsProvider = ttsProvider
-            settings.ttsModelName = ttsModelName.trim()
-            settings.ttsApiKey = ttsApiKey.trim()
-            settings.ttsDefaultVoiceId = ttsDefaultVoiceId.trim()
-            val newVectorSignature = if (vectorProviderMode == "local") "local-hash-384-v1" else "${vectorProvider}:${vectorBaseUrl.trim()}:${vectorModelName.trim()}"
-            val vectorSignatureChanged = settings.vectorIndexSignature != newVectorSignature
-            if (vectorSignatureChanged) {
-                pendingVectorSignature = newVectorSignature
-                vectorIndexFlowPending = true
-                invalidatingVectorIndex = true
-                scope.launch {
-                    runCatching { viewModel.invalidateAllMemoryIndexes() }
-                        .onFailure { rebuildVectorResult = "旧索引清理失败：${it.message?.take(60) ?: "未知错误"}" }
-                    invalidatingVectorIndex = false
-                    if (rebuildVectorResult.isBlank()) {
-                        rebuildEligibleCount = runCatching { viewModel.countEligibleMemoryIndexes() }.getOrNull()
-                        showRebuildVectorIndex = true
-                    } else {
-                        vectorIndexFlowPending = false
-                    }
+        didSave = false
+        // Saving is independent from connecting. Users must be able to configure providers
+        // incrementally, while the individual test buttons validate the required fields.
+        val modelName = currentModelName
+        settings.saveModelConfiguration(
+                provider = currentProviderId,
+                modelName = modelName,
+                customUrl = customUrl.trim(),
+                apiKey = apiKey.trim(),
+                visionBaseUrl = visionBaseUrl.trim(),
+                visionProvider = visionProvider,
+                visionModelName = visionModelName.trim(),
+                visionApiKey = visionApiKey.trim(),
+                vectorProviderMode = vectorProviderMode,
+                vectorProvider = vectorProvider,
+                vectorBaseUrl = vectorBaseUrl.trim(),
+                vectorModelName = vectorModelName.trim(),
+                vectorApiKey = vectorApiKey.trim(),
+                asrBaseUrl = asrBaseUrl.trim(),
+                asrProvider = asrProvider,
+                asrModelName = asrModelName.trim(),
+                asrApiKey = asrApiKey.trim(),
+                ttsBaseUrl = ttsBaseUrl.trim(),
+                ttsProvider = ttsProvider,
+                ttsModelName = ttsModelName.trim(),
+                ttsApiKey = ttsApiKey.trim(),
+        )
+        val newVectorSignature = if (vectorProviderMode == "local") "local-hash-384-v1" else "${vectorProvider}:${vectorBaseUrl.trim()}:${vectorModelName.trim()}"
+        val previousVectorSignature = settings.vectorIndexSignature
+        val vectorSignatureChanged = previousVectorSignature.isNotBlank() && previousVectorSignature != newVectorSignature
+        if (previousVectorSignature.isBlank()) {
+            // First configuration has no prior index to clear or rebuild.
+            settings.vectorIndexSignature = newVectorSignature
+        }
+        if (vectorSignatureChanged) {
+            pendingVectorSignature = newVectorSignature
+            vectorIndexFlowPending = true
+            invalidatingVectorIndex = true
+            scope.launch {
+                runCatching { viewModel.invalidateAllMemoryIndexes() }
+                    .onFailure { rebuildVectorResult = "旧索引清理失败：${it.message?.take(60) ?: "未知错误"}" }
+                invalidatingVectorIndex = false
+                if (rebuildVectorResult.isBlank()) {
+                    rebuildEligibleCount = runCatching { viewModel.countEligibleMemoryIndexes() }.getOrNull()
+                    showRebuildVectorIndex = true
+                } else {
+                    vectorIndexFlowPending = false
                 }
             }
-            errorText = ""
-            vectorSignatureChanged
         }
+        errorText = ""
+        didSave = true
+        vectorSignatureChanged
     }
 
     fun requestBack() {
@@ -254,13 +258,11 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         scope.launch {
             try {
                 val key = ttsApiKey.trim().ifBlank { apiKey.trim() }
-                require(if (ttsProvider == "xiaomi") ttsBaseUrl.trim().startsWith("http") else ttsBaseUrl.trim().startsWith("ws")) { if (ttsProvider == "xiaomi") "小米文字转语音地址需要以 http:// 或 https:// 开头" else "文字转语音地址需要以 ws:// 或 wss:// 开头" }
+                require(ttsBaseUrl.trim().isNotBlank()) { "请填写文字转语音地址" }
                 require(ttsModelName.trim().isNotBlank()) { "请填写文字转语音模型名" }
                 require(key.isNotBlank()) { "请填写文字转语音密钥，或先填写聊天密钥" }
-                val testVoiceId = ttsDefaultVoiceId.trim()
-                require(testVoiceId.isNotBlank()) { "请填写默认音色 ID，或到角色编辑页测试角色音色" }
                 val audioBytes = createTtsGateway(ttsBaseUrl.trim(), key, ttsModelName.trim(), ttsProvider)
-                    .synthesize(TtsRequest("测试成功", testVoiceId)).audioBytes
+                    .synthesize(TtsRequest("测试成功", defaultTtsVoiceId(ttsProvider))).audioBytes
                 if (audioBytes == null || audioBytes.isEmpty()) {
                     ttsTestResult = "测试失败：服务没有返回音频数据"
                 } else {
@@ -325,13 +327,13 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     BackHandler(onBack = { requestBack() })
 
     Box(modifier = modifier.fillMaxSize()) {
-    Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
+    Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding().imePadding()) {
         Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { requestBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Spacer(Modifier.weight(1f))
             Text("模型设置", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
             Spacer(Modifier.weight(1f))
-            TextButton(enabled = !invalidatingVectorIndex && !rebuildingVectorIndex, onClick = { val stayForVectorFlow = saveSettings(); if (!stayForVectorFlow) onBack() }) {
+            TextButton(enabled = !invalidatingVectorIndex && !rebuildingVectorIndex, onClick = { val stayForVectorFlow = saveSettings(); if (didSave && !stayForVectorFlow) onBack() }) {
                 Icon(Icons.Default.Check, null, tint = Primary, modifier = Modifier.size(20.dp))
                 Text("保存", color = Primary, fontWeight = FontWeight.SemiBold)
             }
@@ -441,7 +443,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 DropDown("服务商", listOf("MiniMax", "小米 MiMo", "自填（MiniMax 兼容）"), when (ttsProvider) { "minimax" -> 0; "xiaomi" -> 1; else -> 2 }) { index ->
                     ttsProvider = listOf("minimax", "xiaomi", "custom")[index]
                     if (index == 0) { ttsBaseUrl = "wss://api.minimaxi.com/ws/v1/t2a_v2"; ttsModelName = "speech-2.8-hd" }
-                    if (index == 1) { ttsBaseUrl = "https://api.xiaomimimo.com/v1/chat/completions"; ttsModelName = "mimo-v2.5-tts"; if (ttsDefaultVoiceId.isBlank()) ttsDefaultVoiceId = "mimo_default" }
+                    if (index == 1) { ttsBaseUrl = "https://api.xiaomimimo.com/v1/chat/completions"; ttsModelName = "mimo-v2.5-tts" }
                 }
                 Text(if (ttsProvider == "xiaomi") "小米 MiMo 使用 HTTP 非流式 TTS，支持 mimo_default、冰糖、茉莉、苏打等预置音色。" else "自填服务必须兼容 MiniMax WebSocket TTS 协议。", fontSize = 12.sp, color = TextSecondary)
                 Spacer(Modifier.height(10.dp))
@@ -449,7 +451,6 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 Spacer(Modifier.height(10.dp))
                 LabeledField("模型名") { TextInput(ttsModelName, { ttsModelName = it }, ctx, placeholder = "speech-2.8-hd") }
                 Spacer(Modifier.height(10.dp))
-                LabeledField("默认音色 ID") { TextInput(ttsDefaultVoiceId, { ttsDefaultVoiceId = it }, ctx, placeholder = "角色未设置音色时使用") }
                 LabeledField("API Key（空则复用聊天 API Key）") { SecretInput(ttsApiKey, { ttsApiKey = it }, ctx) }
                 TestButton("测试文字转语音", testing == "tts", ttsTestResult, onClick = ::testTts)
             }
@@ -462,10 +463,11 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             title = { Text("有未保存的修改", color = TextPrimary) },
             text = { Text("你已经修改了模型设置。要保存后离开，还是放弃这些修改？", color = TextSecondary) },
             confirmButton = { TextButton(onClick = {
-                if (validateSettings() != null) return@TextButton
                 val stayForVectorFlow = saveSettings()
-                showUnsavedDialog = false
-                if (!stayForVectorFlow) onBack()
+                if (didSave) {
+                    showUnsavedDialog = false
+                    if (!stayForVectorFlow) onBack()
+                }
             }) { Text("保存修改", color = Primary) } },
             dismissButton = {
                 Row {

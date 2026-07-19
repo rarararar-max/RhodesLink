@@ -275,6 +275,7 @@ class GroupChatViewModel(
         stopAutoGroupChat(groupSessionId)
         settings.remove("group_auto_$groupSessionId")
         settings.remove("group_event_auto_$groupSessionId")
+        settings.putBoolean("group_deleted_$groupSessionId", true)
         scope.launch {
             repository.purgeSessionData(groupSessionId)
             repository.deleteSession(groupSessionId)

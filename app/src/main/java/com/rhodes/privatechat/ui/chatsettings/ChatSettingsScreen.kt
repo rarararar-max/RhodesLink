@@ -121,17 +121,17 @@ private fun HelpButton(message: String) {
 @Composable
 private fun PrivateTab(settings: SettingsRepository) {
     SectionTitle("台词（共用：线上/线下/导演）")
-    ParamSlider(settings, "dia_seg_min", "最少台词段数", 1, 1f..10f, "角色每次回复最少说几段话。建议1。太低（0）可能不出声，太高（超过3）角色为了凑段数会说一堆车轱辘话。")
-    ParamSlider(settings, "dia_seg_max", "最多台词段数", 3, 1f..10f, "角色每次回复最多说几段话。建议2-3。太高（超过5）角色容易啰嗦，每个回复都像在写作文。")
-    ParamSlider(settings, "dia_min", "台词最少字数", 10, 1f..1000f, "每段话最少写几个字。建议10-20。太低（低于5）角色答得很敷衍，太高（超过50）每句话都像在写小作文。", step = 5f, pairKey = "dia_max", isMinSide = true)
-    ParamSlider(settings, "dia_max", "台词最多字数", 300, 1f..1000f, "每段话最多写几个字。建议200-300。太低（低于50）角色只能一问一答没法好好说话，太高（超过500）角色会变得非常啰嗦。", step = 5f, pairKey = "dia_min", isMinSide = false)
+    ParamSlider(settings, "dia_seg_min", "最少台词段数", 1, 1f..10f, "角色每次回复最少说几段话。建议1。太低（0）可能不出声，太高（超过3）角色为了凑段数会说一堆车轱辘话。", pairKey = "dia_seg_max", pairDefaultVal = 3, isMinSide = true)
+    ParamSlider(settings, "dia_seg_max", "最多台词段数", 3, 1f..10f, "角色每次回复最多说几段话。建议2-3。太高（超过5）角色容易啰嗦，每个回复都像在写作文。", pairKey = "dia_seg_min", pairDefaultVal = 1, isMinSide = false)
+    ParamSlider(settings, "dia_min", "台词最少字数", 10, 1f..1000f, "每段话最少写几个字。建议10-20。太低（低于5）角色答得很敷衍，太高（超过50）每句话都像在写小作文。", step = 5f, pairKey = "dia_max", pairDefaultVal = 300, isMinSide = true)
+    ParamSlider(settings, "dia_max", "台词最多字数", 300, 1f..1000f, "每段话最多写几个字。建议200-300。太低（低于50）角色只能一问一答没法好好说话，太高（超过500）角色会变得非常啰嗦。", step = 5f, pairKey = "dia_min", pairDefaultVal = 10, isMinSide = false)
     Spacer(modifier = Modifier.height(12.dp))
 
     SectionTitle("旁白（线下/导演模式）")
-    ParamSlider(settings, "nar_seg_min", "最少旁白段数", 1, 0f..10f, "线下和导演模式每轮至少会保留一段旁白；此设置用于提示模型额外增加旁白的数量。线上模式用不到这个。")
-    ParamSlider(settings, "nar_seg_max", "最多旁白段数", 3, 1f..10f, "每次回复最多带几段环境描写。建议2-3。太高（超过5）旁白比台词还多，像在读剧本不像在聊天。")
-    ParamSlider(settings, "nar_min", "旁白最少字数", 20, 0f..1000f, "每段环境描写最少写几个字。建议20-50。太低写不出画面感，太高（超过100）一段动作描写就占了大半篇幅。", step = 5f, pairKey = "nar_max", isMinSide = true)
-    ParamSlider(settings, "nar_max", "旁白最多字数", 300, 1f..1000f, "每段环境描写最多写几个字。建议200-300。太高（超过400）旁白抢了台词的风头，而且每次回复花的钱也更多。", step = 5f, pairKey = "nar_min", isMinSide = false)
+    ParamSlider(settings, "nar_seg_min", "最少旁白段数", 1, 0f..10f, "线下和导演模式每轮至少会保留一段旁白；此设置用于提示模型额外增加旁白的数量。线上模式用不到这个。", pairKey = "nar_seg_max", pairDefaultVal = 3, isMinSide = true)
+    ParamSlider(settings, "nar_seg_max", "最多旁白段数", 3, 1f..10f, "每次回复最多带几段环境描写。建议2-3。太高（超过5）旁白比台词还多，像在读剧本不像在聊天。", pairKey = "nar_seg_min", pairDefaultVal = 1, isMinSide = false)
+    ParamSlider(settings, "nar_min", "旁白最少字数", 20, 0f..1000f, "每段环境描写最少写几个字。建议20-50。太低写不出画面感，太高（超过100）一段动作描写就占了大半篇幅。", step = 5f, pairKey = "nar_max", pairDefaultVal = 300, isMinSide = true)
+    ParamSlider(settings, "nar_max", "旁白最多字数", 300, 1f..1000f, "每段环境描写最多写几个字。建议200-300。太高（超过400）旁白抢了台词的风头，而且每次回复花的钱也更多。", step = 5f, pairKey = "nar_min", pairDefaultVal = 20, isMinSide = false)
 }
 
 // ── Tab 1: 群聊 ──
@@ -141,22 +141,22 @@ private fun GroupTab(settings: SettingsRepository) {
     Text("群聊参数调整的是每轮群聊的表现。想开启空闲自动聊天，需要到权限管理或群聊编辑页为具体群打开开关。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
     Spacer(Modifier.height(8.dp))
     SectionTitle("消息长度")
-    ParamSlider(settings, "group_msg_min", "每条消息最小字数", 10, 5f..50f, "群聊里每人每次最少说几个字。建议10-20。太低（低于5）只说一两个字没内容，太高（超过30）每人说话都像在写小作文，群聊节奏拖得很慢。")
-    ParamSlider(settings, "group_msg_max", "每条消息最大字数", 100, 30f..200f, "群聊里每人每次最多说几个字。建议50-100。太低（低于30）说不完整一件事，太高（超过150）一个人刷一大段，其他人就冷场了。", step = 5f, pairKey = "group_msg_min", isMinSide = false)
+    ParamSlider(settings, "group_msg_min", "每条消息最小字数", 10, 5f..50f, "群聊里每人每次最少说几个字。建议10-20。太低（低于5）只说一两个字没内容，太高（超过30）每人说话都像在写小作文，群聊节奏拖得很慢。", pairKey = "group_msg_max", pairDefaultVal = 100, isMinSide = true)
+    ParamSlider(settings, "group_msg_max", "每条消息最大字数", 100, 30f..200f, "群聊里每人每次最多说几个字。建议50-100。太低（低于30）说不完整一件事，太高（超过150）一个人刷一大段，其他人就冷场了。", step = 5f, pairKey = "group_msg_min", pairDefaultVal = 10, isMinSide = false)
 
     Spacer(Modifier.height(12.dp)); SectionTitle("发言频率")
-    ParamSlider(settings, "group_speech_min", "每轮每人最少发言", 1, 1f..3f, "每轮群聊每人至少说几次。建议1。太低（0）有人可能全程不说话，太高（超过2）每人要硬说好几轮，对话变得很刻意。")
-    ParamSlider(settings, "group_speech_max", "每轮每人最多发言", 2, 1f..5f, "每轮群聊每人最多说几次。建议2。太高（超过4）话多的人一直刷屏，其他人插不上嘴。")
+    ParamSlider(settings, "group_speech_min", "每轮每人最少发言", 1, 1f..3f, "每轮群聊每人至少说几次。建议1。太低（0）有人可能全程不说话，太高（超过2）每人要硬说好几轮，对话变得很刻意。", pairKey = "group_speech_max", pairDefaultVal = 2, isMinSide = true)
+    ParamSlider(settings, "group_speech_max", "每轮每人最多发言", 2, 1f..5f, "每轮群聊每人最多说几次。建议2。太高（超过4）话多的人一直刷屏，其他人插不上嘴。", pairKey = "group_speech_min", pairDefaultVal = 1, isMinSide = false)
 
     Spacer(Modifier.height(12.dp)); SectionTitle("空闲自动聊天")
-    ParamSlider(settings, "group_chat_min_interval", "空闲最小间隔(秒)", 60, 5f..600f, "没人说话后，最快等多久AI会自动接话。建议60。太低（低于30）AI接得太快像在抢话，太高（超过300）冷场太久聊天接不上。", step = 5f)
-    ParamSlider(settings, "group_chat_max_interval", "空闲最大间隔(秒)", 180, 30f..900f, "没人说话后，最晚等多久AI一定会接话。建议180-300。太低（低于60）AI总是急着说话，太高（超过600）冷场太久才有人开口。", step = 10f)
+    ParamSlider(settings, "group_chat_min_interval", "空闲最小间隔(秒)", 60, 5f..600f, "没人说话后，最快等多久AI会自动接话。建议60。太低（低于30）AI接得太快像在抢话，太高（超过300）冷场太久聊天接不上。", step = 5f, pairKey = "group_chat_max_interval", pairDefaultVal = 180, isMinSide = true)
+    ParamSlider(settings, "group_chat_max_interval", "空闲最大间隔(秒)", 180, 30f..900f, "没人说话后，最晚等多久AI一定会接话。建议180-300。太低（低于60）AI总是急着说话，太高（超过600）冷场太久才有人开口。", step = 10f, pairKey = "group_chat_min_interval", pairDefaultVal = 60, isMinSide = false)
     ParamSlider(settings, "group_auto_max_rounds", "空闲连续轮数", 20, 1f..300f, "AI自己聊天最多连续聊多少轮后停下来。建议10-30。太低（低于5）刚聊起来就停了，太高（超过50）AI一直聊不停，刷屏严重。", step = 1f)
 
     Spacer(Modifier.height(12.dp)); SectionTitle("群聊旁白(线下/导演)")
     Text("线下和导演模式每轮至少有一条旁白，用于动作、环境或气氛衔接；不是每个人都一定有旁白。旁白越长，回复也会越长。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
-    ParamSlider(settings, "group_nar_min", "旁白最小字数", 20, 0f..200f, "每段场景描写最少写几个字。建议20。太低（0）场景描写太短没画面感。", step = 5f, pairKey = "group_nar_max", isMinSide = true)
-    ParamSlider(settings, "group_nar_max", "旁白最大字数", 100, 50f..300f, "每段场景描写最多写几个字。建议100。太高（超过200）群聊里大段旁白像在写小说而不是聊天。", step = 5f, pairKey = "group_nar_min", isMinSide = false)
+    ParamSlider(settings, "group_nar_min", "旁白最小字数", 20, 0f..200f, "每段场景描写最少写几个字。建议20。太低（0）场景描写太短没画面感。", step = 5f, pairKey = "group_nar_max", pairDefaultVal = 100, isMinSide = true)
+    ParamSlider(settings, "group_nar_max", "旁白最大字数", 100, 50f..300f, "每段场景描写最多写几个字。建议100。太高（超过200）群聊里大段旁白像在写小说而不是聊天。", step = 5f, pairKey = "group_nar_min", pairDefaultVal = 20, isMinSide = false)
 }
 
 // ── Tab 2: 统一记忆 ──
@@ -387,9 +387,9 @@ private fun modeLabel(mode: String): String = when (mode) {
 // ── Shared slider components ──
 
 @Composable
-private fun ParamSlider(settings: SettingsRepository, key: String, label: String, defaultVal: Int, range: ClosedFloatingPointRange<Float>, tip: String, step: Float = 1f, pairKey: String? = null, isMinSide: Boolean = true) {
+private fun ParamSlider(settings: SettingsRepository, key: String, label: String, defaultVal: Int, range: ClosedFloatingPointRange<Float>, tip: String, step: Float = 1f, pairKey: String? = null, pairDefaultVal: Int = defaultVal, isMinSide: Boolean = true) {
     var value by remember { mutableFloatStateOf(settings.getInt(key, defaultVal).toFloat().coerceIn(range)) }
-    var pairValue by remember { mutableFloatStateOf(if (pairKey != null) settings.getInt(pairKey, defaultVal).toFloat() else 0f) }
+    var pairValue by remember { mutableFloatStateOf(if (pairKey != null) settings.getInt(pairKey, pairDefaultVal).toFloat() else 0f) }
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Card).padding(12.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(label, fontSize = 13.sp, color = TextPrimary)
@@ -400,7 +400,7 @@ private fun ParamSlider(settings: SettingsRepository, key: String, label: String
         }
         Slider(value = value, onValueChange = { v ->
             if (pairKey != null) {
-                pairValue = settings.getInt(pairKey, defaultVal).toFloat()
+                pairValue = settings.getInt(pairKey, pairDefaultVal).toFloat()
                 if (isMinSide) {
                     value = v.coerceAtMost(pairValue)
                 } else {
@@ -409,7 +409,7 @@ private fun ParamSlider(settings: SettingsRepository, key: String, label: String
             } else { value = v }
         }, onValueChangeFinished = {
             val oldValue = settings.getInt(key, defaultVal)
-            val oldPairValue = if (pairKey != null) settings.getInt(pairKey, defaultVal) else null
+            val oldPairValue = if (pairKey != null) settings.getInt(pairKey, pairDefaultVal) else null
             settings.putInt(key, value.toInt())
             DebugLogger.log("Settings/Param", "参数调整: $label($key) $oldValue -> ${value.toInt()}")
             if (pairKey != null) {

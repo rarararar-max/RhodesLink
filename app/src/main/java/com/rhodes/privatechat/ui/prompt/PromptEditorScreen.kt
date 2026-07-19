@@ -109,31 +109,44 @@ fun PromptEditorScreen(
         )
     }
 
-    val saveCurrent: () -> Unit = {
+    val saveCurrent: () -> Boolean = saveCurrent@{
         if (tabIndex < 5 && currentKey() in dirtyKeys) {
             textMap[currentKey()] = textFieldValue
-            val warnings = viewModel.savePromptTemplate(currentType(), currentMode(), textFieldValue.text)
+            val result = runCatching { viewModel.savePromptTemplate(currentType(), currentMode(), textFieldValue.text) }
+            if (result.isFailure) {
+                Toast.makeText(context, "保存失败：${result.exceptionOrNull()?.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
+                return@saveCurrent false
+            }
+            val warnings = result.getOrThrow()
             dirtyKeys.remove(currentKey())
             if (warnings.isNotEmpty()) {
                 android.widget.Toast.makeText(context, warnings.joinToString("\n"), android.widget.Toast.LENGTH_LONG).show()
             }
         }
+        true
     }
-    val saveAllEdited: () -> Unit = {
+    val saveAllEdited: () -> Boolean = saveAllEdited@{
         if (tabIndex < 5) textMap[currentKey()] = textFieldValue
         val warnings = mutableListOf<String>()
-        textMap.filterKeys { it in dirtyKeys }.forEach { (templateKey, value) ->
+        val editedTemplates = textMap.filterKeys { it in dirtyKeys }.toMap()
+        for ((templateKey, value) in editedTemplates) {
             val type = templateKey.substringBefore(":")
             val mode = templateKey.substringAfter(":", "")
-            warnings += viewModel.savePromptTemplate(type, mode, value.text)
+            val result = runCatching { viewModel.savePromptTemplate(type, mode, value.text) }
+            if (result.isFailure) {
+                Toast.makeText(context, "保存失败：${result.exceptionOrNull()?.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
+                return@saveAllEdited false
+            }
+            warnings += result.getOrThrow()
         }
         dirtyKeys.clear()
         if (warnings.isNotEmpty()) {
             android.widget.Toast.makeText(context, warnings.distinct().joinToString("\n"), android.widget.Toast.LENGTH_LONG).show()
         }
+        true
     }
 
-    BackHandler(onBack = { saveAllEdited(); onBack() })
+    BackHandler(onBack = { if (saveAllEdited()) onBack() })
 
     var showResetDialog by remember { mutableStateOf(false) }
     var showHelpDialog by remember { mutableStateOf(false) }
@@ -244,14 +257,14 @@ fun PromptEditorScreen(
             modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = { saveAllEdited(); onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
+            IconButton(onClick = { if (saveAllEdited()) onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Spacer(modifier = Modifier.weight(1f))
             Text("提示词模板编辑", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
             Spacer(modifier = Modifier.weight(1f))
             IconButton(onClick = { showHelpDialog = true }) {
                 Icon(Icons.AutoMirrored.Filled.HelpOutline, "帮助", tint = Blue400, modifier = Modifier.size(22.dp))
             }
-            TextButton(onClick = { saveAllEdited(); Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show(); onBack() }) {
+            TextButton(onClick = { if (saveAllEdited()) { Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show(); onBack() } }) {
                 Icon(Icons.Default.Check, null, tint = Blue400, modifier = Modifier.size(20.dp))
                 Text("保存", color = Blue400, fontWeight = FontWeight.SemiBold)
             }

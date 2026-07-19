@@ -616,13 +616,19 @@ class GroupChatViewModel(
                         "groupRelationshipHintCount" to settings.groupRelationshipHintCount.toString()
                     )
                 )
-                val finalSystemPrompt = sharedUtils.compactTemplate(sharedUtils.applyTemplate(grpTpl, grpReplacements))
+                val finalSystemPrompt = sharedUtils.compactTemplate(sharedUtils.applyTemplate(grpTpl, grpReplacements)) + """
+
+                    |【最近话题连续性 · 最高优先级】
+                    |- 优先承接最近一轮最后一个有效发言、尚未回答的问题、邀约、分歧或行动。
+                    |- 本轮至少一名成员必须回应上述具体内容；不要无关联地突然换话题。
+                    |- 只有用户明确转题，或当前话题自然收束后，才能转题；转题必须有自然过渡。
+                """.trimMargin()
                 val historyLimit = settings.historyMessages
                 val activeNames = activeMembers.map { it.name }.toSet() + "我" + "系统"
                 val allHistory = repository.getMessagesSync(groupSessionId).let { msgs ->
                     val restartAt = settings.getSessionRestartAt(groupSessionId)
                     val currentConversation = if (restartAt > 0L) msgs.filter { it.timestamp >= restartAt } else msgs
-                    val limited = if (historyLimit > 0) currentConversation.takeLast(historyLimit) else currentConversation
+                    val limited = recentGroupRounds(currentConversation, historyLimit)
                     limited.filter { msg -> (msg.id !in batchIds) && (msg.isMe || msg.type == "system" || msg.type == "ai_json" || msg.senderName in activeNames) }
                 }.toMutableList()
                 // Keep the pre-stored media row in history, but remove a non-batched trailing text row.
@@ -736,6 +742,20 @@ class GroupChatViewModel(
             }
             }
         }
+    }
+
+    /** A group round starts with a user message; automatic AI batches remain individual rounds. */
+    private fun recentGroupRounds(messages: List<ChatMessage>, roundLimit: Int): List<ChatMessage> {
+        if (roundLimit <= 0) return messages
+        val roundStarts = mutableListOf<Int>()
+        messages.forEachIndexed { index, message ->
+            if (message.isMe || (index == 0 && !message.isMe) || (!message.isMe && messages[index - 1].isMe.not() && message.type == "ai_json")) {
+                roundStarts += index
+            }
+        }
+        if (roundStarts.isEmpty()) return messages.takeLast(roundLimit)
+        val startIndex = roundStarts.getOrElse((roundStarts.size - roundLimit).coerceAtLeast(0)) { 0 }
+        return messages.drop(startIndex)
     }
 
     private fun formatGroupHistoryForPrompt(msg: ChatMessage): String {

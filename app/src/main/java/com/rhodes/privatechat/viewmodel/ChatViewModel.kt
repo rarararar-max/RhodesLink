@@ -610,6 +610,10 @@ ${text}"""
             return if (dialogue.isEmpty()) parsed else parsed.copy(dialogue = "", narration = "", segments = dialogue)
         }
         if (source.isEmpty()) return parsed
+        if (mode == "offline") {
+            // Offline content is entirely model-authored: preserve its segment text and types verbatim.
+            return parsed.copy(dialogue = "", narration = "", segments = source)
+        }
         val normalized = mutableListOf<com.rhodes.privatechat.shared.model.Segment>()
         val actionPrefix = Regex("""^[（(]([^）)]{1,180})[）)]\s*""")
         for (segment in source) {
@@ -1725,7 +1729,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             |用户：${profile.nickname}，${profile.gender.ifBlank { "未知" }}，${profile.bio.ifBlank { "无" }}
             |共同经历引用风格：${when (settings.personalMemoryReferenceStyle) { "restrained" -> "只在用户明确问起或话题高度相关时提及"; "proactive" -> "话题有联系时可主动自然提及共同经历"; else -> "话题相关时自然提及共同经历，不要无故翻旧账" }}
             |临时指令：${listOf(analysisBlock, hypnosisBlock, transitionNotice).filter { it.isNotBlank() }.joinToString("\n").ifBlank { "无" }}
-            |格式边界：${if (mode == "offline" || mode == "director") "必须至少有一条 dialogue；旁白段数为 ${settings.narSegMin} 到 ${settings.narSegMax} 段。动作、表情、环境只写 narration；dialogue 只写说出口台词，禁止括号动作。" else "只允许 dialogue；禁止旁白、动作和环境描写。"}
+            |格式边界：${if (mode == "offline") "每轮必须至少有一条 dialogue 和一条 narration；旁白必须为第三人称，严禁含我、我们、咱、咱们、本人等第一人称；dialogue 可使用简短（）表达语气、表情或简单动作。" else if (mode == "director") "必须至少有一条 dialogue；旁白段数为 ${settings.narSegMin} 到 ${settings.narSegMax} 段。动作、表情、环境只写 narration；dialogue 只写说出口台词，禁止括号动作。" else "只允许 dialogue；禁止旁白、动作和环境描写。"}
         """.trimMargin()
         val rawMsgs = repository.getMessagesSync(session.id).let { msgs ->
             val scoped = historyBeforeMessageId?.let { targetId -> msgs.takeWhile { it.id != targetId } } ?: msgs
@@ -1733,7 +1737,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             val currentConversation = if (restartAt > 0L) scoped.filter { it.timestamp >= restartAt } else scoped
             val limit = historyLimitOverride ?: settings.historyMessages
             val filtered = currentConversation.filter { it.id !in excludeMessageIds && it.type != "system" }
-            if (limit > 0) filtered.takeLast(limit) else filtered
+            recentPrivateRounds(filtered, limit)
         }.toMutableList()
         // 去掉最后一条用户消息，避免与 {{USER_CONTENT}} 重复
         if (rawMsgs.lastOrNull()?.isMe == true && rawMsgs.last().content == userContent) {
@@ -1761,6 +1765,15 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             com.rhodes.privatechat.util.DebugLogger.log("Chat/Token", "截断后: 消息数=${messages.size}, 估算token=$totalTokens")
         }
         return messages
+    }
+
+    /** A private round starts with one user message and includes all following AI output until the next user message. */
+    private fun recentPrivateRounds(messages: List<ChatMessage>, roundLimit: Int): List<ChatMessage> {
+        if (roundLimit <= 0) return messages
+        val userIndexes = messages.indices.filter { messages[it].isMe }
+        if (userIndexes.isEmpty()) return messages.takeLast(roundLimit)
+        val startIndex = userIndexes.getOrElse((userIndexes.size - roundLimit).coerceAtLeast(0)) { 0 }
+        return messages.drop(startIndex)
     }
 
     private suspend fun buildPrivateGroupContext(operatorId: String, query: String): String {

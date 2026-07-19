@@ -168,7 +168,7 @@ private fun MemoryTab(settings: SettingsRepository, onManageMemories: () -> Unit
     Spacer(modifier = Modifier.height(12.dp))
     ParamSlider(settings, "daily_intimacy_cap", "每日好感变化上限", 5, 1f..20f, "每个角色每天最多涨或掉多少好感。建议3-5。太低（低于2）关系推进非常慢，太高（超过10）聊几句好感就满了。", step = 1f)
     Spacer(modifier = Modifier.height(12.dp))
-    ParamSlider(settings, "history_messages", "每次回复最多回看几句", 20, 0f..200f, "AI每次回复最多翻看最近多少句聊天记录。建议15-30。太高（超过50）AI容易注意细节忽略当前话题，太低（低于10）AI记不住刚才聊了什么。设为0就是不限制，但仍受模型自身记忆力上限影响。", step = 1f)
+    ParamSlider(settings, "history_messages", "每次回复最多回看几轮", 20, 0f..200f, "一轮指用户一次发言及其后续 AI 回复；私聊和群聊都按轮数回看，不受单轮台词段数或群成员发言数量影响。建议10-20轮。设为0就是不限制，但仍受模型自身上下文上限影响。", step = 1f)
     Spacer(modifier = Modifier.height(12.dp))
     ParamSlider(settings, "clean_days", "近期记录整理天数", 30, 0f..365f, "聊天记录多久后自动归档整理。建议30。太低（低于7）很快就会忘事，太高（超过90）长期累积变慢。设为0就不自动整理。", step = 5f)
     Spacer(modifier = Modifier.height(12.dp))

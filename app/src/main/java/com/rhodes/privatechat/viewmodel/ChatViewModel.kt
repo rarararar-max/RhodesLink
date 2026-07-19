@@ -1734,7 +1734,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             |用户：${profile.nickname}，${profile.gender.ifBlank { "未知" }}，${profile.bio.ifBlank { "无" }}
             |共同经历引用风格：${when (settings.personalMemoryReferenceStyle) { "restrained" -> "只在用户明确问起或话题高度相关时提及"; "proactive" -> "话题有联系时可主动自然提及共同经历"; else -> "话题相关时自然提及共同经历，不要无故翻旧账" }}
             |临时指令：${listOf(analysisBlock, hypnosisBlock, transitionNotice).filter { it.isNotBlank() }.joinToString("\n").ifBlank { "无" }}
-            |格式边界：${if (mode == "offline") "每轮必须至少有一条 dialogue 和一条 narration；旁白必须为第三人称，严禁含我、我们、咱、咱们、本人等第一人称；dialogue 可使用简短（）表达语气、表情或简单动作。" else if (mode == "director") "必须至少有一条 dialogue；旁白段数为 ${settings.narSegMin} 到 ${settings.narSegMax} 段。动作、表情、环境只写 narration；dialogue 只写说出口台词，禁止括号动作。" else "只允许 dialogue；禁止旁白、动作和环境描写。"}
+            |格式边界：${if (mode == "offline") "每轮必须至少有一条 dialogue 和一条 narration；旁白必须为第三人称，严禁含我、我们、咱、咱们、本人等第一人称；dialogue 可使用简短（）表达语气、表情或简单动作。" else if (mode == "director") "必须至少有一条 dialogue；旁白段数为 ${settings.narSegMin} 到 ${settings.narSegMax} 段。动作、表情、环境只写 narration；dialogue 只写说出口台词，禁止括号动作。" else "只允许第一人称 dialogue；每段必须像角色亲自发送的聊天文字。禁止 narration、动作、神态、环境、角色名加动作、他/她等第三人称叙述；禁止“角色名皱眉”“她沉默片刻”这类小说句式。"}
         """.trimMargin()
         val rawMsgs = repository.getMessagesSync(session.id).let { msgs ->
             val scoped = historyBeforeMessageId?.let { targetId -> msgs.takeWhile { it.id != targetId } } ?: msgs

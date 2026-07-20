@@ -8,6 +8,7 @@ import com.rhodes.privatechat.automation.DailyContentScheduler
 import com.rhodes.privatechat.shared.db.DatabaseWrapper
 import com.rhodes.privatechat.shared.di.sharedModule
 import com.rhodes.privatechat.shared.settings.AndroidSettingsFactory
+import com.rhodes.privatechat.util.DebugLogger
 import org.koin.android.ext.koin.androidContext
 import org.koin.android.ext.koin.androidLogger
 import org.koin.core.context.startKoin
@@ -16,6 +17,7 @@ class RhodesApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         AndroidSettingsFactory.init(this)
+        DebugLogger.enabled = getSharedPreferences("rhodes_settings", Context.MODE_PRIVATE).getBoolean("debug_log_enabled", false)
         SettingsMigration.migrateIfNeeded(this)
         
         // 版本升级后清除导航栈状态，防止旧版序列化数据导致新版崩溃

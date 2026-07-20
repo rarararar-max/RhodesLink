@@ -120,6 +120,10 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = getBoolean("dual_model", false)
         set(value) = putBoolean("dual_model", value)
 
+    var debugLogEnabled: Boolean
+        get() = getBoolean("debug_log_enabled", false)
+        set(value) = putBoolean("debug_log_enabled", value)
+
     var messageCounter: Int
         get() = getInt("msg_counter", 0)
         set(value) = putInt("msg_counter", value)

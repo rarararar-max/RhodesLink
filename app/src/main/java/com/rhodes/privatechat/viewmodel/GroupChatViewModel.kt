@@ -685,9 +685,10 @@ class GroupChatViewModel(
                     if (DEBUG) sharedUtils.logAiCall("GroupChat", promptText, rawBase, requestMessages)
                     val results = extractGroupResults(rawBase)
                     filtered = normalizeGroupResults(results, validSpeakers, mode)
-                    if (!isCompleteGroupReply(filtered, activeMembers.map { it.name }, mode)) filtered = emptyList()
+                    if (!isCompleteGroupReply(filtered)) filtered = emptyList()
                     if (filtered.isEmpty() && !formatChecked) {
                         formatChecked = true
+                        DebugLogger.trace("AI/GroupFormatRepair", "ORIGINAL_UNUSABLE_RESPONSE\n$rawBase")
                         filtered = correctGroupFormat(rawBase, activeMembers.map { it.name }, mode)
                     }
                 }
@@ -831,7 +832,7 @@ class GroupChatViewModel(
         val members = memberNames.joinToString("、")
         val modeRule = when (mode) {
             "online" -> "线上模式：只允许 dialogue，禁止旁白。"
-            else -> "线下/导演模式：保留原文中已有的旁白为 speaker=旁白、type=narration；每位成员必须至少有一条 dialogue，且必须有至少一条 narration。"
+            else -> "线下/导演模式：保留原文中已有的旁白为 speaker=旁白、type=narration；不要求所有成员发言。"
         }
         val prompt = """你是群聊 JSON 格式校对器，不参与对话、不续写剧情。
 
@@ -857,17 +858,17 @@ $members
         val repaired = withTimeout(30_000) {
             sharedUtils.chat(listOf(AiMessage("system", prompt), AiMessage("user", "【待校对原始输出】\n$raw")), "GroupFormatRepair")
         }
+        DebugLogger.trace("AI/GroupFormatRepair", "FORMAT_REPAIR_REQUEST\n$prompt\n\nFORMAT_REPAIR_RESPONSE\n$repaired")
         val allowed = memberNames.toSet() + "旁白"
         return normalizeGroupResults(extractGroupResults(repaired), allowed, mode)
-            .takeIf { isCompleteGroupReply(it, memberNames, mode) }
+            .takeIf(::isCompleteGroupReply)
             .orEmpty()
     }
 
-    private fun isCompleteGroupReply(results: List<GroupMsgResult>, memberNames: List<String>, mode: String): Boolean {
-        if (results.isEmpty()) return false
-        val speakers = results.filter { it.type == "dialogue" }.map { it.speaker }.toSet()
-        if (!speakers.containsAll(memberNames)) return false
-        return mode == "online" || results.any { it.type == "narration" && it.speaker == "旁白" }
+    private fun isCompleteGroupReply(results: List<GroupMsgResult>): Boolean {
+        // A valid group turn may naturally involve only some members and need not include narration.
+        // Requiring every member to speak turned normal replies into a false transport failure.
+        return results.isNotEmpty()
     }
 
     private fun stripSpeakerPrefix(content: String): Pair<String, String> {
@@ -1182,6 +1183,7 @@ $oldSummary
 新增对话：
 $text"""
             val content = withTimeout(20_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "GroupMemory") }.trim()
+            DebugLogger.trace("AI/GroupRollingSummary", "SUMMARY_REQUEST\n$prompt\n\nSUMMARY_RESPONSE\n$content")
             if (content.isNotBlank()) {
                 repository.replaceShortTermMemory(com.rhodes.privatechat.shared.model.Memory(
                     sessionId = groupSessionId,

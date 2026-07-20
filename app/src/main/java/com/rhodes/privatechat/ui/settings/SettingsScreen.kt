@@ -36,6 +36,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -115,7 +117,30 @@ fun SettingsScreen(
                 SettingItem(SettingEntry(Icons.Default.Favorite, "感谢", "支持股东名单", iconColor = Primary), onClick = onCredits)
                 SettingItem(SettingEntry(Icons.Default.DarkMode, "外观设置", "白天/黑夜模式、界面外观", iconColor = Color(0xFF607D8B)), onClick = onAppearance)
             }
+            Spacer(Modifier.height(8.dp))
+            WechatListGroup {
+                DebugLogItem(enabled = settings.debugLogEnabled, onEnabledChange = {
+                    settings.debugLogEnabled = it
+                    com.rhodes.privatechat.util.DebugLogger.enabled = it
+                }, onClick = onDebugLog)
+            }
         }
+    }
+}
+
+@Composable
+private fun DebugLogItem(enabled: Boolean, onEnabledChange: (Boolean) -> Unit, onClick: () -> Unit) {
+    Column(modifier = Modifier.fillMaxWidth().background(Surface).clickable(onClick = onClick)) {
+        Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+            WechatIconTile(Icons.Default.BugReport, Color(0xFFE65100), modifier = Modifier.size(36.dp))
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text("调试日志", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
+                Text(if (enabled) "已开启：记录完整模型请求与返回" else "关闭：不保留模型内容", fontSize = 12.sp, color = TextSecondary)
+            }
+            Switch(checked = enabled, onCheckedChange = onEnabledChange, colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Primary))
+        }
+        HorizontalDivider(color = Divider.copy(alpha = 0.45f), modifier = Modifier.padding(start = 68.dp))
     }
 }
 

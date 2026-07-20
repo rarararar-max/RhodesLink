@@ -22,11 +22,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.util.DebugLogger
+import com.rhodes.privatechat.shared.settings.SettingsRepository
+import org.koin.compose.koinInject
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DebugLogScreen(onBack: () -> Unit) {
+    val settings: SettingsRepository = koinInject()
     var logs by remember { mutableStateOf(DebugLogger.getLogs()) }
     val listState = rememberLazyListState()
     val clipboardManager = LocalClipboardManager.current
@@ -44,6 +47,10 @@ fun DebugLogScreen(onBack: () -> Unit) {
                 title = { Text("调试日志", fontSize = 18.sp, fontWeight = FontWeight.Bold) },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) } },
                 actions = {
+                    Switch(checked = settings.debugLogEnabled, onCheckedChange = {
+                        settings.debugLogEnabled = it
+                        DebugLogger.enabled = it
+                    })
                     IconButton(onClick = { clipboardManager.setText(AnnotatedString(DebugLogger.getLogText())) }) {
                         Icon(Icons.Default.ContentCopy, "复制", tint = TextPrimary)
                     }

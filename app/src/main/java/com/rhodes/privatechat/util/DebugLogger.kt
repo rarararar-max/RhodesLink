@@ -31,6 +31,16 @@ object DebugLogger {
         }
     }
 
+    /** Full local-only prompt/response trace. Only call this after the user explicitly enables debug logging. */
+    fun trace(tag: String, message: String) {
+        if (!enabled) return
+        val entry = LogEntry(idCounter.incrementAndGet(), System.currentTimeMillis(), tag, message)
+        synchronized(lock) {
+            entries.add(entry)
+            if (entries.size > MAX_ENTRIES) entries.removeAt(0)
+        }
+    }
+
     fun getLogs(): List<LogEntry> = synchronized(lock) { entries.toList().reversed() }
 
     fun getLogText(): String = synchronized(lock) {

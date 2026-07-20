@@ -262,6 +262,7 @@ ${oldSummary}
 新增对话：
 ${text}"""
             val rawResult = withTimeout(15_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Memory") }.trim()
+            DebugLogger.trace("AI/PrivateRollingSummary", "SUMMARY_REQUEST\n$prompt\n\nSUMMARY_RESPONSE\n$rawResult")
             sharedUtils.trackTokens("memory", prompt, rawResult)
             val unified = if (settings.unifiedMemoryEnabled) try {
                 json.decodeFromString<UnifiedMemoryResponse>(sharedUtils.aiService.cleanJson(rawResult))

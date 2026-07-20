@@ -412,13 +412,16 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         temperature: Double = 0.95,
         maxRetries: Int = 2,
         logTag: String = "Chat",
-        jsonMode: Boolean = false
+        jsonMode: Boolean = false,
+        trace: (String, String) -> Unit = { _, _ -> }
     ): OfflineModeResponse {
         @Suppress("UNUSED_VARIABLE", "UNUSED_PARAMETER") val ignoredRetries = maxRetries to logTag
         val original = chat(apiKey, messages, providerId, modelName, customUrl, temperature, jsonMode).content
         if (original.isBlank()) throw EmptyModelResponseException(modelName)
         val parsed = runCatching { normalizeOfflineResponse(original) }.getOrNull()
         if (parsed != null && isUsableResponse(parsed, messages)) return parsed
+
+        trace("PrivateFormatRepair", "ORIGINAL_UNUSABLE_RESPONSE\n$original")
 
         val system = messages.firstOrNull { it.role == "system" }?.content.orEmpty()
         val repaired = try {
@@ -440,6 +443,7 @@ class AIService(private val client: HttpClient = createHttpClient()) {
             throw InvalidModelResponseException()
         }
         val repairedParsed = runCatching { normalizeOfflineResponse(repaired) }.getOrNull()
+        trace("PrivateFormatRepair", "FORMAT_REPAIR_RESPONSE\n$repaired\n\nPARSED=${repairedParsed != null}")
         if (repairedParsed != null && isUsableResponse(repairedParsed, messages)) return repairedParsed
         throw InvalidModelResponseException()
     }

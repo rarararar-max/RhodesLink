@@ -69,7 +69,7 @@ class SharedUtils(
         val result = aiService.chat(
             settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl, temperature = temp
         )
-        if (DEBUG) logAiCall("←$logTag", prompt, result.content, messages)
+        logAiCall("←$logTag", prompt, result.content, messages)
         return result.content
     }
 
@@ -81,14 +81,22 @@ class SharedUtils(
         logAiCall("→$logTag", prompt, "(requesting with retry...)", messages)
         val result = aiService.chatWithRetry(
             settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl,
-            temperature = temp, maxRetries = maxRetries, logTag = logTag, jsonMode = true
+            temperature = temp, maxRetries = maxRetries, logTag = logTag, jsonMode = true,
+            trace = { stage, detail -> DebugLogger.trace("AI/$stage", detail) }
         )
-        if (DEBUG) logAiCall("←$logTag", prompt, result.toString(), messages)
+        logAiCall("←$logTag", prompt, result.toString(), messages)
         return result
     }
 
     fun logAiCall(tag: String, prompt: String, response: String, allMessages: List<AiMessage>? = null) {
-        if (!DEBUG) return
+        if (!DebugLogger.enabled) return
+        val details = buildString {
+            append("MODEL_REQUEST\n")
+            append(allMessages?.mapIndexed { index, message -> "[$index][${message.role}]\n${message.content}" }?.joinToString("\n\n") ?: prompt)
+            append("\n\nMODEL_RESPONSE\n")
+            append(response)
+        }
+        DebugLogger.trace("AI/$tag", details)
     }
 
     fun logMemoryContext(

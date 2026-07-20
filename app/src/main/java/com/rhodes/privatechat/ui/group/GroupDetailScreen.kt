@@ -46,8 +46,11 @@ import com.rhodes.privatechat.util.ChatTrace
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.MainActivity
 import com.rhodes.privatechat.audio.LocalAudioController
+import com.rhodes.privatechat.audio.ChatSpeech
+import com.rhodes.privatechat.audio.ChatTtsPlayer
 import com.rhodes.privatechat.shared.voice.AsrRequest
 import com.rhodes.privatechat.shared.voice.hasAsrConfiguration
+import com.rhodes.privatechat.shared.voice.hasTtsConfiguration
 import org.koin.compose.koinInject
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -81,6 +84,12 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
     var forceScrollThroughMessageCount by remember { mutableStateOf(0) }
     var recordingVoice by rememberSaveable { mutableStateOf(false) }
     val audioController = remember { LocalAudioController(ctx) }
+    var voiceEnabled by rememberSaveable(groupId) { mutableStateOf(settings.getBoolean("group_tts_$groupId", false)) }
+    val enteredAt = remember(groupId) { System.currentTimeMillis() }
+    var seenSpeechKeys by remember(groupId) { mutableStateOf(emptySet<String>()) }
+    val chatTtsPlayer = remember(groupId) {
+        ChatTtsPlayer(ctx, settings, scope) { android.widget.Toast.makeText(ctx, it, android.widget.Toast.LENGTH_SHORT).show() }
+    }
 
     val groupMessages by viewModel.groupMessages.collectAsState()
     val groupRestartAt by viewModel.groupRestartAt.collectAsState()
@@ -101,6 +110,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
         if (groupId.isNotBlank()) viewModel.setCurrentGroup(groupId)
         onDispose {
             audioController.release()
+            chatTtsPlayer.release()
             viewModel.clearCurrentGroup()
         }
     }
@@ -137,6 +147,26 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
         }
     }
 
+    LaunchedEffect(uiMessages, voiceEnabled, allOperators) {
+        val unseen = uiMessages.filter { message ->
+            val key = "${message.originalMessageId}:${message.segmentIndex}:${message.id}"
+            key !in seenSpeechKeys
+        }
+        if (unseen.isNotEmpty()) {
+            seenSpeechKeys = seenSpeechKeys + unseen.map { "${it.originalMessageId}:${it.segmentIndex}:${it.id}" }
+            if (voiceEnabled) {
+                val speeches = unseen
+                    .filter { !it.isMe && !it.isSystem && !it.isNarration && it.timestamp >= enteredAt }
+                    .mapNotNull { message ->
+                        allOperators.find { it.name == message.senderName }?.takeIf { it.voiceName.isNotBlank() }?.let { op ->
+                            ChatSpeech(message.content, op.voiceName, op.voiceSpeed.toDoubleOrNull() ?: 1.0)
+                        }
+                    }
+                if (speeches.isNotEmpty()) chatTtsPlayer.enqueue(speeches)
+            }
+        }
+    }
+
     LaunchedEffect(groupMessages.size, uiMessages.size, groupLoading) {
         ChatTrace.d("GroupScreen", "group=$groupId raw=${groupMessages.size} parsed=${uiMessages.size} loading=$groupLoading")
     }
@@ -156,6 +186,23 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                 showGroupIcon = true,
                 onBack = onBack,
                 onModeClick = { showModePicker.value = true },
+                voiceEnabled = voiceEnabled,
+                onVoiceToggle = {
+                    val voicedMembers = groupSession?.members?.split(',')
+                        ?.map(String::trim)
+                        ?.mapNotNull { id -> allOperators.find { it.id == id || it.name == id } }
+                        ?.filter { it.voiceName.isNotBlank() }
+                        .orEmpty()
+                    if (!voiceEnabled && voicedMembers.isEmpty()) {
+                        android.widget.Toast.makeText(ctx, "群成员未配置音色，请在编辑页面配置音色。", android.widget.Toast.LENGTH_LONG).show()
+                    } else if (!voiceEnabled && !settings.hasTtsConfiguration()) {
+                        android.widget.Toast.makeText(ctx, "请先在模型设置中填写文字转语音模型和密钥。", android.widget.Toast.LENGTH_LONG).show()
+                    } else {
+                        voiceEnabled = !voiceEnabled
+                        settings.putBoolean("group_tts_$groupId", voiceEnabled)
+                        if (!voiceEnabled) chatTtsPlayer.stop()
+                    }
+                },
                 menuContent = {
                     ChatDropdownMenuItem(
                         text = { Text("聊天记录") },
@@ -195,6 +242,16 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                     listState = listState,
                     onRecall = { msgId, segIdx -> viewModel.recallMessageSegment(msgId, segIdx) },
                     onSenderClick = onOperatorClick,
+                    onPlay = { message ->
+                        val speaker = allOperators.find { it.name == message.senderName }
+                        if (speaker?.voiceName.isNullOrBlank()) {
+                            android.widget.Toast.makeText(ctx, "请在编辑页面配置${message.senderName}的音色。", android.widget.Toast.LENGTH_LONG).show()
+                        } else if (!settings.hasTtsConfiguration()) {
+                            android.widget.Toast.makeText(ctx, "请先在模型设置中填写文字转语音模型和密钥。", android.widget.Toast.LENGTH_LONG).show()
+                        } else {
+                            chatTtsPlayer.play(listOf(ChatSpeech(message.content, speaker.voiceName, speaker.voiceSpeed.toDoubleOrNull() ?: 1.0)))
+                        }
+                    },
                     progressiveDisplay = true,
                     onLoadOlder = { viewModel.loadOlderGroupMessages() },
                     isLoadingOlder = isLoadingOlder,

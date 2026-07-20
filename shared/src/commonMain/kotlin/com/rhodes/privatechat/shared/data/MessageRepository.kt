@@ -103,15 +103,23 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
                 }
                 is kotlinx.serialization.json.JsonObject -> {
                     val segArray = root["segments"] as? kotlinx.serialization.json.JsonArray
-                    val lastText = segArray?.mapNotNull { it as? kotlinx.serialization.json.JsonObject }
+                    val segments = segArray?.mapNotNull { it as? kotlinx.serialization.json.JsonObject }.orEmpty()
+                    val lastText = segments
                         ?.asReversed()
                         ?.firstNotNullOfOrNull { obj ->
                             val type = (obj["type"] as? kotlinx.serialization.json.JsonPrimitive)?.content
                             (obj["content"] as? kotlinx.serialization.json.JsonPrimitive)?.content
                                 ?.takeIf { it.isNotBlank() && !type.equals("narration", true) }
                         }
+                    val narrationFallback = segments.asReversed().firstNotNullOfOrNull { obj ->
+                        val type = (obj["type"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                        if (type.equals("narration", true)) {
+                            (obj["content"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
+                        } else null
+                    }
                     lastText?.take(50)
                         ?: (root["dialogue"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.take(50)
+                        ?: narrationFallback?.take(50)
                         ?: "AI 回复"
                 }
                 else -> "AI 回复"

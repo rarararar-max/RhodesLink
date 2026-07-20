@@ -589,8 +589,8 @@ ${text}"""
 
     private fun visiblePrivateSegmentCount(parsed: com.rhodes.privatechat.shared.model.OfflineModeResponse, mode: String): Int {
         val segments = parsed.segments.orEmpty().filter { it.content.isNotBlank() }
-        val count = if (mode == "online") segments.count { it.type != "narration" } else segments.size
-        return count
+        // A narration-only response is not a complete private-chat turn in any mode.
+        return segments.count { !it.type.equals("narration", true) }
     }
 
     private fun ensureVisiblePrivateReply(
@@ -609,9 +609,9 @@ ${text}"""
                 .ifEmpty { parsed.dialogue.trim().takeIf { it.isNotBlank() }?.let { listOf(com.rhodes.privatechat.shared.model.Segment("dialogue", it)) }.orEmpty() }
             return if (dialogue.isEmpty()) parsed else parsed.copy(dialogue = "", narration = "", segments = dialogue)
         }
-        if (source.isEmpty()) return parsed
+        if (source.isEmpty() || source.none { it.type == "dialogue" }) return parsed.copy(segments = emptyList(), dialogue = "", narration = "")
         if (mode == "offline") {
-            // Offline content is entirely model-authored: preserve its segment text and types verbatim.
+            // Offline replies require visible speech as well as scene narration.
             return parsed.copy(dialogue = "", narration = "", segments = source)
         }
         val normalized = mutableListOf<com.rhodes.privatechat.shared.model.Segment>()

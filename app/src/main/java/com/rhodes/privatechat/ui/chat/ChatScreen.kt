@@ -43,6 +43,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -76,9 +77,12 @@ import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.util.ChatTrace
 import com.rhodes.privatechat.MainActivity
 import com.rhodes.privatechat.audio.LocalAudioController
+import com.rhodes.privatechat.audio.ChatSpeech
+import com.rhodes.privatechat.audio.ChatTtsPlayer
 import com.rhodes.privatechat.shared.voice.AsrRequest
 import com.rhodes.privatechat.shared.voice.hasAsrConfiguration
 import com.rhodes.privatechat.shared.voice.voiceCallSetupMessage
+import com.rhodes.privatechat.shared.voice.hasTtsConfiguration
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import org.koin.compose.koinInject
 import kotlinx.coroutines.launch
@@ -200,9 +204,31 @@ fun ChatScreen(
     var recordingVoice by rememberSaveable { mutableStateOf(false) }
     val audioController = remember { LocalAudioController(context) }
     val scope = rememberCoroutineScope()
+    var voiceEnabled by rememberSaveable(op.id) { mutableStateOf(settings.getBoolean("chat_tts_${op.id}", false)) }
+    val enteredAt = remember(op.id) { System.currentTimeMillis() }
+    var seenSpeechKeys by remember(op.id) { mutableStateOf(emptySet<String>()) }
+    val chatTtsPlayer = remember(op.id) {
+        ChatTtsPlayer(context, settings, scope) { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+    }
 
-    DisposableEffect(audioController) {
-        onDispose { audioController.release() }
+    DisposableEffect(audioController, chatTtsPlayer) {
+        onDispose { audioController.release(); chatTtsPlayer.release() }
+    }
+
+    LaunchedEffect(messages, voiceEnabled, displayOp.voiceName, displayOp.voiceSpeed) {
+        val unseen = messages.filter { message ->
+            val key = "${message.originalMessageId}:${message.segmentIndex}:${message.id}"
+            key !in seenSpeechKeys
+        }
+        if (unseen.isNotEmpty()) {
+            seenSpeechKeys = seenSpeechKeys + unseen.map { "${it.originalMessageId}:${it.segmentIndex}:${it.id}" }
+            if (voiceEnabled && displayOp.voiceName.isNotBlank()) {
+                val speeches = unseen
+                    .filter { !it.isMe && !it.isSystem && !it.isNarration && it.timestamp >= enteredAt }
+                    .map { ChatSpeech(it.content, displayOp.voiceName, displayOp.voiceSpeed.toDoubleOrNull() ?: 1.0) }
+                if (speeches.isNotEmpty()) chatTtsPlayer.enqueue(speeches)
+            }
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -218,6 +244,18 @@ fun ChatScreen(
                 subtitleText = "",
                 onBack = onBack,
                 onModeClick = { showModePicker.value = true },
+                voiceEnabled = voiceEnabled,
+                onVoiceToggle = {
+                    if (!voiceEnabled && displayOp.voiceName.isBlank()) {
+                        Toast.makeText(context, "请在编辑页面配置音色。", Toast.LENGTH_LONG).show()
+                    } else if (!voiceEnabled && !settings.hasTtsConfiguration()) {
+                        Toast.makeText(context, "请先在模型设置中填写文字转语音模型和密钥。", Toast.LENGTH_LONG).show()
+                    } else {
+                        voiceEnabled = !voiceEnabled
+                        settings.putBoolean("chat_tts_${op.id}", voiceEnabled)
+                        if (!voiceEnabled) chatTtsPlayer.stop()
+                    }
+                },
                 menuContent = {
                     ChatDropdownMenuItem(
                         text = { Text("聊天记录") },
@@ -259,6 +297,15 @@ fun ChatScreen(
                     onRecall = { msgId, segIdx -> viewModel.recallMessageSegment(msgId, segIdx) },
                     onRegenerate = { viewModel.regenerateAiMessage(it) },
                     onContinue = { viewModel.continueAiMessage(it) },
+                    onPlay = { message ->
+                        if (displayOp.voiceName.isBlank()) {
+                            Toast.makeText(context, "请在编辑页面配置音色。", Toast.LENGTH_LONG).show()
+                        } else if (!settings.hasTtsConfiguration()) {
+                            Toast.makeText(context, "请先在模型设置中填写文字转语音模型和密钥。", Toast.LENGTH_LONG).show()
+                        } else {
+                            chatTtsPlayer.play(listOf(ChatSpeech(message.content, displayOp.voiceName, displayOp.voiceSpeed.toDoubleOrNull() ?: 1.0)))
+                        }
+                    },
                     onLoadOlder = { viewModel.loadOlderMessages() },
                     isLoadingOlder = isLoadingOlder,
                     hasMore = hasMoreMessages,

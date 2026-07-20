@@ -17,6 +17,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -71,6 +73,8 @@ fun ChatHeader(
     showGroupIcon: Boolean = false,
     onBack: () -> Unit,
     onModeClick: (() -> Unit)? = null,
+    voiceEnabled: Boolean? = null,
+    onVoiceToggle: (() -> Unit)? = null,
     menuContent: @Composable () -> Unit = {},
 ) {
     var showMenu by remember { mutableStateOf(false) }
@@ -117,6 +121,15 @@ fun ChatHeader(
                         .then(if (onModeClick != null) Modifier.clickable { onModeClick() } else Modifier)
                         .padding(horizontal = 7.dp, vertical = 2.dp)
                     Text("$modeLabel $modeHint", fontSize = 11.sp, color = Primary, fontWeight = FontWeight.Medium, modifier = modeModifier)
+                    if (voiceEnabled != null && onVoiceToggle != null) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        IconButton(onClick = onVoiceToggle, modifier = Modifier.size(28.dp)) {
+                            Icon(if (voiceEnabled) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
+                                if (voiceEnabled) "关闭自动语音" else "开启自动语音",
+                                tint = if (voiceEnabled) Primary else TextTertiary,
+                                modifier = Modifier.size(18.dp))
+                        }
+                    }
                     if (isLoading && !showGroupIcon) {
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("输入中...", fontSize = 13.sp, color = Primary, fontStyle = FontStyle.Italic)

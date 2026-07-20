@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -89,6 +90,7 @@ fun MessageList(
     isLoadingOlder: Boolean = false,
     hasMore: Boolean = false,
     forceScrollToLatest: Boolean = false,
+    onPlay: ((ChatUiMessage) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var displayCount by remember { mutableIntStateOf(Int.MAX_VALUE) }
@@ -185,6 +187,7 @@ fun MessageList(
                 onRegenerate = if (onRegenerate != null && !msg.isMe) { { onRegenerate(msg.originalMessageId) } } else null,
                 onContinue = if (onContinue != null && !msg.isMe) { { onContinue(msg.originalMessageId) } } else null,
                 onSenderClick = onSenderClick,
+                onPlay = onPlay,
             )
         }
         item { Spacer(modifier = Modifier.height(8.dp)) }
@@ -203,6 +206,7 @@ private fun MessageBubble(
     onRegenerate: (() -> Unit)?,
     onContinue: (() -> Unit)?,
     onSenderClick: ((String) -> Unit)?,
+    onPlay: ((ChatUiMessage) -> Unit)?,
 ) {
     val archivedAlpha = if (message.isArchived) 0.45f else 1f
     if (message.isSystem) {
@@ -334,6 +338,10 @@ private fun MessageBubble(
                 if (onContinue != null) {
                     DropdownMenuItem(text = { Row { Icon(Icons.Default.SkipNext, null, tint = Primary, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text("继续说", color = Primary) } },
                         onClick = { onContinue(); showMenu = false })
+                }
+                if (onPlay != null && !message.isMe && !message.isNarration && message.imageUri.isBlank()) {
+                    DropdownMenuItem(text = { Row { Icon(Icons.Default.VolumeUp, null, tint = Primary, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text("播放", color = Primary) } },
+                        onClick = { onPlay(message); showMenu = false })
                 }
             }
         }

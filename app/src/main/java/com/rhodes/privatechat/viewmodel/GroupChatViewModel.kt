@@ -712,6 +712,9 @@ class GroupChatViewModel(
                         senderName = groupName, content = storedContent,
                         type = "ai_json", mode = mode, isMe = false
                     ))
+                    // Auto messages and replies can arrive while the group is open, so unread-based
+                    // restoration alone is insufficient after the user removed it from the home page.
+                    unhideSession(groupSessionId)
                     notifyIfBackground(groupName, filtered.firstOrNull()?.let { "${it.speaker}：${it.message}" } ?: "群聊有新消息", groupSessionId)
                     val last = filtered.last()
                     repository.updateLastMessage(groupSessionId, "${last.speaker}：${last.message.take(50)}", System.currentTimeMillis())
@@ -914,6 +917,7 @@ $members
                     mode = mode,
                     isMe = true
                 ))
+                unhideSession(groupSessionId)
                 // The message is safely persisted now. The composer must never wait for vision/AI work.
                 onMessageSent()
                 onResult(true)

@@ -679,6 +679,9 @@ ${text}"""
                     id = msgId, sessionId = session.id,
                     senderName = "我", content = text, type = "text", mode = _currentMode.value, isMe = true
                 ))
+                // A new user message is activity even when this session is currently open.
+                // Do not rely on unread state to restore a session removed from the home page.
+                onUnhideSession(session.id)
                 DebugLogger.log("Chat/DB", "用户消息已写入, session=${session.id}, id=$msgId, length=${text.length}")
                 aiMsgId = repository.getNextMessageId()
                 DebugLogger.log("Chat/DB", "AI消息ID已获取, aiMsgId=$aiMsgId")
@@ -815,6 +818,7 @@ ${recentDialogues}
                         if (hasVisibleReply) {
                             if ((sessionGenerations[session.id] ?: 0L) != generation) return@launch
                             repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = rawJson, type = "ai_json", mode = mode, isMe = false))
+                            onUnhideSession(session.id)
                             notifyIfBackground(session.operatorName, replyPreview(parsed).ifBlank { "发来一条消息" })
                             DebugLogger.log("Chat/DB", "AI响应已写入, session=${session.id}, id=$aiMsgId")
                             modeTransitionNotice = ""
@@ -925,6 +929,7 @@ ${recentDialogues}
                 "visionSummary" to kotlinx.serialization.json.JsonPrimitive("")
             )))
             repository.sendMessage(session.id, ChatMessage(id = imageMsgId, sessionId = session.id, senderName = "我", content = placeholderJson, type = "image", mode = mode, isMe = true))
+            onUnhideSession(session.id)
             Log.d("RHODES_VISION", "图片占位消息已保存 id=$imageMsgId")
             // Persisting the image is enough to restore the composer. Vision/role reply continues in background.
             onResult(true)
@@ -1005,6 +1010,7 @@ ${recentDialogues}
                 if (hasVisibleReply) {
                     if ((sessionGenerations[session.id] ?: 0L) != generation) return@launch
                     repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = rawJson, type = "ai_json", mode = mode, isMe = false))
+                    onUnhideSession(session.id)
                     notifyIfBackground(session.operatorName, replyPreview(parsed).ifBlank { "发来一条消息" })
                     Log.d("RHODES_VISION", "AI 回复已保存 msgId=$aiMsgId")
                     saveVisionMemory(session, caption, visionText)
@@ -1339,6 +1345,7 @@ ${recentDialogues}
                 val serializedJson = try { json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed) } catch (_: Exception) { parsed.toString() }
                 if (visiblePrivateSegmentCount(parsed, mode) > 0) {
                     repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = serializedJson, type = "ai_json", mode = mode, isMe = false))
+                    onUnhideSession(session.id)
                     markUnreadIfNotCurrent(session.id)
                 } else {
                     savePrivateFailure(session.id, aiMsgId, mode)

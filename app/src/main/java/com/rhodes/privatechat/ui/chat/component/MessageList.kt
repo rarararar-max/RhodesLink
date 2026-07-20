@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -91,6 +92,7 @@ fun MessageList(
     hasMore: Boolean = false,
     forceScrollToLatest: Boolean = false,
     onPlay: ((ChatUiMessage) -> Unit)? = null,
+    speakingMessageKey: String = "",
     modifier: Modifier = Modifier,
 ) {
     var displayCount by remember { mutableIntStateOf(Int.MAX_VALUE) }
@@ -188,6 +190,7 @@ fun MessageList(
                 onContinue = if (onContinue != null && !msg.isMe) { { onContinue(msg.originalMessageId) } } else null,
                 onSenderClick = onSenderClick,
                 onPlay = onPlay,
+                isSpeaking = speakingMessageKey == "${msg.originalMessageId}:${msg.segmentIndex}:${msg.id}",
             )
         }
         item { Spacer(modifier = Modifier.height(8.dp)) }
@@ -207,6 +210,7 @@ private fun MessageBubble(
     onContinue: (() -> Unit)?,
     onSenderClick: ((String) -> Unit)?,
     onPlay: ((ChatUiMessage) -> Unit)?,
+    isSpeaking: Boolean,
 ) {
     val archivedAlpha = if (message.isArchived) 0.45f else 1f
     if (message.isSystem) {
@@ -302,6 +306,13 @@ private fun MessageBubble(
                                 fontSize = if (onSenderClick != null) 15.sp else 16.sp,
                                 color = if (isMe) TextPrimary else TextPrimary,
                                 fontWeight = FontWeight.Normal)
+                        }
+                    }
+                    if (isSpeaking) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 3.dp, start = 2.dp, end = 2.dp)) {
+                            Icon(Icons.Default.GraphicEq, contentDescription = "正在朗读", tint = Primary, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Text("朗读中", fontSize = 10.sp, color = Primary)
                         }
                     }
                 }

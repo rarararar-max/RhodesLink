@@ -210,6 +210,7 @@ fun ChatScreen(
     val chatTtsPlayer = remember(op.id) {
         ChatTtsPlayer(context, settings, scope) { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
     }
+    val speakingMessageKey by chatTtsPlayer.speakingMessageKey.collectAsState()
 
     DisposableEffect(audioController, chatTtsPlayer) {
         onDispose { audioController.release(); chatTtsPlayer.release() }
@@ -225,7 +226,7 @@ fun ChatScreen(
             if (voiceEnabled && displayOp.voiceName.isNotBlank()) {
                 val speeches = unseen
                     .filter { !it.isMe && !it.isSystem && !it.isNarration && it.timestamp >= enteredAt }
-                    .map { ChatSpeech(it.content, displayOp.voiceName, displayOp.voiceSpeed.toDoubleOrNull() ?: 1.0) }
+                    .map { message -> ChatSpeech(message.content, displayOp.voiceName, displayOp.voiceSpeed.toDoubleOrNull() ?: 1.0, "${message.originalMessageId}:${message.segmentIndex}:${message.id}") }
                 if (speeches.isNotEmpty()) chatTtsPlayer.enqueue(speeches)
             }
         }
@@ -303,9 +304,10 @@ fun ChatScreen(
                         } else if (!settings.hasTtsConfiguration()) {
                             Toast.makeText(context, "请先在模型设置中填写文字转语音模型和密钥。", Toast.LENGTH_LONG).show()
                         } else {
-                            chatTtsPlayer.play(listOf(ChatSpeech(message.content, displayOp.voiceName, displayOp.voiceSpeed.toDoubleOrNull() ?: 1.0)))
+                            chatTtsPlayer.play(listOf(ChatSpeech(message.content, displayOp.voiceName, displayOp.voiceSpeed.toDoubleOrNull() ?: 1.0, "${message.originalMessageId}:${message.segmentIndex}:${message.id}")))
                         }
                     },
+                    speakingMessageKey = speakingMessageKey,
                     onLoadOlder = { viewModel.loadOlderMessages() },
                     isLoadingOlder = isLoadingOlder,
                     hasMore = hasMoreMessages,

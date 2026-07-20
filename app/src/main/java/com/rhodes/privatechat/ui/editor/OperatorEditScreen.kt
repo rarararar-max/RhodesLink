@@ -839,18 +839,43 @@ private fun OperatorPickerDialog(
     onDismiss: () -> Unit,
     onSelect: (OperatorEntity) -> Unit
 ) {
+    var query by remember { mutableStateOf("") }
+    val filtered = remember(operators, query) {
+        val keyword = query.trim()
+        if (keyword.isBlank()) operators else operators.filter { op ->
+            op.name.contains(keyword, ignoreCase = true) || op.title.contains(keyword, ignoreCase = true)
+        }
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("选择关联干员") },
         text = {
-            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                operators.forEach { op ->
+            Column {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    placeholder = { Text("搜索角色名称或称号") },
+                    shape = RoundedCornerShape(8.dp),
+                    colors = fieldColors()
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Column(modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                if (filtered.isEmpty()) {
+                    Text("没有匹配的角色", fontSize = 13.sp, color = TextTertiary, modifier = Modifier.fillMaxWidth().padding(vertical = 20.dp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                }
+                filtered.forEach { op ->
                     Row(modifier = Modifier.fillMaxWidth().clickable { onSelect(op) }.padding(vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically) {
                         OperatorAvatarImage(avatarUri = op.avatarUri, name = op.name, modifier = Modifier.size(36.dp))
                         Spacer(modifier = Modifier.width(10.dp))
-                        Text(op.name, fontSize = 14.sp)
+                        Column {
+                            Text(op.name, fontSize = 14.sp)
+                            if (op.title.isNotBlank()) Text(op.title, fontSize = 11.sp, color = TextSecondary)
+                        }
                     }
+                }
                 }
             }
         },

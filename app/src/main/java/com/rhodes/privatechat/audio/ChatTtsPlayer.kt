@@ -12,8 +12,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
-data class ChatSpeech(val text: String, val voiceId: String, val speed: Double = 1.0)
+data class ChatSpeech(val text: String, val voiceId: String, val speed: Double = 1.0, val messageKey: String = "")
 
 /** Plays chat dialogue in order; automatic replies append while manual replay replaces the queue. */
 class ChatTtsPlayer(
@@ -27,6 +30,8 @@ class ChatTtsPlayer(
     private val pending = ArrayDeque<ChatSpeech>()
     private var worker: Job? = null
     private var generation = 0L
+    private val _speakingMessageKey = MutableStateFlow("")
+    val speakingMessageKey: StateFlow<String> = _speakingMessageKey.asStateFlow()
 
     /** Interrupts any active playback and starts with the selected message. */
     fun play(items: List<ChatSpeech>) {
@@ -60,6 +65,7 @@ class ChatTtsPlayer(
             worker = null
         }
         audio.stopPlayback()
+        _speakingMessageKey.value = ""
     }
 
     private fun startWorkerLocked() {
@@ -73,6 +79,7 @@ class ChatTtsPlayer(
                         if (workerGeneration != generation || pending.isEmpty()) null else pending.removeFirst()
                     } ?: break
                     try {
+                        _speakingMessageKey.value = speech.messageKey
                         playSpeech(gateway, speech)
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         throw e
@@ -81,6 +88,7 @@ class ChatTtsPlayer(
                     }
                 }
             } finally {
+                _speakingMessageKey.value = ""
                 synchronized(lock) {
                     if (workerGeneration == generation) {
                         worker = null

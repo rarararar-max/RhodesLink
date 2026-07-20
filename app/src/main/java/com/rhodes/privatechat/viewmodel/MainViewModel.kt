@@ -2291,12 +2291,21 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 cal.add(java.util.Calendar.DAY_OF_MONTH, 1)
                 val todayDisplay = sharedUtils.beijingSdf("yyyy年MM月dd日").format(cal.time)
 
-                val groupSummaries = _allSessions.value.filter { session ->
+                val relevantGroupSessions = _allSessions.value.filter { session ->
                     session.operatorId.startsWith("group_") && session.members.split(",").map { it.trim() }.any { it == operatorId || it == op.name }
                 }
+                val groupRecordContext = relevantGroupSessions
                     .mapNotNull { session -> repository.getMessagesSync(session.id).filter { it.timestamp in yesterdayStart until yesterdayEnd }.takeLast(12).takeIf { it.isNotEmpty() }?.joinToString("；") { it.senderName + "：" + it.content.take(40) }?.let { c -> "- ${session.operatorName}：${c.take(160)}" } }
                     .take(settings.diaryGroupSummaryCount)
-                    .joinToString("\n").ifBlank { "无" }
+                val groupRollingSummaries = relevantGroupSessions.mapNotNull { session ->
+                    repository.getShortTermMemory(session.id)
+                        ?.takeIf { it.createdAt in yesterdayStart..System.currentTimeMillis() && it.content.isNotBlank() }
+                        ?.let { "- ${session.operatorName}近期群聊回顾：${it.content}" }
+                }.take(settings.diaryGroupSummaryCount)
+                val groupSummaries = listOf(
+                    groupRecordContext.takeIf { it.isNotEmpty() }?.let { "昨天实际群聊片段：\n${it.joinToString("\n")}" },
+                    groupRollingSummaries.takeIf { it.isNotEmpty() }?.let { "近期生成的群聊滚动摘要：\n${it.joinToString("\n")}" }
+                ).filterNotNull().joinToString("\n").ifBlank { "无" }
                 val diaryV2Memories = memoryV2Pipeline.buildPrivateMemoryContext(operatorId, limitL1 = 3, limitL2 = 4, limitL3 = 3, query = "日记 回顾 ${op.name}").ifBlank { "无" }
                 val privateSummary = repository.getAllSessionsSync()
                     .firstOrNull { it.operatorId == operatorId }

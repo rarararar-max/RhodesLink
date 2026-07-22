@@ -165,13 +165,13 @@ fun VoiceCallScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
             busy = true
             try {
                 val file = java.io.File(path.removePrefix("file://"))
-                Log.d("RHODES_AUDIO", "processRecording 入口: path=$path 文件大小=${if (file.exists()) file.length() else 0}")
+                Log.d("RHODES_AUDIO", "processRecording: fileExists=${file.exists()} fileSize=${if (file.exists()) file.length() else 0}")
                 transcript = "正在识别你说的话..."
                 val pcmBytes = audio.readPcmFromWav(path)
                 Log.d("RHODES_DEBUG", "[VoiceCall] PCM 数据大小=${pcmBytes.size}")
                 val asrKey = settings.asrApiKey.ifBlank { settings.apiKey }
                 val text = com.rhodes.privatechat.shared.voice.createAsrGateway(settings.asrBaseUrl, asrKey, settings.asrModelName, settings.asrProvider).transcribe(AsrRequest(pcmBytes)).text.trim()
-                Log.d("RHODES_DEBUG", "[VoiceCall] ASR 识别结果: '${text.take(100)}'")
+                Log.d("RHODES_DEBUG", "[VoiceCall] ASR 识别完成: length=${text.length}")
                 if (text.isBlank()) {
                     Log.w("RHODES_DEBUG", "[VoiceCall] ASR 结果为空")
                     transcript = "没有听清，请再说一次"
@@ -191,13 +191,13 @@ fun VoiceCallScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
 $memoryContext
 最近通话：
 $recent"""
-                Log.d("RHODES_DEBUG", "[VoiceCall] AI prompt(前200): ${prompt.take(200)}")
+                Log.d("RHODES_DEBUG", "[VoiceCall] AI prompt 已构建: length=${prompt.length}")
                 reply = "${operator.name}正在思考..."
                 val aiRaw = viewModel.chatViewModel.sharedChatForFeature(listOf(AiMessage("system", prompt), AiMessage("user", "用户刚说：$text")))
                     .trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
                 viewModel.sharedUtils.trackTokens("voice_call", prompt, aiRaw)
                 val ai = aiRaw.take(500).ifBlank { "我刚才没有听清，能再说一次吗？" }
-                Log.d("RHODES_DEBUG", "[VoiceCall] AI 回复: '${ai.take(100)}'")
+                Log.d("RHODES_DEBUG", "[VoiceCall] AI 回复完成: length=${ai.length}")
                 reply = ai
                 turns = turns + (operator.name to ai)
                 viewModel.chatViewModel.saveVoiceExchange(text, ai, "voice_call")

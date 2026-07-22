@@ -98,7 +98,7 @@ private data class MomentMemoryContext(
 private enum class MomentTriggerType { MANUAL, AUTO }
 private const val MOMENT_PAGE_SIZE = 20
 private const val STATUS_REFRESH_INTERVAL_MS = 15 * 60 * 1000L
-private const val PROACTIVE_PRIVATE_ENABLED = false
+private const val PROACTIVE_PRIVATE_ENABLED = true
 
 class MainViewModel(
     application: Application,
@@ -329,7 +329,6 @@ class MainViewModel(
                 settings.hiddenIds = hidden
                 settings.putBoolean("initial_hidden_done", true)
             }
-            cleanupExpired()
             DailyContentScheduler.ensureTodayPlan(application, repository, settings)
             refreshAutoGroupChats()
         }
@@ -358,7 +357,6 @@ class MainViewModel(
                 dispatchViewModel.checkActiveDispatches()
             }
         }
-        dataViewModel.cleanupAllExpired()
         }
     }
 
@@ -519,8 +517,15 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         if (!settings.idleProactiveChatEnabled) return false
         if (getApiKey().isBlank()) return false
         val profile = getUserProfile()
-        val now = sharedUtils.beijingPromptTime()
+        val nowMillis = System.currentTimeMillis()
+        val now = sharedUtils.beijingPromptTime(nowMillis)
         val session = repository.getOrCreateSession(op.id, op.name, op.avatarUri)
+        val history = repository.getMessagesSync(session.id).filter { it.type != "system" }
+        val proactiveContext = buildProactiveContext(history, nowMillis)
+        if (proactiveContext == null) {
+            DebugLogger.log("Proactive", "跳过主动消息: op=${op.id}, 缺少可用聊天上下文")
+            return false
+        }
         // 构建替换映射
         val shortTerm = repository.getShortTermMemory(session.id)
         val analysisBlock = if (isDualModel() && analysisGuidance.isNotBlank()) "【AI分析指导】\n${analysisGuidance}\n" else ""
@@ -540,7 +545,18 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             "USER_BIO" to profile.bio.ifBlank { "无" },
             "USER_CONTENT" to "(用户没有说话)",
             "PROACTIVE_TRIGGER_TYPE" to "idle",
-            "PROACTIVE_TRIGGER_CONTEXT" to "无",
+            "PROACTIVE_TRIGGER_CONTEXT" to proactiveContext.summary,
+            "PROACTIVE_CURRENT_TIME" to now,
+            "PROACTIVE_LAST_USER_MESSAGE" to proactiveContext.lastUserMessage,
+            "PROACTIVE_LAST_USER_TIME" to proactiveContext.lastUserTime,
+            "PROACTIVE_LAST_AI_MESSAGE" to proactiveContext.lastAiMessage,
+            "PROACTIVE_LAST_AI_TIME" to proactiveContext.lastAiTime,
+            "PROACTIVE_LAST_INTERACTION_TIME" to proactiveContext.lastInteractionTime,
+            "PROACTIVE_IDLE_DURATION" to proactiveContext.idleDuration,
+            "PROACTIVE_TIME_RELATION" to proactiveContext.timeRelation,
+            "PROACTIVE_CONTEXT_MODE" to proactiveContext.mode,
+            "PROACTIVE_UNRESOLVED_TOPIC" to proactiveContext.unresolvedTopic,
+            "PROACTIVE_RECENT_HISTORY" to proactiveContext.recentHistory,
             "AI_ANALYSIS" to analysisBlock,
             "HYPNOSIS" to "",
             "MIND_READ" to "",
@@ -551,6 +567,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             "LONG_TERM_IMPRESSION" to "无",
             "USER_PREFS" to "无",
             "MEMORY_ANCHORS" to unifiedMemory,
+            "MEMORY_V2_CONTEXT" to unifiedMemory,
             "SHARED_MEMORIES" to "无",
             "DAILY_SUMMARY" to "无",
             "SHORT_TERM_SUMMARY" to (shortTerm?.content ?: "无"),
@@ -571,12 +588,11 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             "GROUP_CONTEXT" to ""
         )
         val prompt = applyTemplate(getPromptTemplate("private", "proactive"), replacements)
-        // A proactive opening must see the actual recent exchange, not only an eventually stale summary.
-        val history = repository.getMessagesSync(session.id).filter { it.type != "system" }.takeLast(10)
+        // A proactive opening sees timestamped history so it cannot treat last night's context as current.
         val conversation = mutableListOf(AiMessage("system", prompt))
-        history.forEach { message ->
-            val content = if (message.type == "ai_json") extractProactiveText(message.content) else message.content
-            if (content.isNotBlank()) conversation += AiMessage(if (message.isMe) "user" else "assistant", content.take(800))
+        history.takeLast(10).forEach { message ->
+            val content = proactiveMessageText(message)
+            if (content.isNotBlank()) conversation += AiMessage(if (message.isMe) "user" else "assistant", content)
         }
         try {
             val parsed = withTimeout(60_000) { sharedUtils.chatWithRetry(conversation, "ProactivePrivate") }
@@ -608,6 +624,79 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         root["segments"]?.jsonArray?.joinToString(" ") { it.jsonObject["content"]?.jsonPrimitive?.content.orEmpty() }
             ?: root["dialogue"]?.jsonPrimitive?.content.orEmpty()
     } catch (_: Exception) { content }
+
+    private data class ProactiveContext(
+        val mode: String,
+        val timeRelation: String,
+        val idleDuration: String,
+        val lastUserMessage: String,
+        val lastUserTime: String,
+        val lastAiMessage: String,
+        val lastAiTime: String,
+        val lastInteractionTime: String,
+        val unresolvedTopic: String,
+        val recentHistory: String,
+        val summary: String
+    )
+
+    private fun buildProactiveContext(messages: List<ChatMessage>, now: Long): ProactiveContext? {
+        val visible = messages.filter { proactiveMessageText(it).isNotBlank() }
+        if (visible.isEmpty()) return null
+        val lastInteraction = visible.last()
+        val lastUser = visible.lastOrNull { it.isMe }
+        val lastAi = visible.lastOrNull { !it.isMe }
+        val lastInteractionAt = lastInteraction.timestamp.takeIf { it > 0L } ?: now
+        val lastUserText = lastUser?.let(::proactiveMessageText).orEmpty().ifBlank { "无" }
+        val lastAiText = lastAi?.let(::proactiveMessageText).orEmpty().ifBlank { "无" }
+        val unresolvedQuestion = lastUser != null && lastUser.id == lastInteraction.id &&
+            (lastUserText.trimEnd().endsWith("?") || lastUserText.trimEnd().endsWith("？"))
+        val sameDay = proactiveDayKey(lastInteractionAt) == proactiveDayKey(now)
+        val idleMillis = (now - lastInteractionAt).coerceAtLeast(0L)
+        val mode = when {
+            unresolvedQuestion -> "unresolved_question"
+            !sameDay -> "new_day_greeting"
+            idleMillis >= 36L * 60 * 60 * 1000L -> "long_idle_reconnect"
+            idleMillis <= 4L * 60 * 60 * 1000L -> "same_day_continuation"
+            else -> "same_day_reconnect"
+        }
+        val relation = when {
+            unresolvedQuestion -> "用户上一条是尚未得到回复的明确提问。"
+            !sameDay -> "跨日：上一轮互动已属于此前一天；不要把当时的场景、时段或道别当作现在仍在发生。"
+            idleMillis <= 4L * 60 * 60 * 1000L -> "同日短暂间隔：可参考上次未自然收束的话题，但不要假装对话没有中断。"
+            else -> "同日间隔较久：以当前时段重新自然联系，不要直接续写已经结束的话题。"
+        }
+        val unresolved = if (unresolvedQuestion) "用户问：${lastUserText.take(180)}" else "无"
+        val recentHistory = visible.takeLast(6).joinToString("\n") { message ->
+            "[${sharedUtils.beijingPromptTime(message.timestamp.takeIf { it > 0L } ?: now)}]${if (message.isMe) "用户" else "干员"}：${proactiveMessageText(message).take(240)}"
+        }
+        val lastUserTime = lastUser?.let { sharedUtils.beijingPromptTime(it.timestamp.takeIf { time -> time > 0L } ?: now) } ?: "无"
+        val lastAiTime = lastAi?.let { sharedUtils.beijingPromptTime(it.timestamp.takeIf { time -> time > 0L } ?: now) } ?: "无"
+        val lastInteractionTime = sharedUtils.beijingPromptTime(lastInteractionAt)
+        val idleDuration = formatProactiveDuration(idleMillis)
+        val summary = """主动联系判断：
+            |模式：$mode
+            |时间关系：$relation
+            |距离上次互动：$idleDuration
+            |上次互动时间：$lastInteractionTime
+            |未完成事项：$unresolved
+        """.trimMargin()
+        return ProactiveContext(mode, relation, idleDuration, lastUserText.take(400), lastUserTime, lastAiText.take(400), lastAiTime, lastInteractionTime, unresolved, recentHistory, summary)
+    }
+
+    private fun proactiveMessageText(message: ChatMessage): String =
+        (if (message.type == "ai_json") extractProactiveText(message.content) else message.content).trim().take(800)
+
+    private fun proactiveDayKey(timestamp: Long): String = sharedUtils.beijingSdf("yyyyMMdd").format(java.util.Date(timestamp))
+
+    private fun formatProactiveDuration(durationMillis: Long): String {
+        val minutes = durationMillis / 60_000L
+        return when {
+            minutes < 1 -> "不足1分钟"
+            minutes < 60 -> "约${minutes}分钟"
+            minutes < 24 * 60 -> "约${minutes / 60}小时${minutes % 60}分钟"
+            else -> "约${minutes / (24 * 60)}天${(minutes / 60) % 24}小时"
+        }
+    }
 
     /** Called from WorkManager. Idempotency is persisted per product day and operator. */
     suspend fun deliverScheduledMoment(operatorId: String, cycle: String, deliveryId: String): Boolean {
@@ -746,10 +835,6 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         }
     }
 
-    private suspend fun cleanupExpired() {
-        try { repository.cleanupExpiredData() } catch (_: Exception) { }
-    }
-
     private suspend fun autoGenerateTodayMoments() {
         if (!settings.autoAiEnabled) return
         if (!settings.dailyAutoMomentEnabled) return
@@ -800,10 +885,18 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         migrateLegacyImpressions()
         val now = System.currentTimeMillis()
         return repository.getAllMemoryItems().filter {
-            it.ownerType == "operator" && it.memoryLevel == MemoryLevel.L3 &&
-                it.status == "active" && it.expiresAt > now && it.content.isNotBlank()
-        }
+            it.ownerType == "operator" && it.status == "active" && it.expiresAt > now && it.content.isNotBlank() &&
+                (it.memoryLevel == MemoryLevel.L3 ||
+                    (it.memoryLevel == MemoryLevel.L2 && it.importance >= 60 && it.memoryType in impressionRecentTypes))
+        }.sortedWith(compareByDescending<MemoryItem> { it.memoryLevel == MemoryLevel.L3 }
+            .thenByDescending { it.updatedAt }
+            .thenByDescending { it.importance })
     }
+
+    private val impressionRecentTypes = setOf(
+        "preference_expression", "agreement_commitment", "care_reminder", "intent_wish",
+        "evaluation_opinion", "self_cognition_statement"
+    )
 
     private suspend fun migrateLegacyImpressions() {
         repository.getAllLongTermImpressions().forEach { legacy ->
@@ -829,7 +922,9 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     }
 
     suspend fun deleteAllCurrentImpressions() {
-        getCurrentImpressions().forEach { deleteOperatorMemoryItem(it) }
+        getCurrentImpressions()
+            .filter { it.memoryLevel == MemoryLevel.L3 }
+            .forEach { deleteOperatorMemoryItem(it) }
     }
 
     suspend fun getOperatorVectorMemories(operatorId: String) = memoryVectorService?.listMemories("operator", operatorId).orEmpty()
@@ -2452,6 +2547,8 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         val groupPrompt: String = ""
     )
 
+    private var operatorPromptGenerationJob: kotlinx.coroutines.Job? = null
+
     private fun parseOperatorPromptResult(raw: String): OperatorPromptResult {
         val cleaned = sharedUtils.aiService.cleanJson(raw)
         try {
@@ -2467,8 +2564,9 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         return r
     }
 
-    fun generateOperatorPrompt(requirement: String, existingPrompt: String, onResult: (OperatorPromptResult) -> Unit) {
-        viewModelScope.launch {
+    fun generateOperatorPrompt(requirement: String, existingPrompt: String, onResult: (OperatorPromptResult) -> Unit): kotlinx.coroutines.Job {
+        operatorPromptGenerationJob?.cancel()
+        return viewModelScope.launch {
             try {
                 val existingBlock = if (existingPrompt.isNotBlank()) "\n【现有的人设文本（请在此基础上升级优化，保留核心设定）】\n$existingPrompt\n" else ""
                 val prompt = """
@@ -2492,7 +2590,7 @@ $existingBlock
    20~50字，概括角色核心特点，用做角色列表中的摘要展示
 
 4. privatePrompt（私聊人设—核心字段）：
-   至少500汉字，直接影响私聊时 AI 的表现质量。不达到此字数请继续补充。
+   建议300~500汉字，直接影响私聊时 AI 的表现质量。重点完整、具体，不要重复凑字数。
    必须包含以下维度：
    · 角色身份与背景：职业、来历、当前状态
    · 性格特质：用具体的行为描述替代抽象标签。不说"性格温柔"，说"说话轻声细语，从不打断别人"
@@ -2514,7 +2612,10 @@ $existingBlock
 {"title":"","gender":"","description":"","privatePrompt":"","groupPrompt":""}
 直接输出JSON对象，不加额外文字。
 """.trimIndent()
-                val text = withTimeout(30_000) { sharedUtils.chat(listOf(AiMessage("system", prompt))) }.trim()
+                DebugLogger.log("GenPrompt", "开始生成人设：需求长度=${requirement.length}，现有人设=${existingPrompt.isNotBlank()}")
+                val text = withTimeout(30_000) {
+                    sharedUtils.chat(listOf(AiMessage("system", prompt)), "GenPrompt", maxOutputTokens = 1400)
+                }.trim()
                 val result = parseOperatorPromptResult(text)
                 if (result.privatePrompt.isNotBlank()) {
                     DebugLogger.log("GenPrompt", "人设生成成功: title=${result.title}")
@@ -2523,13 +2624,25 @@ $existingBlock
                     DebugLogger.log("GenPrompt", "人设为空，降级返回原文: ${text.take(100)}")
                     onResult(OperatorPromptResult(privatePrompt = text))
                 }
+            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                DebugLogger.log("GenPrompt/ERROR", "人设生成超时：超过30秒")
+                onResult(OperatorPromptResult())
             } catch (e: CancellationException) {
-                throw e
+                DebugLogger.log("GenPrompt", "人设生成已取消")
             } catch (e: Exception) {
                 DebugLogger.log("GenPrompt/ERROR", "生成失败: ${e.message}")
                 onResult(OperatorPromptResult())
+            } finally {
+                if (operatorPromptGenerationJob === coroutineContext[kotlinx.coroutines.Job]) {
+                    operatorPromptGenerationJob = null
+                }
             }
-        }
+        }.also { operatorPromptGenerationJob = it }
+    }
+
+    fun cancelOperatorPromptGeneration() {
+        operatorPromptGenerationJob?.cancel()
+        operatorPromptGenerationJob = null
     }
 }
 

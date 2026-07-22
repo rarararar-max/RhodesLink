@@ -451,7 +451,7 @@ ${text}"""
         val minutes = durationSeconds / 60
         val seconds = durationSeconds % 60
         val content = "📞 语音通话 ${minutes}:${seconds.toString().padStart(2, '0')}"
-        Log.d("RHODES_AUDIO", "saveCallSummary: sessionId=$sessionId content=$content")
+        Log.d("RHODES_AUDIO", "saveCallSummary: sessionId=$sessionId durationSeconds=$durationSeconds")
         viewModelScope.launch {
             repository.sendMessage(sessionId, ChatMessage(
                 id = repository.getNextMessageId(),
@@ -788,7 +788,7 @@ ${recentDialogues}
                 var effectiveHistoryMessages = settings.historyMessages
                 while (retryCount < maxRetries) {
                     try {
-                        val apiMessages = buildApiMessages(text, effectiveHistoryMessages, batchIds.toSet(), mode = mode)
+                        val apiMessages = buildApiMessages(session, text, effectiveHistoryMessages, batchIds.toSet(), mode = mode)
                         DebugLogger.log("Chat/AI", "请求AI, session=${session.id}, mode=$mode, prompt长度=${apiMessages.size}")
                         logPrivatePromptTrace(
                             stage = "REQUEST",
@@ -820,7 +820,7 @@ ${recentDialogues}
                             if ((sessionGenerations[session.id] ?: 0L) != generation) return@launch
                             repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = rawJson, type = "ai_json", mode = mode, isMe = false))
                             onUnhideSession(session.id)
-                            notifyIfBackground(session.operatorName, replyPreview(parsed).ifBlank { "发来一条消息" })
+                            notifyIfBackground(session, replyPreview(parsed).ifBlank { "发来一条消息" })
                             DebugLogger.log("Chat/DB", "AI响应已写入, session=${session.id}, id=$aiMsgId")
                             modeTransitionNotice = ""
                             modeTransitionRetryPending = false
@@ -893,7 +893,7 @@ ${recentDialogues}
         val session = _currentSession.value ?: run {
             Log.w("RHODES_DEBUG", "[Vision] sendImageMessage: session is null"); onResult(false); return
         }
-        Log.d("RHODES_DEBUG", "[Vision] sendImageMessage 入口: imageUri=$imageUri caption=$caption sessionId=${session.id}")
+        Log.d("RHODES_DEBUG", "[Vision] sendImageMessage: sessionId=${session.id} hasCaption=${caption.isNotBlank()}")
         if (sharedUtils.getApiKey().isBlank()) {
             Log.w("RHODES_DEBUG", "[Vision] API Key 为空")
             onShowToast("请先在设置中配置 API Key")
@@ -990,7 +990,7 @@ ${recentDialogues}
                 val visionSummary = runCatching {
                     json.parseToJsonElement(cleanText).jsonObject["visibleSummary"]?.jsonPrimitive?.content
                 }.getOrNull()?.take(500)
-                Log.d("RHODES_VISION", "visibleSummary解析: success=${visionSummary != null} value=${visionSummary?.take(80)}")
+                Log.d("RHODES_VISION", "visibleSummary解析: success=${visionSummary != null}")
                 val userContent = buildString {
                     append("用户发送了一张图片。")
                     if (caption.isNotBlank()) append("\n用户附带文字：${caption.trim()}")
@@ -998,9 +998,9 @@ ${recentDialogues}
                     append("\n画面内容：${visionSummary ?: visionText.take(500)}")
                     append("\n请你作为当前角色自然回应这张图片和用户的话，不要像识图工具一样机械描述。")
                 }
-                Log.d("RHODES_VISION", "userContent(前300): ${userContent.take(300)}")
+                Log.d("RHODES_VISION", "图片上下文已构建: length=${userContent.length}")
 
-                val apiMessages = buildApiMessages(userContent, settings.historyMessages, mode = mode)
+                val apiMessages = buildApiMessages(session, userContent, settings.historyMessages, mode = mode)
                 Log.d("RHODES_VISION", "开始 AI 调用: apiMessages 数量=${apiMessages.size}")
                 var parsed = withTimeout(90_000) { sharedUtils.chatWithRetry(apiMessages) }
                 Log.d("RHODES_VISION", "图片角色回复解析成功")
@@ -1012,12 +1012,14 @@ ${recentDialogues}
                     if ((sessionGenerations[session.id] ?: 0L) != generation) return@launch
                     repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = rawJson, type = "ai_json", mode = mode, isMe = false))
                     onUnhideSession(session.id)
-                    notifyIfBackground(session.operatorName, replyPreview(parsed).ifBlank { "发来一条消息" })
+                    notifyIfBackground(session, replyPreview(parsed).ifBlank { "发来一条消息" })
                     Log.d("RHODES_VISION", "AI 回复已保存 msgId=$aiMsgId")
                     saveVisionMemory(session, caption, visionText)
                     markUnreadIfNotCurrent(session.id, visiblePrivateSegmentCount(parsed, mode))
                 } else savePrivateFailure(session.id, aiMsgId, mode)
                 Log.d("RHODES_VISION", "sendImageMessage 完成")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e("RHODES_VISION", "sendImageMessage 异常: ${e.message}", e)
                 val errId = repository.getNextMessageId()
@@ -1069,12 +1071,11 @@ ${recentDialogues}
         if (repository.saveAnchor(anchor)) saveAnchorToVector(anchor)
     }
 
-    private fun notifyIfBackground(title: String, content: String) {
+    private fun notifyIfBackground(session: ChatSession, content: String) {
         if (!RhodesAppVisibility.isForeground) {
-            val session = _currentSession.value
             RhodesNotificationCenter.show(
-                getApplication(), title, content.take(120), sessionId = session?.id, isGroup = false,
-                avatarUri = _selectedOperator.value?.avatarUri.orEmpty()
+                getApplication(), session.operatorName, content.take(120), sessionId = session.id, isGroup = false,
+                avatarUri = session.avatarUri
             )
         }
     }
@@ -1225,6 +1226,7 @@ ${recentDialogues}
                 aiMutexFor(session.id).lock()
                 mutexLocked = true
                 val apiMessages = buildRegenerateApiMessages(
+                    session = session,
                     userContent = userMsg.content,
                     previousReply = previousReply,
                     excludeMessageIds = setOf(msgId),
@@ -1339,7 +1341,7 @@ ${recentDialogues}
                     } catch (_: Exception) { analysisGuidanceBySession[session.id] = "" }
                 }
 
-                val apiMessages = buildApiMessages(previousUser?.content ?: "", mode = mode)
+                val apiMessages = buildApiMessages(session, previousUser?.content ?: "", mode = mode)
                 var parsed = withTimeout(90_000) { sharedUtils.chatWithRetry(apiMessages) }
                 parsed = ensureVisiblePrivateReply(parsed, mode)
                 sharedUtils.trackTokens("private", apiMessages, parsed.toString())
@@ -1614,13 +1616,13 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
     } catch (_: Exception) { "用户发送了一张图片" }
 
     private suspend fun buildApiMessages(
+        session: ChatSession,
         userContent: String = "",
         historyLimitOverride: Int? = null,
         excludeMessageIds: Set<Long> = emptySet(),
         historyBeforeMessageId: Long? = null,
         mode: String = _currentMode.value
     ): List<AiMessage> {
-        val session = _currentSession.value ?: return emptyList()
         val op = repository.getOperator(session.operatorId)
         val restartAt = settings.getSessionRestartAt(session.id)
         val shortTerm = repository.getShortTermMemory(session.id)?.takeIf { restartAt <= 0L || it.createdAt >= restartAt }
@@ -1806,6 +1808,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
     }
 
     private suspend fun buildRegenerateApiMessages(
+        session: ChatSession,
         userContent: String,
         previousReply: String,
         excludeMessageIds: Set<Long> = emptySet(),
@@ -1820,8 +1823,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             "从短句和反问切入，让回复更像临场反应",
             "从陪伴和试探切入，不沿用上一版安慰方式"
         ).random()
-        val cur = _currentSession.value
-        val avoid = formatPrivateHistoryForPrompt(ChatMessage(id = 0L, sessionId = cur?.id ?: "", content = previousReply, type = "ai_json", senderName = cur?.operatorName ?: "干员", isMe = false)).take(1600)
+        val avoid = formatPrivateHistoryForPrompt(ChatMessage(id = 0L, sessionId = session.id, content = previousReply, type = "ai_json", senderName = session.operatorName, isMe = false)).take(1600)
         modeTransitionNotice = """【重说任务 · 最高优先级】
 用户要求你重新回答上一轮消息。
 本次重写角度：$angle
@@ -1836,6 +1838,7 @@ $avoid
 - 不要只做同义词替换；如果上一版偏解释，这次偏行动/感受；如果上一版偏安慰，这次偏陪伴/反问/推进。
 - 不要提到“重说”“上一版”“重新生成”。"""
         return buildApiMessages(
+            session = session,
             userContent = userContent,
             excludeMessageIds = excludeMessageIds,
             historyBeforeMessageId = historyBeforeMessageId,

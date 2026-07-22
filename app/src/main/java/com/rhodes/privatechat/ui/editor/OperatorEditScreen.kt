@@ -536,16 +536,24 @@ fun OperatorEditScreen(
     // AI 人设生成 - 加载中
     if (isGeneratingPrompt) {
         AlertDialog(
-            onDismissRequest = {},
+            onDismissRequest = {
+                viewModel.cancelOperatorPromptGeneration()
+                isGeneratingPrompt = false
+            },
             title = { Text("AI 生成中...", color = TextPrimary) },
             text = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.width(16.dp))
-                    Text("正在根据需求生成人设，请稍候", fontSize = 14.sp, color = TextSecondary)
+                    Text("通常会在 30 秒内完成；可随时取消后重新生成", fontSize = 14.sp, color = TextSecondary)
                 }
             },
-            confirmButton = {},
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.cancelOperatorPromptGeneration()
+                    isGeneratingPrompt = false
+                }) { Text("取消") }
+            },
             containerColor = Card
         )
     }

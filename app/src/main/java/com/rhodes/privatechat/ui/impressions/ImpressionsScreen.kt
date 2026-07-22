@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -44,6 +45,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.shared.model.MemoryItem
+import com.rhodes.privatechat.shared.model.MemoryLevel
 import com.rhodes.privatechat.shared.model.Operator
 import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.ui.theme.*
@@ -66,6 +68,9 @@ fun ImpressionsScreen(
     var editing by remember { mutableStateOf<MemoryItem?>(null) }
     var editContent by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
+    fun refreshImpressions() {
+        scope.launch { impressions = viewModel.getCurrentImpressions() }
+    }
 
     LaunchedEffect(Unit) {
         impressions = viewModel.getCurrentImpressions()
@@ -75,8 +80,8 @@ fun ImpressionsScreen(
         AlertDialog(
             onDismissRequest = { showClearDialog = false },
             title = { Text("清空所有印象") },
-            text = { Text("将清除所有干员当前对你的稳定印象，且无法恢复。不会删除聊天记录、近期记忆、动态或评论。") },
-            confirmButton = { TextButton(onClick = { scope.launch { viewModel.deleteAllCurrentImpressions(); impressions = emptyList() }; showClearDialog = false }) { Text("确认清空", color = ErrorRed) } },
+            text = { Text("将清除所有干员当前对你的长期印象，且无法恢复。不会删除聊天记录、近期了解、动态或评论。") },
+            confirmButton = { TextButton(onClick = { scope.launch { viewModel.deleteAllCurrentImpressions(); impressions = viewModel.getCurrentImpressions() }; showClearDialog = false }) { Text("确认清空", color = ErrorRed) } },
             dismissButton = { TextButton(onClick = { showClearDialog = false }) { Text("取消", color = TextSecondary) } }
         )
     }
@@ -84,7 +89,7 @@ fun ImpressionsScreen(
     editing?.let { entry ->
         AlertDialog(
             onDismissRequest = { editing = null },
-            title = { Text("编辑长期印象") },
+            title = { Text(if (entry.memoryLevel == MemoryLevel.L3) "编辑长期印象" else "编辑近期了解") },
             text = { OutlinedTextField(value = editContent, onValueChange = { editContent = it }, label = { Text("印象内容") }, modifier = Modifier.fillMaxWidth(), minLines = 4) },
             confirmButton = {
                 TextButton(onClick = {
@@ -106,6 +111,7 @@ fun ImpressionsScreen(
             Spacer(modifier = Modifier.width(4.dp))
             Text("大家的印象", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
             Spacer(Modifier.weight(1f))
+            IconButton(onClick = ::refreshImpressions) { Icon(Icons.Default.Refresh, "刷新印象", tint = TextSecondary) }
             TextButton(onClick = { showClearDialog = true }) { Text("清空", color = ErrorRed, fontSize = 14.sp) }
         }
         HorizontalDivider(color = Divider)
@@ -129,38 +135,67 @@ private fun DetailImpressionsPage(
     onEdit: (MemoryItem) -> Unit,
     onDelete: (MemoryItem) -> Unit
 ) {
-    if (impressions.isEmpty()) {
+    val longTerm = impressions.filter { it.memoryLevel == MemoryLevel.L3 }
+    val recent = impressions.filter { it.memoryLevel == MemoryLevel.L2 }
+    if (longTerm.isEmpty() && recent.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("暂无印象数据", fontSize = 16.sp, color = TextTertiary)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("暂无印象数据", fontSize = 16.sp, color = TextTertiary)
+                Spacer(Modifier.height(6.dp))
+                Text("多聊几次后，干员会逐渐形成对你的近期了解和长期印象", fontSize = 12.sp, color = TextTertiary)
+            }
         }
         return
     }
     LazyColumn {
-        items(impressions) { entry ->
-            val op = operators.find { it.id == entry.ownerId }
-            val displayName = op?.name ?: entry.ownerId
-            Column(modifier = Modifier.fillMaxWidth().background(Surface).padding(16.dp)) {
-                Row(modifier = Modifier.clickable { onOperatorClick(entry.ownerId) }, verticalAlignment = Alignment.CenterVertically) {
-                OperatorAvatarImage(avatarUri = op?.avatarUri ?: "", name = displayName, modifier = Modifier.size(40.dp))
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Column {
-                        Text(displayName, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-                        Text("更新于 ${SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()).apply { timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai") }.format(Date(entry.createdAt))}", fontSize = 11.sp, color = TextTertiary)
-                    }
-                    Spacer(modifier = Modifier.weight(1f))
-                    IconButton(onClick = { onEdit(entry) }) { Icon(Icons.Default.Edit, "编辑印象", tint = TextSecondary) }
-                    IconButton(onClick = { onDelete(entry) }) { Icon(Icons.Default.Delete, "删除印象", tint = ErrorRed) }
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(entry.content, fontSize = 14.sp, color = TextPrimary, lineHeight = 22.sp)
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    entry.memoryType.replace('_', ' ').split(' ').filter { it.isNotBlank() }.forEach { kw ->
-                        Text(kw.trim(), fontSize = 11.sp, color = Primary, fontWeight = FontWeight.Medium, modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(Primary.copy(alpha = 0.1f)).padding(horizontal = 8.dp, vertical = 2.dp))
-                    }
-                }
-            }
-            HorizontalDivider(color = Divider)
+        if (longTerm.isNotEmpty()) {
+            item { ImpressionSectionHeader("长期印象", "反复互动后形成的稳定了解") }
+            items(longTerm, key = { it.id }) { ImpressionEntry(it, operators, "长期印象", onOperatorClick, onEdit, onDelete) }
+        }
+        if (recent.isNotEmpty()) {
+            item { ImpressionSectionHeader("近期了解", "近期反复提到的重要偏好、约定和关心点") }
+            items(recent, key = { it.id }) { ImpressionEntry(it, operators, "近期了解", onOperatorClick, onEdit, onDelete) }
         }
     }
+}
+
+@Composable
+private fun ImpressionSectionHeader(title: String, subtitle: String) {
+    Column(modifier = Modifier.fillMaxWidth().background(BG).padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Text(title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+        Text(subtitle, fontSize = 12.sp, color = TextSecondary)
+    }
+}
+
+@Composable
+private fun ImpressionEntry(
+    entry: MemoryItem,
+    operators: List<Operator>,
+    levelLabel: String,
+    onOperatorClick: (String) -> Unit,
+    onEdit: (MemoryItem) -> Unit,
+    onDelete: (MemoryItem) -> Unit
+) {
+    val op = operators.find { it.id == entry.ownerId }
+    val displayName = op?.name ?: entry.ownerId
+    Column(modifier = Modifier.fillMaxWidth().background(Surface).padding(16.dp)) {
+        Row(modifier = Modifier.clickable { onOperatorClick(entry.ownerId) }, verticalAlignment = Alignment.CenterVertically) {
+            OperatorAvatarImage(avatarUri = op?.avatarUri ?: "", name = displayName, modifier = Modifier.size(40.dp))
+            Spacer(modifier = Modifier.width(10.dp))
+            Column {
+                Text(displayName, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                Text("$levelLabel · 更新于 ${SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()).apply { timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai") }.format(Date(entry.updatedAt.takeIf { it > 0L } ?: entry.createdAt))}", fontSize = 11.sp, color = TextTertiary)
+            }
+            Spacer(modifier = Modifier.weight(1f))
+            IconButton(onClick = { onEdit(entry) }) { Icon(Icons.Default.Edit, "编辑印象", tint = TextSecondary) }
+            IconButton(onClick = { onDelete(entry) }) { Icon(Icons.Default.Delete, "删除印象", tint = ErrorRed) }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(entry.content, fontSize = 14.sp, color = TextPrimary, lineHeight = 22.sp)
+        Spacer(modifier = Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(entry.memoryType.replace('_', ' '), fontSize = 11.sp, color = Primary, fontWeight = FontWeight.Medium, modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(Primary.copy(alpha = 0.1f)).padding(horizontal = 8.dp, vertical = 2.dp))
+        }
+    }
+    HorizontalDivider(color = Divider)
 }

@@ -4,7 +4,6 @@ import androidx.compose.ui.graphics.Color
 import com.rhodes.privatechat.data.db.entity.ChatMessageEntity
 import com.rhodes.privatechat.ui.chat.model.ChatUiMessage
 import com.rhodes.privatechat.ui.theme.*
-import android.util.Log
 import com.rhodes.privatechat.util.ChatTrace
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -44,7 +43,6 @@ object MessageParser {
             try {
                 val mode = msg.mode
                 val isOnline = mode == "online"
-                Log.d("RHODES_VISION", "Parser msgId=${msg.id} type='${msg.type}' isMe=${msg.isMe} content=${msg.content.take(80)}")
                 val result = when {
                     msg.type == "ai_json" && isGroup -> parseGroupAiJson(msg, isOnline, senderColor, senderAvatar, restartAt)
                     msg.type == "ai_json" && !isGroup -> parsePrivateAiJson(msg, isOnline, aiName, aiAvatarUri, restartAt)
@@ -61,7 +59,7 @@ object MessageParser {
                 ChatTrace.d("Parser", "msg id=${msg.id} type=${msg.type} out=${result.size}")
                 result
             } catch (e: Exception) {
-                ChatTrace.e("Parser", "ERROR id=${msg.id} type=${msg.type} sender=${msg.senderName} content=${ChatTrace.short(msg.content)} err=${e.message}", e)
+                ChatTrace.e("Parser", "ERROR id=${msg.id} type=${msg.type} sender=${msg.senderName} contentLength=${msg.content.length} err=${e.message}", e)
                 listOf(ChatUiMessage(msg.id, msg.senderName.ifBlank { "系统" }, Gray100, msg.content.ifBlank { "[消息解析失败]" }, msg.timestamp, isSystem = msg.type == "system", originalMessageId = msg.id))
             }
         }
@@ -74,7 +72,6 @@ object MessageParser {
         val imageUri = root?.get("imageUri")?.jsonPrimitive?.contentOrNull.orEmpty()
         val caption = root?.get("caption")?.jsonPrimitive?.contentOrNull.orEmpty()
         val status = root?.get("status")?.jsonPrimitive?.contentOrNull.orEmpty()
-        Log.d("RHODES_VISION", "imageMsg id=${msg.id} imageUri='${imageUri.take(80)}' caption='${caption.take(40)}'")
         return ChatUiMessage(
             id = msg.id,
             senderName = msg.senderName,

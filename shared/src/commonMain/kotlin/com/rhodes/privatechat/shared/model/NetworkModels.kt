@@ -159,7 +159,13 @@ data class ProviderConfig(
 @Serializable
 data class GoogleGenerationRequest(
     val contents: List<GoogleContent>,
-    @SerialName("system_instruction") val systemInstruction: GoogleContent? = null
+    @SerialName("system_instruction") val systemInstruction: GoogleContent? = null,
+    @SerialName("generationConfig") val generationConfig: GoogleGenerationConfig? = null
+)
+
+@Serializable
+data class GoogleGenerationConfig(
+    @SerialName("maxOutputTokens") val maxOutputTokens: Int? = null
 )
 
 @Serializable

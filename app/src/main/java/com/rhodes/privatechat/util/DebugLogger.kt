@@ -41,7 +41,7 @@ object DebugLogger {
         }
     }
 
-    fun getLogs(): List<LogEntry> = synchronized(lock) { entries.toList().reversed() }
+    fun getLogs(): List<LogEntry> = synchronized(lock) { entries.toList() }
 
     fun getLogText(): String = synchronized(lock) {
         entries.joinToString("\n") { "[${it.formattedTime}][${it.tag}] ${it.message}" }

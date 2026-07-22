@@ -406,8 +406,29 @@ class MemoryV2Pipeline(
             sdf.timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")
             sdf.format(java.util.Date(msg.timestamp))
         } else "unknown"
-        val speaker = if (msg.isMe) "用户" else msg.senderName.ifBlank { "成员" }
-        return "[$time] 群聊「$groupName」中，$speaker：${msg.content.take(240)}"
+        if (msg.isMe) return "[$time] 群聊「$groupName」中，用户：${msg.content.take(240)}"
+        if (msg.type == "ai_json") {
+            val items = runCatching {
+                val root = json.parseToJsonElement(msg.content)
+                val arr = root as? kotlinx.serialization.json.JsonArray
+                    ?: (root as? JsonObject)?.get("messages")?.jsonArray
+                    ?: (root as? JsonObject)?.get("segments")?.jsonArray
+                    ?: kotlinx.serialization.json.JsonArray(emptyList())
+                arr.mapNotNull { element ->
+                    val obj = element.jsonObject
+                    val speaker = obj["speaker"]?.jsonPrimitive?.contentOrNull
+                        ?: obj["sender"]?.jsonPrimitive?.contentOrNull
+                        ?: return@mapNotNull null
+                    val content = obj["message"]?.jsonPrimitive?.contentOrNull
+                        ?: obj["content"]?.jsonPrimitive?.contentOrNull
+                        ?: obj["text"]?.jsonPrimitive?.contentOrNull
+                        ?: return@mapNotNull null
+                    if (content.isBlank()) null else "${if (speaker == "旁白" || obj["type"]?.jsonPrimitive?.contentOrNull.equals("narration", true)) "旁白" else speaker}：${content.trim()}"
+                }
+            }.getOrDefault(emptyList())
+            if (items.isNotEmpty()) return "[$time] 群聊「$groupName」中，${items.joinToString("\n").take(800)}"
+        }
+        return "[$time] 群聊「$groupName」中，${msg.senderName.ifBlank { "成员" }}：${msg.content.take(240)}"
     }
 
     private fun formatMoment(moment: Moment): String {

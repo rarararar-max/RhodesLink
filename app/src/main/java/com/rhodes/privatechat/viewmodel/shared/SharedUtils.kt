@@ -71,13 +71,19 @@ class SharedUtils(
     // === AI 调用 ===
 
     /** 非流式聊天：发送请求，等待完整响应后返回 */
-    suspend fun chat(messages: List<AiMessage>, logTag: String = "Chat"): String {
+    suspend fun chat(
+        messages: List<AiMessage>,
+        logTag: String = "Chat",
+        maxOutputTokens: Int? = null,
+        temperature: Double? = null
+    ): String {
         validateChatConfiguration()
-        val temp = settings.aiTemperature
+        val temp = temperature ?: settings.aiTemperature
         val prompt = messages.firstOrNull()?.content ?: ""
         logAiCall("→$logTag", prompt, "(requesting...)", messages)
         val result = aiService.chat(
-            settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl, temperature = temp
+            settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl,
+            temperature = temp, maxOutputTokens = maxOutputTokens
         )
         logAiCall("←$logTag", prompt, result.content, messages)
         return result.content
@@ -233,6 +239,17 @@ class SharedUtils(
         map.putIfAbsent("TRANSITION_NOTICE", "")
         map.putIfAbsent("PROACTIVE_TRIGGER_TYPE", "none")
         map.putIfAbsent("PROACTIVE_TRIGGER_CONTEXT", "无")
+        map.putIfAbsent("PROACTIVE_CURRENT_TIME", map["CURRENT_TIME"] ?: "无")
+        map.putIfAbsent("PROACTIVE_LAST_USER_MESSAGE", "无")
+        map.putIfAbsent("PROACTIVE_LAST_USER_TIME", "无")
+        map.putIfAbsent("PROACTIVE_LAST_AI_MESSAGE", "无")
+        map.putIfAbsent("PROACTIVE_LAST_AI_TIME", "无")
+        map.putIfAbsent("PROACTIVE_LAST_INTERACTION_TIME", "无")
+        map.putIfAbsent("PROACTIVE_IDLE_DURATION", "无")
+        map.putIfAbsent("PROACTIVE_TIME_RELATION", "无")
+        map.putIfAbsent("PROACTIVE_CONTEXT_MODE", "none")
+        map.putIfAbsent("PROACTIVE_UNRESOLVED_TOPIC", "无")
+        map.putIfAbsent("PROACTIVE_RECENT_HISTORY", "无")
         map.putIfAbsent("USER_CONTENT", "")
         map.putIfAbsent("SOURCE_AWARE_RULES", "")
         map.putIfAbsent("KNOWN_FROM_CONTEXT", "无")

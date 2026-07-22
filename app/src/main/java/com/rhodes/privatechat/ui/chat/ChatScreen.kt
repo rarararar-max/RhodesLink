@@ -112,7 +112,9 @@ fun ChatScreen(
     val sessionRestartAt by viewModel.sessionRestartAt.collectAsState()
     val scrollToMessageId by viewModel.scrollToMessageId.collectAsState()
     val currentOp by viewModel.selectedOperator.collectAsState()
+    val currentSession by viewModel.currentSession.collectAsState()
     val displayOp = currentOp ?: operator
+    val canSend = currentSession?.operatorId == operator.id
     val listState = rememberLazyListState()
     val op = operator
     val context = LocalContext.current
@@ -343,7 +345,7 @@ fun ChatScreen(
                         }
                     },
                     // Sending again intentionally cancels the unfinished request; do not trap users in image analysis.
-                    enabled = !imageSending,
+                    enabled = !imageSending && canSend,
                     forceSendEnabled = pendingImageUri.isNotBlank(),
                     currentMode = currentMode,
                     onModeChange = { viewModel.setMode(it) },
@@ -462,6 +464,8 @@ private fun PropShopDialog(
     var loading by remember { mutableStateOf(false) }
     val settings: SettingsRepository = koinInject()
     val balance by settings.lmbFlow.collectAsState(initial = settings.lmb)
+    val hypnosisRounds by viewModel.hypnosisRounds.collectAsState()
+    val hypnosisCommand by viewModel.hypnosisCommand.collectAsState()
 
     AlertDialog(onDismissRequest = onDismiss, containerColor = ElevatedSurface, shape = RoundedCornerShape(24.dp), title = { Row { Icon(Icons.Default.ShoppingCart, null, tint = AccentOrange, modifier = Modifier.size(20.dp)); Spacer(modifier = Modifier.width(6.dp)); Text("道具商店", color = TextPrimary) } },
         text = {
@@ -473,12 +477,23 @@ private fun PropShopDialog(
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("催眠怀表", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-                            Text("对干员施加催眠指令，持续10轮", fontSize = 12.sp, color = TextSecondary)
+                            Text(if (hypnosisRounds > 0) "催眠中 · 剩余${hypnosisRounds}轮" else "对干员施加催眠指令，持续10轮", fontSize = 12.sp, color = TextSecondary)
                         }
-                        Text("${PROP_PRICE}", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = AccentOrange)
+                        if (hypnosisRounds == 0) Text("${PROP_PRICE}", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = AccentOrange)
                     }
                     Spacer(modifier = Modifier.height(8.dp))
-                    if (showHypnotizeInput) {
+                    if (hypnosisRounds > 0) {
+                        if (hypnosisCommand.isNotBlank()) {
+                            Text("当前指令：${hypnosisCommand.take(80)}", fontSize = 12.sp, color = TextSecondary, maxLines = 2)
+                            Spacer(modifier = Modifier.height(6.dp))
+                        }
+                        Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(ErrorRed.copy(alpha = 0.12f)).clickable {
+                            viewModel.cancelHypnosis()
+                            Toast.makeText(context, "催眠效果已中断", Toast.LENGTH_SHORT).show()
+                        }.padding(vertical = 8.dp), horizontalArrangement = Arrangement.Center) {
+                            Text("中断催眠", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = ErrorRed)
+                        }
+                    } else if (showHypnotizeInput) {
                         OutlinedTextField(value = hypnotizeInput, onValueChange = { hypnotizeInput = it },
                             modifier = Modifier.fillMaxWidth(), singleLine = true,
                             placeholder = { Text("输入催眠指令...", color = TextTertiary) }, shape = RoundedCornerShape(8.dp),
@@ -500,7 +515,6 @@ private fun PropShopDialog(
                     } else {
                         Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(PrimaryContainer).clickable {
                             if (balance < PROP_PRICE) { Toast.makeText(context, "余额不足", Toast.LENGTH_SHORT).show(); return@clickable }
-                            if (viewModel.hypnosisRounds.value > 0) { Toast.makeText(context, "已有催眠指令生效中", Toast.LENGTH_SHORT).show(); return@clickable }
                             showHypnotizeInput = true
                         }.padding(vertical = 8.dp), horizontalArrangement = Arrangement.Center) {
                             Text("购买", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = Primary)

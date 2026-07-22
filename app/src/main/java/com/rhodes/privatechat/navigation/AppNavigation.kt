@@ -55,6 +55,7 @@ import cafe.adriel.voyager.navigator.currentOrThrow
 import cafe.adriel.voyager.transitions.SlideTransition
 import org.koin.compose.viewmodel.koinViewModel
 import com.rhodes.privatechat.viewmodel.MainViewModel
+import com.rhodes.privatechat.MainActivity
 
 // ──────────────────────────────────────────────
 // Main screen with bottom tabs
@@ -210,18 +211,16 @@ fun AppNavigation() {
 
     Navigator(MainScreen()) { navigator ->
         BackHandler(enabled = navigator.lastItem !is MainScreen) { navigator.pop() }
+        val navigationRequest by MainActivity.navigationRequest.collectAsState()
 
-        LaunchedEffect(Unit) {
-            val intent = activity?.intent ?: return@LaunchedEffect
-            val sessionId = intent.getStringExtra("nav_session_id") ?: return@LaunchedEffect
-            val isGroup = intent.getBooleanExtra("nav_is_group", false)
-            if (sessionId.isBlank()) return@LaunchedEffect
+        LaunchedEffect(navigationRequest?.nonce) {
+            val request = navigationRequest ?: return@LaunchedEffect
+            val sessionId = request.sessionId
+            val isGroup = request.isGroup
             try {
                 val viewModel = org.koin.core.context.GlobalContext.get().get<MainViewModel>()
                 val deadline = System.currentTimeMillis() + 10_000L
                 while (System.currentTimeMillis() < deadline) {
-                    // Do not interrupt a screen the user opened while cold-start data was loading.
-                    if (navigator.lastItem !is MainScreen) break
                     val session = viewModel.allSessions.value.find { it.id == sessionId }
                     if (session != null) {
                         if (isGroup) {
@@ -236,8 +235,11 @@ fun AppNavigation() {
                     }
                     delay(200)
                 }
-            } catch (_: Exception) {}
-            activity?.intent?.removeExtra("nav_session_id")
+            } catch (_: Exception) {
+            } finally {
+                MainActivity.consumeNavigationRequest(request.nonce)
+                activity?.intent?.removeExtra("nav_session_id")
+            }
         }
 
         SlideTransition(navigator)

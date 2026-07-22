@@ -186,10 +186,15 @@ class SharedUtils(
     fun getModelName(): String = settings.modelName
     fun getCustomUrl(): String = settings.customUrl
 
+    fun chatConfigurationError(): String? = when {
+        settings.apiKey.isBlank() -> "请先在设置中配置 API Key"
+        settings.modelName.isBlank() -> "请先在设置中配置模型名称"
+        settings.provider == "custom" && settings.customUrl.isBlank() -> "请先在设置中配置自定义 API 地址"
+        else -> null
+    }
+
     private fun validateChatConfiguration() {
-        require(settings.apiKey.isNotBlank()) { "请先在设置中配置 API Key" }
-        require(settings.modelName.isNotBlank()) { "请先在设置中配置模型名称" }
-        require(settings.provider != "custom" || settings.customUrl.isNotBlank()) { "请先在设置中配置自定义 API 地址" }
+        chatConfigurationError()?.let { error(it) }
     }
 
     // === 纯工具函数 ===

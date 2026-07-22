@@ -96,7 +96,7 @@ private enum class SleepInputMode { Manual, Auto, Sleeping }
 private enum class WakeTextMode { Ai, Fixed }
 
 @Composable
-fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> Unit) {
+fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: String, onBack: () -> Unit) {
     val context = LocalContext.current
     val activity = context as? Activity
     val scope = rememberCoroutineScope()
@@ -279,7 +279,7 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
                     .trim().take(240).ifBlank { "我在。" }
                 aiReply = reply
                 turns += operator.name to reply
-                viewModel.chatViewModel.saveVoiceExchange(text, reply, "sleep_mode")
+                viewModel.chatViewModel.saveVoiceExchange(sessionId, text, reply, "sleep_mode")
                 speak(reply)
             } catch (e: Exception) {
                 callState = com.rhodes.privatechat.shared.call.CallState.Failed

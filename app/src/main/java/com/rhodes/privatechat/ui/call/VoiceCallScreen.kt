@@ -48,6 +48,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -83,7 +84,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
 @Composable
-fun VoiceCallScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> Unit) {
+fun VoiceCallScreen(viewModel: MainViewModel, operator: Operator, sessionId: String, onBack: () -> Unit) {
     val context = LocalContext.current
     val settings: SettingsRepository = koinInject()
     val scope = rememberCoroutineScope()
@@ -109,16 +110,12 @@ fun VoiceCallScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
         audio.stopPlayback()
         val totalSeconds = ((System.currentTimeMillis() - callStartedAt) / 1000).toInt().coerceAtLeast(1)
         scope.launch {
-            val session = viewModel.repository.getSessionByOperator(operator.id)
-            if (session != null) {
-                viewModel.chatViewModel.saveCallSummary(session.id, totalSeconds)
-            } else {
-                Log.d("RHODES_AUDIO", "finishCall: 找不到${operator.name}的会话")
-            }
+            viewModel.chatViewModel.saveCallSummary(sessionId, totalSeconds)
             onBack()
         }
     }
 
+    BackHandler { finishCall() }
     DisposableEffect(audio) { onDispose { audio.release() } }
 
     suspend fun synthesizeAndPlay(tts: TtsGateway, text: String) {
@@ -180,7 +177,7 @@ fun VoiceCallScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
                 transcript = text
                 turns = turns + ("你" to text)
                 val recent = turns.takeLast(8).joinToString("\n") { "${it.first}：${it.second}" }
-                val memoryContext = viewModel.chatViewModel.buildVoiceContext(text)
+                val memoryContext = viewModel.chatViewModel.buildVoiceContext(sessionId, text)
                 val now = viewModel.sharedUtils.beijingPromptTime()
                 val prompt = """你是${operator.name}。${operator.privatePrompt.ifBlank { operator.description }}
 当前是语音通话。当前北京时间是$now。请保持角色身份，只用自然中文口语回复，限制在1到3句、500字以内。
@@ -200,7 +197,7 @@ $recent"""
                 Log.d("RHODES_DEBUG", "[VoiceCall] AI 回复完成: length=${ai.length}")
                 reply = ai
                 turns = turns + (operator.name to ai)
-                viewModel.chatViewModel.saveVoiceExchange(text, ai, "voice_call")
+                viewModel.chatViewModel.saveVoiceExchange(sessionId, text, ai, "voice_call")
                 val ttsKey = settings.ttsApiKey.ifBlank { settings.apiKey }
                 synthesizeAndPlay(createTtsGateway(settings.ttsBaseUrl, ttsKey, settings.ttsModelName, settings.ttsProvider), ai)
                 Log.d("RHODES_DEBUG", "[VoiceCall] processRecording 完成")

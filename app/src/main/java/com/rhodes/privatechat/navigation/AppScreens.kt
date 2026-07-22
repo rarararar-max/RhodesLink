@@ -100,17 +100,19 @@ data class ChatOperator(val operatorId: String) : Screen {
         val operators by viewModel.operators.collectAsState()
         val operator = remember(operators, operatorId) { operators.find { it.id == operatorId } }
         var ready by remember { mutableStateOf(false) }
+        var selectionId by remember { mutableStateOf<Long?>(null) }
         LaunchedEffect(operatorId, operator) {
             if (operator != null) {
+                ready = false
                 try {
-                    viewModel.chatViewModel.selectOperatorSync(operator)
+                    selectionId = viewModel.chatViewModel.selectOperatorSync(operator)
+                    ready = viewModel.currentSession.value?.operatorId == operator.id
                 } catch (_: Exception) {
                 }
-                ready = true
             }
         }
-        DisposableEffect(Unit) {
-            onDispose { viewModel.chatViewModel.clearSelection() }
+        DisposableEffect(selectionId) {
+            onDispose { selectionId?.let { viewModel.chatViewModel.clearSelection(it) } }
         }
         if (ready && operator != null) {
             com.rhodes.privatechat.ui.chat.ChatScreen(
@@ -139,15 +141,18 @@ data class VoiceCallRoute(val operatorId: String) : Screen {
         val operators by viewModel.operators.collectAsState()
         val operator = remember(operators, operatorId) { operators.find { it.id == operatorId } }
         val context = androidx.compose.ui.platform.LocalContext.current
+        var sessionId by remember { mutableStateOf<String?>(null) }
         val setupMessage = operator?.let { settings.voiceCallSetupMessage(it.voiceName) }
-        LaunchedEffect(setupMessage) {
+        LaunchedEffect(operator, setupMessage) {
             if (setupMessage != null) {
                 Toast.makeText(context, setupMessage, Toast.LENGTH_LONG).show()
                 navigator.pop()
+            } else if (operator != null) {
+                sessionId = viewModel.repository.getOrCreateSession(operator.id, operator.name, operator.avatarUri).id
             }
         }
-        if (operator != null && setupMessage == null) {
-            com.rhodes.privatechat.ui.call.VoiceCallScreen(viewModel = viewModel, operator = operator, onBack = { navigator.pop() })
+        if (operator != null && setupMessage == null && sessionId != null) {
+            com.rhodes.privatechat.ui.call.VoiceCallScreen(viewModel = viewModel, operator = operator, sessionId = sessionId!!, onBack = { navigator.pop() })
         } else {
             androidx.compose.foundation.layout.Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
                 androidx.compose.material3.Text(if (operators.isEmpty()) "正在加载角色..." else "角色不存在或已删除")
@@ -165,6 +170,7 @@ data object SleepRoute : Screen {
         val operators by viewModel.operators.collectAsState()
         val kaltsit = remember(operators) { operators.find { it.id == "kaltsit" || it.name == "凯尔希" } }
         val context = androidx.compose.ui.platform.LocalContext.current
+        var sessionId by remember { mutableStateOf<String?>(null) }
         LaunchedEffect(kaltsit) {
             if (operators.isNotEmpty() && kaltsit == null) {
                 android.widget.Toast.makeText(context, "未找到凯尔希角色", android.widget.Toast.LENGTH_SHORT).show()
@@ -172,10 +178,12 @@ data object SleepRoute : Screen {
             } else if (kaltsit != null && settings.voiceCallSetupMessage(kaltsit.voiceName) != null) {
                 android.widget.Toast.makeText(context, settings.voiceCallSetupMessage(kaltsit.voiceName), android.widget.Toast.LENGTH_LONG).show()
                 navigator.pop()
+            } else if (kaltsit != null) {
+                sessionId = viewModel.repository.getOrCreateSession(kaltsit.id, kaltsit.name, kaltsit.avatarUri).id
             }
         }
-        if (kaltsit != null && settings.voiceCallSetupMessage(kaltsit.voiceName) == null) {
-            com.rhodes.privatechat.ui.sleep.SleepModeScreen(viewModel = viewModel, operator = kaltsit, onBack = { navigator.pop() })
+        if (kaltsit != null && settings.voiceCallSetupMessage(kaltsit.voiceName) == null && sessionId != null) {
+            com.rhodes.privatechat.ui.sleep.SleepModeScreen(viewModel = viewModel, operator = kaltsit, sessionId = sessionId!!, onBack = { navigator.pop() })
         }
     }
 }

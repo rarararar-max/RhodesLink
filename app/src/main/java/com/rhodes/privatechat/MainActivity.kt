@@ -22,6 +22,8 @@ import java.io.File
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import org.koin.java.KoinJavaComponent.inject
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 class MainActivity : ComponentActivity() {
     private var imageResultHandler: ((String) -> Unit)? = null
@@ -69,6 +71,7 @@ class MainActivity : ComponentActivity() {
                 AppNavigation()
             }
         }
+        publishNavigationIntent(intent)
     }
     override fun onStart() {
         super.onStart()
@@ -98,6 +101,11 @@ class MainActivity : ComponentActivity() {
         } else {
             launchTakePhoto(handler)
         }
+    }
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        publishNavigationIntent(intent)
     }
 
     fun ensureMicrophonePermission(handler: (Boolean) -> Unit) {
@@ -178,10 +186,22 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+        data class NavigationRequest(val sessionId: String, val isGroup: Boolean, val nonce: Long)
+        private val _navigationRequest = MutableStateFlow<NavigationRequest?>(null)
+        val navigationRequest = _navigationRequest.asStateFlow()
         @Volatile private var current: MainActivity? = null
         fun pickImage(handler: (String) -> Unit) { current?.pickChatImage(handler) }
         fun takePhoto(handler: (String) -> Unit) { current?.takeChatPhoto(handler) }
         fun requestMicrophonePermission(handler: (Boolean) -> Unit) { current?.ensureMicrophonePermission(handler) ?: handler(false) }
         fun imageForModel(uriText: String): String? = current?.prepareImageForModel(uriText)
+
+        private fun publishNavigationIntent(intent: android.content.Intent?) {
+            val sessionId = intent?.getStringExtra("nav_session_id")?.takeIf { it.isNotBlank() } ?: return
+            _navigationRequest.value = NavigationRequest(sessionId, intent.getBooleanExtra("nav_is_group", false), System.currentTimeMillis())
+        }
+
+        fun consumeNavigationRequest(nonce: Long) {
+            if (_navigationRequest.value?.nonce == nonce) _navigationRequest.value = null
+        }
     }
 }

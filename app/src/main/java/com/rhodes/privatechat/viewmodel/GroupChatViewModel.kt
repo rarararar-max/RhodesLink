@@ -116,7 +116,7 @@ class GroupChatViewModel(
     private val autoRoundCounts = ConcurrentHashMap<String, Int>()
     private val groupAiJobs = ConcurrentHashMap<String, Job>()
     private val groupJobLock = Any()
-    private val absorbedUserMessageIds = ConcurrentHashMap.newKeySet<Long>()
+    private val pendingUserMessageIds = ConcurrentHashMap<String, MutableSet<Long>>()
     private val groupGenerations = ConcurrentHashMap<String, Long>()
 
     private fun logAutoInterval(groupId: String, event: String, details: String) {
@@ -131,6 +131,7 @@ class GroupChatViewModel(
 
     private fun cancelGroupRequests(groupId: String) {
         groupGenerations.merge(groupId, 1L) { old, increment -> old + increment }
+        pendingUserMessageIds.remove(groupId)
         groupAiJobs.remove(groupId)?.cancel()
         synchronized(autoGroupChatLock) {
             autoChatGenerations[groupId] = nextAutoGroupGeneration()
@@ -495,6 +496,12 @@ class GroupChatViewModel(
     fun sendGroupMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online", autoSpeak: Boolean = false, isAuto: Boolean = false, userMessageAlreadyStored: Boolean = false, onMessageSent: () -> Unit = {}, onResponseComplete: () -> Unit = {}) {
         if (isAuto && !settings.autoAiEnabled) { onResponseComplete(); return }
         if (isAuto && groupAiJobs[groupSessionId]?.isActive == true) { onResponseComplete(); return }
+        if (!isAuto && !userMessageAlreadyStored && text.isNotBlank()) {
+            sharedUtils.chatConfigurationError()?.let { error ->
+                _lastSendError.value = error
+                return
+            }
+        }
         synchronized(groupJobLock) {
             // User sends queue behind the current reply. Idle chat never preempts a user request.
             val generation = groupGenerations[groupSessionId] ?: 0L
@@ -508,6 +515,7 @@ class GroupChatViewModel(
                     id = userMsgId, sessionId = groupSessionId,
                     senderName = "我", content = text, type = "text", mode = mode, isMe = true
                 ))
+                pendingUserMessageIds.computeIfAbsent(groupSessionId) { ConcurrentHashMap.newKeySet() }.add(userMsgId)
                 DebugLogger.log("GroupChat/DB", "群用户消息已写入, session=$groupSessionId, id=$userMsgId, text=${text.take(50)}")
                 onMessageSent()
                 resetAutoGroupChatTimer(groupSessionId)
@@ -526,21 +534,23 @@ class GroupChatViewModel(
                     // Image/voice paths may have persisted their user row before calling here.
                     // In that case there is no text row to merge, but the supplied prompt must
                     // still reach the model.
-                    val firstMessageId = userMessageId!!
+                    val pendingIds = pendingUserMessageIds[groupSessionId].orEmpty()
+                    if (userMessageId !in pendingIds) return@launch
+                    val candidateIds = pendingIds.sorted().take(MAX_MERGED_USER_MESSAGES)
+                    if (candidateIds.firstOrNull() != userMessageId) return@launch
                     val batch = repository.getMessagesSync(groupSessionId)
                         .asSequence()
                         .filter { it.isMe && it.type == "text" && it.mode == mode }
-                        .filter { firstMessageId <= 0L || it.id >= firstMessageId }
-                        .take(MAX_MERGED_USER_MESSAGES)
+                        .filter { it.id in candidateIds }
+                        .sortedBy { it.id }
                         .fold(mutableListOf<ChatMessage>()) { acc, message ->
                             if (acc.isEmpty() || acc.sumOf { it.content.length } + message.content.length <= MAX_MERGED_USER_CHARS) acc += message
                             acc
                         }
                     val ids = batch.map { it.id }
-                    if (ids.any { absorbedUserMessageIds.remove(it) }) return@launch
                     batchIds = ids.toSet()
+                    pendingUserMessageIds[groupSessionId]?.removeAll(batchIds)
                     if (ids.size > 1) {
-                        absorbedUserMessageIds.addAll(ids.drop(1))
                         "用户连续补充了以下消息，请按顺序视为同一轮表达并综合回应：\n" +
                             batch.mapIndexed { index, message -> "[${index + 1}] ${message.content}" }.joinToString("\n")
                     } else text
@@ -1024,6 +1034,11 @@ $members
 
     fun sendGroupImageMessage(groupSessionId: String, groupName: String, imageUri: String, imageForModel: String?, caption: String, mode: String = "online", onMessageSent: () -> Unit = {}, onResult: (Boolean) -> Unit = {}) {
         if (groupSessionId.isBlank()) { onResult(false); return }
+        sharedUtils.chatConfigurationError()?.let { error ->
+            _lastSendError.value = error
+            onResult(false)
+            return
+        }
         if (!isVisionConfigured()) {
             _lastSendError.value = "图片聊天需要先设置识图模型，请在模型设置中填写识图地址、模型名和密钥。"
             onResult(false)

@@ -144,7 +144,7 @@ class ChatViewModel(
     private var modeTransitionRetryPending = false
     private var messagesJob: Job? = null
     private val chatAiJobs = ConcurrentHashMap<String, Job>()
-    private val absorbedUserMessageIds = ConcurrentHashMap.newKeySet<Long>()
+    private val pendingUserMessageIds = ConcurrentHashMap<String, MutableSet<Long>>()
     private val sessionGenerations = ConcurrentHashMap<String, Long>()
     private val pageSize: Long get() = CHAT_PAGE_SIZE
     private val memoryV2Pipeline = MemoryV2Pipeline(repository, settings, sharedUtils.aiService, memoryVectorService) { appState.userProfile.value.nickname }
@@ -340,7 +340,7 @@ ${text}"""
         }
     }
 
-    suspend fun selectOperatorSync(operator: Operator) {
+    suspend fun selectOperatorSync(operator: Operator): Long {
         val selectionId = selectionSequence.incrementAndGet()
         try {
             val prevOp = _selectedOperator.value
@@ -354,14 +354,14 @@ ${text}"""
             settings.hypnosisCmd = _hypnosisCommand.value
             settings.hypnosisRound = _hypnosisRounds.value
             val session = repository.getOrCreateSession(operator.id, operator.name, operator.avatarUri)
-            if (selectionId != selectionSequence.get()) return
+            if (selectionId != selectionSequence.get()) return selectionId
             val sameSession = _currentSession.value?.id == session.id
             ChatTrace.d("ChatVM", "selectSync op=${operator.id} session=${session.id} sameSession=$sameSession jobActive=${messagesJob?.isActive}")
             _currentSession.value = session
             _sessionRestartAt.value = settings.getSessionRestartAt(session.id)
             _currentMode.value = settings.getLastMode(operator.id)
             markSessionRead(session.id)
-            if (sameSession && messagesJob?.isActive == true) return
+            if (sameSession && messagesJob?.isActive == true) return selectionId
             if (sameSession) {
                 ChatTrace.d("ChatVM", "selectSync restarting dead job for session=${session.id}")
             }
@@ -386,9 +386,11 @@ ${text}"""
             ChatTrace.e("ChatVM", "selectSync.ERROR op=${operator.id} err=${e.message}", e)
             _selectedOperator.value = operator
         }
+        return selectionId
     }
 
-    fun clearSelection() {
+    fun clearSelection(selectionId: Long? = null) {
+        if (selectionId != null && selectionId != selectionSequence.get()) return
         selectionSequence.incrementAndGet()
         _selectedOperator.value = null
         _currentSession.value = null
@@ -466,10 +468,10 @@ ${text}"""
         }
     }
 
-    fun saveVoiceExchange(userText: String, operatorText: String, source: String) {
-        val session = _currentSession.value ?: return
+    fun saveVoiceExchange(sessionId: String, userText: String, operatorText: String, source: String) {
         if (userText.isBlank() || operatorText.isBlank()) return
         viewModelScope.launch {
+            val session = repository.getSession(sessionId) ?: return@launch
             val now = System.currentTimeMillis()
             repository.sendMessage(session.id, ChatMessage(id = repository.getNextMessageId(), sessionId = session.id, senderName = "我", content = userText, type = source, mode = _currentMode.value, isMe = true, timestamp = now))
             repository.sendMessage(session.id, ChatMessage(id = repository.getNextMessageId(), sessionId = session.id, senderName = session.operatorName, content = operatorText, type = "text", mode = _currentMode.value, isMe = false, timestamp = now + 1))
@@ -638,6 +640,7 @@ ${text}"""
 
     fun cancelSessionRequests(sessionId: String) {
         sessionGenerations.merge(sessionId, 1L) { old, increment -> old + increment }
+        pendingUserMessageIds.remove(sessionId)
         chatAiJobs.remove(sessionId)?.cancel()
         activeRequestBySession.remove(sessionId)
         _loadingSessions.update { it - sessionId }
@@ -658,10 +661,13 @@ ${text}"""
     fun sendMessage() {
         if (DEBUG) dumpDebugState()
         var text = _inputText.value.trim()
-        val session = _currentSession.value ?: return
+        val session = _currentSession.value ?: run {
+            onShowToast("聊天正在恢复，请稍后再试")
+            return
+        }
         if (text.isEmpty()) return
-        if (sharedUtils.getApiKey().isBlank()) {
-            onShowToast("请先在设置中配置 API Key")
+        sharedUtils.chatConfigurationError()?.let { error ->
+            onShowToast(error)
             return
         }
         _inputText.value = ""
@@ -680,6 +686,7 @@ ${text}"""
                     id = msgId, sessionId = session.id,
                     senderName = "我", content = text, type = "text", mode = _currentMode.value, isMe = true
                 ))
+                pendingUserMessageIds.computeIfAbsent(session.id) { ConcurrentHashMap.newKeySet() }.add(msgId)
                 // A new user message is activity even when this session is currently open.
                 // Do not rely on unread state to restore a session removed from the home page.
                 onUnhideSession(session.id)
@@ -688,23 +695,26 @@ ${text}"""
                 DebugLogger.log("Chat/DB", "AI消息ID已获取, aiMsgId=$aiMsgId")
                 aiMutexFor(session.id).lock()
                 mutexLocked = true
-                if (absorbedUserMessageIds.remove(msgId)) return@launch
                 if ((sessionGenerations[session.id] ?: 0L) != generation) return@launch
                 chatAiJobs[session.id] = coroutineContext[Job]!!
                 beginLoading(session.id, requestId)
                 // Allow a short natural follow-up before creating this response batch.
                 delay(250)
+                val pendingIds = pendingUserMessageIds[session.id].orEmpty()
+                if (msgId !in pendingIds) return@launch
+                val candidateIds = pendingIds.sorted().take(MAX_MERGED_USER_MESSAGES)
+                if (candidateIds.firstOrNull() != msgId) return@launch
                 val batchMessages = repository.getMessagesSync(session.id)
                     .asSequence()
-                    .filter { it.isMe && it.type == "text" && it.mode == mode && it.id >= msgId }
-                    .take(MAX_MERGED_USER_MESSAGES)
+                    .filter { it.id in candidateIds }
+                    .sortedBy { it.id }
                     .fold(mutableListOf<ChatMessage>()) { acc, message ->
                         if (acc.isEmpty() || acc.sumOf { it.content.length } + message.content.length <= MAX_MERGED_USER_CHARS) acc += message
                         acc
                     }
                 val batchIds = batchMessages.map { it.id }.ifEmpty { listOf(msgId) }
+                pendingUserMessageIds[session.id]?.removeAll(batchIds.toSet())
                 if (batchIds.size > 1) {
-                    absorbedUserMessageIds.addAll(batchIds.drop(1))
                     val combined = batchMessages.mapIndexed { index, message -> "[${index + 1}] ${message.content}" }.joinToString("\n")
                     text = "用户连续补充了以下消息，请按顺序视为同一轮表达并综合回应：\n$combined"
                 }
@@ -829,7 +839,7 @@ ${recentDialogues}
                             val currentDate = sharedUtils.beijingSdf("yyyyMMdd").format(java.util.Date())
                             operatorStateUpdater.updateOperatorIntimacy(session.operatorId, affectionMod.coerceIn(0, 4))
                             settings.grantDailyLmb(currentDate, 10)
-                            decrementHypnosis()
+                            decrementHypnosis(session.operatorId)
                             val sessionCounter = settings.getSessionMessageCounter(session.id) + 1
                             settings.putSessionMessageCounter(session.id, sessionCounter)
                             if (sessionCounter >= shortTermThreshold && generateShortTermSummary(session)) {
@@ -894,9 +904,9 @@ ${recentDialogues}
             Log.w("RHODES_DEBUG", "[Vision] sendImageMessage: session is null"); onResult(false); return
         }
         Log.d("RHODES_DEBUG", "[Vision] sendImageMessage: sessionId=${session.id} hasCaption=${caption.isNotBlank()}")
-        if (sharedUtils.getApiKey().isBlank()) {
-            Log.w("RHODES_DEBUG", "[Vision] API Key 为空")
-            onShowToast("请先在设置中配置 API Key")
+        sharedUtils.chatConfigurationError()?.let { error ->
+            Log.w("RHODES_DEBUG", "[Vision] 聊天配置无效: $error")
+            onShowToast(error)
             onResult(false)
             return
         }
@@ -1364,8 +1374,43 @@ ${recentDialogues}
         chatAiJobs[session.id] = job
     }
 
-    fun setHypnosis(command: String) { _hypnosisCommand.value = command; _hypnosisRounds.value = 10; settings.hypnosisCmd = command; settings.hypnosisRound = 10 }
-    fun decrementHypnosis() { if (_hypnosisRounds.value > 0) _hypnosisRounds.value = _hypnosisRounds.value - 1; settings.hypnosisRound = _hypnosisRounds.value }
+    fun setHypnosis(command: String) {
+        _hypnosisCommand.value = command
+        _hypnosisRounds.value = 10
+        persistHypnosis()
+    }
+
+    fun cancelHypnosis() {
+        _hypnosisCommand.value = ""
+        _hypnosisRounds.value = 0
+        persistHypnosis()
+    }
+
+    fun decrementHypnosis(operatorId: String? = null) {
+        val targetOperatorId = operatorId ?: _selectedOperator.value?.id ?: return
+        val roundsKey = "hypnosis_round_$targetOperatorId"
+        val commandKey = "hypnosis_cmd_$targetOperatorId"
+        val rounds = (settings.getInt(roundsKey, 0) - 1).coerceAtLeast(0)
+        val command = if (rounds > 0) settings.getString(commandKey, "") else ""
+        settings.putInt(roundsKey, rounds)
+        settings.putString(commandKey, command)
+        if (_selectedOperator.value?.id == targetOperatorId) {
+            _hypnosisRounds.value = rounds
+            _hypnosisCommand.value = command
+            settings.hypnosisRound = rounds
+            settings.hypnosisCmd = command
+        }
+    }
+
+    private fun persistHypnosis() {
+        settings.hypnosisCmd = _hypnosisCommand.value
+        settings.hypnosisRound = _hypnosisRounds.value
+        _selectedOperator.value?.id?.let { operatorId ->
+            settings.putString("hypnosis_cmd_$operatorId", _hypnosisCommand.value)
+            settings.putInt("hypnosis_round_$operatorId", _hypnosisRounds.value)
+        }
+    }
+
     fun loadHypnosis() { _hypnosisCommand.value = settings.hypnosisCmd; _hypnosisRounds.value = settings.hypnosisRound }
 
     fun generateInspirations(callback: (List<String>) -> Unit) {
@@ -1491,9 +1536,9 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
     }
 
     /** A compact, private-chat-compatible context for calls without replaying the full prompt. */
-    suspend fun buildVoiceContext(userText: String): String {
-        val session = _currentSession.value ?: return "无"
-        val op = _selectedOperator.value
+    suspend fun buildVoiceContext(sessionId: String, userText: String): String {
+        val session = repository.getSession(sessionId) ?: return "无"
+        val op = appState.operators.value.find { it.id == session.operatorId }
         val recent = repository.getMessagesSync(session.id).takeLast(4)
             .joinToString("\n") { "${if (it.isMe) "用户" else session.operatorName}：${it.content.take(100)}" }
         val recallQuery = (recent + "\n" + userText).take(700)

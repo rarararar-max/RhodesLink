@@ -1510,6 +1510,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     fun continueAiMessage(msgId: Long) = chatViewModel.continueAiMessage(msgId)
 
     fun setHypnosis(command: String) = chatViewModel.setHypnosis(command)
+    fun cancelHypnosis() = chatViewModel.cancelHypnosis()
     fun decrementHypnosis() = chatViewModel.decrementHypnosis()
     fun loadHypnosis() = chatViewModel.loadHypnosis()
 

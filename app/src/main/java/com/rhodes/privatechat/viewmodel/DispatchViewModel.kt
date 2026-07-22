@@ -10,6 +10,7 @@ import com.rhodes.privatechat.viewmodel.shared.AppStateHolder
 import com.rhodes.privatechat.viewmodel.shared.OperatorStateUpdater
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.viewmodel.shared.SharedUtils
+import com.rhodes.privatechat.viewmodel.shared.PromptTemplates
 import com.rhodes.privatechat.viewmodel.shared.UserProfile
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -50,6 +51,11 @@ class DispatchViewModel(
     private val finishingIds = ConcurrentHashMap<String, Boolean>()
     private val generatingSegments = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
+    private fun dispatchPrompt(mode: String, values: Map<String, String>): String {
+        val saved = settings.getString("prompt_dispatch_$mode", "").orEmpty()
+        return sharedUtils.applyTemplate(saved.ifBlank { PromptTemplates.get("dispatch", mode) }, values)
+    }
+
     private fun compactLogChain(log: String): String {
         if (log.length <= MAX_DISPATCH_LOG_CHARS) return log
         val head = log.take(6_000).trimEnd()
@@ -83,36 +89,12 @@ class DispatchViewModel(
             try {
                 val dMn = settings.dispatchMinChars; val dMx = settings.dispatchMaxChars
                 val recentPlot = logChain.takeLast(900).ifBlank { logSummary.takeLast(300) }
-                val prompt = """
-你是罗德岛的战术记录员，也是冒险小说作家。为进行中的派遣行动续写故事。
-
-续写派遣冒险的第${roundNum}轮过程日志。
-
-【派遣信息】
-任务类型：${taskType}
-预算等级：${budgetLevel}（低预算事件倾向危险和损失，高预算倾向顺利和意外收获）
-任务总览：${logSummary.take(200)}
-
-【最近剧情】
-${recentPlot}
-
-【成员档案】
-${profiles}
-
-【写作要求】
-- ${dMn}~${dMx}字，第三人称叙事，承接前情，剧情连贯
-- 鼓励出现一个具体事件（遭遇敌人、发现遗迹、天气突变等），也可延续上一轮的张力（追踪、等待、谈判中）
-- 所有成员必须被提及，名字和人设必须与前文一致
-
-【人称约束】
-- 叙述文字使用第三人称，不从任何角色第一人称视角讲述
-- 角色台词可以自然使用"我""你"，但叙述者不要使用"我""我们"代指小队
-
-【格式约束】
-- 只输出叙事文本，不要输出JSON、格式标记、Markdown
-
-直接输出过程叙事。
-""".trimIndent()
+                val prompt = dispatchPrompt("progress", mapOf(
+                    "TASK_TYPE" to taskType, "BUDGET_LEVEL" to budgetLevel,
+                    "DISPATCH_ROUND" to roundNum.toString(), "DISPATCH_SUMMARY" to logSummary.take(200),
+                    "RECENT_PLOT" to recentPlot, "MEMBER_PROFILES" to profiles,
+                    "DISPATCH_MIN_CHARS" to dMn.toString(), "DISPATCH_MAX_CHARS" to dMx.toString()
+                ))
                 DebugLogger.log("Dispatch/AI", "过程段请求: id=$dispatchId, 第${roundNum}轮, prompt长度=${prompt.length}")
                 val rawResult = withTimeout(20_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Dispatch") }
                 sharedUtils.trackTokens("dispatch", prompt, rawResult)
@@ -281,54 +263,13 @@ ${profiles}
                 val dispatch = repository.getDispatch(dispatchId) ?: return Pair(0, 0)
                 if (dispatch.status != "active" || dispatch.endTime > 0) return Pair(0, 0)
                 val dMn = settings.dispatchMinChars; val dMx = settings.dispatchMaxChars
-                val prompt = """
-你是罗德岛的战术记录员，也是冒险小说作家。为即将结束的派遣行动撰写结局。
-
-【派遣信息】
-任务类型：${taskType}
-耗时：${duration}小时
-投入预算：${budget}龙门币
-小队成员：${names}（共${memberCount}人，所有成员必须在结局中提及归队情况）
-
-【完整日志摘要】
-${dispatch.logChain.take(800)}
-
-【最近过程片段】
-${dispatch.logChain.takeLast(1500)}
-
-【成员档案】
-${profiles}
-
-【写作要求】
-- ${dMn}~${dMx + 50}字结局叙事
-- 描写小队返回罗德岛的场景：疲惫、收获、伤病、意外发现
-- 结局有情绪收束：疲惫后的欣慰、失落中的意外收获、一个被当宝贝捡回来的废品
-- 描述本次任务获得的所有物品
-- 必须承接“最近过程片段”里的关键事件，不要像另一个任务的结尾
-
-【人称约束 - 必须遵守】
-- 叙事视角始终为上帝视角/第三人称叙述者，不从任何一个角色的第一人称视角出发
-- 叙述文字使用角色名字称呼角色，禁止用"我""我们"代指小队
-- 角色台词可以自然使用"我""你"，但叙述者不要使用第一人称代指小队
-
-【输出格式】
-严格输出以下JSON对象：
-{
-  "ending_content": "结局叙事内容",
-  "items": ["获得的物品1"],
-  "currency_reward": 物品卖出后的龙门币总额,
-  "net_profit": 净收益
-}
-
-【字段解释】
-- ending_content：结局叙事文本
-- items：字符串数组
-- currency_reward：0~${budget * 10}之间的整数
-- net_profit：必须等于 currency_reward - ${budget}
-- items 写 1~6 个具体物品名，不要写长句
-
-直接输出JSON对象。
-""".trimIndent()
+                val prompt = dispatchPrompt("ending", mapOf(
+                    "TASK_TYPE" to taskType, "DURATION_HOURS" to duration.toString(), "BUDGET" to budget.toString(),
+                    "MEMBER_NAMES" to names, "MEMBER_COUNT" to memberCount.toString(),
+                    "DISPATCH_SUMMARY" to dispatch.logChain.take(800), "RECENT_PLOT" to dispatch.logChain.takeLast(1500),
+                    "MEMBER_PROFILES" to profiles, "DISPATCH_MIN_CHARS" to dMn.toString(),
+                    "DISPATCH_ENDING_MAX_CHARS" to (dMx + 50).toString(), "MAX_CURRENCY_REWARD" to (budget * 10).toString()
+                ))
                 DebugLogger.log("Dispatch/AI", "结局请求: id=$dispatchId")
                 val rawResult = withTimeout(20_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Dispatch") }
                 sharedUtils.trackTokens("dispatch", prompt, rawResult)
@@ -493,38 +434,11 @@ ${profiles}
         repeat(3) { attempt ->
             try {
                 val dMn = settings.dispatchMinChars; val dMx = settings.dispatchMaxChars
-                val prompt = """
-你是罗德岛的战术记录员，也是冒险小说作家。不是写任务报告，而是写生动的开局故事。
-
-为以下派遣任务撰写开局简报。
-
-【派遣信息】
-任务类型：${taskType}
-小队成员：${names}（共${memberCount}人，所有成员必须在故事中被提及并描写）
-投入预算：${budget}龙门币
-
-【成员档案】
-${profiles}
-
-【写作要求】
-- ${dMn}~${dMx}字，第三人称叙事，小说级描写
-- 描写出发前准备：采购装备、讨论策略、互相打趣
-- 为每个成员确立"本集特征"
-- 埋下悬念或意外发现：神秘信件、不明脚印、远处声响
-- 所有成员必须出场，名字和人设必须与档案一致
-
-【叙事质量】
-- 不是任务汇报，而是小说叙事。有场景、有情绪、有细节
-- 在细微动作和环境中透露角色关系和情感状态
-- 制造"可看性"——让读者能想象出这个场景的画面
-
-【人称约束 - 必须遵守】
-- 全文使用角色名字称呼角色（如"阿米娅""能天使"），禁止使用"我""我的""我们""咱们"等第一人称代词
-- 叙事视角始终为上帝视角/第三人称叙述者，不从任何一个角色的第一人称视角出发
-- 角色台词可以自然使用"我""你"，但叙述者不要使用第一人称代指小队
-
-直接输出开局叙事。
-""".trimIndent()
+                val prompt = dispatchPrompt("start", mapOf(
+                    "TASK_TYPE" to taskType, "MEMBER_NAMES" to names, "MEMBER_COUNT" to memberCount.toString(),
+                    "BUDGET" to budget.toString(), "MEMBER_PROFILES" to profiles,
+                    "DISPATCH_MIN_CHARS" to dMn.toString(), "DISPATCH_MAX_CHARS" to dMx.toString()
+                ))
                 Log.d(TAG, "[generateDispatchStartSuspend] AI请求 attempt=${attempt + 1}/3")
                 val rawResult = withTimeout(20_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Dispatch") }
                 sharedUtils.trackTokens("dispatch", prompt, rawResult)

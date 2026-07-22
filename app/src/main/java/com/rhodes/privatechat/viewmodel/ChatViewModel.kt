@@ -1380,15 +1380,7 @@ ${recentDialogues}
                     "director" -> "【导演模式】你可以用用户视角描述场景推进、动作或对白，但不要直接控制${op.name}的内心。"
                     else -> "【线上模式】你通过通讯终端与${op.name}文字聊天，建议必须像用户发出的短消息，不要写动作括号或旁白。"
                 }
-                val timeHint = when {
-                    hour in 6..8 -> "清晨"
-                    hour in 9..11 -> "上午"
-                    hour in 12..13 -> "中午"
-                    hour in 14..17 -> "下午"
-                    hour in 18..20 -> "晚上"
-                    hour in 21..23 -> "深夜"
-                    else -> "凌晨"
-                }
+                val timeHint = SharedUtils.getTimeOfDay(hour)
                 val prompt = """
 你是对话灵感生成器，请结合聊天上下文，为${profile.nickname}生成3条可以直接发送给${op.name}的回复话术。
 
@@ -1654,6 +1646,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             }
             .ifBlank { userContent }
         val groupContext = buildPrivateGroupContext(session.operatorId, userContent)
+        val stableImpression = memoryV2Pipeline.buildPrivateStableImpression(session.operatorId)
         val memoryV2Context = sharedUtils.trimContextBlock(
             memoryV2Pipeline.buildPrivateMemoryContext(
                 operatorId = session.operatorId,
@@ -1684,7 +1677,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             "OPERATOR_NAME" to (op?.name ?: session.operatorName), "OPERATOR_TITLE" to (op?.title ?: ""),
             "OPERATOR_PERSONA" to (op?.privatePrompt?.ifBlank { op.description } ?: ""),
             "OPERATOR_GENDER" to (op?.gender?.ifBlank { "" } ?: ""),
-            "LONG_TERM_IMPRESSION" to "",
+            "LONG_TERM_IMPRESSION" to stableImpression.ifBlank { "无" },
             "USER_PREFS" to "",
             "MEMORY_ANCHORS" to "",
             "MEMORY_V2_CONTEXT" to recallMemoryContext,
@@ -1741,6 +1734,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             |当前时间：${sharedUtils.beijingPromptTime()}
             |用户：${profile.nickname}，${profile.gender.ifBlank { "未知" }}，${profile.bio.ifBlank { "无" }}
             |共同经历引用风格：${when (settings.personalMemoryReferenceStyle) { "restrained" -> "只在用户明确问起或话题高度相关时提及"; "proactive" -> "话题有联系时可主动自然提及共同经历"; else -> "话题相关时自然提及共同经历，不要无故翻旧账" }}
+            |长期稳定印象：${stableImpression.ifBlank { "无" }}
             |临时指令：${listOf(analysisBlock, hypnosisBlock, transitionNotice).filter { it.isNotBlank() }.joinToString("\n").ifBlank { "无" }}
             |格式边界：${if (mode == "offline") "每轮必须至少有一条 dialogue 和一条 narration；旁白必须为第三人称，严禁含我、我们、咱、咱们、本人等第一人称；dialogue 可使用简短（）表达语气、表情或简单动作。" else if (mode == "director") "必须至少有一条 dialogue；旁白段数为 ${settings.narSegMin} 到 ${settings.narSegMax} 段。动作、表情、环境只写 narration；dialogue 只写说出口台词，禁止括号动作。" else "只允许第一人称 dialogue；每段必须像角色亲自发送的聊天文字。禁止 narration、动作、神态、环境、角色名加动作、他/她等第三人称叙述；禁止“角色名皱眉”“她沉默片刻”这类小说句式。"}
         """.trimMargin()

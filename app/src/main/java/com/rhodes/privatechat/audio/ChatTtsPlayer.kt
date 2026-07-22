@@ -11,12 +11,13 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-data class ChatSpeech(val text: String, val voiceId: String, val speed: Double = 1.0, val messageKey: String = "")
+data class ChatSpeech(val text: String, val voiceId: String, val speed: Double = 1.0, val volume: Float = 1f, val messageKey: String = "")
 
 /** Plays chat dialogue in order; automatic replies append while manual replay replaces the queue. */
 class ChatTtsPlayer(
@@ -74,17 +75,26 @@ class ChatTtsPlayer(
         worker = scope.launch {
             val gateway = createTtsGateway(settings.ttsBaseUrl, settings.ttsApiKey.ifBlank { settings.apiKey }, settings.ttsModelName, settings.ttsProvider)
             try {
-                while (true) {
-                    val speech = synchronized(lock) {
-                        if (workerGeneration != generation || pending.isEmpty()) null else pending.removeFirst()
-                    } ?: break
-                    try {
-                        _speakingMessageKey.value = speech.messageKey
-                        playSpeech(gateway, speech)
-                    } catch (e: kotlinx.coroutines.CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        onError("语音播放失败：${e.message?.take(40) ?: "未知错误"}")
+                supervisorScope {
+                    var prefetched = emptyList<kotlinx.coroutines.Deferred<PreparedSpeech>>()
+                    while (true) {
+                        if (prefetched.isEmpty()) {
+                            val next = synchronized(lock) { if (workerGeneration != generation) emptyList() else takePendingLocked(1) }
+                            prefetched = next.map { async { prepareSpeech(gateway, it) } }
+                        }
+                        val nextPrepared = prefetched.firstOrNull() ?: break
+                        prefetched = prefetched.drop(1)
+                        val fill = synchronized(lock) { if (workerGeneration != generation) emptyList() else takePendingLocked(1 - prefetched.size) }
+                        prefetched = prefetched + fill.map { async { prepareSpeech(gateway, it) } }
+                        try {
+                            val prepared = nextPrepared.await()
+                            _speakingMessageKey.value = prepared.speech.messageKey
+                            playPreparedSpeech(gateway, prepared)
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            onError("语音播放失败：${e.message?.take(40) ?: "未知错误"}")
+                        }
                     }
                 }
             } finally {
@@ -99,28 +109,38 @@ class ChatTtsPlayer(
         }
     }
 
-    private suspend fun playSpeech(gateway: com.rhodes.privatechat.shared.voice.TtsGateway, speech: ChatSpeech) = coroutineScope {
+    private fun takePendingLocked(count: Int): List<ChatSpeech> = buildList {
+        repeat(count) { pending.removeFirstOrNull()?.let(::add) }
+    }
+
+    private data class PreparedSpeech(val speech: ChatSpeech, val parts: List<String>, val firstAudio: ByteArray)
+
+    private suspend fun prepareSpeech(gateway: com.rhodes.privatechat.shared.voice.TtsGateway, speech: ChatSpeech): PreparedSpeech {
         val parts = splitSentences(speech.text)
-        var current = withTimeout(45_000) {
+        val firstAudio = withTimeout(45_000) {
             gateway.synthesize(TtsRequest(text = parts.first(), voiceId = speech.voiceId, speed = speech.speed))
-        }
-        for (index in parts.indices) {
-            val next = if (index + 1 < parts.size) async {
+        }.audioBytes ?: error("TTS 未返回音频")
+        return PreparedSpeech(speech, parts, firstAudio)
+    }
+
+    private suspend fun playPreparedSpeech(gateway: com.rhodes.privatechat.shared.voice.TtsGateway, prepared: PreparedSpeech) = coroutineScope {
+        var currentAudio = prepared.firstAudio
+        for (index in prepared.parts.indices) {
+            val nextAudio = if (index + 1 < prepared.parts.size) async {
                 withTimeout(45_000) {
-                    gateway.synthesize(TtsRequest(text = parts[index + 1], voiceId = speech.voiceId, speed = speech.speed))
-                }
+                    gateway.synthesize(TtsRequest(text = prepared.parts[index + 1], voiceId = prepared.speech.voiceId, speed = prepared.speech.speed))
+                }.audioBytes ?: error("TTS 未返回音频")
             } else null
-            val bytes = current.audioBytes ?: error("TTS 未返回音频")
+            val bytes = currentAudio
             val file = audio.saveTtsAudio(bytes) ?: error("无法保存 TTS 音频")
             var complete = false
             var success = false
-            audio.play(file.path) { played -> complete = true; success = played }
+            audio.play(file.path, prepared.speech.volume) { played -> complete = true; success = played }
             var waited = 0L
             while (!complete && waited < 90_000L) { delay(100); waited += 100 }
             audio.deleteAudio(file.path)
             if (!success) error("音频播放失败")
-            if (next == null) break
-            current = next.await()
+            if (nextAudio != null) currentAudio = nextAudio.await()
         }
     }
 

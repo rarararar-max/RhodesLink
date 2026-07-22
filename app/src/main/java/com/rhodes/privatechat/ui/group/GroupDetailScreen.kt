@@ -160,7 +160,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                     .filter { !it.isMe && !it.isSystem && !it.isNarration && it.timestamp >= enteredAt }
                     .mapNotNull { message ->
                         allOperators.find { it.name == message.senderName }?.takeIf { it.voiceName.isNotBlank() }?.let { op ->
-                            ChatSpeech(message.content, op.voiceName, op.voiceSpeed.toDoubleOrNull() ?: 1.0, "${message.originalMessageId}:${message.segmentIndex}:${message.id}")
+                            ChatSpeech(message.content, op.voiceName, op.voiceSpeed.toDoubleOrNull() ?: 1.0, settings.getOperatorVoiceVolume(op.id), "${message.originalMessageId}:${message.segmentIndex}:${message.id}")
                         }
                     }
                 if (speeches.isNotEmpty()) chatTtsPlayer.enqueue(speeches)
@@ -250,7 +250,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                         } else if (!settings.hasTtsConfiguration()) {
                             android.widget.Toast.makeText(ctx, "请先在模型设置中填写文字转语音模型和密钥。", android.widget.Toast.LENGTH_LONG).show()
                         } else {
-                            chatTtsPlayer.play(listOf(ChatSpeech(message.content, speaker.voiceName, speaker.voiceSpeed.toDoubleOrNull() ?: 1.0, "${message.originalMessageId}:${message.segmentIndex}:${message.id}")))
+                            chatTtsPlayer.play(listOf(ChatSpeech(message.content, speaker.voiceName, speaker.voiceSpeed.toDoubleOrNull() ?: 1.0, settings.getOperatorVoiceVolume(speaker.id), "${message.originalMessageId}:${message.segmentIndex}:${message.id}")))
                         }
                     },
                     speakingMessageKey = speakingMessageKey,

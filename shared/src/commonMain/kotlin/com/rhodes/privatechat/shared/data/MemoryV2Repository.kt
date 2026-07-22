@@ -166,6 +166,10 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
         db.memoryItemsQueries.updateMemoryItemVectorId(vectorId, updatedAt, id)
     }
 
+    suspend fun updateMemoryItemContent(id: Long, content: String, updatedAt: Long) = withContext(Dispatchers.Default) {
+        db.memoryItemsQueries.updateMemoryItemContent(content, updatedAt, id)
+    }
+
     suspend fun clearAllMemoryItemVectorIds() = withContext(Dispatchers.Default) {
         db.memoryItemsQueries.clearAllMemoryItemVectorIds()
     }

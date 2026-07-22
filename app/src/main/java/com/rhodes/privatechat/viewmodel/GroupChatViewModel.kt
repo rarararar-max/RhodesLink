@@ -29,6 +29,7 @@ import com.rhodes.privatechat.viewmodel.shared.MemorySurface
 import com.rhodes.privatechat.viewmodel.shared.MemoryV2Pipeline
 import com.rhodes.privatechat.viewmodel.shared.UnifiedMemoryContext
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -40,6 +41,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import java.io.IOException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -69,10 +71,16 @@ class GroupChatViewModel(
         private const val CHAT_PAGE_SIZE = 50L
         private const val MAX_MERGED_USER_MESSAGES = 2
         private const val MAX_MERGED_USER_CHARS = 600
+        // A WorkManager task can construct a second MainViewModel in this process.
+        // Auto scheduling must therefore be shared across all GroupChatViewModel instances.
+        private val autoChatGenerations = ConcurrentHashMap<String, Long>()
+        private val autoGroupChatJobs = ConcurrentHashMap<String, Job>()
+        private val autoGroupChatLock = Any()
+        private val activeAutoGroupRuns = ConcurrentHashMap<String, Long>()
+        private val autoGroupRunSequence = AtomicLong()
     }
 
-    private val autoChatGenerations = ConcurrentHashMap<String, Long>()
-    private val autoGroupChatJobs = ConcurrentHashMap<String, Job>()
+    private val autoLogInstanceId = Integer.toHexString(System.identityHashCode(this))
 
     private val groupActivityCache = ConcurrentHashMap<String, String>()
     private val _groupMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
@@ -111,10 +119,24 @@ class GroupChatViewModel(
     private val absorbedUserMessageIds = ConcurrentHashMap.newKeySet<Long>()
     private val groupGenerations = ConcurrentHashMap<String, Long>()
 
+    private fun logAutoInterval(groupId: String, event: String, details: String) {
+        Log.d("AutoGroupInterval", "AUTO_GROUP_INTERVAL vm=$autoLogInstanceId event=$event groupId=$groupId $details")
+    }
+
+    private fun nextAutoGroupGeneration(): Long = autoGroupRunSequence.incrementAndGet()
+
+    init {
+        logAutoInterval("all", "VM_CREATED", "thread=${Thread.currentThread().name}")
+    }
+
     private fun cancelGroupRequests(groupId: String) {
         groupGenerations.merge(groupId, 1L) { old, increment -> old + increment }
         groupAiJobs.remove(groupId)?.cancel()
-        autoGroupChatJobs.remove(groupId)?.cancel()
+        synchronized(autoGroupChatLock) {
+            autoChatGenerations[groupId] = nextAutoGroupGeneration()
+            activeAutoGroupRuns.remove(groupId)
+            autoGroupChatJobs.remove(groupId)?.cancel()
+        }
         setGroupLoading(groupId, false)
     }
 
@@ -288,6 +310,7 @@ class GroupChatViewModel(
 
     fun setAutoGroupChatEnabled(groupId: String, enabled: Boolean) {
         settings.putGroupAuto(groupId, enabled)
+        logAutoInterval(groupId, "SET_ENABLED", "enabled=$enabled autoAiEnabled=${settings.autoAiEnabled}")
         if (enabled && settings.autoAiEnabled) {
             autoRoundCounts[groupId] = 0
             if (autoGroupChatJobs[groupId]?.isActive == true) {
@@ -304,18 +327,27 @@ class GroupChatViewModel(
     }
 
     private fun startAutoGroupChat(groupId: String, groupName: String) {
-        val existing = autoGroupChatJobs[groupId]
-        if (existing?.isActive == true) {
-            DebugLogger.log("GroupChat/Auto", "跳过启动: id=$groupId, 已有活跃协程")
-            return
-        }
-        autoGroupChatJobs[groupId]?.cancel()
-        autoGroupChatJobs.remove(groupId)
-        val generation = (autoChatGenerations[groupId] ?: 0L) + 1L
-        autoChatGenerations[groupId] = generation
-        DebugLogger.log("GroupChat/Auto", "启动: id=$groupId, gen=$generation")
-        autoGroupChatJobs[groupId] = scope.launch {
-            try {
+        synchronized(autoGroupChatLock) {
+            val activeRun = activeAutoGroupRuns[groupId]
+            logAutoInterval(groupId, "START_ATTEMPT", "activeRun=$activeRun job=${autoGroupChatJobs[groupId]?.let(System::identityHashCode)}")
+            if (activeRun != null) {
+                logAutoInterval(groupId, "START_SKIPPED", "reason=active_run generation=$activeRun")
+                return
+            }
+            val existing = autoGroupChatJobs[groupId]
+            if (existing?.isActive == true) {
+                DebugLogger.log("GroupChat/Auto", "跳过启动: id=$groupId, 已有活跃协程")
+                logAutoInterval(groupId, "START_SKIPPED", "reason=active_job")
+                return
+            }
+            autoGroupChatJobs[groupId]?.cancel()
+            autoGroupChatJobs.remove(groupId)
+            val generation = nextAutoGroupGeneration()
+            autoChatGenerations[groupId] = generation
+            activeAutoGroupRuns[groupId] = generation
+            DebugLogger.log("GroupChat/Auto", "启动: id=$groupId, gen=$generation")
+            logAutoInterval(groupId, "START", "generation=$generation groupName=$groupName")
+            val job = scope.launch(start = CoroutineStart.LAZY) {
                 while (isAutoGroupChatEnabled(groupId)) {
                     val nextRound = (autoRoundCounts[groupId] ?: 0) + 1
                     val maxRounds = settings.groupAutoMaxRounds
@@ -332,6 +364,12 @@ class GroupChatViewModel(
                     val maxMs = settings.groupChatMaxInterval * 1000L
                     var interval = minMs + (Math.random() * (maxMs - minMs).coerceAtLeast(0L)).toLong()
                     DebugLogger.log("GroupChat/Auto", "第${nextRound}轮: id=$groupId, 等待${interval/1000}秒, gen=$generation")
+                    val waitStartedAt = System.currentTimeMillis()
+                    logAutoInterval(
+                        groupId,
+                        "INTERVAL_SELECTED",
+                        "generation=$generation round=$nextRound minMs=$minMs maxMs=$maxMs selectedMs=$interval startedAt=$waitStartedAt"
+                    )
                     val tickMs = 1000L
                     var remaining = interval
                     var elapsed = 0L
@@ -344,14 +382,26 @@ class GroupChatViewModel(
                         // Never fire earlier than a newly raised minimum while this timer is running.
                         val latestMinMs = settings.groupChatMinInterval * 1000L
                         if (interval < latestMinMs) {
+                            val previousInterval = interval
                             interval = latestMinMs
                             remaining = (interval - elapsed).coerceAtLeast(0L)
+                            logAutoInterval(
+                                groupId,
+                                "INTERVAL_RAISED",
+                                "generation=$generation round=$nextRound previousMs=$previousInterval latestMinMs=$latestMinMs elapsedMs=$elapsed remainingMs=$remaining"
+                            )
                         }
                     }
                     if (autoChatGenerations[groupId] != generation) break
                     // 等够间隔，发消息
                     autoRoundCounts[groupId] = nextRound
                     DebugLogger.log("GroupChat/Auto", "发消息: id=$groupId, round=$nextRound")
+                    val firedAt = System.currentTimeMillis()
+                    logAutoInterval(
+                        groupId,
+                        "MESSAGE_FIRED",
+                        "generation=$generation round=$nextRound selectedMs=$interval actualElapsedMs=${firedAt - waitStartedAt} firedAt=$firedAt"
+                    )
                     val session = repository.getSession(groupId) ?: break
                     val mode = getGroupChatMode(groupId)
                     var responseCompleted = false
@@ -360,22 +410,37 @@ class GroupChatViewModel(
                         delay(100)
                     }
                 }
-            } finally {
-                if (autoChatGenerations[groupId] == generation) {
-                    autoGroupChatJobs.remove(groupId)
+            }
+            // Register before dispatching so concurrent refresh calls observe this timer.
+            autoGroupChatJobs[groupId] = job
+            logAutoInterval(groupId, "JOB_REGISTERED", "generation=$generation job=${System.identityHashCode(job)}")
+            job.invokeOnCompletion {
+                synchronized(autoGroupChatLock) {
+                    if (autoGroupChatJobs[groupId] === job) {
+                        autoGroupChatJobs.remove(groupId)
+                    } else {
+                        logAutoInterval(groupId, "JOB_CLEANUP_SKIPPED", "generation=$generation job=${System.identityHashCode(job)} currentJob=${autoGroupChatJobs[groupId]?.let(System::identityHashCode)}")
+                    }
+                    if (activeAutoGroupRuns[groupId] == generation) activeAutoGroupRuns.remove(groupId)
+                    logAutoInterval(groupId, "FINISHED", "generation=$generation")
                 }
             }
+            job.start()
         }
     }
 
     fun resetAutoGroupChatTimer(groupId: String) {
         DebugLogger.log("GroupChat/Auto", "重置计时器: id=$groupId")
+        logAutoInterval(groupId, "RESET", "reason=user_message autoEnabled=${isAutoGroupChatEnabled(groupId)}")
         lastUserMsgTime[groupId] = System.currentTimeMillis()
         autoRoundCounts[groupId] = 0
         if (isAutoGroupChatEnabled(groupId)) {
-            autoChatGenerations[groupId] = (autoChatGenerations[groupId] ?: 0L) + 1L
-            autoGroupChatJobs[groupId]?.cancel()
-            autoGroupChatJobs.remove(groupId)
+            synchronized(autoGroupChatLock) {
+                autoChatGenerations[groupId] = nextAutoGroupGeneration()
+                activeAutoGroupRuns.remove(groupId)
+                autoGroupChatJobs[groupId]?.cancel()
+                autoGroupChatJobs.remove(groupId)
+            }
             scope.launch {
                 val session = repository.getSession(groupId)
                 if (session != null) startAutoGroupChat(groupId, session.operatorName)
@@ -387,16 +452,23 @@ class GroupChatViewModel(
         settings.getGroupMode(groupId)
 
     fun stopAutoGroupChat(groupId: String) {
-        autoChatGenerations[groupId] = (autoChatGenerations[groupId] ?: 0L) + 1L
-        autoGroupChatJobs[groupId]?.cancel()
-        autoGroupChatJobs.remove(groupId)
-        autoRoundCounts.remove(groupId)
+        synchronized(autoGroupChatLock) {
+            logAutoInterval(groupId, "STOP", "generation=${autoChatGenerations[groupId] ?: 0L}")
+            autoChatGenerations[groupId] = nextAutoGroupGeneration()
+            activeAutoGroupRuns.remove(groupId)
+            autoGroupChatJobs[groupId]?.cancel()
+            autoGroupChatJobs.remove(groupId)
+            autoRoundCounts.remove(groupId)
+        }
     }
 
     fun stopAllAutoGroupChats() {
-        autoChatGenerations.clear()
-        autoGroupChatJobs.values.forEach { it.cancel() }
-        autoGroupChatJobs.clear()
+        synchronized(autoGroupChatLock) {
+            autoChatGenerations.keys.forEach { groupId -> autoChatGenerations[groupId] = nextAutoGroupGeneration() }
+            activeAutoGroupRuns.clear()
+            autoGroupChatJobs.values.forEach { it.cancel() }
+            autoGroupChatJobs.clear()
+        }
     }
 
     fun refreshAutoGroupChats() {
@@ -404,11 +476,14 @@ class GroupChatViewModel(
             stopAllAutoGroupChats()
             return
         }
+        val caller = Throwable().stackTrace.drop(1).firstOrNull()?.let { "${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}" } ?: "unknown"
+        logAutoInterval("all", "REFRESH_REQUESTED", "caller=$caller")
         scope.launch {
             repository.getAllSessionsSync()
                 .filter { it.operatorId.startsWith("group_") || it.operatorId.startsWith("group") }
                 .forEach { group ->
                     if (settings.getGroupAuto(group.id)) {
+                        logAutoInterval(group.id, "REFRESH", "autoEnabled=true")
                         startAutoGroupChat(group.id, group.operatorName)
                     } else {
                         stopAutoGroupChat(group.id)
@@ -673,22 +748,42 @@ class GroupChatViewModel(
                 val promptText = apiMessages.firstOrNull()?.content ?: ""
                 if (DEBUG) sharedUtils.logAiCall("GroupChat", promptText, "(requesting...)", apiMessages)
                 val validSpeakers = activeMembers.map { it.name }.toSet() + "旁白"
-                var rawBase = ""
-                var filtered: List<GroupMsgResult> = emptyList()
-                var requestMessages = apiMessages.toList()
-                var formatChecked = false
-                repeat(1) {
-                    if (filtered.isNotEmpty()) return@repeat
-                    rawBase = withTimeout(90_000) { sharedUtils.chat(requestMessages, "GroupChat") }.trim()
+                suspend fun generateGroupReply(messages: List<AiMessage>, tag: String): String {
+                    return withTimeout(90_000) { sharedUtils.chat(messages, tag) }.trim()
                         .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
-                    sharedUtils.trackTokens("group", requestMessages, rawBase)
-                    if (DEBUG) sharedUtils.logAiCall("GroupChat", promptText, rawBase, requestMessages)
-                    val results = extractGroupResults(rawBase)
-                    filtered = normalizeGroupResults(results, validSpeakers, mode)
-                    if (!isCompleteGroupReply(filtered)) filtered = emptyList()
-                    if (filtered.isEmpty() && !formatChecked) {
-                        formatChecked = true
-                        DebugLogger.trace("AI/GroupFormatRepair", "ORIGINAL_UNUSABLE_RESPONSE\n$rawBase")
+                }
+                fun normalizeReply(raw: String): List<GroupMsgResult> =
+                    normalizeGroupResults(extractGroupResults(raw), validSpeakers, mode)
+                        .takeIf(::isCompleteGroupReply)
+                        .orEmpty()
+
+                var rawBase = generateGroupReply(apiMessages, "GroupChat")
+                sharedUtils.trackTokens("group", apiMessages, rawBase)
+                if (DEBUG) sharedUtils.logAiCall("GroupChat", promptText, rawBase, apiMessages)
+                var filtered = normalizeReply(rawBase)
+                var needsFormatRepair = !isStrictGroupJson(rawBase) && filtered.isNotEmpty()
+
+                if (needsFormatRepair) {
+                    DebugLogger.trace("AI/GroupFormatRepair", "ORIGINAL_MALFORMED_RESPONSE\n$rawBase")
+                    filtered = correctGroupFormat(rawBase, activeMembers.map { it.name }, mode)
+                } else if (filtered.isEmpty()) {
+                    // Empty after strict parsing means the creative reply lacks usable group content.
+                    // Regenerate once instead of asking a format-only model to invent missing content.
+                    DebugLogger.trace("AI/GroupContentRetry", "ORIGINAL_UNUSABLE_RESPONSE\n$rawBase")
+                    val retryMessages = apiMessages.mapIndexed { index, message ->
+                        if (index == 0 && message.role == "system") message.copy(content = message.content + """
+
+                            |【重新生成要求】
+                            |- 上一版没有可展示的有效群成员台词。请重新生成完整群聊，不要沿用残缺内容。
+                            |- 只能使用当前成员；至少一名成员必须有非空台词；只输出 JSON 数组。
+                        """.trimMargin()) else message
+                    }
+                    rawBase = generateGroupReply(retryMessages, "GroupChatContentRetry")
+                    sharedUtils.trackTokens("group", retryMessages, rawBase)
+                    filtered = normalizeReply(rawBase)
+                    needsFormatRepair = !isStrictGroupJson(rawBase) && filtered.isNotEmpty()
+                    if (needsFormatRepair) {
+                        DebugLogger.trace("AI/GroupFormatRepair", "RETRY_MALFORMED_RESPONSE\n$rawBase")
                         filtered = correctGroupFormat(rawBase, activeMembers.map { it.name }, mode)
                     }
                 }
@@ -1119,6 +1214,13 @@ $members
         } catch (_: Exception) {}
 
         return emptyList()
+    }
+
+    private fun isStrictGroupJson(raw: String): Boolean = try {
+        val cleaned = sharedUtils.aiService.cleanJson(raw)
+        json.decodeFromString<List<GroupMsgResult>>(cleaned).isNotEmpty()
+    } catch (_: Exception) {
+        false
     }
 
     private suspend fun generateGroupDailySummary(groupSessionId: String, groupName: String) {

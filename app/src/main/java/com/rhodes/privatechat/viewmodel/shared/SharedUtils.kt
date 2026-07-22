@@ -20,6 +20,16 @@ class SharedUtils(
     companion object {
         const val DEBUG = false
         private const val RECENT_SOCIAL_WINDOW_MS = 3L * 86_400_000L
+
+        fun getTimeOfDay(hour: Int): String = when {
+            hour in 5..7 -> "清晨"
+            hour in 8..11 -> "上午"
+            hour in 12..13 -> "中午"
+            hour in 14..17 -> "下午"
+            hour in 18..21 -> "晚上"
+            hour in 22..23 -> "深夜"
+            else -> "凌晨"
+        }
     }
 
     /** Keeps public social context small: specified people, the last three days, and related items only. */
@@ -288,16 +298,6 @@ class SharedUtils(
         val calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai")).apply { timeInMillis = timestamp }
         val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
         return "${beijingSdf("yyyy-MM-dd HH:mm").format(java.util.Date(timestamp))}（${getTimeOfDay(hour)}）"
-    }
-
-    fun getTimeOfDay(hour: Int): String = when {
-        hour in 5..7 -> "清晨"
-        hour in 8..11 -> "上午"
-        hour in 12..13 -> "中午"
-        hour in 14..17 -> "下午"
-        hour in 18..21 -> "晚上"
-        hour in 22..23 -> "深夜"
-        else -> "凌晨"
     }
 
     fun parseOnlineEmotion(text: String): Pair<String, String> {

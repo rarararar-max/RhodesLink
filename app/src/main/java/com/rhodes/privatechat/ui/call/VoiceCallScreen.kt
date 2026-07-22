@@ -143,7 +143,7 @@ fun VoiceCallScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
                 if (audioFile != null) {
                     var done = false
                     Log.d("RHODES_AUDIO", "开始播放: ${audioFile.path}")
-                    audio.play(audioFile.path) { done = true }
+                    audio.play(audioFile.path, settings.getOperatorVoiceVolume(operator.id)) { done = true }
                     var waited = 0L
                     while (!done && waited < 90_000L) { delay(120); waited += 120 }
                     Log.d("RHODES_AUDIO", "播放完成: waited=${waited}ms")

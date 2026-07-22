@@ -128,7 +128,7 @@ class LocalAudioController(private val context: Context) {
         runCatching { File(path.removePrefix("file://")).delete() }
     }
 
-    fun play(path: String, onComplete: ((Boolean) -> Unit)? = null) {
+    fun play(path: String, volume: Float = 1f, onComplete: ((Boolean) -> Unit)? = null) {
         stopPlayback()
         val file = File(path.removePrefix("file://"))
         runCatching {
@@ -141,6 +141,7 @@ class LocalAudioController(private val context: Context) {
                     @Suppress("DEPRECATION") setAudioStreamType(AudioManager.STREAM_MUSIC)
                 }
                 setDataSource(file.absolutePath)
+                setVolume(volume.coerceIn(0f, 1f), volume.coerceIn(0f, 1f))
                 prepareAsync()
                 setOnPreparedListener { it.start() }
                 setOnCompletionListener { finishPlayback(true) }

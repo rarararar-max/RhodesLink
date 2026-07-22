@@ -309,6 +309,16 @@ class MemoryV2Pipeline(
         ).filterNotNull().joinToString("\n")
     }
 
+    suspend fun buildPrivateStableImpression(operatorId: String, limit: Int = 3): String {
+        val now = System.currentTimeMillis()
+        val items = repository.getActiveMemoryItemsByLevel("operator", operatorId, MemoryLevel.L3, now)
+            .take(limit)
+        return items.joinToString("\n") { "- ${it.content.take(180)}" }
+            .takeIf { it.isNotBlank() }
+            ?.let { "【该角色对用户的长期稳定印象】\n$it" }
+            .orEmpty()
+    }
+
     suspend fun buildPublicMemoryContext(query: String, limit: Int = 3): String =
         buildOwnerMemoryContext("global", "public", limit, 0, 0, query)
 

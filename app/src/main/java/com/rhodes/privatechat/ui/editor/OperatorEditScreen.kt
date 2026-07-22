@@ -113,6 +113,7 @@ fun OperatorEditScreen(
     var description by remember { mutableStateOf(operator?.description ?: "") }
     var userRelation by remember { mutableStateOf(operator?.userRelation ?: "") }
     var voiceName by remember { mutableStateOf(operator?.voiceName ?: "") }
+    var voiceVolume by remember { mutableFloatStateOf(settings.getOperatorVoiceVolume(operator?.id ?: name.lowercase())) }
     var relationships by remember { mutableStateOf<List<RelationshipEntity>>(emptyList()) }
     var initialRelationships by remember { mutableStateOf<List<RelationshipEntity>>(emptyList()) }
     var showAddPicker by remember { mutableStateOf(false) }
@@ -153,6 +154,7 @@ fun OperatorEditScreen(
         groupSlotDrafts.forEach { (slot, content) -> savePromptSlot("group", slot, content) }
         settings.putInt(activeSlotKey("private"), privateSlot)
         settings.putInt(activeSlotKey("group"), groupSlot)
+        settings.putOperatorVoiceVolume(operator?.id ?: name.lowercase(), voiceVolume)
         viewModel.saveOperator(
             id = operator?.id ?: name.lowercase(),
             name = name, title = title,
@@ -180,6 +182,7 @@ fun OperatorEditScreen(
         description != (operator?.description ?: "") ||
         userRelation != (operator?.userRelation ?: "") ||
         voiceName != (operator?.voiceName ?: "") ||
+        voiceVolume != settings.getOperatorVoiceVolume(operator?.id ?: name.lowercase()) ||
         relationships != initialRelationships || slotDirty
     val requestBack = { if (hasUnsavedChanges) showUnsavedConfirm = true else onBack() }
 
@@ -278,6 +281,17 @@ fun OperatorEditScreen(
                     )
                 }
                 Spacer(modifier = Modifier.height(8.dp))
+                LabeledField("播放音量 (${(voiceVolume * 100).toInt()}%)") {
+                    Slider(
+                        value = voiceVolume,
+                        onValueChange = { voiceVolume = it },
+                        valueRange = 0.2f..1.0f,
+                        steps = 15,
+                        colors = androidx.compose.material3.SliderDefaults.colors(thumbColor = Blue400, activeTrackColor = Blue400)
+                    )
+                }
+                Text("影响私聊、群聊、陪睡和语音通话；100% 为默认和最大音量。", fontSize = 12.sp, color = TextSecondary)
+                Spacer(modifier = Modifier.height(8.dp))
                 Button(
                     onClick = {
                         scope.launch {
@@ -302,6 +316,7 @@ fun OperatorEditScreen(
                                     file.writeBytes(audioBytes)
                                     android.media.MediaPlayer().apply {
                                         setDataSource(file.absolutePath)
+                                        setVolume(voiceVolume, voiceVolume)
                                         prepare()
                                         start()
                                         setOnCompletionListener { release(); file.delete() }

@@ -5,6 +5,7 @@ import android.content.pm.ActivityInfo
 import android.util.Log
 import android.view.WindowManager
 import android.widget.Toast
+import com.rhodes.privatechat.viewmodel.shared.SharedUtils
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -176,7 +177,7 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, onBack: () -> 
         if (file != null) {
             visualState = SleepVisualState.Talking
             Log.d("RHODES_AUDIO", "开始播放: ${file.path}")
-            audio.play(file.path) {
+            audio.play(file.path, settings.getOperatorVoiceVolume(operator.id)) {
                 audio.deleteAudio(file.path)
                 callState = com.rhodes.privatechat.shared.call.CallState.Listening
                 visualState = SleepVisualState.Idle
@@ -669,9 +670,7 @@ private fun formatClockTime(timeMillis: Long): String {
     val calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai")).apply { timeInMillis = timeMillis }
     val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
     val time = SimpleDateFormat("HH:mm", Locale.CHINA).apply { timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai") }.format(Date(timeMillis))
-    val period = when (hour) {
-        in 5..7 -> "清晨"; in 8..11 -> "上午"; in 12..13 -> "中午"; in 14..17 -> "下午"; in 18..21 -> "晚上"; in 22..23 -> "深夜"; else -> "凌晨"
-    }
+    val period = SharedUtils.getTimeOfDay(hour)
     return "$time（$period）"
 }
 private fun formatAlarmCompact(targetAtMillis: Long): String = "闹钟 ${formatClockTime(targetAtMillis)} · ${formatRemainingTime(targetAtMillis)}"

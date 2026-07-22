@@ -339,7 +339,7 @@ class MainViewModel(
         viewModelScope.launch { recoverDispatches() }
         // 每日龙门币刷新（麻将干员保底）
         viewModelScope.launch { refreshDailyLmb() }
-        // 定期清理过期记忆、锚点等（每6小时）
+        // 每天执行一次自动保留期清理；启动时仍会先执行一次。
         viewModelScope.launch {
             while (true) {
                 dataViewModel.cleanupAllExpired()
@@ -348,7 +348,7 @@ class MainViewModel(
                 for (op in _operators.value) {
                     try { repository.enforceAnchorRetain(op.id, 200) } catch (_: Exception) { }
                 }
-                delay(6 * 60 * 60 * 1000L)
+                delay(24 * 60 * 60 * 1000L)
             }
         }
         // 派遣后台监控（每分钟检查，推进段落或结算超时派遣）
@@ -796,6 +796,42 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
 
     suspend fun getAllUnifiedMemoryItems() = repository.getAllMemoryItems()
 
+    suspend fun getCurrentImpressions(): List<MemoryItem> {
+        migrateLegacyImpressions()
+        val now = System.currentTimeMillis()
+        return repository.getAllMemoryItems().filter {
+            it.ownerType == "operator" && it.memoryLevel == MemoryLevel.L3 &&
+                it.status == "active" && it.expiresAt > now && it.content.isNotBlank()
+        }
+    }
+
+    private suspend fun migrateLegacyImpressions() {
+        repository.getAllLongTermImpressions().forEach { legacy ->
+            if (legacy.content.isBlank()) return@forEach
+            val existing = repository.getMemoryItemsByLevel("operator", legacy.operatorId, MemoryLevel.L3)
+                .any { it.status == "active" }
+            if (!existing) {
+                repository.insertMemoryItem(MemoryItem(
+                    ownerType = "operator", ownerId = legacy.operatorId, memoryLevel = MemoryLevel.L3,
+                    memoryType = "stable_impression", sourceKind = MemorySourceKind.MANUAL_MEMORY,
+                    content = legacy.content.take(500), importance = 80, privacy = "private",
+                    createdAt = legacy.createdAt, updatedAt = legacy.createdAt
+                ))
+            }
+        }
+    }
+
+    suspend fun updateCurrentImpression(item: MemoryItem, content: String) {
+        item.vectorId.takeIf { it.isNotBlank() }?.let { memoryVectorService?.deleteMemory(it) }
+        val now = System.currentTimeMillis()
+        repository.updateMemoryItemContent(item.id, content.trim().take(500), now)
+        repository.updateMemoryItemVectorId(item.id, "", now)
+    }
+
+    suspend fun deleteAllCurrentImpressions() {
+        getCurrentImpressions().forEach { deleteOperatorMemoryItem(it) }
+    }
+
     suspend fun getOperatorVectorMemories(operatorId: String) = memoryVectorService?.listMemories("operator", operatorId).orEmpty()
 
     suspend fun deleteOperatorMemoryItem(item: MemoryItem) {
@@ -1143,7 +1179,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     fun getModelName(): String = sharedUtils.getModelName()
     fun getCustomUrl(): String = sharedUtils.getCustomUrl()
 
-    private fun getTimeOfDay(hour: Int): String = sharedUtils.getTimeOfDay(hour)
+    private fun getTimeOfDay(hour: Int): String = SharedUtils.getTimeOfDay(hour)
 
     private suspend fun getRecentPosts(operatorId: String, limit: Int = 3): String =
         sharedUtils.getRecentPosts(operatorId, limit)
@@ -1418,9 +1454,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     private fun commentTimeReplacements(now: Long = System.currentTimeMillis()): Map<String, String> {
         val calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai")).apply { timeInMillis = now }
         val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
-        val timeOfDay = when (hour) {
-            in 5..8 -> "清晨"; in 9..11 -> "上午"; in 12..13 -> "中午"; in 14..17 -> "下午"; in 18..20 -> "傍晚"; in 21..23 -> "深夜"; else -> "凌晨"
-        }
+        val timeOfDay = SharedUtils.getTimeOfDay(hour)
         return mapOf("CURRENT_TIME" to sharedUtils.beijingPromptTime(now), "CURRENT_DATE" to beijingSdf("yyyy-MM-dd").format(java.util.Date(now)), "TIME_OF_DAY" to timeOfDay)
     }
 

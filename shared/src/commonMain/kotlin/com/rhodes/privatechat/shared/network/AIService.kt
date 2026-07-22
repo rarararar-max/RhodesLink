@@ -399,10 +399,7 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         throw Exception("不支持的厂商: ${config.id}")
     }
 
-    /**
-     * 带重试的非流式聊天请求 + JSON解析。
-     * 请求为空、失败或无法解析时，使用一次独立的格式校对请求，不重新创作回复。
-     */
+    /** A content retry precedes one structure-only repair; neither path loops indefinitely. */
     suspend fun chatWithRetry(
         apiKey: String,
         messages: List<AiMessage>,
@@ -417,11 +414,23 @@ class AIService(private val client: HttpClient = createHttpClient()) {
     ): OfflineModeResponse {
         @Suppress("UNUSED_VARIABLE", "UNUSED_PARAMETER") val ignoredRetries = maxRetries to logTag
         val original = chat(apiKey, messages, providerId, modelName, customUrl, temperature, jsonMode).content
-        if (original.isBlank()) throw EmptyModelResponseException(modelName)
         val parsed = runCatching { normalizeOfflineResponse(original) }.getOrNull()
         if (parsed != null && isUsableResponse(parsed, messages)) return parsed
 
-        trace("PrivateFormatRepair", "ORIGINAL_UNUSABLE_RESPONSE\n$original")
+        trace("PrivateContentRetry", "ORIGINAL_UNUSABLE parsed=${parsed != null} blank=${original.isBlank()}")
+        val retryMessages = messages.mapIndexed { index, message ->
+            if (index == 0 && message.role == "system") message.copy(content = message.content + """
+
+                |【重新生成要求】
+                |- 上一版输出无法直接展示。请重新生成完整回复，不要沿用上一版的残缺内容。
+                |- 必须至少包含一条非空角色台词，并严格遵守当前模式的 JSON 格式。
+            """.trimMargin()) else message
+        }
+        val retried = chat(apiKey, retryMessages, providerId, modelName, customUrl, temperature, jsonMode).content
+        val retriedParsed = runCatching { normalizeOfflineResponse(retried) }.getOrNull()
+        if (retriedParsed != null && isUsableResponse(retriedParsed, messages)) return retriedParsed
+
+        trace("PrivateFormatRepair", "RETRY_UNUSABLE_RESPONSE\n$retried")
 
         val system = messages.firstOrNull { it.role == "system" }?.content.orEmpty()
         val repaired = try {
@@ -429,7 +438,7 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                 apiKey = apiKey,
                 messages = listOf(
                     AiMessage("system", privateFormatRepairInstruction(system)),
-                    AiMessage("user", "【待校对原始输出】\n$original")
+                    AiMessage("user", "【待校对原始输出】\n$retried")
                 ),
                 providerId = providerId,
                 modelName = modelName,

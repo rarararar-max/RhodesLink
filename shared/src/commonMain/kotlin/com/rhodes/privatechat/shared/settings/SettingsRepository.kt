@@ -145,7 +145,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putInt("impression_threshold", value.coerceIn(5, 500))
 
     var historyMessages: Int
-        get() = getInt("history_messages", 20).coerceIn(0, 200)
+        get() = getInt("history_messages", 10).coerceIn(0, 200)
         set(value) = putInt("history_messages", value.coerceIn(0, 200))
 
     var maxContextTokens: Int
@@ -763,6 +763,12 @@ class SettingsRepository(private val settings: ObservableSettings) {
     fun putOperatorDynPermission(operatorId: String, value: Boolean) =
         putBoolean("dyn_$operatorId", value)
 
+    fun getOperatorVoiceVolume(operatorId: String): Float =
+        getString("voice_volume_$operatorId", "1.0").toFloatOrNull()?.coerceIn(0.2f, 1.0f) ?: 1.0f
+
+    fun putOperatorVoiceVolume(operatorId: String, value: Float) =
+        putString("voice_volume_$operatorId", value.coerceIn(0.2f, 1.0f).toString())
+
     fun getGroupAuto(groupId: String): Boolean =
         getBoolean("group_auto_$groupId", false)
 
@@ -967,7 +973,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
                 putInt("comment_bystander_max", 1)
             }
             "standard" -> {
-                historyMessages = 20
+                historyMessages = 10
                 putInt("private_group_context_count", 2)
                 putInt("group_member_memory_count", 2)
                 putInt("event_context_count", 5)

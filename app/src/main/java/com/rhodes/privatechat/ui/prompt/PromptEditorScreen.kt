@@ -62,8 +62,8 @@ fun PromptEditorScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val tabs = listOf("私聊", "群聊", "动态", "评论", "日记", "说明")
-    val tabKeys = listOf("private", "group", "moment", "moment_comment", "diary", "help")
+    val tabs = listOf("私聊", "群聊", "动态", "评论", "日记", "派遣", "说明")
+    val tabKeys = listOf("private", "group", "moment", "moment_comment", "diary", "dispatch", "help")
     var tabIndex by remember { mutableIntStateOf(0) }
     val context = LocalContext.current
 
@@ -72,9 +72,12 @@ fun PromptEditorScreen(
     // Automatic group chat reuses the group's current online/offline/director template.
     val grpModeLabels = listOf("线上模式", "线下模式", "导演模式")
     val grpModes = listOf("online", "offline", "director")
+    val dispatchModeLabels = listOf("开局", "过程", "结局")
+    val dispatchModes = listOf("start", "progress", "ending")
 
     var privModeIdx by remember { mutableIntStateOf(0) }
     var grpModeIdx by remember { mutableIntStateOf(0) }
+    var dispatchModeIdx by remember { mutableIntStateOf(0) }
 
     val textMap = remember { mutableStateMapOf<String, TextFieldValue>() }
     val dirtyKeys = remember { mutableStateListOf<String>() }
@@ -87,6 +90,7 @@ fun PromptEditorScreen(
         2 -> "moment:"
         3 -> "moment_comment:"
         4 -> "diary:"
+        5 -> "dispatch:${dispatchModes[dispatchModeIdx]}"
         else -> "help:"
     }
 
@@ -95,13 +99,14 @@ fun PromptEditorScreen(
     fun currentMode(): String = when (tabIndex) {
         0 -> privModes[privModeIdx]
         1 -> grpModes[grpModeIdx]
+        5 -> dispatchModes[dispatchModeIdx]
         else -> ""
     }
 
     val key = currentKey()
     var textFieldValue by remember(key) {
         mutableStateOf(
-            if (tabIndex < 5) {
+            if (tabIndex < 6) {
                 textMap[key] ?: TextFieldValue(loadTemplate(currentType(), currentMode()))
             } else {
                 TextFieldValue("")
@@ -110,7 +115,7 @@ fun PromptEditorScreen(
     }
 
     val saveCurrent: () -> Boolean = saveCurrent@{
-        if (tabIndex < 5 && currentKey() in dirtyKeys) {
+        if (tabIndex < 6 && currentKey() in dirtyKeys) {
             textMap[currentKey()] = textFieldValue
             val result = runCatching { viewModel.savePromptTemplate(currentType(), currentMode(), textFieldValue.text) }
             if (result.isFailure) {
@@ -126,7 +131,7 @@ fun PromptEditorScreen(
         true
     }
     val saveAllEdited: () -> Boolean = saveAllEdited@{
-        if (tabIndex < 5) textMap[currentKey()] = textFieldValue
+        if (tabIndex < 6) textMap[currentKey()] = textFieldValue
         val warnings = mutableListOf<String>()
         val editedTemplates = textMap.filterKeys { it in dirtyKeys }.toMap()
         for ((templateKey, value) in editedTemplates) {
@@ -248,7 +253,21 @@ fun PromptEditorScreen(
         "{{RELATION_EVENTS}}" to "日记可参考的关系相关事件",
         "{{STATUS_EVENTS}}" to "日记可参考的自身状态变化",
         "{{DIARY_MIN_CHARS}}" to "日记字数下限",
-        "{{DIARY_MAX_CHARS}}" to "日记字数上限"
+        "{{DIARY_MAX_CHARS}}" to "日记字数上限",
+        "{{TASK_TYPE}}" to "派遣任务类型",
+        "{{BUDGET}}" to "派遣投入预算（龙门币）",
+        "{{BUDGET_LEVEL}}" to "派遣预算等级",
+        "{{DISPATCH_ROUND}}" to "当前过程轮数",
+        "{{DISPATCH_SUMMARY}}" to "派遣完整日志摘要",
+        "{{RECENT_PLOT}}" to "派遣最近剧情",
+        "{{MEMBER_PROFILES}}" to "派遣成员档案",
+        "{{MEMBER_NAMES}}" to "派遣成员名称",
+        "{{MEMBER_COUNT}}" to "派遣成员数量",
+        "{{DURATION_HOURS}}" to "派遣时长（小时）",
+        "{{DISPATCH_MIN_CHARS}}" to "派遣叙事字数下限",
+        "{{DISPATCH_MAX_CHARS}}" to "派遣叙事字数上限",
+        "{{DISPATCH_ENDING_MAX_CHARS}}" to "派遣结局字数上限",
+        "{{MAX_CURRENCY_REWARD}}" to "派遣结局最高货币奖励"
     )
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -276,7 +295,7 @@ fun PromptEditorScreen(
                 Tab(
                     selected = tabIndex == i,
                     onClick = {
-                        if (tabIndex < 5) textMap[currentKey()] = textFieldValue
+                        if (tabIndex < 6) textMap[currentKey()] = textFieldValue
                         tabIndex = i
                     },
                     text = {
@@ -327,10 +346,24 @@ fun PromptEditorScreen(
                     )
                 }
             }
+        } else if (tabIndex == 5) {
+            HorizontalDivider(color = Divider)
+            TabRow(selectedTabIndex = dispatchModeIdx, containerColor = Surface, contentColor = Blue400) {
+                dispatchModeLabels.forEachIndexed { i, label ->
+                    Tab(
+                        selected = dispatchModeIdx == i,
+                        onClick = {
+                            textMap[currentKey()] = textFieldValue
+                            dispatchModeIdx = i
+                        },
+                        text = { Text(label, fontWeight = if (dispatchModeIdx == i) FontWeight.SemiBold else FontWeight.Normal) }
+                    )
+                }
+            }
         }
 
         Column(modifier = Modifier.weight(1f).imePadding()) {
-        if (tabIndex < 5) {
+        if (tabIndex < 6) {
             Column(modifier = Modifier.weight(1f).padding(12.dp)) {
                 OutlinedTextField(
                     value = textFieldValue,
@@ -420,6 +453,7 @@ fun PromptEditorScreen(
         val resetLabel = when (tabIndex) {
             0 -> "${tabs[0]} - ${privModeLabels[privModeIdx]}"
             1 -> "${tabs[1]} - ${grpModeLabels[grpModeIdx]}"
+            5 -> "${tabs[5]} - ${dispatchModeLabels[dispatchModeIdx]}"
             else -> tabs[tabIndex]
         }
         AlertDialog(

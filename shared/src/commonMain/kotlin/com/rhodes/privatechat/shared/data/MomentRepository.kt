@@ -127,6 +127,10 @@ class MomentRepository(private val wrapper: DatabaseWrapper) {
         }.executeAsOneOrNull()
     }
 
+    suspend fun getMaxMomentId(): Long = withContext(Dispatchers.Default) {
+        db.momentsQueries.getMaxMomentId().executeAsOne().MAX ?: 0L
+    }
+
     suspend fun deleteOldMoments(cutoff: Long) = withContext(Dispatchers.Default) { db.momentsQueries.deleteOldMoments(cutoff) }
 
     suspend fun deleteMomentsByOperator(operatorId: String) = withContext(Dispatchers.Default) {

@@ -248,6 +248,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun countMomentsByOperatorSince(operatorId: String, since: Long) = moments.countMomentsByOperatorSince(operatorId, since)
     suspend fun deleteLike(momentId: Long, operatorId: String) = moments.deleteLike(momentId, operatorId)
     suspend fun getMoment(id: Long) = moments.getMoment(id)
+    suspend fun getMaxMomentId() = moments.getMaxMomentId()
     suspend fun deleteOldMoments(cutoff: Long) = moments.deleteOldMoments(cutoff)
     suspend fun deleteMomentsByOperator(operatorId: String) = moments.deleteMomentsByOperator(operatorId)
 

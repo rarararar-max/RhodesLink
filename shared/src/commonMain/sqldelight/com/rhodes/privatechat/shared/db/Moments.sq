@@ -54,6 +54,9 @@ DELETE FROM moments WHERE operatorId = ?;
 getLastInsertRowId:
 SELECT last_insert_rowid();
 
+getMaxMomentId:
+SELECT MAX(id) FROM moments;
+
 backfillLikeCounts:
 UPDATE moments
 SET likeCount = (SELECT COUNT(*) FROM moment_likes WHERE moment_likes.momentId = moments.id);

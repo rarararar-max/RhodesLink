@@ -99,8 +99,9 @@ class MomentsViewModel(
     }
 
     fun markMomentsSeen() {
-        val latest = appState.moments.value.firstOrNull()?.id ?: 0
-        settings.lastSeenMomentId = latest
+        scope.launch {
+            settings.lastSeenMomentId = repository.getMaxMomentId()
+        }
     }
 
     fun markCommentRead(commentId: Long) {

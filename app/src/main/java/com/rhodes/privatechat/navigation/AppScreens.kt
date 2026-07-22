@@ -100,19 +100,15 @@ data class ChatOperator(val operatorId: String) : Screen {
         val operators by viewModel.operators.collectAsState()
         val operator = remember(operators, operatorId) { operators.find { it.id == operatorId } }
         var ready by remember { mutableStateOf(false) }
-        var selectionId by remember { mutableStateOf<Long?>(null) }
         LaunchedEffect(operatorId, operator) {
             if (operator != null) {
                 ready = false
                 try {
-                    selectionId = viewModel.chatViewModel.selectOperatorSync(operator)
+                    viewModel.chatViewModel.selectOperatorSync(operator)
                     ready = viewModel.currentSession.value?.operatorId == operator.id
                 } catch (_: Exception) {
                 }
             }
-        }
-        DisposableEffect(selectionId) {
-            onDispose { selectionId?.let { viewModel.chatViewModel.clearSelection(it) } }
         }
         if (ready && operator != null) {
             com.rhodes.privatechat.ui.chat.ChatScreen(

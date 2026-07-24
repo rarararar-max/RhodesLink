@@ -1549,8 +1549,14 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             !needsRecall -> ""
             voiceRecallContext.isNotBlank() && now - voiceRecallAt < 5 * 60_000L && terms.intersect(voiceRecallTerms).isNotEmpty() -> voiceRecallContext
             else -> {
-                val memories = memoryV2Pipeline.buildPrivateMemoryContext(
+                val personalMemories = memoryV2Pipeline.buildPrivateMemoryContext(
                     session.operatorId, limitL1 = 2, limitL2 = 1, limitL3 = 1, query = recallQuery
+                )
+                val relationshipMemories = memoryV2Pipeline.buildRelationshipPrivateMemoryContext(
+                    session.operatorId, recallQuery
+                )
+                val memories = UnifiedMemoryContext.mergeBlocks(
+                    sharedUtils.contextBlockLimit(), personalMemories, relationshipMemories
                 )
                 val public = if (settings.globalPublicMemoryEnabled) {
                     memoryV2Pipeline.buildPublicMemoryContext(recallQuery, limit = 1)
@@ -1612,13 +1618,16 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         return try {
             val parsed = sharedUtils.aiService.normalizeOfflineResponse(msg.content)
             val segments = parsed.segments.orEmpty()
-                .map { it.copy(content = it.content.trim().take(500)) }
-                .filter { it.content.isNotBlank() }
-            val safe = if (segments.isNotEmpty()) parsed.copy(dialogue = "", narration = "", segments = segments)
-            else if (parsed.dialogue.isNotBlank()) parsed.copy(segments = listOf(com.rhodes.privatechat.shared.model.Segment("dialogue", parsed.dialogue.take(500))))
-            else null
-            safe?.let { json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), it) }
-                ?: "[上一条回复不可用]"
+                .mapNotNull { segment ->
+                    val content = segment.content.trim().take(500)
+                    content.takeIf { it.isNotBlank() }?.let {
+                        if (segment.type.equals("narration", true)) "【旁白】$it" else "【台词】$it"
+                    }
+                }
+            segments.joinToString("\n").ifBlank {
+                parsed.dialogue.trim().take(500).takeIf { it.isNotBlank() }?.let { "【台词】$it" }
+                    ?: "[上一条回复不可用]"
+            }
         } catch (_: Exception) {
             "[上一条回复不可用]"
         }
@@ -1694,13 +1703,22 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             .ifBlank { userContent }
         val groupContext = buildPrivateGroupContext(session.operatorId, userContent)
         val stableImpression = memoryV2Pipeline.buildPrivateStableImpression(session.operatorId)
-        val memoryV2Context = sharedUtils.trimContextBlock(
-            memoryV2Pipeline.buildPrivateMemoryContext(
+        val personalMemoryContext = memoryV2Pipeline.buildPrivateMemoryContext(
                 operatorId = session.operatorId,
                 limitL1 = if (wantsRecall) 6 else 3,
                 limitL2 = 0,
                 limitL3 = 0,
                 query = recallQuery
+            )
+        val relationshipMemoryContext = memoryV2Pipeline.buildRelationshipPrivateMemoryContext(
+            operatorId = session.operatorId,
+            query = recallQuery,
+        )
+        val memoryV2Context = sharedUtils.trimContextBlock(
+            UnifiedMemoryContext.mergeBlocks(
+                maxChars = sharedUtils.contextBlockLimit(),
+                personalMemoryContext,
+                relationshipMemoryContext,
             ).ifBlank { "无" },
             sharedUtils.contextBlockLimit()
         )
@@ -1714,7 +1732,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         )
         DebugLogger.log(
             "Memory/Inject",
-            "统一记忆注入: op=${session.operatorId}, mode=$mode, summary=${shortTerm != null}, memory=${memoryV2Context != "无"}"
+            "统一记忆注入: op=${session.operatorId}, mode=$mode, summary=${shortTerm != null}, personal=${personalMemoryContext.isNotBlank()}, relation=${relationshipMemoryContext.isNotBlank()}"
         )
         val replacements = mapOf(
             "CURRENT_TIME" to sharedUtils.beijingPromptTime(),

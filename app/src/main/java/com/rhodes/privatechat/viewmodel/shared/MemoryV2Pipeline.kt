@@ -309,6 +309,52 @@ class MemoryV2Pipeline(
         ).filterNotNull().joinToString("\n")
     }
 
+    /**
+     * A relationship is a runtime knowledge channel, not a copied memory.  A -> B lets B
+     * recall a small, relevant subset of A's private-chat memories for the current response.
+     */
+    suspend fun buildRelationshipPrivateMemoryContext(operatorId: String, query: String): String {
+        val vectorService = memoryVectorService ?: return ""
+        if (query.isBlank()) return ""
+        val now = System.currentTimeMillis()
+        val relations = repository.getReverseRelationships(operatorId)
+        if (relations.isEmpty()) return ""
+        val candidates = mutableListOf<com.rhodes.privatechat.shared.vector.VectorMemory>()
+        relations.forEach { relation ->
+            val policy = relationshipRecallPolicy(relation.intimacy) ?: return@forEach
+            val recalled = runCatching {
+                vectorService.search(
+                    VectorSearchRequest(
+                        ownerType = "operator",
+                        ownerId = relation.operatorId,
+                        query = query,
+                        limit = policy.candidateLimit,
+                        sourceTypes = listOf("memory_v2_l1", "memory_v2_l2", "memory_v2_l3"),
+                        minScore = 0.16,
+                        now = now,
+                        candidateLimit = 50,
+                        minImportance = policy.minImportance / 100.0,
+                    )
+                )
+            }.getOrDefault(emptyList())
+            candidates += recalled
+                .asSequence()
+                .filter { memory -> memory.tags.split(',').any { it == MemorySourceKind.PRIVATE_CHAT.name } }
+                .take(2)
+                .toList()
+        }
+        val lines = candidates
+            .sortedWith(compareByDescending<com.rhodes.privatechat.shared.vector.VectorMemory> { it.importance }
+                .thenByDescending { it.createdAt })
+            .distinctBy { normalizeForDedup("relationship", it.content) }
+            .take(3)
+            .map { "- ${it.content.take(180)}" }
+        return lines.takeIf { it.isNotEmpty() }
+            ?.joinToString("\n")
+            ?.let { "【与当前话题相关的关系网经历】\n$it" }
+            .orEmpty()
+    }
+
     suspend fun buildPrivateStableImpression(operatorId: String, limit: Int = 3): String {
         val now = System.currentTimeMillis()
         val items = repository.getActiveMemoryItemsByLevel("operator", operatorId, MemoryLevel.L3, now)
@@ -704,6 +750,16 @@ class MemoryV2Pipeline(
     }
 
     private data class PromotionTopic(val topicKey: String, val items: List<MemoryItem>)
+
+    private data class RelationshipRecallPolicy(val candidateLimit: Int, val minImportance: Int)
+
+    private fun relationshipRecallPolicy(intimacy: Int): RelationshipRecallPolicy? = when (intimacy) {
+        in 0..19 -> null
+        in 20..39 -> RelationshipRecallPolicy(candidateLimit = 1, minImportance = 80)
+        in 40..59 -> RelationshipRecallPolicy(candidateLimit = 2, minImportance = 65)
+        in 60..79 -> RelationshipRecallPolicy(candidateLimit = 3, minImportance = 50)
+        else -> RelationshipRecallPolicy(candidateLimit = 5, minImportance = 35)
+    }
 
     private fun pickPromotionTopic(items: List<MemoryItem>, threshold: Int, requireStable: Boolean = false): PromotionTopic? {
         if (items.size < threshold) return null

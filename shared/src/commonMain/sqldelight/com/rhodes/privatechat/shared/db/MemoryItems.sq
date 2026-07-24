@@ -120,4 +120,9 @@ deleteMemoryItemsByOwner:
 DELETE FROM memory_items WHERE ownerType = ? AND ownerId = ?;
 
 deleteExpiredMemoryItems:
-DELETE FROM memory_items WHERE expiresAt < ?;
+DELETE FROM memory_items
+WHERE expiresAt < ?
+  AND (
+    memoryLevel != 'L1'
+    OR memoryType NOT IN ('preference_expression', 'emotion_state', 'physiological_state')
+  );

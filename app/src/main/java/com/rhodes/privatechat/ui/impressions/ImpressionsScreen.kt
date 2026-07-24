@@ -72,15 +72,13 @@ fun ImpressionsScreen(
         scope.launch { impressions = viewModel.getCurrentImpressions() }
     }
 
-    LaunchedEffect(Unit) {
-        impressions = viewModel.getCurrentImpressions()
-    }
+    LaunchedEffect(Unit) { impressions = viewModel.getCurrentImpressions() }
 
     if (showClearDialog) {
         AlertDialog(
             onDismissRequest = { showClearDialog = false },
             title = { Text("清空所有印象") },
-            text = { Text("将清除所有干员当前对你的长期印象，且无法恢复。不会删除聊天记录、近期了解、动态或评论。") },
+            text = { Text("将清除当前页面展示的所有印象记录，且无法恢复。不会删除聊天记录、动态或评论。") },
             confirmButton = { TextButton(onClick = { scope.launch { viewModel.deleteAllCurrentImpressions(); impressions = viewModel.getCurrentImpressions() }; showClearDialog = false }) { Text("确认清空", color = ErrorRed) } },
             dismissButton = { TextButton(onClick = { showClearDialog = false }) { Text("取消", color = TextSecondary) } }
         )
@@ -136,8 +134,9 @@ private fun DetailImpressionsPage(
     onDelete: (MemoryItem) -> Unit
 ) {
     val longTerm = impressions.filter { it.memoryLevel == MemoryLevel.L3 }
-    val recent = impressions.filter { it.memoryLevel == MemoryLevel.L2 }
-    if (longTerm.isEmpty() && recent.isEmpty()) {
+    val sustained = impressions.filter { it.memoryLevel == MemoryLevel.L2 }
+    val interaction = impressions.filter { it.memoryLevel == MemoryLevel.L1 }
+    if (longTerm.isEmpty() && sustained.isEmpty() && interaction.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("暂无印象数据", fontSize = 16.sp, color = TextTertiary)
@@ -152,9 +151,13 @@ private fun DetailImpressionsPage(
             item { ImpressionSectionHeader("长期印象", "反复互动后形成的稳定了解") }
             items(longTerm, key = { it.id }) { ImpressionEntry(it, operators, "长期印象", onOperatorClick, onEdit, onDelete) }
         }
-        if (recent.isNotEmpty()) {
-            item { ImpressionSectionHeader("近期了解", "近期反复提到的重要偏好、约定和关心点") }
-            items(recent, key = { it.id }) { ImpressionEntry(it, operators, "近期了解", onOperatorClick, onEdit, onDelete) }
+        if (sustained.isNotEmpty()) {
+            item { ImpressionSectionHeader("持续了解", "经多次互动合并出的偏好、约定和关心点") }
+            items(sustained, key = { it.id }) { ImpressionEntry(it, operators, "持续了解", onOperatorClick, onEdit, onDelete) }
+        }
+        if (interaction.isNotEmpty()) {
+            item { ImpressionSectionHeader("互动印象", "偏好、情绪和身体状态会按记录日期保留") }
+            items(interaction, key = { it.id }) { ImpressionEntry(it, operators, "互动印象", onOperatorClick, onEdit, onDelete) }
         }
     }
 }
@@ -184,7 +187,7 @@ private fun ImpressionEntry(
             Spacer(modifier = Modifier.width(10.dp))
             Column {
                 Text(displayName, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-                Text("$levelLabel · 更新于 ${SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()).apply { timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai") }.format(Date(entry.updatedAt.takeIf { it > 0L } ?: entry.createdAt))}", fontSize = 11.sp, color = TextTertiary)
+                Text("$levelLabel · ${impressionDate(entry)}", fontSize = 11.sp, color = TextTertiary)
             }
             Spacer(modifier = Modifier.weight(1f))
             IconButton(onClick = { onEdit(entry) }) { Icon(Icons.Default.Edit, "编辑印象", tint = TextSecondary) }
@@ -194,8 +197,29 @@ private fun ImpressionEntry(
         Text(entry.content, fontSize = 14.sp, color = TextPrimary, lineHeight = 22.sp)
         Spacer(modifier = Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(entry.memoryType.replace('_', ' '), fontSize = 11.sp, color = Primary, fontWeight = FontWeight.Medium, modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(Primary.copy(alpha = 0.1f)).padding(horizontal = 8.dp, vertical = 2.dp))
+            Text(memoryTypeLabel(entry.memoryType), fontSize = 11.sp, color = Primary, fontWeight = FontWeight.Medium, modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(Primary.copy(alpha = 0.1f)).padding(horizontal = 8.dp, vertical = 2.dp))
         }
     }
     HorizontalDivider(color = Divider)
+}
+
+private fun impressionDate(entry: MemoryItem): String {
+    val eventTime = entry.eventTime?.trim().orEmpty()
+    if (eventTime.isNotBlank()) return "发生于 $eventTime"
+    val formatter = SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()).apply {
+        timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")
+    }
+    return "记录于 ${formatter.format(Date(entry.createdAt))}"
+}
+
+private fun memoryTypeLabel(type: String): String = when (type) {
+    "preference_expression" -> "偏好"
+    "emotion_state" -> "情绪"
+    "physiological_state" -> "身体状态"
+    "agreement_commitment" -> "约定"
+    "care_reminder" -> "关心提醒"
+    "intent_wish" -> "意图愿望"
+    "evaluation_opinion" -> "评价观点"
+    "self_cognition_statement" -> "自我认知"
+    else -> type.replace('_', ' ')
 }

@@ -39,6 +39,7 @@ fun OperatorMemoryScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
     LaunchedEffect(operator.id) { items = viewModel.getOperatorMemoryItems(operator.id); loading = false }
     Scaffold(
         topBar = { TopAppBar(title = { Text("${operator.name}的记忆") }, navigationIcon = { TextButton(onClick = onBack) { Text("返回") } }, actions = {
+            TextButton(enabled = !working, onClick = { scope.launch { items = viewModel.getOperatorMemoryItems(operator.id) } }) { Text("刷新") }
             TextButton(enabled = !working, onClick = { scope.launch { eligibleCount = viewModel.countEligibleMemoryIndexes(operator.id); pendingRebuild = true } }) { Text(if (working) "处理中" else "重建索引") }
             TextButton(onClick = { showAdd = true }) { Text("新增") }
         }) }
@@ -47,7 +48,7 @@ fun OperatorMemoryScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
             Text("近期记录、长期记忆和角色记得的你都在这里。删除会同步清除检索索引，角色之后不会再引用这条内容。", fontSize = 12.sp, color = TextSecondary)
             Spacer(Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-                FilterMenu(sourceFilter, listOf("全部来源", "私聊", "群聊", "动态", "评论", "手动添加")) { sourceFilter = it }
+                FilterMenu(sourceFilter, listOf("全部来源", "私聊", "群聊", "动态", "评论", "日记", "手动添加")) { sourceFilter = it }
                 FilterMenu(levelFilter, listOf("全部等级", "L1", "L2", "L3")) { levelFilter = it }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -57,7 +58,11 @@ fun OperatorMemoryScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
             if (message.isNotBlank()) Text(message, fontSize = 12.sp, color = TextSecondary)
             if (loading) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
             else {
-                val filtered = items.filter { (sourceFilter == "全部来源" || it.sourceKind.name == sourceFilter) && (levelFilter == "全部等级" || it.memoryLevel.name == levelFilter) && (privacyFilter == "全部权限" || (it.privacy ?: "private") == privacyFilter) }.let { if (newestFirst) it.sortedByDescending { item -> item.createdAt } else it.sortedBy { item -> item.createdAt } }
+                val filtered = items.filter {
+                    (sourceFilter == "全部来源" || sourceLabel(it) == sourceFilter) &&
+                        (levelFilter == "全部等级" || it.memoryLevel.name == levelFilter) &&
+                        (privacyFilter == "全部权限" || privacyLabel(it.privacy) == privacyFilter)
+                }.let { if (newestFirst) it.sortedByDescending { item -> item.createdAt } else it.sortedBy { item -> item.createdAt } }
                 if (filtered.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("没有符合筛选条件的记忆", color = TextSecondary) }
                 else LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(filtered, key = { it.id }) { item ->
@@ -105,6 +110,23 @@ fun OperatorMemoryScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
         confirmButton = { TextButton(enabled = !working, onClick = { scope.launch { working = true; rebuildProgress = 0 to (eligibleCount ?: 0); val result = runCatching { viewModel.rebuildOperatorMemoryIndexes(operator.id) { done, total -> rebuildProgress = done to total } }.getOrNull(); message = result?.let { "索引重建完成：有效 ${it.eligible}，成功 ${it.succeeded}，失败 ${it.failed}，跳过 ${it.skipped}" + if (it.errors.isNotEmpty()) "。错误：${it.errors.joinToString("；")}" else "" } ?: "索引重建失败，请稍后重试"; items = viewModel.getOperatorMemoryItems(operator.id); rebuildProgress = null; working = false; pendingRebuild = false } }) { Text("开始重建") } },
         dismissButton = { TextButton(enabled = !working, onClick = { pendingRebuild = false }) { Text("取消") } }
     )
+}
+
+private fun sourceLabel(item: MemoryItem): String = when (item.sourceKind.name) {
+    "PRIVATE_CHAT" -> "私聊"
+    "GROUP_CHAT" -> "群聊"
+    "MOMENT" -> "动态"
+    "MOMENT_COMMENT" -> "评论"
+    "DIARY" -> "日记"
+    "MANUAL_MEMORY" -> "手动添加"
+    else -> item.sourceKind.name
+}
+
+private fun privacyLabel(privacy: String?): String = when (privacy) {
+    "private" -> "私密"
+    "shared" -> "可传开"
+    "public" -> "公开"
+    else -> "私密"
 }
 
 @Composable

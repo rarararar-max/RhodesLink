@@ -642,7 +642,7 @@ private fun RelationshipHelpCard() {
             lineHeight = 16.sp
         )
         Spacer(Modifier.height(4.dp))
-        Text("关系会影响群聊互动、日记内容，以及通过关系听说到的公开记忆。私聊中的私密内容不会直接外传。", fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp)
+        Text("关系会影响群聊互动和日记内容。当前角色与对方越亲近，对方在私聊中越可能自然知道当前角色与用户的近期私聊近况；关系默认单向。", fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp)
     }
     Spacer(Modifier.height(10.dp))
 }
@@ -663,7 +663,7 @@ private fun IntimacyHelpButton() {
             title = { Text("亲密度有什么用", color = TextPrimary, fontWeight = FontWeight.SemiBold) },
             text = {
                 Text(
-                    "亲密度表示两个干员之间的熟悉和信任程度。\n\n0-19：只是认识，基本不共享消息\n20-39：偶尔听说公开事件\n40-59：会知道一些计划和关系事件\n60-79：比较熟，会共享较多公开经历\n80+：非常亲近，可能知道情绪、偏好等更细的信息\n\n只会传递公开记忆，私聊中的私密内容不会直接通过关系网传播。",
+                    "亲密度表示两个干员之间的熟悉和信任程度，也决定对方在私聊中能从当前角色处自然知道多少用户近况。\n\n0-19：基本不知道\n20-39：只会知道一件很重要的事\n40-59：会知道部分重要计划、偏好或经历\n60-79：会知道较多近期近况\n80+：非常亲近，能自然了解更多互动经历\n\n关系默认单向：当前角色与对方越亲近，对方越可能从当前角色处听说用户的私聊近况；如需双方互相知道，请分别设置双向关系。关系网近况只在私聊中使用，不会同步到群聊或公开内容。",
                     fontSize = 13.sp,
                     color = TextSecondary,
                     lineHeight = 20.sp

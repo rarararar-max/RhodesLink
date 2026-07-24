@@ -884,10 +884,13 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     suspend fun getCurrentImpressions(): List<MemoryItem> {
         migrateLegacyImpressions()
         val now = System.currentTimeMillis()
-        return repository.getAllMemoryItems().filter {
-            it.ownerType == "operator" && it.status == "active" && it.expiresAt > now && it.content.isNotBlank() &&
-                (it.memoryLevel == MemoryLevel.L3 ||
-                    (it.memoryLevel == MemoryLevel.L2 && it.importance >= 60 && it.memoryType in impressionRecentTypes))
+        return repository.getAllMemoryItems().filter { item ->
+            item.ownerType == "operator" && item.status == "active" && item.content.isNotBlank() && when (item.memoryLevel) {
+                // L1 is a dated interaction record, so it remains viewable after recall expiry.
+                MemoryLevel.L1 -> item.memoryType in impressionL1Types
+                MemoryLevel.L2 -> item.expiresAt > now && item.importance >= 60 && item.memoryType in impressionRecentTypes
+                MemoryLevel.L3 -> item.expiresAt > now
+            }
         }.sortedWith(compareByDescending<MemoryItem> { it.memoryLevel == MemoryLevel.L3 }
             .thenByDescending { it.updatedAt }
             .thenByDescending { it.importance })
@@ -896,6 +899,10 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     private val impressionRecentTypes = setOf(
         "preference_expression", "agreement_commitment", "care_reminder", "intent_wish",
         "evaluation_opinion", "self_cognition_statement"
+    )
+
+    private val impressionL1Types = setOf(
+        "preference_expression", "emotion_state", "physiological_state"
     )
 
     private suspend fun migrateLegacyImpressions() {
@@ -923,7 +930,6 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
 
     suspend fun deleteAllCurrentImpressions() {
         getCurrentImpressions()
-            .filter { it.memoryLevel == MemoryLevel.L3 }
             .forEach { deleteOperatorMemoryItem(it) }
     }
 
@@ -2591,7 +2597,8 @@ $existingBlock
    20~50字，概括角色核心特点，用做角色列表中的摘要展示
 
 4. privatePrompt（私聊人设—核心字段）：
-   建议300~500汉字，直接影响私聊时 AI 的表现质量。重点完整、具体，不要重复凑字数。
+   若用户需求中明确指定字数、字数范围或“以内/以上”等长度要求，必须优先严格遵守用户的要求；这会覆盖本项默认长度。
+   用户未提出长度要求时，建议300~500汉字。直接影响私聊时 AI 的表现质量，重点完整、具体，不要重复凑字数。
    必须包含以下维度：
    · 角色身份与背景：职业、来历、当前状态
    · 性格特质：用具体的行为描述替代抽象标签。不说"性格温柔"，说"说话轻声细语，从不打断别人"
@@ -2602,7 +2609,7 @@ $existingBlock
    用第二人称「你」来写，描述用户扮演该角色时需要注意什么。
 
 5. groupPrompt（群聊人设）：
-   不超过300汉字，侧重该角色在群聊中的社交风格：活跃还是旁观、容易成为话题中心还是存在感薄弱、对其他成员的态度。超出此字数请精简。
+   若用户需求中明确指定字数、字数范围或“以内/以上”等长度要求，必须优先严格遵守用户的要求；否则不超过300汉字。侧重该角色在群聊中的社交风格：活跃还是旁观、容易成为话题中心还是存在感薄弱、对其他成员的态度。超出适用字数请精简。
 
 【质量要求】
 - 人设要有"可演性"——读完后能想象出这个人说话的样子

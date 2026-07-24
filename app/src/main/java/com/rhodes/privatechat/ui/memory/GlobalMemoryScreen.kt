@@ -113,6 +113,7 @@ fun GlobalMemoryScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 title = { Text("记忆管理") },
                 navigationIcon = { TextButton(onClick = onBack) { Text("返回") } },
                 actions = {
+                    TextButton(enabled = !working, onClick = { scope.launch { reload() } }) { Text("刷新") }
                     TextButton(enabled = !working, onClick = { pendingRebuild = true }) { Text("重建索引") }
                     TextButton(enabled = !working && filtered.isNotEmpty(), onClick = { pendingClear = filtered }) { Text("清除筛选", color = ErrorRed) }
                 }

@@ -163,7 +163,7 @@ fun SettingsParamSlider(settings: SettingsRepository, key: String, label: String
             val oldValue = settings.getInt(key, defaultVal)
             settings.putInt(key, value.toInt())
             DebugLogger.log("Settings/Param", "参数调整: $label($key) $oldValue -> ${value.toInt()}")
-        }, valueRange = range, steps = ((range.endInclusive - range.start) / step).toInt(), colors = SliderDefaults.colors(thumbColor = Blue400, activeTrackColor = Blue400))
+        }, valueRange = range, steps = (((range.endInclusive - range.start) / step).toInt() - 1).coerceAtLeast(0), colors = SliderDefaults.colors(thumbColor = Blue400, activeTrackColor = Blue400))
     } }
     Spacer(Modifier.height(4.dp))
 }

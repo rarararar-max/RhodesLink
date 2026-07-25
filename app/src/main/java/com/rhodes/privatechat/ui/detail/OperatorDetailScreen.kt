@@ -70,15 +70,22 @@ import kotlin.math.atan2
 import kotlin.math.roundToInt
 
 @Composable
-fun OperatorDetailScreen(viewModel: MainViewModel, operator: OperatorEntity, onBack: () -> Unit, onOperatorClick: (OperatorEntity) -> Unit, modifier: Modifier = Modifier) {
+fun OperatorDetailScreen(
+    viewModel: MainViewModel,
+    operator: OperatorEntity,
+    onBack: () -> Unit,
+    onOperatorClick: (OperatorEntity) -> Unit,
+    onGroupClick: (String, String) -> Unit,
+    modifier: Modifier = Modifier
+) {
     val operators by viewModel.operators.collectAsState()
     val userProfile by viewModel.userProfile.collectAsState()
     var graphNodes by remember { mutableStateOf<List<BfsNode>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var sharedMemories by remember { mutableStateOf("") }
+    var interactionStats by remember { mutableStateOf(OperatorInteractionStats()) }
     // 从状态列表获取最新数据，确保 userRelation 等字段更新
     val currentOperator = operators.find { it.id == operator.id } ?: operator
-    val nearbyOps = operators.filter { it.id != currentOperator.id }.take(6)
 
     LaunchedEffect(currentOperator.id) {
         viewModel.loadRelationGraph(currentOperator.id) { nodes ->
@@ -87,6 +94,27 @@ fun OperatorDetailScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
         viewModel.loadSharedMemories(currentOperator.id) { text ->
             sharedMemories = text
         }
+        val sessions = viewModel.repository.getAllSessionsSync()
+        val privateSession = sessions.firstOrNull { it.operatorId == currentOperator.id }
+        val groupSessions = sessions.filter { session ->
+            (session.id.startsWith("group") || session.operatorId.startsWith("group")) &&
+                session.members.split(',').map(String::trim).any { it == currentOperator.id }
+        }
+        val messages = privateSession?.let { viewModel.repository.getMessagesSync(it.id) }.orEmpty()
+        val moments = viewModel.repository.getMomentsByOperator(currentOperator.id)
+        val diaries = viewModel.repository.getAllDiaryEntries(currentOperator.id)
+        val activeDispatch = viewModel.repository.getActiveDispatches().firstOrNull { dispatch ->
+            dispatch.operatorIds.split(',').map(String::trim).any { it == currentOperator.id }
+        }
+        interactionStats = OperatorInteractionStats(
+            userMessages = messages.count { it.isMe && it.type != "system" },
+            operatorMessages = messages.count { !it.isMe && it.type != "system" },
+            groups = groupSessions,
+            momentCount = moments.size,
+            diaryCount = diaries.size,
+            latestDiaryDate = diaries.maxByOrNull { it.createdAt }?.date.orEmpty(),
+            activeDispatchTask = activeDispatch?.taskType.orEmpty()
+        )
     }
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -94,14 +122,13 @@ fun OperatorDetailScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
         Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Spacer(modifier = Modifier.width(4.dp))
-            Text(currentOperator.name, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+            Text("角色档案", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
         }
         HorizontalDivider(color = Divider)
         LazyColumn {
             item { ProfileSection(currentOperator) }
             item { IntimacySection(currentOperator.intimacy) }
-            item { StatusSection(currentOperator) }
-            item { NearbySection(operators = nearbyOps, onClick = onOperatorClick) }
+            item { InteractionSection(interactionStats, onGroupClick) }
             item { RelationsSection(operatorName = currentOperator.name, graphNodes = graphNodes, isLoading = isLoading, userRelation = currentOperator.userRelation, operators = operators, userAvatarUri = userProfile.avatarUri, onNameClick = { name -> if (name == "用户") { /* 点击用户节点无跳转 */ } else { val op = operators.find { it.name == name }; if (op != null) onOperatorClick(op) } }) }
             item { SharedMemorySection(memories = sharedMemories) }
             item { Spacer(modifier = Modifier.height(24.dp)) }
@@ -109,6 +136,16 @@ fun OperatorDetailScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
     }
     }
 }
+
+private data class OperatorInteractionStats(
+    val userMessages: Int = 0,
+    val operatorMessages: Int = 0,
+    val groups: List<com.rhodes.privatechat.shared.model.ChatSession> = emptyList(),
+    val momentCount: Int = 0,
+    val diaryCount: Int = 0,
+    val latestDiaryDate: String = "",
+    val activeDispatchTask: String = ""
+)
 
 @Composable private fun ProfileSection(op: OperatorEntity) {
     Column(modifier = Modifier.fillMaxWidth().background(Surface).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -132,40 +169,51 @@ fun OperatorDetailScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
     HorizontalDivider(color = BG, thickness = 8.dp)
 }
 
-@Composable private fun StatusSection(op: OperatorEntity) {
+@Composable private fun InteractionSection(stats: OperatorInteractionStats, onGroupClick: (String, String) -> Unit) {
     Column(modifier = Modifier.fillMaxWidth().background(Surface).padding(16.dp)) {
-        Text("当前状态", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+        Text("互动记录", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
         Spacer(modifier = Modifier.height(10.dp))
-        Row(modifier = Modifier.fillMaxWidth()) { StatusItem("心情", op.emotion.ifBlank { "平静" }); Spacer(modifier = Modifier.width(12.dp)); StatusItem("位置", op.location.ifBlank { "罗德岛" }) }
-        Spacer(modifier = Modifier.height(8.dp))
-        Text("状态描述", fontSize = 12.sp, color = TextSecondary)
-        Text("在${op.location.ifBlank { "罗德岛" }}${op.activity.ifBlank { "休息" }}，心情${op.emotion.ifBlank { "平静" }}。", fontSize = 13.sp, color = TextPrimary)
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            StatItem("你发送", "${stats.userMessages} 条")
+            StatItem("角色回复", "${stats.operatorMessages} 条")
+            StatItem("发布动态", "${stats.momentCount} 条")
+            StatItem("写下日记", "${stats.diaryCount} 篇")
+        }
+        if (stats.latestDiaryDate.isNotBlank()) {
+            Spacer(modifier = Modifier.height(10.dp))
+            Text("最近日记：${stats.latestDiaryDate}", fontSize = 12.sp, color = TextSecondary)
+        }
+        Spacer(modifier = Modifier.height(14.dp))
+        Text("参与的群聊", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+        if (stats.groups.isEmpty()) {
+            Text("暂无参与的群聊", fontSize = 12.sp, color = TextTertiary, modifier = Modifier.padding(top = 6.dp))
+        } else {
+            stats.groups.forEach { group ->
+                Text(
+                    group.operatorName.ifBlank { "群聊" },
+                    fontSize = 13.sp,
+                    color = Primary,
+                    modifier = Modifier.fillMaxWidth().clickable { onGroupClick(group.operatorName.ifBlank { "群聊" }, group.id) }.padding(vertical = 6.dp)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        Text("当前安排", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+        Text(
+            if (stats.activeDispatchTask.isBlank()) "未在派遣" else "正在派遣：${stats.activeDispatchTask}",
+            fontSize = 12.sp,
+            color = if (stats.activeDispatchTask.isBlank()) TextSecondary else AccentOrange,
+            modifier = Modifier.padding(top = 6.dp)
+        )
     }
     HorizontalDivider(color = BG, thickness = 8.dp)
 }
 
-@Composable private fun StatusItem(label: String, value: String) {
-    Column(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Gray100).padding(12.dp)) {
+@Composable private fun StatItem(label: String, value: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(label, fontSize = 11.sp, color = TextSecondary)
         Text(value, fontSize = 14.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
     }
-}
-
-@Composable private fun NearbySection(operators: List<OperatorEntity>, onClick: (OperatorEntity) -> Unit) {
-    if (operators.isEmpty()) return
-    Column(modifier = Modifier.fillMaxWidth().background(Surface).padding(16.dp)) {
-        Text("附近的干员", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-        Spacer(modifier = Modifier.height(8.dp))
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(operators) { op ->
-                Column(modifier = Modifier.clickable { onClick(op) }, horizontalAlignment = Alignment.CenterHorizontally) {
-                    OperatorAvatarImage(avatarUri = op.avatarUri, name = op.name, modifier = Modifier.size(48.dp))
-                    Text(op.name, fontSize = 11.sp, color = TextPrimary)
-                }
-            }
-        }
-    }
-    HorizontalDivider(color = BG, thickness = 8.dp)
 }
 
 private fun relDesc(operatorName: String, rel: RelationshipEntity): String {
@@ -424,10 +472,12 @@ private fun bfsLabel(parentName: String, childName: String, type: RelationshipTy
 
 @Composable private fun SharedMemorySection(memories: String) {
     Column(modifier = Modifier.fillMaxWidth().background(Surface).padding(16.dp)) {
-        Text("共享记忆", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+        Text("关系可知的公开经历", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+        Spacer(modifier = Modifier.height(8.dp))
+        Text("根据角色关系、亲密度和关系类型，从关联角色处可得知的公开事件与近况；不包含你与该角色的私聊记忆。", fontSize = 11.sp, color = TextSecondary)
         Spacer(modifier = Modifier.height(8.dp))
         if (memories.isBlank() || memories == "无") {
-            Text("暂无共享记忆", fontSize = 13.sp, color = TextTertiary)
+            Text("暂无可知的公开经历", fontSize = 13.sp, color = TextTertiary)
         } else {
             memories.lines().filter { it.isNotBlank() }.forEach { line ->
                 Text(line, fontSize = 13.sp, color = TextSecondary, modifier = Modifier.padding(vertical = 2.dp))

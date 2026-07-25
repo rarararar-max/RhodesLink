@@ -80,7 +80,7 @@ class SharedUtils(
         validateChatConfiguration()
         val temp = temperature ?: settings.aiTemperature
         val prompt = messages.firstOrNull()?.content ?: ""
-        logAiCall("→$logTag", prompt, "(requesting...)", messages)
+        logAiCall("→$logTag", prompt, "请求已发送，正在等待模型响应。", messages)
         val result = aiService.chat(
             settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl,
             temperature = temp, maxOutputTokens = maxOutputTokens
@@ -90,14 +90,14 @@ class SharedUtils(
     }
 
     /** 非流式聊天 + JSON解析重试：解析失败时重新请求，最多重试3次 */
-    suspend fun chatWithRetry(messages: List<AiMessage>, logTag: String = "Chat", category: String = "", maxRetries: Int = 2): com.rhodes.privatechat.shared.model.OfflineModeResponse {
+    suspend fun chatWithRetry(messages: List<AiMessage>, logTag: String = "Chat", category: String = "", maxRetries: Int = 2, mode: String = ""): com.rhodes.privatechat.shared.model.OfflineModeResponse {
         validateChatConfiguration()
         val temp = settings.aiTemperature
         val prompt = messages.firstOrNull()?.content ?: ""
-        logAiCall("→$logTag", prompt, "(requesting with retry...)", messages)
+        logAiCall("→$logTag", prompt, "请求已发送。模型会在 JSON 无法解析时自动重试。", messages)
         val result = aiService.chatWithRetry(
             settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl,
-            temperature = temp, maxRetries = maxRetries, logTag = logTag, jsonMode = true,
+            temperature = temp, maxRetries = maxRetries, logTag = logTag, jsonMode = true, mode = mode,
             trace = { stage, detail -> DebugLogger.trace("AI/$stage", detail) }
         )
         logAiCall("←$logTag", prompt, result.toString(), messages)
@@ -107,9 +107,9 @@ class SharedUtils(
     fun logAiCall(tag: String, prompt: String, response: String, allMessages: List<AiMessage>? = null) {
         if (!DebugLogger.enabled) return
         val details = buildString {
-            append("MODEL_REQUEST\n")
+            append("【发送给大模型的内容】\n")
             append(allMessages?.mapIndexed { index, message -> "[$index][${message.role}]\n${message.content}" }?.joinToString("\n\n") ?: prompt)
-            append("\n\nMODEL_RESPONSE\n")
+            append("\n\n【模型响应状态或结果】\n")
             append(response)
         }
         DebugLogger.trace("AI/$tag", details)

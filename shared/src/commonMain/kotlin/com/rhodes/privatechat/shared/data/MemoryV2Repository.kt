@@ -161,9 +161,16 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
 
     suspend fun markSourceProcessedL1(id: Long) = withContext(Dispatchers.Default) { db.memorySourceQueueQueries.markMemorySourceProcessedL1(id) }
     suspend fun markSourceProcessedVector(id: Long) = withContext(Dispatchers.Default) { db.memorySourceQueueQueries.markMemorySourceProcessedVector(id) }
+    suspend fun deleteMemorySource(id: Long) = withContext(Dispatchers.Default) { db.memorySourceQueueQueries.deleteMemorySource(id) }
 
     suspend fun updateMemoryItemVectorId(id: Long, vectorId: String, updatedAt: Long) = withContext(Dispatchers.Default) {
         db.memoryItemsQueries.updateMemoryItemVectorId(vectorId, updatedAt, id)
+    }
+
+    suspend fun getActiveMemoryItemsMissingVector(now: Long, limit: Int): List<MemoryItem> = withContext(Dispatchers.Default) {
+        db.memoryItemsQueries.getActiveMemoryItemsMissingVector(now, limit.toLong()) { id, ownerType_, ownerId_, memoryLevel, memoryType, sourceKind, sourceRefId, sessionId, content, nickname, importance, privacy, unmetNeed, location, emotionValence, eventTime, createdAt, updatedAt, expiresAt, status, scheduledTime, action, careType, topicKey, sourceActor, sourceTarget, lastUsedAt, usedCount, confidence, rawJson, vectorId ->
+            MemoryItem(id, ownerType_, ownerId_, try { MemoryLevel.valueOf(memoryLevel) } catch (_: Exception) { MemoryLevel.L1 }, memoryType, try { MemorySourceKind.valueOf(sourceKind) } catch (_: Exception) { MemorySourceKind.PRIVATE_CHAT }, sourceRefId, sessionId, content, nickname, importance.toInt(), privacy, unmetNeed != 0L, location, emotionValence, eventTime, createdAt, updatedAt, expiresAt, status, scheduledTime, action, careType, topicKey, sourceActor, sourceTarget, lastUsedAt, usedCount.toInt(), confidence, rawJson, vectorId)
+        }.executeAsList()
     }
 
     suspend fun updateMemoryItemContent(id: Long, content: String, updatedAt: Long) = withContext(Dispatchers.Default) {
@@ -289,6 +296,9 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
     }
 
     suspend fun deleteByOwnerAndSourceKind(ownerType: String, ownerId: String, sourceKind: MemorySourceKind) = withContext(Dispatchers.Default) {
+        val vectorIds = db.memoryItemsQueries.getMemoryVectorIdsByOwnerAndSourceKind(ownerType, ownerId, sourceKind.name)
+            .executeAsList().filter { it.isNotBlank() }
+        vectorIds.forEach { vectorId -> db.vectorMemoriesQueries.deleteVectorMemory(vectorId) }
         if (sourceKind == MemorySourceKind.PRIVATE_CHAT) {
             db.memoryLinksQueries.deleteMemoryLinksForOwnerPrivateSource(ownerType, ownerId, ownerType, ownerId)
             db.memoryBatchesQueries.deletePrivateMemoryBatchesByOwner(ownerType, ownerId)

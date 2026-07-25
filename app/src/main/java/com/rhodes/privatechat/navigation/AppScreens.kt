@@ -301,7 +301,8 @@ data class OperatorDetailRoute(val opId: String) : Screen {
                 viewModel = viewModel,
                 operator = op,
                 onBack = { navigator.pop() },
-                onOperatorClick = { clickedOp -> navigator.push(ChatOperator(clickedOp.id)) }
+                onOperatorClick = { clickedOp -> navigator.push(ChatOperator(clickedOp.id)) },
+                onGroupClick = { name, groupId -> navigator.push(GroupChatRoute(name, groupId)) }
             )
         }
     }

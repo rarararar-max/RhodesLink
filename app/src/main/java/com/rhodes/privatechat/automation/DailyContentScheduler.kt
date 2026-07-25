@@ -50,9 +50,15 @@ object DailyContentScheduler {
                 schedule(context, TYPE_MOMENT, op.id, index.toString(), scheduledTime(cycleStart, cycleEnd, "moment:${op.id}:$index", now))
             }
         }
+        val dispatchedOperatorIds = repository.getActiveDispatches()
+            .flatMap { it.operatorIds.split(",") }
+            .map(String::trim)
+            .filter(String::isNotBlank)
+            .toSet()
         val candidates = operators.filter { op ->
             settings.idleProactiveChatEnabled &&
             settings.getOperatorMsgPermission(op.id) && (0..99).random() < settings.dailyProactiveChance &&
+                op.id !in dispatchedOperatorIds &&
                 hasConversationContext(repository, op.id)
         }.shuffled().take(settings.dailyProactiveMax)
         candidates.forEachIndexed { index, op ->

@@ -52,8 +52,8 @@ class DispatchViewModel(
     private val generatingSegments = java.util.Collections.synchronizedSet(mutableSetOf<String>())
 
     private fun dispatchPrompt(mode: String, values: Map<String, String>): String {
-        val saved = settings.getString("prompt_dispatch_$mode", "").orEmpty()
-        return sharedUtils.applyTemplate(saved.ifBlank { PromptTemplates.get("dispatch", mode) }, values)
+        val template = settings.resolvePromptTemplate("dispatch", mode, PromptTemplates.get("dispatch", mode), PromptTemplates.VERSION)
+        return sharedUtils.applyTemplate(template, values)
     }
 
     private fun compactLogChain(log: String): String {

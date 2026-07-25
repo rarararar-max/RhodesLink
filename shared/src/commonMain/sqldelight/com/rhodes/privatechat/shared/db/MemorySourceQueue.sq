@@ -42,5 +42,8 @@ DELETE FROM memory_source_queue WHERE sourceRefId = ?;
 deleteMemorySourcesBySource:
 DELETE FROM memory_source_queue WHERE sourceKind = ? AND sourceRefId = ?;
 
+deleteMemorySource:
+DELETE FROM memory_source_queue WHERE id = ?;
+
 deleteProcessedMemorySourcesBefore:
 DELETE FROM memory_source_queue WHERE processedL1 = 1 AND createdAt < ?;

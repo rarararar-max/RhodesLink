@@ -128,7 +128,7 @@ private fun PrivateTab(settings: SettingsRepository) {
     Spacer(modifier = Modifier.height(12.dp))
 
     SectionTitle("旁白（线下/导演模式）")
-    ParamSlider(settings, "nar_seg_min", "最少旁白段数", 1, 0f..10f, "线下和导演模式每轮至少会保留一段旁白；此设置用于提示模型额外增加旁白的数量。线上模式用不到这个。", pairKey = "nar_seg_max", pairDefaultVal = 3, isMinSide = true)
+    ParamSlider(settings, "nar_seg_min", "最少旁白段数", 1, 1f..10f, "线下和导演模式每轮至少保留一段旁白；此设置用于增加旁白数量。线上模式用不到这个。", pairKey = "nar_seg_max", pairDefaultVal = 3, isMinSide = true)
     ParamSlider(settings, "nar_seg_max", "最多旁白段数", 3, 1f..10f, "每次回复最多带几段环境描写。建议2-3。太高（超过5）旁白比台词还多，像在读剧本不像在聊天。", pairKey = "nar_seg_min", pairDefaultVal = 1, isMinSide = false)
     ParamSlider(settings, "nar_min", "旁白最少字数", 20, 0f..1000f, "每段环境描写最少写几个字。建议20-50。太低写不出画面感，太高（超过100）一段动作描写就占了大半篇幅。", step = 5f, pairKey = "nar_max", pairDefaultVal = 300, isMinSide = true)
     ParamSlider(settings, "nar_max", "旁白最多字数", 300, 1f..1000f, "每段环境描写最多写几个字。建议200-300。太高（超过400）旁白抢了台词的风头，而且每次回复花的钱也更多。", step = 5f, pairKey = "nar_min", pairDefaultVal = 20, isMinSide = false)
@@ -145,8 +145,8 @@ private fun GroupTab(settings: SettingsRepository) {
     ParamSlider(settings, "group_msg_max", "每条消息最大字数", 100, 30f..200f, "群聊里每人每次最多说几个字。建议50-100。太低（低于30）说不完整一件事，太高（超过150）一个人刷一大段，其他人就冷场了。", step = 5f, pairKey = "group_msg_min", pairDefaultVal = 10, isMinSide = false)
 
     Spacer(Modifier.height(12.dp)); SectionTitle("发言频率")
-    ParamSlider(settings, "group_speech_min", "每轮每人最少发言", 1, 1f..3f, "每轮群聊每人至少说几次。建议1。太低（0）有人可能全程不说话，太高（超过2）每人要硬说好几轮，对话变得很刻意。", pairKey = "group_speech_max", pairDefaultVal = 2, isMinSide = true)
-    ParamSlider(settings, "group_speech_max", "每轮每人最多发言", 2, 1f..5f, "每轮群聊每人最多说几次。建议2。太高（超过4）话多的人一直刷屏，其他人插不上嘴。", pairKey = "group_speech_min", pairDefaultVal = 1, isMinSide = false)
+    ParamSlider(settings, "group_speech_min", "每轮每人最少发言", 1, 1f..20f, "每轮群聊中，每位当前成员至少说几次。数值越高，一轮消息越多、等待时间和生成消耗也会增加。", pairKey = "group_speech_max", pairDefaultVal = 2, isMinSide = true)
+    ParamSlider(settings, "group_speech_max", "每轮每人最多发言", 2, 1f..20f, "每轮群聊中，每位当前成员最多说几次。可按自己喜欢的群聊密度自由调整；成员越多、数值越高，消息会越多。", pairKey = "group_speech_min", pairDefaultVal = 1, isMinSide = false)
 
     Spacer(Modifier.height(12.dp)); SectionTitle("空闲自动聊天")
     ParamSlider(settings, "group_chat_min_interval", "空闲最小间隔(秒)", 60, 5f..600f, "上一轮自动群聊完整回复结束后，最快还要等待多久才会开始下一轮。修改后请点击页面顶部保存；建议60。太低（低于30）AI接得太快像在抢话，太高（超过300）冷场太久聊天接不上。", step = 5f, pairKey = "group_chat_max_interval", pairDefaultVal = 180, isMinSide = true)
@@ -154,7 +154,9 @@ private fun GroupTab(settings: SettingsRepository) {
     ParamSlider(settings, "group_auto_max_rounds", "空闲连续轮数", 20, 1f..300f, "AI自己聊天最多连续聊多少轮后停下来。建议10-30。太低（低于5）刚聊起来就停了，太高（超过50）AI一直聊不停，刷屏严重。", step = 1f)
 
     Spacer(Modifier.height(12.dp)); SectionTitle("群聊旁白(线下/导演)")
-    Text("线下和导演模式每轮至少有一条旁白，用于动作、环境或气氛衔接；不是每个人都一定有旁白。旁白越长，回复也会越长。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
+    Text("只在线下和导演模式生效；线上模式固定不显示旁白。旁白用于动作、环境和气氛描写，段数或长度越高，群聊越像场景演绎，消息数量和生成消耗也会增加。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
+    ParamSlider(settings, "group_nar_seg_min", "最少旁白段数", 1, 0f..20f, "线下和导演模式每轮最少出现几段旁白。设为0时该模式可以没有旁白；线上模式始终不显示旁白。", pairKey = "group_nar_seg_max", pairDefaultVal = 1, isMinSide = true)
+    ParamSlider(settings, "group_nar_seg_max", "最多旁白段数", 1, 0f..20f, "线下和导演模式每轮最多出现几段旁白。默认1段；调高后动作和场景描写会更多。", pairKey = "group_nar_seg_min", pairDefaultVal = 1, isMinSide = false)
     ParamSlider(settings, "group_nar_min", "旁白最小字数", 20, 0f..200f, "每段场景描写最少写几个字。建议20。太低（0）场景描写太短没画面感。", step = 5f, pairKey = "group_nar_max", pairDefaultVal = 100, isMinSide = true)
     ParamSlider(settings, "group_nar_max", "旁白最大字数", 100, 50f..300f, "每段场景描写最多写几个字。建议100。太高（超过200）群聊里大段旁白像在写小说而不是聊天。", step = 5f, pairKey = "group_nar_min", pairDefaultVal = 20, isMinSide = false)
 }
@@ -170,7 +172,7 @@ private fun MemoryTab(settings: SettingsRepository, onManageMemories: () -> Unit
     Spacer(modifier = Modifier.height(12.dp))
     ParamSlider(settings, "history_messages", "每次回复最多回看几轮", 10, 0f..200f, "一轮指用户一次发言及其后完整的 AI 回复；群聊中一整批成员回复也只算一轮。默认10轮。设为0就是不限制，但仍受模型自身上下文上限影响。", step = 1f)
     Spacer(modifier = Modifier.height(12.dp))
-    ParamSlider(settings, "clean_days", "近期记录整理天数", 30, 0f..365f, "聊天记录多久后自动归档整理。建议30。太低（低于7）很快就会忘事，太高（超过90）长期累积变慢。设为0就不自动整理。", step = 5f)
+    ParamSlider(settings, "clean_days", "普通记忆保留天数", 30, 0f..365f, "角色从聊天中记住的普通事件、近期感受和短期信息默认保留多久。设为0时普通记忆不会自动过期；重要偏好、禁忌和关系会按更长规则保留。不会删除聊天记录、动态、日记或派遣记录。", step = 5f)
     Spacer(modifier = Modifier.height(12.dp))
     SectionTitle("记忆生成")
     SettingsSwitchCard(
@@ -301,7 +303,7 @@ private fun SettingsSwitchCard(title: String, subtitle: String, tip: String, che
 private fun GeneralTab(settings: SettingsRepository, onPromptEditor: () -> Unit = {}) {
     SectionTitle("推荐预设")
     var contextMode by remember { mutableStateOf(settings.contextMode) }
-    Text("当前：${modeLabel(contextMode)}。选择预设会批量调整记忆条数、回看消息数和自动对话次数；你自己改过的角色说话规则不会被覆盖。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
+    Text("当前：${modeLabel(contextMode)}。选择预设会批量调整历史回看、记忆提取、自动动态和主动联系密度；你自己改过的角色说话规则不会被覆盖。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         ModeButton("省钱", contextMode == "economy", Modifier.weight(1f)) { settings.applyContextMode("economy"); contextMode = "economy" }
         ModeButton("标准", contextMode == "standard", Modifier.weight(1f)) { settings.applyContextMode("standard"); contextMode = "standard" }
@@ -310,15 +312,15 @@ private fun GeneralTab(settings: SettingsRepository, onPromptEditor: () -> Unit 
     Spacer(modifier = Modifier.height(8.dp))
     ModeInfoCard(
         "省钱模式",
-        "适合想省着用、主要手动的用户。回看最近12句，记忆12条起提取，每天自动对话最多20次，日记不自动写。"
+        "适合想省着用、主要手动的用户。少回看历史、少提取记忆；每个角色每天最多1条自动动态，最多1位角色主动联系。"
     )
     ModeInfoCard(
         "标准模式（推荐）",
-        "聊天、动态和日记都适中，适合日常。回看最近20句，记忆12条起提取，每天每人自动动态最多2条，自动对话每天40次。"
+        "平衡聊天连续性、记忆和自动内容，适合大多数新用户。每个角色每天最多1条自动动态，最多3位角色主动联系。"
     )
     ModeInfoCard(
         "完整模式",
-        "记得多、联动活跃，但每天花的次数也多。回看最近40句，记忆8条起提取，每天每人自动动态最多3条，自动对话每天80次。"
+        "更容易记住过去互动，角色联动和自动内容更活跃。每个角色每天最多3条自动动态，最多5位角色主动联系，消耗也更高。"
     )
     Spacer(modifier = Modifier.height(12.dp))
     SectionTitle("生成风格")
@@ -416,7 +418,7 @@ private fun ParamSlider(settings: SettingsRepository, key: String, label: String
                 settings.putInt(pairKey, pairValue.toInt())
                 DebugLogger.log("Settings/Param", "联动参数: $pairKey ${oldPairValue ?: 0} -> ${pairValue.toInt()}")
             }
-        }, valueRange = range, steps = ((range.endInclusive - range.start) / step).toInt(), colors = SliderDefaults.colors(thumbColor = Blue400, activeTrackColor = Blue400))
+        }, valueRange = range, steps = (((range.endInclusive - range.start) / step).toInt() - 1).coerceAtLeast(0), colors = SliderDefaults.colors(thumbColor = Blue400, activeTrackColor = Blue400))
     }
     Spacer(Modifier.height(4.dp))
 }

@@ -1,6 +1,7 @@
 package com.rhodes.privatechat.ui.prompt
 
 import android.widget.Toast
+import com.rhodes.privatechat.data.PromptPlaceholderRegistry
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -27,6 +28,8 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -376,6 +379,36 @@ fun PromptEditorScreen(
         Column(modifier = Modifier.weight(1f).imePadding()) {
         if (tabIndex < 6) {
             Column(modifier = Modifier.weight(1f).padding(12.dp)) {
+                if (tabIndex == 0) {
+                    Card(colors = CardDefaults.cardColors(containerColor = Blue400.copy(alpha = 0.08f))) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text("基础回复规则始终生效", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "系统会优先理解并回应用户当前真正想表达的内容，结合上文理解简短回复，避免重复已说过的回答、动作和场景。线下和导演模式还会保持地点、人物位置和事件连续；线上模式不生成旁白。\n\n你可以编辑角色性格、语气、世界观和互动风格。用户本轮明确的要求或场景描述优先执行。",
+                                fontSize = 11.sp,
+                                color = TextSecondary,
+                                lineHeight = 16.sp
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+                if (tabIndex == 1) {
+                    Card(colors = CardDefaults.cardColors(containerColor = Blue400.copy(alpha = 0.08f))) {
+                        Column(Modifier.padding(12.dp)) {
+                            Text("群聊模式与参数规则始终生效", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "系统会限制当前模式的旁白规则、当前成员的发言次数和消息字数，并要求只输出当前群成员的 JSON 发言。你可以编辑群聊氛围、成员关系和世界观，但不要用自定义规则绕过聊天表现设置。",
+                                fontSize = 11.sp,
+                                color = TextSecondary,
+                                lineHeight = 16.sp
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
                 OutlinedTextField(
                     value = textFieldValue,
                     onValueChange = {
@@ -439,7 +472,7 @@ fun PromptEditorScreen(
                     .padding(12.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                allPlaceholders.forEach { (key, desc) ->
+                allPlaceholders.filter { (key, _) -> key.removePrefix("{{").removeSuffix("}}") in PromptPlaceholderRegistry.allowed(currentType()) }.forEach { (key, desc) ->
                     Row(
                         modifier = Modifier.padding(vertical = 6.dp),
                         verticalAlignment = Alignment.Top
@@ -494,12 +527,12 @@ fun PromptEditorScreen(
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     Text(
-                        "提示：私聊和群聊下的子标签页（线上/线下/导演模式）的模板会根据所选模式独立加载和保存。未识别的占位符会原样保留在最终提示词中，请核对拼写。",
+                        "仅展示当前模板可用的占位符。私聊和群聊下的子标签页（线上/线下/导演模式）会根据所选模式独立加载和保存；未识别的占位符会原样保留在最终提示词中。",
                         fontSize = 13.sp,
                         color = TextSecondary,
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
-                    allPlaceholders.forEach { (key, desc) ->
+                    allPlaceholders.filter { (key, _) -> key.removePrefix("{{").removeSuffix("}}") in PromptPlaceholderRegistry.allowed(currentType()) }.forEach { (key, desc) ->
                         Row(
                             modifier = Modifier.padding(vertical = 4.dp),
                             verticalAlignment = Alignment.Top

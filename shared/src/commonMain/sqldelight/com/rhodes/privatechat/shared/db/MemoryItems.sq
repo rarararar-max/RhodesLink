@@ -44,6 +44,12 @@ SELECT * FROM memory_items ORDER BY createdAt DESC;
 getMemoryItemsByLevel:
 SELECT * FROM memory_items WHERE ownerType = ? AND ownerId = ? AND memoryLevel = ? ORDER BY createdAt DESC;
 
+getActiveMemoryItemsMissingVector:
+SELECT * FROM memory_items
+WHERE status = 'active' AND expiresAt > ? AND content != '' AND vectorId = ''
+ORDER BY createdAt ASC
+LIMIT ?;
+
 getActiveMemoryItemsByLevel:
 SELECT * FROM memory_items
 WHERE ownerType = ? AND ownerId = ? AND memoryLevel = ? AND status = 'active' AND expiresAt > ?
@@ -63,6 +69,10 @@ SELECT id FROM memory_items WHERE sessionId = ?;
 
 getMemoryVectorId:
 SELECT vectorId FROM memory_items WHERE id = ?;
+
+getMemoryVectorIdsByOwnerAndSourceKind:
+SELECT vectorId FROM memory_items
+WHERE ownerType = ? AND ownerId = ? AND sourceKind = ? AND vectorId != '';
 
 getMemoryItemsBySource:
 SELECT * FROM memory_items WHERE sourceKind = ? AND sourceRefId = ?;
@@ -120,9 +130,5 @@ deleteMemoryItemsByOwner:
 DELETE FROM memory_items WHERE ownerType = ? AND ownerId = ?;
 
 deleteExpiredMemoryItems:
-DELETE FROM memory_items
-WHERE expiresAt < ?
-  AND (
-    memoryLevel != 'L1'
-    OR memoryType NOT IN ('preference_expression', 'emotion_state', 'physiological_state')
-  );
+UPDATE memory_items SET status = 'expired', updatedAt = ?
+WHERE status = 'active' AND expiresAt < ?;

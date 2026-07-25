@@ -169,14 +169,7 @@ class ChatViewModel(
     fun getCurrentMode(): String = _currentMode.value
 
     fun getPromptTemplate(type: String, mode: String = ""): String {
-        val key = if (mode.isNotBlank()) "prompt_${type}_${mode}" else "prompt_$type"
-        val saved = settings.getString(key, "").orEmpty()
-        val customFlag = "${key}_custom"
-        if (saved.isNotBlank() && !settings.getBoolean(customFlag, false)) {
-            // Older releases did not record edit state; preserve any stored template rather than overwrite it.
-            settings.putBoolean(customFlag, true)
-        }
-        return saved.ifBlank { PromptTemplates.get(type, mode) }
+        return settings.resolvePromptTemplate(type, mode, PromptTemplates.get(type, mode), PromptTemplates.VERSION)
     }
 
     suspend fun generateShortTermSummary(session: ChatSession, messageSource: List<ChatMessage>? = null): Boolean {
@@ -596,12 +589,43 @@ ${text}"""
         return segments.count { !it.type.equals("narration", true) }
     }
 
+    private fun isCompletePrivateReply(
+        parsed: com.rhodes.privatechat.shared.model.OfflineModeResponse,
+        mode: String
+    ): Boolean {
+        val segments = parsed.segments.orEmpty().filter { it.content.isNotBlank() }
+        val hasDialogue = segments.any { !it.type.equals("narration", true) }
+        return hasDialogue && (mode == "online" || segments.any { it.type.equals("narration", true) })
+    }
+
+    /** Retries once only when a reply lacks the minimum visible structure for its mode. */
+    private suspend fun generateCompletePrivateReply(
+        messages: List<AiMessage>,
+        mode: String,
+        logTag: String = "Chat"
+    ): com.rhodes.privatechat.shared.model.OfflineModeResponse {
+        var parsed = ensureVisiblePrivateReply(withTimeout(90_000) { sharedUtils.chatWithRetry(messages, logTag, mode = mode) }, mode)
+        if (isCompletePrivateReply(parsed, mode)) return parsed
+        val requirement = if (mode == "online") {
+            "必须至少输出一条非空 dialogue；线上模式不得输出 narration。"
+        } else {
+            "必须至少输出一条非空 dialogue 和一条非空 narration；不要只输出其中一种。"
+        }
+        val retryMessages = messages.mapIndexed { index, message ->
+            if (index == 0 && message.role == "system") message.copy(content = message.content + "\n\n【重新生成要求】\n$requirement") else message
+        }
+        parsed = ensureVisiblePrivateReply(withTimeout(90_000) {
+            sharedUtils.chatWithRetry(retryMessages, "${logTag}ContentRetry", mode = mode)
+        }, mode)
+        return parsed
+    }
+
     private fun ensureVisiblePrivateReply(
         parsed: com.rhodes.privatechat.shared.model.OfflineModeResponse,
         mode: String
     ): com.rhodes.privatechat.shared.model.OfflineModeResponse {
         val source = parsed.segments.orEmpty().mapNotNull { segment ->
-            val content = segment.content.trim()
+            val content = stripLeakedSegmentLabel(segment.content)
             if (content.isBlank()) null else com.rhodes.privatechat.shared.model.Segment(
                 type = if (segment.type.equals("narration", true) || segment.type == "旁白") "narration" else "dialogue",
                 content = content
@@ -613,30 +637,14 @@ ${text}"""
             return if (dialogue.isEmpty()) parsed else parsed.copy(dialogue = "", narration = "", segments = dialogue)
         }
         if (source.isEmpty() || source.none { it.type == "dialogue" }) return parsed.copy(segments = emptyList(), dialogue = "", narration = "")
-        if (mode == "offline") {
-            // Offline replies require visible speech as well as scene narration.
-            return parsed.copy(dialogue = "", narration = "", segments = source)
-        }
-        val normalized = mutableListOf<com.rhodes.privatechat.shared.model.Segment>()
-        val actionPrefix = Regex("""^[（(]([^）)]{1,180})[）)]\s*""")
-        for (segment in source) {
-            val content = segment.content.trim()
-            if (segment.type.equals("dialogue", true)) {
-                val match = actionPrefix.find(content)
-                if (match != null) {
-                    normalized += com.rhodes.privatechat.shared.model.Segment("narration", match.groupValues[1])
-                    val spoken = content.removeRange(match.range).trim()
-                    if (spoken.isNotBlank()) normalized += com.rhodes.privatechat.shared.model.Segment("dialogue", spoken)
-                } else {
-                    normalized += com.rhodes.privatechat.shared.model.Segment("dialogue", content)
-                }
-            } else {
-                normalized += com.rhodes.privatechat.shared.model.Segment("narration", content)
-            }
-        }
-        if (normalized.none { it.type == "dialogue" }) return parsed
-        return parsed.copy(dialogue = "", narration = "", segments = normalized)
+        return parsed.copy(dialogue = "", narration = "", segments = source)
     }
+
+    /** Removes only the exact structural labels leaked at the start of a model segment. */
+    private fun stripLeakedSegmentLabel(content: String): String = content.trimStart()
+        .removePrefix("【旁白】")
+        .removePrefix("【台词】")
+        .trimStart()
 
     fun cancelSessionRequests(sessionId: String) {
         sessionGenerations.merge(sessionId, 1L) { old, increment -> old + increment }
@@ -807,8 +815,7 @@ ${recentDialogues}
                             mode = mode,
                             messages = apiMessages
                         )
-                        var parsed = withTimeout(90_000) { sharedUtils.chatWithRetry(apiMessages) }
-                        parsed = ensureVisiblePrivateReply(parsed, mode)
+                        val parsed = generateCompletePrivateReply(apiMessages, mode)
                         logPrivatePromptTrace(
                             stage = "RESPONSE",
                             sessionId = session.id,
@@ -824,7 +831,7 @@ ${recentDialogues}
                         }
                         val serializedJson = try { json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed) } catch (_: Exception) { parsed.toString() }
                         val rawJson = sharedUtils.aiService.cleanJson(serializedJson)
-                        val hasVisibleReply = rawJson.isNotBlank() && visiblePrivateSegmentCount(parsed, mode) > 0
+                        val hasVisibleReply = rawJson.isNotBlank() && isCompletePrivateReply(parsed, mode)
                         val aiResponseCount = if (hasVisibleReply) visiblePrivateSegmentCount(parsed, mode) else 0
                         if (hasVisibleReply) {
                             if ((sessionGenerations[session.id] ?: 0L) != generation) return@launch
@@ -1012,12 +1019,11 @@ ${recentDialogues}
 
                 val apiMessages = buildApiMessages(session, userContent, settings.historyMessages, mode = mode)
                 Log.d("RHODES_VISION", "开始 AI 调用: apiMessages 数量=${apiMessages.size}")
-                var parsed = withTimeout(90_000) { sharedUtils.chatWithRetry(apiMessages) }
+                val parsed = generateCompletePrivateReply(apiMessages, mode, "VisionChat")
                 Log.d("RHODES_VISION", "图片角色回复解析成功")
-                parsed = ensureVisiblePrivateReply(parsed, mode)
                 val rawJson = sharedUtils.aiService.cleanJson(json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed))
                 val aiMsgId = repository.getNextMessageId()
-                val hasVisibleReply = rawJson.isNotBlank() && visiblePrivateSegmentCount(parsed, mode) > 0
+                val hasVisibleReply = rawJson.isNotBlank() && isCompletePrivateReply(parsed, mode)
                 if (hasVisibleReply) {
                     if ((sessionGenerations[session.id] ?: 0L) != generation) return@launch
                     repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = rawJson, type = "ai_json", mode = mode, isMe = false))
@@ -1219,7 +1225,7 @@ ${recentDialogues}
         val userMsg = messageSnapshot.take(idx).lastOrNull { it.isMe } ?: return
         val originalReply = messageSnapshot.getOrNull(idx) ?: return
         val previousReply = originalReply.content
-        val mode = _currentMode.value
+        val mode = originalReply.mode.ifBlank { _currentMode.value }
         chatAiJobs[session.id]?.cancel()
         val requestId = requestSequence.incrementAndGet()
         val job = viewModelScope.launch {
@@ -1243,12 +1249,11 @@ ${recentDialogues}
                     historyBeforeMessageId = msgId,
                     mode = mode
                 )
-                var parsed = withTimeout(90_000) { sharedUtils.chatWithRetry(apiMessages) }
-                parsed = ensureVisiblePrivateReply(parsed, mode)
+                val parsed = generateCompletePrivateReply(apiMessages, mode, "ChatRegenerate")
                 sharedUtils.trackTokens("private", apiMessages, parsed.toString())
                 val serializedJson = try { json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed) } catch (_: Exception) { parsed.toString() }
                 val rawJson = sharedUtils.aiService.cleanJson(serializedJson)
-                if (rawJson.isNotBlank() && visiblePrivateSegmentCount(parsed, mode) > 0) {
+                if (rawJson.isNotBlank() && isCompletePrivateReply(parsed, mode)) {
                     // Preserve the original row and timestamp so regeneration stays in place.
                     repository.updateMessageContentAndPreview(session.id, msgId, rawJson, originalReply.timestamp)
                     markUnreadIfNotCurrent(session.id)
@@ -1281,7 +1286,7 @@ ${recentDialogues}
         val session = _currentSession.value ?: return
         val idx = _messages.value.indexOfFirst { it.id == msgId }
         if (idx < 0) return
-        val mode = _currentMode.value
+        val mode = _messages.value.getOrNull(idx)?.mode?.ifBlank { _currentMode.value } ?: _currentMode.value
         chatAiJobs[session.id]?.cancel()
         val requestId = requestSequence.incrementAndGet()
         val job = viewModelScope.launch {
@@ -1352,12 +1357,11 @@ ${recentDialogues}
                 }
 
                 val apiMessages = buildApiMessages(session, previousUser?.content ?: "", mode = mode)
-                var parsed = withTimeout(90_000) { sharedUtils.chatWithRetry(apiMessages) }
-                parsed = ensureVisiblePrivateReply(parsed, mode)
+                val parsed = generateCompletePrivateReply(apiMessages, mode, "ChatContinue")
                 sharedUtils.trackTokens("private", apiMessages, parsed.toString())
-                val serializedJson = try { json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed) } catch (_: Exception) { parsed.toString() }
-                if (visiblePrivateSegmentCount(parsed, mode) > 0) {
-                    repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = serializedJson, type = "ai_json", mode = mode, isMe = false))
+                val serializedJson = runCatching { json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed) }.getOrNull()
+                if (serializedJson != null && isCompletePrivateReply(parsed, mode)) {
+                    repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = sharedUtils.aiService.cleanJson(serializedJson), type = "ai_json", mode = mode, isMe = false))
                     onUnhideSession(session.id)
                     markUnreadIfNotCurrent(session.id)
                 } else {
@@ -1528,7 +1532,6 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
                 messages = messages,
                 currentRound = settings.getSessionMessageCounter(session.id)
             )
-            true
         } catch (e: Exception) {
             DebugLogger.log("MemoryV2", "私聊L1写入失败: ${e.message?.take(80)}")
             false
@@ -1703,13 +1706,10 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             .ifBlank { userContent }
         val groupContext = buildPrivateGroupContext(session.operatorId, userContent)
         val stableImpression = memoryV2Pipeline.buildPrivateStableImpression(session.operatorId)
-        val personalMemoryContext = memoryV2Pipeline.buildPrivateMemoryContext(
-                operatorId = session.operatorId,
-                limitL1 = if (wantsRecall) 6 else 3,
-                limitL2 = 0,
-                limitL3 = 0,
-                query = recallQuery
-            )
+        val personalMemoryContext = memoryV2Pipeline.buildPrivateChatMemoryContext(
+            operatorId = session.operatorId,
+            query = recallQuery
+        )
         val relationshipMemoryContext = memoryV2Pipeline.buildRelationshipPrivateMemoryContext(
             operatorId = session.operatorId,
             query = recallQuery,
@@ -1736,6 +1736,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         )
         val replacements = mapOf(
             "CURRENT_TIME" to sharedUtils.beijingPromptTime(),
+            "CURRENT_DATE" to sharedUtils.beijingSdf("yyyy-MM-dd").format(java.util.Date()),
             "USER_NAME" to profile.nickname, "USER_GENDER" to profile.gender.ifBlank { "未知" }, "USER_BIO" to profile.bio.ifBlank { "无" },
             "AI_ANALYSIS" to analysisBlock,             "HYPNOSIS" to hypnosisBlock,
             "TRANSITION_NOTICE" to transitionNotice,
@@ -1755,6 +1756,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             "SHORT_TERM_SUMMARY" to (shortTerm?.content ?: "无"),
             "GROUP_CONTEXT" to groupContext,
             "USER_RELATION" to (op?.userRelation?.ifBlank { "未知" } ?: "未知"),
+            "USER_CONTENT" to userContent,
             "NAR_SEG_MIN" to settings.narSegMin.toString(), "NAR_SEG_MAX" to settings.narSegMax.toString(),
             "NAR_MIN" to settings.narMin.toString(), "NAR_MAX" to settings.narMax.toString(),
             "DIA_SEG_MIN" to settings.diaSegMin.toString(), "DIA_SEG_MAX" to settings.diaSegMax.toString(),
@@ -1801,7 +1803,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             |共同经历引用风格：${when (settings.personalMemoryReferenceStyle) { "restrained" -> "只在用户明确问起或话题高度相关时提及"; "proactive" -> "话题有联系时可主动自然提及共同经历"; else -> "话题相关时自然提及共同经历，不要无故翻旧账" }}
             |长期稳定印象：${stableImpression.ifBlank { "无" }}
             |临时指令：${listOf(analysisBlock, hypnosisBlock, transitionNotice).filter { it.isNotBlank() }.joinToString("\n").ifBlank { "无" }}
-            |格式边界：${if (mode == "offline") "每轮必须至少有一条 dialogue 和一条 narration；旁白必须为第三人称，严禁含我、我们、咱、咱们、本人等第一人称；dialogue 可使用简短（）表达语气、表情或简单动作。" else if (mode == "director") "必须至少有一条 dialogue；旁白段数为 ${settings.narSegMin} 到 ${settings.narSegMax} 段。动作、表情、环境只写 narration；dialogue 只写说出口台词，禁止括号动作。" else "只允许第一人称 dialogue；每段必须像角色亲自发送的聊天文字。禁止 narration、动作、神态、环境、角色名加动作、他/她等第三人称叙述；禁止“角色名皱眉”“她沉默片刻”这类小说句式。"}
+            |格式边界：${if (mode == "offline" || mode == "director") "每轮必须至少有一条 dialogue 和一条 narration；旁白必须为第三人称，严禁含我、我们、咱、咱们、本人等第一人称；dialogue 只写说出口台词，允许用简短（）表达语气、表情或简单动作。" else "只允许第一人称 dialogue；每段必须像角色亲自发送的聊天文字。禁止 narration、动作、神态、环境、角色名加动作、他/她等第三人称叙述；禁止“角色名皱眉”“她沉默片刻”这类小说句式。"}
         """.trimMargin()
         val rawMsgs = repository.getMessagesSync(session.id).let { msgs ->
             val scoped = historyBeforeMessageId?.let { targetId -> msgs.takeWhile { it.id != targetId } } ?: msgs
@@ -1815,7 +1817,8 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         if (rawMsgs.lastOrNull()?.isMe == true && rawMsgs.last().content == userContent) {
             rawMsgs.removeAt(rawMsgs.lastIndex)
         }
-        val messages = mutableListOf(AiMessage("system", "CACHE_PRIVATE_V5:private:$mode\n$protocol\n\n$persona\n\n$context"))
+        val foundation = privateReplyFoundation(mode)
+        val messages = mutableListOf(AiMessage("system", "CACHE_PRIVATE_V6:private:$mode\n$foundation\n\n$protocol\n\n$persona\n\n$context"))
         rawMsgs.forEach { msg ->
             val formatted = formatPrivateHistoryForPrompt(msg).take(1200)
             if (formatted.isNotBlank()) {
@@ -1838,6 +1841,28 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         }
         return messages
     }
+
+    /** Fixed guardrails keep private-chat continuity intact even when users customize templates. */
+    private fun privateReplyFoundation(mode: String): String = buildString {
+        appendLine("【系统基础回复规则 · 高于自定义提示词】")
+        appendLine("内容决策优先级：用户本轮明确要求或明确描述的场景事实 > 本规则 > 用户自定义角色提示词 > 历史与记忆背景。输出格式规则只约束 JSON 结构，不改变这条内容优先级。")
+        appendLine("- 先判断用户是在提问、表达情绪、邀请、拒绝、确认、补充还是推进场景；优先回应其当前最具体的真实意图，不要只抓字面词。")
+        appendLine("- 需要答案时给明确的角色化回答；需要情绪回应时先接住感受；需要行动反馈或场景推进时只推进与当前事件直接相关的一步。")
+        appendLine("- 结合最近对话理解“嗯”“这个”“第二个”等简短回复；除非确实存在多个同等合理的指代，不要脱离上下文追问用户是什么意思。")
+        appendLine("【回复前内部判断，不要输出分析过程】")
+        appendLine("- 结合最近对话和用户本轮发言，先确认用户正在问什么、想确认什么、表达什么情绪，以及希望得到回应还是行动反馈。")
+        appendLine("- 对“这个、那个、他、她、它、这里、刚才、第二个、嗯、好、不要”等代称或短回复，优先从最近未结束的话题、选项、人物和行动中确定指向；证据不足时才简短确认。")
+        appendLine("- 优先回应用户明确表达的内容；只有最近上下文有充分依据时，才自然照顾可能的隐含情绪或需求，不能把猜测当成事实。")
+        appendLine("- 本轮必须提供新的有效回应：不要换词复述上一轮已经完成的答案、安慰、提问、邀请、动作或场景。用户明确要求重复时除外。")
+        appendLine("- 自定义提示词可规定角色性格、语气、世界观和互动偏好，但不能要求角色无故忽略用户当前发言、无故跳场景或机械重复。")
+        if (mode != "online") {
+            appendLine("【线下/导演场景连续性】")
+            appendLine("- 最近一轮已确认的地点、人物位置、姿势、动作、物品、在场人物、情绪和未完成事件默认持续有效。")
+            appendLine("- 用户未明确改变场景时，不得无解释地换地点、时间、位置或正在做的事；需要移动、开始事件或取得物品时，先在 narration 中交代过程，再由 dialogue 自然承接。")
+            appendLine("- narration 与相邻 dialogue 必须属于同一个即时事件：旁白说明角色为何这样说、正在做什么或场景如何变化；台词回应用户、该动作或该变化，不得各说各话。")
+            if (mode == "director") appendLine("- 用户明确建立的新场景、时间变化、移动或事件结果视为真实发生；以用户描述为准，但要把上一轮未结束的事件和情绪自然衔接到新场景，不替用户补写关键决定、内心或结果。")
+        }
+    }.trim()
 
     /** A private round starts with one user message and includes all following AI output until the next user message. */
     private fun recentPrivateRounds(messages: List<ChatMessage>, roundLimit: Int): List<ChatMessage> {

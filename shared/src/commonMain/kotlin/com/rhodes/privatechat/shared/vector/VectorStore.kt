@@ -18,6 +18,8 @@ data class VectorMemory(
     val embeddingSignature: String = "",
     val createdAt: Long = 0L,
     val expiresAt: Long = Long.MAX_VALUE,
+    /** Runtime-only retrieval score; not persisted by the vector store. */
+    val similarity: Double = 0.0,
 )
 
 @Serializable
@@ -39,6 +41,10 @@ data class VectorSearchRequest(
     val minCreatedAt: Long = 0L,
     val minImportance: Double = 0.0,
     val embeddingSignature: String = "",
+    /** Restricts the SQL candidate pool before scoring when a caller needs a tier quota. */
+    val candidateSourceType: String = "",
+    val preferRecentCandidates: Boolean = false,
+    val maxCreatedAt: Long = Long.MAX_VALUE,
 )
 
 interface VectorStoreGateway {

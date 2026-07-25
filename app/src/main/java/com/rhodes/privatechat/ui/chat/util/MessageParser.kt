@@ -109,7 +109,7 @@ object MessageParser {
                 val rawContent = obj["message"]?.jsonPrimitive?.content ?: obj["content"]?.jsonPrimitive?.content ?: obj["text"]?.jsonPrimitive?.content ?: return@mapIndexedNotNull null
                 val msgType = if (rawName == "旁白" || obj["type"]?.jsonPrimitive?.content.equals("narration", true)) "narration" else "dialogue"
                 val name = if (msgType == "narration") "旁白" else rawName
-                val content = rawContent.trim()
+                val content = stripLeakedSegmentLabel(rawContent)
                 if (content.isBlank()) return@mapIndexedNotNull null
                 if (isOnline && (msgType == "narration" || name == "旁白")) return@mapIndexedNotNull null
                 val uid = msg.id * 1000 + idx
@@ -150,16 +150,18 @@ object MessageParser {
         }
         var segIdx = 0
         for (seg in segments) {
+            val displayContent = stripLeakedSegmentLabel(seg.content)
+            if (displayContent.isBlank()) continue
             if (seg.type == "narration") {
                 if (!isOnline) {
                     result.add(ChatUiMessage(
-                        msg.id * 1000 + segIdx, "旁白", TextTertiary, seg.content, msg.timestamp,
+                        msg.id * 1000 + segIdx, "旁白", TextTertiary, displayContent, msg.timestamp,
                         isSystem = true, isNarration = true, mode = msg.mode, isArchived = isArchived(msg, restartAt), originalMessageId = msg.id, segmentIndex = segIdx
                     ))
                 }
             } else {
                 result.add(ChatUiMessage(
-                    msg.id * 1000 + segIdx, aiName, Primary, seg.content, msg.timestamp,
+                    msg.id * 1000 + segIdx, aiName, Primary, displayContent, msg.timestamp,
                     avatarUri = aiAvatarUri, mode = msg.mode,
                     emotion = emotion, activity = msg.activity, location = msg.location,
                     isArchived = isArchived(msg, restartAt),
@@ -181,15 +183,19 @@ object MessageParser {
             } ?: emptyList()
             if (segments.isEmpty()) {
                 val dialogue = obj["dialogue"]?.jsonPrimitive?.content
+                val narration = obj["narration"]?.jsonPrimitive?.content
                 if (!dialogue.isNullOrBlank()) {
                     if (looksLikeJson(dialogue)) {
                         val nested = parsePrivateJson(dialogue)
                         if (nested.second.isNotEmpty()) nested else emotion to listOf(com.rhodes.privatechat.network.Segment(type = "dialogue", content = dialogue))
                     } else {
-                        emotion to listOf(com.rhodes.privatechat.network.Segment(type = "dialogue", content = dialogue))
+                        emotion to buildList {
+                            narration?.takeIf { it.isNotBlank() }?.let { add(com.rhodes.privatechat.network.Segment(type = "narration", content = it)) }
+                            add(com.rhodes.privatechat.network.Segment(type = "dialogue", content = dialogue))
+                        }
                     }
                 } else {
-                    emotion to segments
+                    emotion to narration?.takeIf { it.isNotBlank() }?.let { listOf(com.rhodes.privatechat.network.Segment(type = "narration", content = it)) }.orEmpty()
                 }
             } else {
                 emotion to segments
@@ -262,6 +268,12 @@ object MessageParser {
         extractStringFieldLenient(content, "message")?.takeIf { it.isNotBlank() && !looksLikeJson(it) }?.let { return it }
         return if (looksLikeJson(content)) "[消息格式异常，已隐藏原始结构]" else content.ifBlank { "[消息解析失败]" }
     }
+
+    /** Removes only the exact structural labels leaked at the start of a model segment. */
+    private fun stripLeakedSegmentLabel(content: String): String = content.trimStart()
+        .removePrefix("【旁白】")
+        .removePrefix("【台词】")
+        .trimStart()
 
     private fun looksLikeJson(content: String): Boolean {
         val t = content.trim()

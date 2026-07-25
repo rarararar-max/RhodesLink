@@ -110,6 +110,8 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun deleteMemoryV2ByOwnerAndSourceKind(ownerType: String, ownerId: String, sourceKind: MemorySourceKind) = memoryV2.deleteByOwnerAndSourceKind(ownerType, ownerId, sourceKind)
     suspend fun deleteMemoryItemsBySession(sessionId: String) = memoryV2.deleteMemoryItemsBySession(sessionId)
     suspend fun deleteMemoryV2BySource(sourceKind: MemorySourceKind, sourceRefId: String) = memoryV2.deleteBySource(sourceKind, sourceRefId)
+    suspend fun getActiveMemoryItemsMissingVector(now: Long, limit: Int) = memoryV2.getActiveMemoryItemsMissingVector(now, limit)
+    suspend fun deleteMemorySource(id: Long) = memoryV2.deleteMemorySource(id)
 
     /** Raw public content and its unified-memory projections must expire together. */
     suspend fun deleteExpiredSocialContent(momentCutoff: Long?, commentCutoff: Long?, userName: String) = withContext(Dispatchers.Default) {

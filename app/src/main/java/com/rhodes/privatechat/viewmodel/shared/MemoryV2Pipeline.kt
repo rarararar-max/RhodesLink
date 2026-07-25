@@ -41,8 +41,8 @@ class MemoryV2Pipeline(
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
-    suspend fun ingestPrivateChat(sessionId: String, operatorId: String, operatorName: String, messages: List<ChatMessage>, currentRound: Int) {
-        if (messages.isEmpty()) return
+    suspend fun ingestPrivateChat(sessionId: String, operatorId: String, operatorName: String, messages: List<ChatMessage>, currentRound: Int): Boolean {
+        if (messages.isEmpty()) return true
         val sourceText = messages.joinToString("\n") { formatPrivateMessage(it) }
         val source = MemorySourceItem(
             sourceKind = MemorySourceKind.PRIVATE_CHAT,
@@ -55,15 +55,21 @@ class MemoryV2Pipeline(
         )
         val sourceId = repository.insertMemorySource(source)
 
-        val l1 = extractL1(
-            sourceKind = MemorySourceKind.PRIVATE_CHAT,
-            text = sourceText,
-            ownerType = "operator",
-            ownerId = operatorId,
-            sourceRefId = sessionId,
-            sessionId = sessionId,
-            operatorName = operatorName
-        )
+        val l1 = try {
+            extractL1(
+                sourceKind = MemorySourceKind.PRIVATE_CHAT,
+                text = sourceText,
+                ownerType = "operator",
+                ownerId = operatorId,
+                sourceRefId = sessionId,
+                sessionId = sessionId,
+                operatorName = operatorName
+            )
+        } catch (e: Exception) {
+            com.rhodes.privatechat.util.DebugLogger.log("MemoryV2", "私聊L1提取失败，将在后续消息时重试: ${e.message?.take(80)}")
+            if (sourceId > 0) repository.deleteMemorySource(sourceId)
+            return false
+        }
         if (l1.isNotEmpty()) {
             saveMemoryItems(l1)
             repository.saveMemoryBatch(MemoryBatch(
@@ -81,10 +87,11 @@ class MemoryV2Pipeline(
         }
         if (sourceId > 0) repository.markMemorySourceProcessedL1(sourceId)
         maybePromotePrivateMemory(operatorId, thresholdL1 = settings.memoryV2PromoteL1Threshold, thresholdL2 = settings.memoryV2PromoteL2Threshold)
+        return true
     }
 
-    suspend fun ingestGroupChat(groupId: String, groupName: String, messages: List<ChatMessage>, memberIds: List<String>) {
-        if (messages.isEmpty()) return
+    suspend fun ingestGroupChat(groupId: String, groupName: String, messages: List<ChatMessage>, memberIds: List<String>): Boolean {
+        if (messages.isEmpty()) return true
         val sourceText = messages.joinToString("\n") { formatGroupMessage(groupName, it) }
         // A group has many extraction windows.  Use the window identity rather than the group
         // identity so deleting one source in memory management cannot purge the whole group.
@@ -100,7 +107,13 @@ class MemoryV2Pipeline(
                 createdAt = System.currentTimeMillis()
             )
         )
-        val l1 = extractGroupL1(groupId, groupName, sourceText, sourceRefId)
+        val l1 = try {
+            extractGroupL1(groupId, groupName, sourceText, sourceRefId)
+        } catch (e: Exception) {
+            com.rhodes.privatechat.util.DebugLogger.log("MemoryV2", "群聊L1提取失败，将在后续消息时重试: ${e.message?.take(80)}")
+            if (sourceId > 0) repository.deleteMemorySource(sourceId)
+            return false
+        }
         if (l1.isNotEmpty()) {
             val savedGroupItems = saveMemoryItems(l1)
             repository.saveMemoryBatch(MemoryBatch(
@@ -141,6 +154,7 @@ class MemoryV2Pipeline(
         }
         if (sourceId > 0) repository.markMemorySourceProcessedL1(sourceId)
         maybePromoteOwnerMemory("group", groupId, MemorySourceKind.GROUP_CHAT, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
+        return true
     }
 
     suspend fun ingestMoment(moment: Moment, contextGroup: String = "") {
@@ -233,7 +247,10 @@ class MemoryV2Pipeline(
 
     private suspend fun maybePromoteOwnerMemory(ownerType: String, ownerId: String, sourceKind: MemorySourceKind, thresholdL1: Int, thresholdL2: Int) {
         val now = System.currentTimeMillis()
+        // Promotion must preserve the source boundary. In particular, group knowledge must not
+        // become a character's private-chat impression just because it has a copied owner.
         val l1Items = repository.getActiveMemoryItemsByLevel(ownerType, ownerId, MemoryLevel.L1, now)
+            .filter { it.sourceKind == sourceKind }
         val l1Topic = pickPromotionTopic(l1Items, thresholdL1)
         if (l1Topic != null) {
             val selected = l1Topic.items
@@ -268,6 +285,7 @@ class MemoryV2Pipeline(
         }
 
         val l2Items = repository.getActiveMemoryItemsByLevel(ownerType, ownerId, MemoryLevel.L2, now)
+            .filter { it.sourceKind == sourceKind }
         val l2Topic = pickPromotionTopic(l2Items, thresholdL2, requireStable = true)
         if (l2Topic != null) {
             val selected = l2Topic.items
@@ -307,6 +325,125 @@ class MemoryV2Pipeline(
         return listOf(
             personal.takeIf { it.isNotBlank() },
         ).filterNotNull().joinToString("\n")
+    }
+
+    /** Private chat prioritizes recent facts without letting long-term memories fill the candidate pool. */
+    suspend fun buildPrivateChatMemoryContext(operatorId: String, query: String): String {
+        if (query.isBlank()) return ""
+        val now = System.currentTimeMillis()
+        val vectorService = memoryVectorService ?: return ""
+        val budget = privateRecallBudget(settings.memoryRecallMode)
+        val recentCutoff = now - 30L * 86_400_000L
+        val candidates = buildList {
+            addAll(recallPrivateTier(vectorService, operatorId, query, "memory_v2_l1", budget.recentL1, recentCutoff, Long.MAX_VALUE, true, now))
+            addAll(recallPrivateTier(vectorService, operatorId, query, "memory_v2_l1", budget.olderL1, 0L, recentCutoff, false, now))
+            addAll(recallPrivateTier(vectorService, operatorId, query, "memory_v2_l2", budget.l2, 0L, Long.MAX_VALUE, false, now))
+            addAll(recallPrivateTier(vectorService, operatorId, query, "memory_v2_l3", budget.l3, 0L, Long.MAX_VALUE, false, now))
+            addAll(recallPrivateTier(vectorService, operatorId, query, "manual_memory", budget.manual, 0L, Long.MAX_VALUE, false, now))
+            if (isVisualRecallQuery(query)) {
+                addAll(recallPrivateTier(vectorService, operatorId, query, "anchor_vision", 10, recentCutoff, Long.MAX_VALUE, true, now))
+            }
+        }.distinctBy { it.id }
+
+        val ranked = candidates.mapNotNull { memory ->
+            val type = memory.tags.split(',').getOrNull(1).orEmpty()
+            val threshold = minimumPrivateSimilarity(memory.sourceType, type, query)
+            if (memory.similarity < threshold) null else memory to privateRecallScore(memory, type, now)
+        }.sortedByDescending { it.second }.map { it.first }
+
+        val recallQuestion = UnifiedMemoryContext.shouldIncludeTimeSummary(query)
+        val selected = selectPrivateInjection(ranked, recallQuestion, isVisualRecallQuery(query), now)
+        val lines = selected.joinToString("\n") { "- ${it.content.take(180)}" }
+        return lines.takeIf { it.isNotBlank() }?.let { "【与当前话题相关的经历】\n$it" }.orEmpty()
+    }
+
+    private data class PrivateRecallBudget(val recentL1: Int, val olderL1: Int, val l2: Int, val l3: Int, val manual: Int)
+
+    private fun privateRecallBudget(mode: String): PrivateRecallBudget = when (mode) {
+        "fast" -> PrivateRecallBudget(recentL1 = 80, olderL1 = 20, l2 = 30, l3 = 20, manual = 20)
+        "deep" -> PrivateRecallBudget(recentL1 = 260, olderL1 = 100, l2 = 100, l3 = 40, manual = 40)
+        else -> PrivateRecallBudget(recentL1 = 150, olderL1 = 50, l2 = 60, l3 = 30, manual = 30)
+    }
+
+    private suspend fun recallPrivateTier(
+        vectorService: MemoryVectorService,
+        operatorId: String,
+        query: String,
+        sourceType: String,
+        limit: Int,
+        minCreatedAt: Long,
+        maxCreatedAt: Long,
+        preferRecent: Boolean,
+        now: Long,
+    ): List<VectorMemory> {
+        if (limit <= 0) return emptyList()
+        return runCatching {
+            vectorService.search(VectorSearchRequest(
+                ownerType = "operator", ownerId = operatorId, query = query,
+                limit = limit, sourceTypes = listOf(sourceType), minScore = 0.0, now = now,
+                candidateLimit = limit, minCreatedAt = minCreatedAt,
+                maxCreatedAt = maxCreatedAt, candidateSourceType = sourceType, preferRecentCandidates = preferRecent,
+            ))
+        }.getOrDefault(emptyList())
+    }
+
+    private fun minimumPrivateSimilarity(sourceType: String, memoryType: String, query: String): Double {
+        val protected = memoryType in setOf("agreement_commitment", "care_reminder", "preference_expression")
+        val recallQuestion = UnifiedMemoryContext.shouldIncludeTimeSummary(query)
+        return when {
+            protected && recallQuestion -> 0.14
+            sourceType == "anchor_vision" -> 0.22
+            sourceType == "memory_v2_l1" && memoryType in setOf("emotion_state", "behavior_state", "physiological_state", "event") -> 0.22
+            sourceType in setOf("memory_v2_l3", "manual_memory") || protected -> 0.18
+            else -> 0.20
+        }
+    }
+
+    private fun isVisualRecallQuery(query: String): Boolean = listOf(
+        "图片", "照片", "相片", "图里", "图中", "这张", "那张", "截图", "画面", "看见", "看到", "物品", "东西"
+    ).any { query.contains(it) }
+
+    private fun privateRecallScore(memory: VectorMemory, memoryType: String, now: Long): Double {
+        val ageDays = ((now - memory.createdAt).coerceAtLeast(0L) / 86_400_000L).coerceAtMost(90L)
+        val recency = when (memory.sourceType) {
+            "memory_v2_l1" -> (30.0 - ageDays.coerceAtMost(30L)) / 30.0
+            "memory_v2_l2" -> (45.0 - ageDays.coerceAtMost(45L)) / 45.0
+            else -> 0.5
+        }
+        val typeBonus = when (memoryType) {
+            "agreement_commitment", "care_reminder" -> 0.05
+            "preference_expression" -> 0.03
+            else -> 0.0
+        }
+        return memory.similarity * 0.70 + memory.importance * 0.15 + recency * 0.10 + typeBonus
+    }
+
+    private fun selectPrivateInjection(candidates: List<VectorMemory>, expanded: Boolean, visualQuery: Boolean, now: Long): List<VectorMemory> {
+        val maxCount = if (expanded) 6 else 4
+        val recentL1Limit = if (expanded) 3 else 2
+        val selected = mutableListOf<VectorMemory>()
+        val selectedTopics = mutableSetOf<String>()
+
+        fun addMatching(limit: Int, predicate: (VectorMemory) -> Boolean) {
+            candidates.asSequence().filter(predicate).forEach { memory ->
+                if (selected.size >= maxCount || selected.count(predicate) >= limit) return@forEach
+                val topic = normalizeForDedup("injected", memory.content)
+                if (selectedTopics.add(topic)) selected += memory
+            }
+        }
+
+        addMatching(recentL1Limit) { it.sourceType == "memory_v2_l1" && now - it.createdAt <= 30L * 86_400_000L }
+        if (visualQuery) {
+            // A directly relevant image should not be crowded out by generic long-term context.
+            addMatching(1) { it.sourceType == "anchor_vision" }
+        }
+        addMatching(1) { it.sourceType in setOf("memory_v2_l2", "memory_v2_l3", "manual_memory") }
+        addMatching(1) {
+            val type = it.tags.split(',').getOrNull(1)
+            type in setOf("agreement_commitment", "care_reminder", "preference_expression")
+        }
+        addMatching(maxCount) { true }
+        return selected.take(maxCount)
     }
 
     /**
@@ -358,6 +495,7 @@ class MemoryV2Pipeline(
     suspend fun buildPrivateStableImpression(operatorId: String, limit: Int = 3): String {
         val now = System.currentTimeMillis()
         val items = repository.getActiveMemoryItemsByLevel("operator", operatorId, MemoryLevel.L3, now)
+            .filter { it.sourceKind == MemorySourceKind.PRIVATE_CHAT }
             .take(limit)
         return items.joinToString("\n") { "- ${it.content.take(180)}" }
             .takeIf { it.isNotBlank() }
@@ -663,18 +801,19 @@ class MemoryV2Pipeline(
     private suspend fun saveMemoryItemToVector(id: Long, item: MemoryItem) {
         val service = memoryVectorService ?: return
         if (item.content.isBlank()) return
-        val vectorId = "memory_v2_${item.ownerType}_${item.ownerId}_${item.memoryLevel.name.lowercase()}_$id"
+        val indexed = item.copy(id = id)
+        val vectorId = MemoryVectorFormatter.vectorId(indexed)
         try {
             service.saveMemory(
                 VectorMemory(
                     id = vectorId,
                     ownerType = item.ownerType,
                     ownerId = item.ownerId,
-                    sourceType = "memory_v2_${item.memoryLevel.name.lowercase()}",
+                    sourceType = MemoryVectorFormatter.sourceType(indexed),
                     sourceId = item.sourceRefId.ifBlank { item.sessionId },
-                    content = formatVectorContent(item),
+                    content = MemoryVectorFormatter.content(indexed),
                     importance = item.importance.coerceIn(0, 100) / 100.0,
-                    tags = listOf(item.memoryLevel.name, item.memoryType, item.sourceKind.name).joinToString(","),
+                    tags = MemoryVectorFormatter.tags(indexed),
                     visibility = item.privacy ?: defaultPrivacy(item.sourceKind),
                     createdAt = item.createdAt,
                     expiresAt = item.expiresAt,
@@ -720,24 +859,6 @@ class MemoryV2Pipeline(
         else -> "shared"
     }
 
-    private fun formatVectorContent(item: MemoryItem): String {
-        val time = item.eventTime?.takeIf { it.isNotBlank() }
-            ?: item.scheduledTime?.takeIf { it.isNotBlank() }?.let { "约定 $it" }
-            ?: item.createdAt.takeIf { it > 0 }?.let { timestamp ->
-                java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.CHINA).apply {
-                    timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")
-                }.format(java.util.Date(timestamp))
-            }.orEmpty()
-        val source = when (item.sourceKind) {
-            MemorySourceKind.PRIVATE_CHAT -> "私聊"
-            MemorySourceKind.GROUP_CHAT -> "群聊"
-            MemorySourceKind.MOMENT -> "动态"
-            MemorySourceKind.MOMENT_COMMENT -> "评论"
-            MemorySourceKind.DIARY -> "日记"
-            MemorySourceKind.MANUAL_MEMORY -> "手动记忆"
-        }
-        return "[$time·$source] ${item.content}"
-    }
 
     private fun expiresAtFor(type: String, level: MemoryLevel): Long {
         if (level == MemoryLevel.L3 || type in setOf("preference_expression", "agreement_commitment")) return Long.MAX_VALUE

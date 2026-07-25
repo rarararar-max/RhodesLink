@@ -655,13 +655,14 @@ class GroupChatViewModel(
                     "director" -> "用户作为导演正在观察大家的表演，没有给出新指令。"
                     else -> "群内用户正在安静地观察，没有发言。"
                 } else ""
-                val grpModeFormat = if (isAuto) when (mode) {
-                    "offline", "director" -> "\n允许旁白条目（speaker为\"旁白\"，type为\"narration\"），对话条目type为\"dialogue\"。"
-                    else -> ""
-                } else ""
+                val grpModeFormat = when (mode) {
+                    "offline", "director" -> "线下/导演模式：本轮 narration 共${settings.groupNarSegMin}~${settings.groupNarSegMax}段；允许旁白条目（speaker为\"旁白\"，type为\"narration\"），对话条目type为\"dialogue\"。"
+                    else -> "线上模式：narration 固定为0段；禁止输出旁白条目。"
+                }
                 val now = sharedUtils.beijingPromptTime()
                 val grpReplacements = mapOf(
                     "CURRENT_TIME" to now, "GROUP_NAME" to groupName,
+                    "CURRENT_DATE" to sharedUtils.beijingSdf("yyyy-MM-dd").format(java.util.Date()),
                     "AUTO_REASON" to (if (isAuto) "idle" else "manual"),
                     "AUTO_REASON_TEXT" to (if (isAuto) "群聊空闲自然闲聊。" else "用户主动发言。"),
                     "GROUP_RULES" to (session.rules.ifBlank { "无" }),
@@ -671,6 +672,9 @@ class GroupChatViewModel(
                     "SHORT_TERM_SUMMARY" to groupSummary, "GROUP_SUMMARY" to groupSummary,
                     "DAILY_SUMMARY" to groupDailySummary,
                     "LONG_TERM_IMPRESSION" to "无",
+                    "GROUP_CONTEXT" to groupSummary,
+                    "USER_RELATION" to "群聊成员对用户的关系以各自人设与关系提示为准。",
+                    "SHARED_MEMORIES" to unifiedGroupMemory,
                     "SOURCE_AWARE_MEMORIES" to unifiedKnownFrom,
                     "MEMORY_ANCHORS" to unifiedGroupMemory,
                     "MEMORY_V2_CONTEXT" to unifiedGroupMemory,
@@ -714,7 +718,21 @@ class GroupChatViewModel(
                         "groupRelationshipHintCount" to settings.groupRelationshipHintCount.toString()
                     )
                 )
-                var finalSystemPrompt = sharedUtils.compactTemplate(sharedUtils.applyTemplate(grpTpl, grpReplacements)) + """
+                val groupFoundation = when (mode) {
+                    "online" -> """
+                        |【群聊固定模式与参数规则 · 高于自定义模板】
+                        |- 当前为线上群聊：只允许 type="dialogue"，narration 固定为0段；即使自定义模板另有要求也不得输出旁白、动作或环境描写。
+                        |- 当前成员名单中的每位成员本轮各发言 ${settings.groupSpeechMin}~${settings.groupSpeechMax} 次，每条 ${settings.groupMsgMin}~${settings.groupMsgMax} 字。
+                        |- 只能让当前成员名单中的角色发言，不替用户发言；严格输出 JSON 数组，每项包含 speaker、message、type。
+                    """.trimMargin()
+                    else -> """
+                        |【群聊固定模式与参数规则 · 高于自定义模板】
+                        |- 当前为${if (mode == "director") "导演" else "线下"}群聊：每位当前成员本轮各发言 ${settings.groupSpeechMin}~${settings.groupSpeechMax} 次，每条 ${settings.groupMsgMin}~${settings.groupMsgMax} 字。
+                        |- narration 共 ${settings.groupNarSegMin}~${settings.groupNarSegMax} 段，每段 ${settings.groupNarMin}~${settings.groupNarMax} 字；旁白使用 speaker="旁白"、type="narration"，只写第三人称可见动作、环境或气氛。
+                        |- 只能让当前成员名单中的角色发言，不替用户发言；严格输出 JSON 数组，每项包含 speaker、message、type。
+                    """.trimMargin()
+                }
+                var finalSystemPrompt = "$groupFoundation\n\n" + sharedUtils.compactTemplate(sharedUtils.applyTemplate(grpTpl, grpReplacements)) + """
 
                     |【最近话题连续性 · 最高优先级】
                     |- 优先承接最近一轮最后一个有效发言、尚未回答的问题、邀约、分歧或行动。
@@ -769,7 +787,7 @@ class GroupChatViewModel(
                         normalizeGroupResults(extractSpeakerLines(raw, validSpeakers), validSpeakers, mode)
                     }
                     return candidates
-                        .takeIf(::isCompleteGroupReply)
+                        .takeIf { isCompleteGroupReply(it, mode) }
                         .orEmpty()
                 }
                 suspend fun repairOrKeepUsableReply(raw: String, usable: List<GroupMsgResult>, stage: String): List<GroupMsgResult> {
@@ -798,16 +816,17 @@ class GroupChatViewModel(
                 if (needsFormatRepair) {
                     DebugLogger.trace("AI/GroupFormatRepair", "ORIGINAL_MALFORMED_RESPONSE\n$rawBase")
                     filtered = repairOrKeepUsableReply(rawBase, filtered, "首次输出")
-                } else if (filtered.isEmpty()) {
-                    // Empty after strict parsing means the creative reply lacks usable group content.
-                    // Regenerate once instead of asking a format-only model to invent missing content.
+                }
+                if (filtered.isEmpty()) {
+                    // The format model only preserves content. Regenerate once when the reply still
+                    // lacks the minimum visible structure for the current mode.
                     DebugLogger.trace("AI/GroupContentRetry", "ORIGINAL_UNUSABLE_RESPONSE\n$rawBase")
                     val retryMessages = apiMessages.mapIndexed { index, message ->
                         if (index == 0 && message.role == "system") message.copy(content = message.content + """
 
                             |【重新生成要求】
-                            |- 上一版没有可展示的有效群成员台词。请重新生成完整群聊，不要沿用残缺内容。
-                            |- 只能使用当前成员；至少一名成员必须有非空台词；只输出 JSON 数组。
+                            |- 上一版缺少当前模式的最低可展示内容。请重新生成完整群聊，不要沿用残缺内容。
+                            |- ${if (mode == "online") "至少输出一条当前成员的非空台词，且不得包含旁白。" else "至少输出一条当前成员的非空台词和一条非空旁白。"}只输出 JSON 数组。
                         """.trimMargin()) else message
                     }
                     rawBase = generateGroupReply(retryMessages, "GroupChatContentRetry")
@@ -1002,14 +1021,13 @@ $members
         DebugLogger.trace("AI/GroupFormatRepair", "FORMAT_REPAIR_REQUEST\n$prompt\n\nFORMAT_REPAIR_RESPONSE\n$repaired")
         val allowed = memberNames.toSet() + "旁白"
         return normalizeGroupResults(extractGroupResults(repaired), allowed, mode)
-            .takeIf(::isCompleteGroupReply)
+            .takeIf { isCompleteGroupReply(it, mode) }
             .orEmpty()
     }
 
-    private fun isCompleteGroupReply(results: List<GroupMsgResult>): Boolean {
-        // A valid group turn may naturally involve only some members and need not include narration.
-        // Requiring every member to speak turned normal replies into a false transport failure.
-        return results.isNotEmpty()
+    private fun isCompleteGroupReply(results: List<GroupMsgResult>, mode: String): Boolean {
+        val hasDialogue = results.any { it.type == "dialogue" && it.message.isNotBlank() }
+        return hasDialogue && (mode == "online" || results.any { it.type == "narration" && it.message.isNotBlank() })
     }
 
     private fun stripSpeakerPrefix(content: String): Pair<String, String> {
@@ -1297,9 +1315,9 @@ $members
         false
     }
 
-    /** Plain speaker-labelled text is already safely normalized locally; do not spend a second AI call on it. */
+    /** Plain speaker-labelled text is already safely normalized locally; malformed JSON still uses the format model. */
     private fun requiresFormatRepair(raw: String, normalized: List<GroupMsgResult>): Boolean =
-        normalized.isNotEmpty() && !isStrictGroupJson(raw) && extractGroupResults(raw).isNotEmpty()
+        !isStrictGroupJson(raw) && extractGroupResults(raw).isNotEmpty()
 
     private suspend fun generateGroupDailySummary(groupSessionId: String, groupName: String) {
         try {
@@ -1409,7 +1427,6 @@ $text"""
             val memberIds = repository.getSession(groupSessionId)?.members
                 ?.split(',')?.map { it.trim() }?.filter { it.isNotBlank() }.orEmpty()
             memoryV2Pipeline.ingestGroupChat(groupSessionId, groupName, messages, memberIds)
-            true
         } catch (e: Exception) {
             DebugLogger.log("MemoryV2", "群聊L1写入失败: ${e.message?.take(80)}")
             false

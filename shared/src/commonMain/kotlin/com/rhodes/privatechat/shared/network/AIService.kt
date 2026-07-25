@@ -53,6 +53,9 @@ class AIService(private val client: HttpClient = createHttpClient()) {
     class EmptyModelResponseException(modelName: String) : Exception("模型 $modelName 返回空内容，请重试或更换模型")
     class InvalidModelResponseException : Exception("模型返回内容无法解析")
 
+    private fun normalizeModelName(providerId: String, modelName: String): String =
+        if (providerId == "deepseek" && modelName in setOf("deepseek-chat", "deepseek-reasoner")) "deepseek-v4-flash" else modelName
+
     // --- Response parsing utilities ---
 
     fun parseOfflineResponse(raw: String): OfflineModeResponse {
@@ -90,7 +93,7 @@ class AIService(private val client: HttpClient = createHttpClient()) {
     private fun normalizeNestedDialogue(response: OfflineModeResponse, depth: Int): OfflineModeResponse {
         val directSegments = response.segments?.filter { it.content.isNotBlank() }
         if (!directSegments.isNullOrEmpty()) return response.copy(segments = directSegments)
-        val nestedText = response.dialogue.ifBlank { response.narration }
+        val nestedText = response.dialogue
         if (depth > 0 && looksLikeJson(nestedText)) {
             val nested = normalizeOfflineResponse(nestedText, depth - 1)
             if (!nested.segments.isNullOrEmpty() || nested.dialogue.isNotBlank()) {
@@ -102,7 +105,11 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                 )
             }
         }
-        return if (nestedText.isNotBlank()) response.copy(segments = listOf(Segment(type = "dialogue", content = nestedText)), dialogue = "") else response
+        val legacySegments = buildList {
+            response.narration.takeIf { it.isNotBlank() }?.let { add(Segment(type = "narration", content = it)) }
+            response.dialogue.takeIf { it.isNotBlank() }?.let { add(Segment(type = "dialogue", content = it)) }
+        }
+        return if (legacySegments.isNotEmpty()) response.copy(segments = legacySegments, dialogue = "", narration = "") else response
     }
 
     fun parseScriptResponse(raw: String): OfflineModeResponse {
@@ -258,14 +265,14 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         apiKey: String,
         messages: List<AiMessage>,
         providerId: String = "deepseek",
-        modelName: String = "deepseek-chat",
+        modelName: String = "deepseek-v4-flash",
         customUrl: String = "",
         temperature: Double = 0.95,
         jsonMode: Boolean = false,
         maxOutputTokens: Int? = null
     ): ChatResult {
         val config = providers[providerId] ?: providers["deepseek"]!!
-        val model = modelName
+        val model = normalizeModelName(config.id, modelName)
 
         // 自填厂商 URL 校验
         if (config.id == "custom" && customUrl.isBlank()) {
@@ -408,18 +415,19 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         apiKey: String,
         messages: List<AiMessage>,
         providerId: String = "deepseek",
-        modelName: String = "deepseek-chat",
+        modelName: String = "deepseek-v4-flash",
         customUrl: String = "",
         temperature: Double = 0.95,
         maxRetries: Int = 2,
         logTag: String = "Chat",
         jsonMode: Boolean = false,
+        mode: String = "",
         trace: (String, String) -> Unit = { _, _ -> }
     ): OfflineModeResponse {
         @Suppress("UNUSED_VARIABLE", "UNUSED_PARAMETER") val ignoredRetries = maxRetries to logTag
         val original = chat(apiKey, messages, providerId, modelName, customUrl, temperature, jsonMode).content
         val parsed = runCatching { normalizeOfflineResponse(original) }.getOrNull()
-        if (parsed != null && isUsableResponse(parsed, messages)) return parsed
+        if (parsed != null && isUsableResponse(parsed, mode)) return parsed
 
         trace("PrivateContentRetry", "ORIGINAL_UNUSABLE parsed=${parsed != null} blank=${original.isBlank()}")
         val retryMessages = messages.mapIndexed { index, message ->
@@ -432,16 +440,15 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         }
         val retried = chat(apiKey, retryMessages, providerId, modelName, customUrl, temperature, jsonMode).content
         val retriedParsed = runCatching { normalizeOfflineResponse(retried) }.getOrNull()
-        if (retriedParsed != null && isUsableResponse(retriedParsed, messages)) return retriedParsed
+        if (retriedParsed != null && isUsableResponse(retriedParsed, mode)) return retriedParsed
 
         trace("PrivateFormatRepair", "RETRY_UNUSABLE_RESPONSE\n$retried")
 
-        val system = messages.firstOrNull { it.role == "system" }?.content.orEmpty()
         val repaired = try {
             chat(
                 apiKey = apiKey,
                 messages = listOf(
-                    AiMessage("system", privateFormatRepairInstruction(system)),
+                    AiMessage("system", privateFormatRepairInstruction(mode)),
                     AiMessage("user", "【待校对原始输出】\n$retried")
                 ),
                 providerId = providerId,
@@ -457,22 +464,17 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         }
         val repairedParsed = runCatching { normalizeOfflineResponse(repaired) }.getOrNull()
         trace("PrivateFormatRepair", "FORMAT_REPAIR_RESPONSE\n$repaired\n\nPARSED=${repairedParsed != null}")
-        if (repairedParsed != null && isUsableResponse(repairedParsed, messages)) return repairedParsed
+        if (repairedParsed != null && isUsableResponse(repairedParsed, mode)) return repairedParsed
         throw InvalidModelResponseException()
     }
 
-    private fun isUsableResponse(response: OfflineModeResponse, messages: List<AiMessage>): Boolean {
-        val system = messages.firstOrNull { it.role == "system" }?.content.orEmpty()
-        val online = system.contains("线上模式") || system.contains("主动给用户") || system.contains("只输出 dialogue")
+    private fun isUsableResponse(response: OfflineModeResponse, mode: String): Boolean {
         val segments = response.segments.orEmpty()
-        return if (online) {
-            response.dialogue.isNotBlank() || segments.any { it.type.equals("dialogue", true) && it.content.isNotBlank() }
-        } else response.dialogue.isNotBlank() || segments.any { it.type.equals("dialogue", true) && it.content.isNotBlank() }
+        return response.dialogue.isNotBlank() || segments.any { it.type.equals("dialogue", true) && it.content.isNotBlank() }
     }
 
-    private fun privateFormatRepairInstruction(system: String): String {
-        val online = system.contains("线上模式") || system.contains("主动给用户") || system.contains("只输出 dialogue")
-        val modeRules = if (online) {
+    private fun privateFormatRepairInstruction(mode: String): String {
+        val modeRules = if (mode == "online") {
             "线上模式：segments 必须至少包含一条 type=dialogue；禁止 type=narration。"
         } else {
             "线下/导演模式：segments 必须至少包含一条 type=dialogue；原文已有的旁白使用 type=narration。"
@@ -502,13 +504,13 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         apiKey: String,
         messages: List<AiMessage>,
         providerId: String = "deepseek",
-        modelName: String = "deepseek-chat",
+        modelName: String = "deepseek-v4-flash",
         customUrl: String = "",
         temperature: Double = 0.95
     ): Flow<String> = flow {
         val config = providers[providerId] ?: providers["deepseek"]!!
         val url = if (config.id == "custom") customUrl else config.baseUrl
-        val model = modelName
+        val model = normalizeModelName(config.id, modelName)
 
         val requestBody = ChatCompletionRequest(
             model = model,

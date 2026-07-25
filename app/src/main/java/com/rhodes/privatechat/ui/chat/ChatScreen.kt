@@ -214,6 +214,13 @@ fun ChatScreen(
     }
     val speakingMessageKey by chatTtsPlayer.speakingMessageKey.collectAsState()
 
+    DisposableEffect(op.id) {
+        onDispose {
+            // The role reply may finish after navigation; clear the viewed session so it becomes unread.
+            if (viewModel.currentSession.value?.operatorId == op.id) viewModel.clearSelection()
+        }
+    }
+
     DisposableEffect(audioController, chatTtsPlayer) {
         onDispose { audioController.release(); chatTtsPlayer.release() }
     }
@@ -404,7 +411,7 @@ fun ChatScreen(
                                 Toast.makeText(context, it, Toast.LENGTH_LONG).show()
                             } ?: onVoiceCall()
                         }
-                        MenuChip("📊 状态", Primary) { onViewStatus() }
+                        MenuChip("📒 档案", Primary) { onViewStatus() }
                     }
                 )
             }

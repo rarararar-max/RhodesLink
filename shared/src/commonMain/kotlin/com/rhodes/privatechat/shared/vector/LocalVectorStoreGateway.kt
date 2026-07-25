@@ -32,7 +32,21 @@ class LocalVectorStoreGateway(
     override suspend fun search(request: VectorSearchRequest): List<VectorMemory> {
         val now = request.now.takeIf { it > 0L } ?: System.currentTimeMillis()
         val minCreatedAt = request.minCreatedAt.coerceAtLeast(0L)
-        val rows = if (request.candidateLimit > 0) {
+        val rows = if (request.candidateSourceType.isNotBlank()) {
+            db.vectorMemoriesQueries.getVectorCandidatesByOwnerAndSourceType(
+                request.ownerType,
+                request.ownerId,
+                request.candidateSourceType,
+                now,
+                minCreatedAt,
+                request.maxCreatedAt,
+                request.minImportance,
+                request.embeddingSignature,
+                if (request.preferRecentCandidates) 1L else 0L,
+                if (request.preferRecentCandidates) 1L else 0L,
+                request.candidateLimit.toLong(),
+            ).executeAsList()
+        } else if (request.candidateLimit > 0) {
             db.vectorMemoriesQueries.getVectorCandidatesByOwner(
                 request.ownerType,
                 request.ownerId,
@@ -75,6 +89,7 @@ class LocalVectorStoreGateway(
                     embeddingSignature = row.embeddingSignature,
                     createdAt = row.createdAt,
                     expiresAt = row.expiresAt,
+                    similarity = score,
                 ) to score
             }
             .sortedByDescending { it.second }

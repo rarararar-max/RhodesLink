@@ -30,6 +30,9 @@ class DailyContentWorker(context: Context, params: WorkerParameters) : Coroutine
             val operatorId = inputData.getString("operatorId") ?: return Result.success()
             val deliveryId = inputData.getString("deliveryId") ?: "0"
             val cycle = inputData.getString("cycle") ?: DailyContentScheduler.cycleId()
+            // One-time work can be delayed by network constraints or backoff. Daily content must
+            // never be delivered into a later Beijing calendar day.
+            if (cycle != DailyContentScheduler.cycleId()) return Result.success()
             when (inputData.getString("type")) {
                 DailyContentScheduler.TYPE_MOMENT -> viewModel.deliverScheduledMoment(operatorId, cycle, deliveryId)
                 DailyContentScheduler.TYPE_PRIVATE -> viewModel.deliverScheduledPrivate(operatorId, cycle)

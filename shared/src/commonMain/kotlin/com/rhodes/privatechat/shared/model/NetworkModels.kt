@@ -5,7 +5,7 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class ChatCompletionRequest(
-    val model: String = "deepseek-chat",
+    val model: String = "deepseek-v4-flash",
     val messages: List<AiMessage>,
     val stream: Boolean = true,
     val temperature: Double = 0.95,

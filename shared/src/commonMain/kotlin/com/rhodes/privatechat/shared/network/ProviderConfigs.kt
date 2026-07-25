@@ -7,7 +7,7 @@ val providers = mapOf(
         id = "deepseek",
         name = "DeepSeek",
         baseUrl = "https://api.deepseek.com/chat/completions",
-        models = listOf("deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash", "deepseek-v4-pro")
+        models = listOf("deepseek-v4-flash", "deepseek-v4-pro")
     ),
     "minimax" to ProviderConfig(
         id = "minimax",

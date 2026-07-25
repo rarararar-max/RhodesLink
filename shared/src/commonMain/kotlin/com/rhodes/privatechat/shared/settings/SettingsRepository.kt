@@ -93,8 +93,8 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putString("provider", value)
 
     var modelName: String
-        get() = getString("model_name", "deepseek-chat")
-        set(value) = putString("model_name", value)
+        get() = normalizeDeepSeekModel(provider, getString("model_name", "deepseek-v4-flash"))
+        set(value) = putString("model_name", normalizeDeepSeekModel(provider, value))
 
     var customUrl: String
         get() = getString("custom_url", "")
@@ -310,17 +310,9 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = settings.getInt("daily_proactive_limit", 3).coerceIn(0, 20)
         set(value) = settings.putInt("daily_proactive_limit", value.coerceIn(0, 20))
 
-    var proactiveGlobalCooldownMinutes: Int
-        get() = settings.getInt("proactive_global_cooldown_minutes", 60).coerceIn(0, 1440)
-        set(value) = settings.putInt("proactive_global_cooldown_minutes", value.coerceIn(0, 1440))
-
     var proactiveQuietAfterUserMinutes: Int
-        get() = settings.getInt("proactive_quiet_after_user_minutes", 10).coerceIn(0, 1440)
+        get() = settings.getInt("proactive_quiet_after_user_minutes", 15).coerceIn(0, 1440)
         set(value) = settings.putInt("proactive_quiet_after_user_minutes", value.coerceIn(0, 1440))
-
-    var proactiveOperatorCooldownMinutes: Int
-        get() = settings.getInt("proactive_operator_cooldown_minutes", 120).coerceIn(0, 1440)
-        set(value) = settings.putInt("proactive_operator_cooldown_minutes", value.coerceIn(0, 1440))
 
     var contextMode: String
         get() = getString("context_mode", "custom")
@@ -334,12 +326,12 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     // === 旁白设置 ===
     var narSegMin: Int
-        get() = getInt("nar_seg_min", 1).coerceIn(0, getInt("nar_seg_max", 3).coerceIn(0, 20))
-        set(value) = putInt("nar_seg_min", value.coerceIn(0, getInt("nar_seg_max", 3).coerceIn(0, 20)))
+        get() = getInt("nar_seg_min", 1).coerceIn(1, getInt("nar_seg_max", 3).coerceIn(1, 20))
+        set(value) = putInt("nar_seg_min", value.coerceIn(1, getInt("nar_seg_max", 3).coerceIn(1, 20)))
 
     var narSegMax: Int
-        get() = getInt("nar_seg_max", 3).coerceIn(getInt("nar_seg_min", 1).coerceIn(0, 20), 20)
-        set(value) = putInt("nar_seg_max", value.coerceIn(getInt("nar_seg_min", 1).coerceIn(0, 20), 20))
+        get() = getInt("nar_seg_max", 3).coerceIn(getInt("nar_seg_min", 1).coerceIn(1, 20), 20)
+        set(value) = putInt("nar_seg_max", value.coerceIn(getInt("nar_seg_min", 1).coerceIn(1, 20), 20))
 
     var narMin: Int
         get() = settings.getInt("nar_min", 50).coerceIn(0, settings.getInt("nar_max", 300).coerceIn(0, 2000))
@@ -726,12 +718,12 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putInt("group_speech_max", value.coerceIn(getInt("group_speech_min", 1).coerceIn(1, 20), 20))
 
     var groupNarSegMin: Int
-        get() = getInt("group_nar_seg_min", 0).coerceIn(0, getInt("group_nar_seg_max", 3).coerceIn(0, 20))
-        set(value) = putInt("group_nar_seg_min", value.coerceIn(0, getInt("group_nar_seg_max", 3).coerceIn(0, 20)))
+        get() = getInt("group_nar_seg_min", 1).coerceIn(0, getInt("group_nar_seg_max", 1).coerceIn(0, 20))
+        set(value) = putInt("group_nar_seg_min", value.coerceIn(0, getInt("group_nar_seg_max", 1).coerceIn(0, 20)))
 
     var groupNarSegMax: Int
-        get() = getInt("group_nar_seg_max", 3).coerceIn(getInt("group_nar_seg_min", 0).coerceIn(0, 20), 20)
-        set(value) = putInt("group_nar_seg_max", value.coerceIn(getInt("group_nar_seg_min", 0).coerceIn(0, 20), 20))
+        get() = getInt("group_nar_seg_max", 1).coerceIn(getInt("group_nar_seg_min", 1).coerceIn(0, 20), 20)
+        set(value) = putInt("group_nar_seg_max", value.coerceIn(getInt("group_nar_seg_min", 1).coerceIn(0, 20), 20))
 
     var groupNarMin: Int
         get() = getInt("group_nar_min", 20).coerceIn(0, getInt("group_nar_max", 100).coerceIn(0, 2000))
@@ -801,6 +793,23 @@ class SettingsRepository(private val settings: ObservableSettings) {
     fun putPromptTemplate(type: String, mode: String, value: String) {
         val key = if (mode.isNotBlank()) "prompt_${type}_${mode}" else "prompt_$type"
         putString(key, value)
+    }
+
+    /**
+     * Applies a new shipped template only to legacy saved defaults. Templates explicitly saved
+     * from the editor are marked custom and are never replaced during an app upgrade.
+     */
+    fun resolvePromptTemplate(type: String, mode: String, defaultTemplate: String, defaultVersion: Int): String {
+        val key = if (mode.isNotBlank()) "prompt_${type}_${mode}" else "prompt_$type"
+        val saved = getString(key, "").orEmpty()
+        if (saved.isBlank()) return defaultTemplate
+        if (getBoolean("${key}_custom", false)) return saved
+        if (getPromptTemplateVersion(type, mode) < defaultVersion) {
+            putString(key, defaultTemplate)
+            putPromptTemplateVersion(type, mode, defaultVersion)
+            return defaultTemplate
+        }
+        return saved
     }
 
     fun getPromptTemplateVersion(type: String, mode: String = ""): Int {
@@ -891,7 +900,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
         ttsApiKey: String,
     ) {
         val values = mapOf(
-            "provider" to provider, "model_name" to modelName, "custom_url" to customUrl, "api_key" to apiKey,
+            "provider" to provider, "model_name" to normalizeDeepSeekModel(provider, modelName), "custom_url" to customUrl, "api_key" to apiKey,
             "vision_base_url" to visionBaseUrl, "vision_provider" to visionProvider, "vision_model_name" to visionModelName, "vision_api_key" to visionApiKey,
             "vector_provider_mode" to vectorProviderMode, "vector_provider" to vectorProvider, "vector_base_url" to vectorBaseUrl, "vector_model_name" to vectorModelName, "vector_api_key" to vectorApiKey,
             "asr_base_url" to asrBaseUrl, "asr_provider" to asrProvider, "asr_model_name" to asrModelName, "asr_api_key" to asrApiKey,
@@ -912,6 +921,9 @@ class SettingsRepository(private val settings: ObservableSettings) {
     fun putString(key: String, value: String) = synchronized(draftLock) {
         if (draftActive) draftValues[key] = value else settings.putString(key, value)
     }
+
+    private fun normalizeDeepSeekModel(provider: String, model: String): String =
+        if (provider == "deepseek" && model in setOf("deepseek-chat", "deepseek-reasoner")) "deepseek-v4-flash" else model
 
     fun getInt(key: String, default: Int = 0): Int =
         draftInt(key, default)
@@ -964,30 +976,53 @@ class SettingsRepository(private val settings: ObservableSettings) {
         when (mode) {
             "economy" -> {
                 dualModel = false
-                historyMessages = 12
+                historyMessages = 6
+                putInt("private_memory_extraction_threshold", 20)
+                putInt("group_memory_extraction_threshold", 20)
                 putInt("private_group_context_count", 1)
                 putInt("group_member_memory_count", 1)
                 putInt("event_context_count", 2)
                 putInt("daily_moment_target", 1)
+                putInt("daily_proactive_chance", 40)
+                putInt("daily_proactive_max", 1)
+                idleProactiveChatEnabled = true
+                quietHoursEnabled = true
+                momentMemoryV2Enabled = false
                 autoDiaryEnabled = false
                 putInt("comment_bystander_max", 1)
             }
             "standard" -> {
+                dualModel = false
                 historyMessages = 10
+                putInt("private_memory_extraction_threshold", 12)
+                putInt("group_memory_extraction_threshold", 12)
                 putInt("private_group_context_count", 2)
                 putInt("group_member_memory_count", 2)
                 putInt("event_context_count", 5)
                 putInt("daily_moment_target", 1)
-                autoDiaryEnabled = true
+                putInt("daily_proactive_chance", 70)
+                putInt("daily_proactive_max", 3)
+                idleProactiveChatEnabled = true
+                quietHoursEnabled = true
+                momentMemoryV2Enabled = true
+                autoDiaryEnabled = false
                 putInt("comment_bystander_max", 3)
             }
             "full" -> {
+                dualModel = false
                 historyMessages = 40
+                putInt("private_memory_extraction_threshold", 8)
+                putInt("group_memory_extraction_threshold", 8)
                 putInt("private_group_context_count", 4)
                 putInt("group_member_memory_count", 4)
                 putInt("event_context_count", 8)
                 putInt("daily_moment_target", 3)
-                autoDiaryEnabled = true
+                putInt("daily_proactive_chance", 90)
+                putInt("daily_proactive_max", 5)
+                idleProactiveChatEnabled = true
+                quietHoursEnabled = true
+                momentMemoryV2Enabled = true
+                autoDiaryEnabled = false
                 putInt("comment_bystander_max", 4)
             }
         }

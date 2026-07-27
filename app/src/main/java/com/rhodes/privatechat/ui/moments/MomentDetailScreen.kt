@@ -50,16 +50,19 @@ fun MomentDetailScreen(
 ) {
     val moments by viewModel.moments.collectAsState()
     var loadedMoment by remember(momentId) { mutableStateOf<com.rhodes.privatechat.shared.model.Moment?>(null) }
+    var isMomentLoading by remember(momentId) { mutableStateOf(true) }
     val moment = moments.find { it.id == momentId } ?: loadedMoment
     val likes by viewModel.getLikes(momentId).collectAsState(initial = emptyList())
     val comments by viewModel.getCommentsForMoment(momentId).collectAsState(initial = emptyList())
     var inputText by remember { mutableStateOf("") }
+    var isSending by remember { mutableStateOf(false) }
     var replyTarget by remember { mutableStateOf(Triple(0L, "", "")) }
     val profile by viewModel.userProfile.collectAsState()
     val userName = profile.nickname
 
     LaunchedEffect(momentId) {
         loadedMoment = withContext(Dispatchers.IO) { viewModel.repository.getMoment(momentId) }
+        isMomentLoading = false
     }
 
     // 初始回复目标
@@ -73,6 +76,10 @@ fun MomentDetailScreen(
         viewModel.markMomentCommentsRead(momentId)
     }
 
+    if (isMomentLoading && moment == null) {
+        Box(Modifier.fillMaxSize().background(BG), contentAlignment = Alignment.Center) { Text("加载中...", color = TextTertiary) }
+        return
+    }
     if (moment == null) {
         Box(Modifier.fillMaxSize().background(BG), contentAlignment = Alignment.Center) { Text("动态已删除", color = TextTertiary) }
         return
@@ -122,11 +129,13 @@ fun MomentDetailScreen(
                     Icon(Icons.Default.Close, "取消回复", tint = TextSecondary, modifier = Modifier.size(18.dp))
                 }
             }
-            IconButton(onClick = {
-                if (inputText.isBlank()) return@IconButton
+            IconButton(enabled = inputText.isNotBlank() && !isSending, onClick = {
+                if (inputText.isBlank() || isSending) return@IconButton
                 val (pid, pName, _) = replyTarget
+                isSending = true
                 viewModel.commentOnMoment(momentId, "user", userName, inputText, pid, pName)
                 inputText = ""; replyTarget = Triple(0L, "", "")
+                isSending = false
             }) { Icon(Icons.AutoMirrored.Filled.Send, "发送", tint = if (inputText.isNotBlank()) Primary else TextSecondary) }
         }
     }

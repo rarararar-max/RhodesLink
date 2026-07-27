@@ -61,6 +61,7 @@ import com.rhodes.privatechat.viewmodel.shared.MemoryVectorFormatter
 import com.rhodes.privatechat.viewmodel.shared.UnifiedMemoryContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
@@ -75,7 +76,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeout
 import java.util.concurrent.ConcurrentHashMap
 
@@ -153,6 +156,10 @@ class MainViewModel(
     )
     private val sessionMessageCounter = ConcurrentHashMap<String, Int>()
     private val pendingCommentJobs = ConcurrentHashMap<String, kotlinx.coroutines.Job>()
+    private val pendingUserCommentSubmissions = ConcurrentHashMap.newKeySet<String>()
+    private val pendingMomentPosts = ConcurrentHashMap.newKeySet<String>()
+    private val commentCountMutexes = ConcurrentHashMap<Long, kotlinx.coroutines.sync.Mutex>()
+    private val mentionedCommentSemaphore = Semaphore(2)
     val momentsViewModel = MomentsViewModel(repository, settings, appState, viewModelScope) { getUserProfile() }
     val dispatchViewModel = DispatchViewModel(repository, settings, sharedUtils, operatorStateUpdater, appState, viewModelScope, { refreshAllOperatorStatus(force = true) }, { getUserProfile() })
     val groupChatViewModel = GroupChatViewModel(
@@ -550,9 +557,6 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                     type = "ai_json", mode = "online", isMe = false
                 ))
                 unhideSession(session.id)
-                if (normalized.emotion.isNotBlank() || normalized.location.isNotBlank() || normalized.state.isNotBlank()) {
-                    updateOperatorStatus(op.id, normalized.location, normalized.state, normalized.emotion)
-                }
                 return true
             }
         } catch (e: CancellationException) {
@@ -703,55 +707,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     }
 
     private suspend fun refreshAllOperatorStatus(force: Boolean = false) {
-        if (!force && !settings.autoAiEnabled) return
-        if (!force && !settings.autoStatusRefresh) return
-        val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
-        val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
-        val dispatchedOpIds = repository.getActiveDispatches().flatMap {
-            it.operatorIds.split(",").map(String::trim).filter(String::isNotBlank)
-        }.toSet()
-        val allOps = _operators.value.filter { it.id !in dispatchedOpIds }
-
-        // 深夜强制
-        if (hour in 22..23 || hour in 0..4) {
-            for (op in allOps) { repository.updateOperator(op.copy(location = "宿舍", activity = "睡觉", emotion = "安静")) }
-            return
-        }
-
-        val locations = settings.parseStatusPool(settings.statusLocationPool, settings.defaultStatusLocations)
-        val activities = settings.parseStatusPool(settings.statusActivityPool, settings.defaultStatusActivities)
-        val emotions = settings.parseStatusPool(settings.statusEmotionPool, settings.defaultStatusEmotions)
-
-        var locCount = mutableMapOf<String, Int>()
-        val now = System.currentTimeMillis()
-
-        for (op in allOps) {
-            if (!force) {
-                val session = repository.getSessionByOperator(op.id)
-                if (session != null) {
-                    val lastUserMsgTime = repository.getLastUserMessageTime(session.id)
-                    val lastTalkTime = maxOf(lastUserMsgTime ?: 0L, session.lastTime)
-                    if (now - lastTalkTime < STATUS_REFRESH_INTERVAL_MS) continue
-                }
-            }
-
-            var loc = locations.random()
-            val cnt = locCount.getOrDefault(loc, 0)
-            if (cnt >= 10) loc = locations.firstOrNull() ?: "宿舍"
-            locCount[loc] = cnt + 1
-
-            val activity = activities.random()
-
-            val emotion = if (Math.random() < 0.3) emotions.random() else op.emotion
-
-            repository.updateOperator(op.copy(location = loc, activity = activity, emotion = emotion))
-        }
-        // 同步聊天页顶栏的干员状态
-        val selected = chatViewModel.selectedOperator.value
-        if (selected != null) {
-            val fresh = repository.getOperator(selected.id)
-            if (fresh != null) chatViewModel.updateSelectedOperator(fresh)
-        }
+        // Legacy world-state refresh is intentionally disabled. Fields remain for old data compatibility.
     }
 
     private suspend fun autoGenerateTodayMoments() {
@@ -1567,7 +1523,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                             "PERSONAL_MEMORY_REFERENCE_STYLE" to personalMemoryReferenceRule(),
                             "SOURCE_AWARE_MEMORIES" to momentMemory.sourceAwareMemories,
                             "MOMENT_TRIGGER_TYPE" to (if (isAuto) "daily" else "manual"),
-                            "WORLD_TODAY_STATE" to "${op.name}现在在${op.location}，正在${op.activity}，情绪${op.emotion}",
+                            "WORLD_TODAY_STATE" to "无",
                             "KNOWN_FROM_CONTEXT" to momentMemory.sourceAwareMemories,
                             "SOURCE_AWARE_RULES" to sharedUtils.sourceAwareUsageRule(MemorySurface.MOMENT),
                             "RECENT_POSTS" to recentPosts,
@@ -1646,9 +1602,9 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                                                 "COMMENTER_NAME" to commenter.name, "COMMENTER_PERSONA" to publicCommentPersona(commenter),
                                                 "POST_AUTHOR_NAME" to op.name,
                                                 "POST_AUTHOR_PERSONA" to publicCommentPersona(op),
-                                                "COMMENTER_LOCATION" to commenter.location,
-                                                "COMMENTER_STATE" to commenter.activity,
-                                                "COMMENTER_EMOTION" to commenter.emotion,
+                                                "COMMENTER_LOCATION" to "无",
+                                                "COMMENTER_STATE" to "无",
+                                                "COMMENTER_EMOTION" to "无",
                                                 "COMMENT_CONTEXT" to recentComments.ifBlank { "暂无" },
                                                 "COMMENTER_MEMORY" to commenterMemory,
                                                 "MEMORY_V2_CONTEXT" to commenterMemory,
@@ -1671,7 +1627,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                                             }.orEmpty()
                                             if (cleanComment.isNotBlank()) {
                                                 val comment = MomentComment(momentId = momentId, operatorId = commenter.id, operatorName = commenter.name, content = cleanComment, createdAt = System.currentTimeMillis())
-                                                val savedCommentId = repository.insertComment(comment)
+                                                 val savedCommentId = repository.insertComment(comment)
                                                 if (settings.memoryV2Enabled && settings.momentMemoryV2Enabled) {
                                                     memoryV2Pipeline.ingestMomentComment(comment.copy(id = savedCommentId), momentId)
                                                 }
@@ -1753,7 +1709,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 "PERSONAL_MEMORY_REFERENCE_STYLE" to personalMemoryReferenceRule(),
                 "SOURCE_AWARE_MEMORIES" to momentMemory.sourceAwareMemories,
                 "MOMENT_TRIGGER_TYPE" to triggerType.name.lowercase(),
-                "WORLD_TODAY_STATE" to "${op.name}现在在${op.location}，正在${op.activity}，情绪${op.emotion}",
+                "WORLD_TODAY_STATE" to "无",
                 "KNOWN_FROM_CONTEXT" to momentMemory.sourceAwareMemories,
                 "SOURCE_AWARE_RULES" to sharedUtils.sourceAwareUsageRule(MemorySurface.MOMENT),
                 "RECENT_POSTS" to recentPosts,
@@ -1850,9 +1806,9 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                             "COMMENTER_NAME" to commenter.name, "COMMENTER_PERSONA" to publicCommentPersona(commenter),
                             "POST_AUTHOR_NAME" to op.name,
                             "POST_AUTHOR_PERSONA" to publicCommentPersona(op),
-                            "COMMENTER_LOCATION" to commenter.location,
-                            "COMMENTER_STATE" to commenter.activity,
-                            "COMMENTER_EMOTION" to commenter.emotion,
+                            "COMMENTER_LOCATION" to "无",
+                            "COMMENTER_STATE" to "无",
+                            "COMMENTER_EMOTION" to "无",
                             "COMMENT_CONTEXT" to recentComments.ifBlank { "暂无" },
                             "COMMENTER_MEMORY" to commenterMemory,
                             "MEMORY_V2_CONTEXT" to commenterMemory,
@@ -1901,9 +1857,12 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     fun commentOnMoment(momentId: Long, operatorId: String, operatorName: String, content: String, parentCommentId: Long = 0, replyToName: String = "") {
         val cleanContent = content.trim()
         if (cleanContent.isBlank()) return
+        val submissionKey = "$momentId:$operatorId:$parentCommentId:$replyToName:$cleanContent"
+        if (!pendingUserCommentSubmissions.add(submissionKey)) return
         Log.d("RHODES_MOMENT", "commentOnMoment: operatorId=$operatorId momentId=$momentId content=${cleanContent.take(50)} parentId=$parentCommentId replyTo=$replyToName")
         DebugLogger.log("Moment", "用户发评论: momentId=$momentId, content=${cleanContent.take(50)}, parentId=$parentCommentId, replyTo=$replyToName")
         viewModelScope.launch {
+            try {
             // 微信模式：向上追溯到根一级评论，所有回复挂在一级下面
             val rootParentId = if (parentCommentId > 0) {
                 val parentComment = repository.getCommentById(parentCommentId)
@@ -1931,7 +1890,8 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             // 用户回复某干员 → AI 回复挂在原根评论下（微信模式）
             if (parentCommentId > 0 && replyToName.isNotBlank() && replyToName.trim() != moment.operatorName.trim() && replyToName.trim() != userName.trim()) {
                 Log.d("RHODES_MOMENT", "commentOnMoment: 回复目标人=$replyToName")
-                scheduleAiComment(momentId, replyToName, content, rootParentId, userName)
+                val targetOp = _operators.value.find { it.name == replyToName }
+                scheduleAiComment(momentId, replyToName, content, rootParentId, userName, speakerOperatorId = targetOp?.id, sourceCommentId = userCommentId)
                 alreadyReplied.add(replyToName)
             }
 
@@ -1939,7 +1899,8 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             val replyParentId = rootParentId.takeIf { it > 0 } ?: userCommentId
             if (moment.operatorName != "我" && moment.operatorName.trim() != userName.trim() && moment.operatorName !in alreadyReplied) {
                 Log.d("RHODES_MOMENT", "commentOnMoment: 动态主人回复 start=${moment.operatorName}")
-                scheduleAiComment(momentId, moment.operatorName, content, replyParentId, userName, "你是${moment.operatorName}。用户${userName}在你的动态下评论了：「${content}」。请用10-50字自然回复。只输出回复内容本身，不要加任何前缀如「回复xxx」或冒号。直接输出纯文本。", immediate = true)
+                val ownerOp = _operators.value.find { it.id == moment.operatorId }
+                scheduleAiComment(momentId, moment.operatorName, content, replyParentId, userName, "你是${moment.operatorName}。用户${userName}在你的动态下评论了：「${content}」。请用10-50字自然回复。只输出回复内容本身，不要加任何前缀如「回复xxx」或冒号。直接输出纯文本。", immediate = true, speakerOperatorId = ownerOp?.id, sourceCommentId = userCommentId)
                 alreadyReplied.add(moment.operatorName)
             }
 
@@ -1947,20 +1908,22 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             Log.d("RHODES_MOMENT", "commentOnMoment: 旁观者回复 count=$bystanderCount")
             val bystanders = _operators.value
                 .filter { settings.getOperatorDynPermission(it.id) }
-                .map { it.name }
-                .filter { it !in alreadyReplied && it != "我" && it != userName }
+                .filter { it.name !in alreadyReplied && it.name != "我" && it.name != userName }
                 .shuffled()
                 .take(bystanderCount)
-            for ((i, bystander) in bystanders.withIndex()) {
+            for ((i, op) in bystanders.withIndex()) {
+                val bystander = op.name
                 Log.d("RHODES_MOMENT", "commentOnMoment: 旁观者回复 i=$i name=$bystander")
-                val op = _operators.value.find { it.name == bystander }
-                val persona = op?.let(::publicCommentPersona).orEmpty()
+                val persona = publicCommentPersona(op)
                 val bp = if (persona.isNotBlank()) {
                     "你是${bystander}（${persona}）。你刚看到${moment.operatorName}的动态下，用户${userName}评论了「${content}」。请以${bystander}的性格自然凑热闹回复这条评论。10-40字。直接输出纯文本。"
                 } else {
                     "你是${bystander}。你刚看到${moment.operatorName}的动态下，用户${userName}评论了「${content}」。请用10-40字凑热闹式地回复这条评论（看戏、调侃、起哄风格）。直接输出纯文本。"
                 }
-                scheduleAiComment(momentId, bystander, content, replyParentId, userName, bp)
+                scheduleAiComment(momentId, bystander, content, replyParentId, userName, bp, speakerOperatorId = op.id, sourceCommentId = userCommentId)
+            }
+            } finally {
+                pendingUserCommentSubmissions.remove(submissionKey)
             }
         }
     }
@@ -1983,8 +1946,10 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     }
 
     private suspend fun refreshMomentCommentCount(momentId: Long) {
-        val count = repository.getCommentCount(momentId)
-        repository.updateCommentCount(momentId, count)
+        val mutex = commentCountMutexes.computeIfAbsent(momentId) { kotlinx.coroutines.sync.Mutex() }
+        mutex.withLock {
+            repository.updateCommentCount(momentId, repository.getCommentCount(momentId))
+        }
     }
 
     private fun randomCommentDelayMs(): Long = 10_000L + (Math.random() * 20_000L).toLong()
@@ -1999,19 +1964,30 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         mustInsert: Boolean = false,
         fallbackComment: String = "我看到了，特意来回一句。",
         immediate: Boolean = false,
+        speakerOperatorId: String? = null,
+        sourceCommentId: Long? = null,
     ) {
-        val key = "$momentId:$speakerName:$parentCommentId:${System.nanoTime()}"
-        if (pendingCommentJobs.containsKey(key)) return
-        val job = appScope.launch {
+        val key = "$momentId:${speakerOperatorId ?: speakerName}:$parentCommentId:${sourceCommentId ?: userContent.trim().hashCode()}"
+        val job = appScope.launch(start = CoroutineStart.LAZY) {
             try {
                 if (!immediate) delay(randomCommentDelayMs())
                 if (repository.getMoment(momentId) == null) return@launch
-                triggerSingleAiReply(momentId, speakerName, userContent, parentCommentId, userName, customPrompt, mustInsert, fallbackComment)
+                if (mustInsert) {
+                    mentionedCommentSemaphore.withPermit {
+                        triggerSingleAiReply(momentId, speakerName, speakerOperatorId, userContent, parentCommentId, userName, customPrompt, mustInsert, fallbackComment)
+                    }
+                } else {
+                    triggerSingleAiReply(momentId, speakerName, speakerOperatorId, userContent, parentCommentId, userName, customPrompt, mustInsert, fallbackComment)
+                }
             } finally {
                 pendingCommentJobs.remove(key)
             }
         }
-        pendingCommentJobs[key] = job
+        if (pendingCommentJobs.putIfAbsent(key, job) != null) {
+            job.cancel()
+            return
+        }
+        job.start()
     }
 
     private fun todayStartMillis(): Long {
@@ -2027,10 +2003,8 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         return maxOf(settings.getMomentCount(operatorId, dateKey), repository.countMomentsByOperatorSince(operatorId, todayStartMillis()))
     }
 
-    private suspend fun insertAiComment(momentId: Long, speakerName: String, content: String, parentCommentId: Long, userName: String) {
-        val realOp = _operators.value.find { it.name == speakerName || it.id == speakerName }
-        val realId = realOp?.id ?: speakerName
-        val comment = MomentComment(momentId = momentId, operatorId = realId, operatorName = speakerName, content = content, parentCommentId = parentCommentId, replyToName = userName, createdAt = System.currentTimeMillis())
+    private suspend fun insertAiComment(momentId: Long, operator: Operator, content: String, parentCommentId: Long, userName: String) {
+        val comment = MomentComment(momentId = momentId, operatorId = operator.id, operatorName = operator.name, content = content, parentCommentId = parentCommentId, replyToName = userName, createdAt = System.currentTimeMillis())
         val commentId = repository.insertComment(comment)
         val persistedComment = comment.copy(id = commentId)
         if (settings.memoryV2Enabled && settings.momentMemoryV2Enabled) {
@@ -2041,9 +2015,22 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         refreshMomentsNow()
     }
 
-    private suspend fun triggerSingleAiReply(momentId: Long, speakerName: String, userContent: String, parentCommentId: Long, userName: String, customPrompt: String? = null, mustInsert: Boolean = false, fallbackComment: String = "我看到了，特意来回一句。") {
+    private fun mentionedFallback(operator: Operator, postContent: String): String {
+        val subject = postContent.trim().take(16).ifBlank { "这条动态" }
+        return listOf(
+            "“$subject”这句我看见了，晚点认真回你。",
+            "你提到的“$subject”，我先记下了。",
+            "关于“$subject”，让我想想再回答你。",
+            "“$subject”我注意到了，别急。"
+        )[operator.id.hashCode().and(3)]
+    }
+
+    private suspend fun triggerSingleAiReply(momentId: Long, speakerName: String, speakerOperatorId: String?, userContent: String, parentCommentId: Long, userName: String, customPrompt: String? = null, mustInsert: Boolean = false, fallbackComment: String = "我看到了，特意来回一句。") {
             try {
-                val realOp = _operators.value.find { it.name == speakerName || it.id == speakerName }
+                val realOp = if (speakerOperatorId != null) _operators.value.find { it.id == speakerOperatorId }
+                    else _operators.value.find { it.name == speakerName || it.id == speakerName }
+                if (realOp == null) return
+                val currentSpeakerName = realOp.name
                 val moment = repository.getMoment(momentId)
                 val recentComments = try {
                     withTimeout(500) { repository.getComments(momentId).first() }
@@ -2052,10 +2039,10 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 } catch (_: Exception) { "" }
                 // A direct reply to the user on this operator's own post is a private interaction,
                 // even though its rendered result is a public comment.
-                val isOwnerReply = realOp?.id == moment?.operatorId
-                val (memory, sourceAwareMemory) = if (realOp != null) {
-                    buildCommenterMemoryContext(realOp.id, MemorySurface.COMMENT, userContent, isOwnerReply)
-                } else "" to ""
+                val isOwnerReply = realOp.id == moment?.operatorId
+                val (memory, sourceAwareMemory) = buildCommenterMemoryContext(
+                    realOp.id, MemorySurface.COMMENT, userContent, isOwnerReply
+                )
                 val contextBlock = listOfNotNull(
                     recentComments.takeIf { it.isNotBlank() }?.let { "【评论上下文】\n$it" },
                     memory.takeIf { it.isNotBlank() }?.let { "【你的相关记忆】\n$it" },
@@ -2067,7 +2054,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 )
                 sharedUtils.logMemoryContext(
                     surface = "comment",
-                    title = "$speakerName/moment_$momentId",
+                    title = "$currentSpeakerName/moment_$momentId",
                     placeholders = mapOf(
                         "COMMENT_CONTEXT" to recentComments,
                         "COMMENTER_MEMORY" to memory,
@@ -2086,11 +2073,11 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 val maxChars = intPref("comment_max_chars", 40)
                 val template = getPromptTemplate("moment_comment")
                 val prompt = applyTemplate(template, commentTimeReplacements() + mapOf(
-                    "COMMENTER_NAME" to speakerName,
+                    "COMMENTER_NAME" to currentSpeakerName,
                     "COMMENTER_PERSONA" to (realOp?.let(::publicCommentPersona).orEmpty().ifBlank { "无" }),
-                    "COMMENTER_LOCATION" to (realOp?.location ?: "无"),
-                    "COMMENTER_STATE" to (realOp?.activity ?: "无"),
-                    "COMMENTER_EMOTION" to (realOp?.emotion ?: "无"),
+                    "COMMENTER_LOCATION" to "无",
+                    "COMMENTER_STATE" to "无",
+                    "COMMENTER_EMOTION" to "无",
                     "POST_AUTHOR_NAME" to (moment?.operatorName ?: "动态作者"),
                     "POST_AUTHOR_PERSONA" to "公开动态作者",
                     "POST_CONTENT" to (moment?.content ?: "无"),
@@ -2103,23 +2090,40 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                     "SOURCE_AWARE_RULES" to sharedUtils.sourceAwareUsageRule(MemorySurface.COMMENT),
                     "USER_CONTENT" to userContent,
                     "REPLY_TARGET" to userName,
-                    "COMMENT_TASK" to "reply_to_user",
-                    "COMMENT_INSTRUCTION" to listOfNotNull("回复用户 $userName 的最新评论，不要添加回复前缀。", customPrompt?.let { "互动意图：$it" }).joinToString("\n"),
+                    "COMMENT_TASK" to if (mustInsert) "mentioned_on_user_post" else "reply_to_user",
+                    "COMMENT_INSTRUCTION" to listOfNotNull(
+                        if (mustInsert) "用户在自己的动态中明确 @ 了你。必须针对动态正文的一个具体点评论；禁止只回复“我在”“收到”或“看到你 @ 我”。"
+                        else "回复用户 $userName 的最新评论，不要添加回复前缀。",
+                        customPrompt?.let { "互动意图：$it" }
+                    ).joinToString("\n"),
                     "COMMENT_MIN_CHARS" to minChars.toString(),
                     "COMMENT_MAX_CHARS" to maxChars.toString()
                 ))
-                val reply = withTimeout(10_000) { chat(listOf(AiMessage("system", prompt)), "Moment") }
-                    .trim().take(maxChars).takeIf { it.length >= minChars }.orEmpty()
-                if (reply.isNotBlank()) {
-                    insertAiComment(momentId, speakerName, reply, parentCommentId, userName)
-                    Log.d("RHODES_MOMENT", "triggerSingleAiReply: $speakerName 回复成功")
-                } else {
-                    if (mustInsert) insertAiComment(momentId, speakerName, fallbackComment, parentCommentId, userName)
-                    Log.w("RHODES_MOMENT", "triggerSingleAiReply: $speakerName 回复内容为空")
+                val requiredChars = if (mustInsert) 2 else minChars
+                var reply = withTimeout(10_000) { chat(listOf(AiMessage("system", prompt)), "Moment") }
+                    .trim().take(maxChars).takeIf { it.length >= requiredChars }.orEmpty()
+                if (reply.isBlank() && mustInsert) {
+                    delay(500)
+                    reply = withTimeout(10_000) { chat(listOf(AiMessage("system", prompt)), "MomentMentionRetry") }
+                        .trim().take(maxChars).takeIf { it.length >= requiredChars }.orEmpty()
                 }
+                if (reply.isNotBlank()) {
+                    insertAiComment(momentId, realOp, reply, parentCommentId, userName)
+                    Log.d("RHODES_MOMENT", "triggerSingleAiReply: $currentSpeakerName 回复成功")
+                } else {
+                    if (mustInsert) insertAiComment(momentId, realOp, mentionedFallback(realOp, moment?.content.orEmpty()), parentCommentId, userName)
+                    Log.w("RHODES_MOMENT", "triggerSingleAiReply: $currentSpeakerName 回复内容为空")
+                }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 if (mustInsert) {
-                    try { insertAiComment(momentId, speakerName, fallbackComment, parentCommentId, userName) } catch (_: Exception) {}
+                    val operator = speakerOperatorId?.let { id -> _operators.value.find { it.id == id } }
+                        ?: _operators.value.find { it.name == speakerName || it.id == speakerName }
+                    if (operator != null) try {
+                        val postContent = repository.getMoment(momentId)?.content.orEmpty()
+                        insertAiComment(momentId, operator, mentionedFallback(operator, postContent), parentCommentId, userName)
+                    } catch (_: Exception) {}
                 }
                 Log.e("RHODES_MOMENT", "triggerSingleAiReply: $speakerName 异常: ${e.message}", e)
             }
@@ -2127,12 +2131,17 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
 
 
 
-    fun postUserMoment(content: String, mentionedOps: List<String>) {
-        DebugLogger.log("Moment", "用户发动态: content=${content.take(50)}, mentioned=$mentionedOps")
+    fun postUserMoment(content: String, mentionedOperatorIds: List<String>) {
+        val cleanContent = content.trim()
+        if (cleanContent.isBlank()) return
+        val postKey = "$cleanContent:${mentionedOperatorIds.distinct().sorted().joinToString(",")}" 
+        if (!pendingMomentPosts.add(postKey)) return
+        DebugLogger.log("Moment", "用户发动态: content=${content.take(50)}, mentionedIds=$mentionedOperatorIds")
         viewModelScope.launch {
+            try {
             val profile = getUserProfile()
             val userName = profile.nickname
-            val moment = Moment(operatorId = "user", operatorName = userName, content = content, isUserPost = true, mentionedOperatorIds = mentionedOps.joinToString(","), createdAt = System.currentTimeMillis())
+            val moment = Moment(operatorId = "user", operatorName = userName, content = cleanContent, isUserPost = true, mentionedOperatorIds = mentionedOperatorIds.joinToString(","), createdAt = System.currentTimeMillis())
             val momentId = repository.insertMoment(moment)
             DebugLogger.log("Moment/DB", "动态已写入DB, id=$momentId")
             if (settings.memoryV2Enabled && settings.momentMemoryV2Enabled) {
@@ -2140,9 +2149,10 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                     .onFailure { DebugLogger.log("MemoryV2", "动态分层记忆写入失败: ${it.message?.take(80)}") }
             }
             refreshMomentsNow()
-            val mentionedOperators = mentionedOps.mapNotNull { resolveMentionedOperator(it) }.distinctBy { it.id }
+            // The picker IDs are authoritative; free text in the post never creates an @ task.
+            val mentionedOperators = mentionedOperatorIds.mapNotNull { id -> _operators.value.find { it.id == id } }.distinctBy { it.id }
             val mentionedIds = mentionedOperators.map { it.id }
-            DebugLogger.log("Moment/Mention", "解析@角色: raw=${mentionedOps.joinToString("|")}, resolved=${mentionedOperators.joinToString("、") { it.name }}")
+            DebugLogger.log("Moment/Mention", "选择@角色: ids=${mentionedOperatorIds.joinToString("|")}, resolved=${mentionedOperators.joinToString("、") { it.name }}")
 
             // 用户主动发布/@触发的互动不消耗自动预算，也不受 autoAiEnabled 总开关限制。
             val eligibleOps = _operators.value.filter { it.name != userName && settings.getOperatorDynPermission(it.id) }
@@ -2163,7 +2173,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             val randomRepliers = availableBystanders.shuffled().take(bystanderTake)
             val repliers = (mentionedInteractive + randomRepliers).distinctBy { it.id }
             DebugLogger.log("Moment/Mention", "评论角色: mentioned=${mentionedInteractive.joinToString("、") { it.name }}, random=${randomRepliers.joinToString("、") { it.name }}")
-            val c = content; val u = userName
+            val c = cleanContent; val u = userName
             for (op in repliers) {
                 val prompt = if (op.id in mentionedIds) {
                     buildMentionedCommentPrompt(op.name, u, c)
@@ -2175,6 +2185,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 scheduleAiComment(
                     momentId = momentId,
                     speakerName = op.name,
+                    speakerOperatorId = op.id,
                     userContent = c,
                     parentCommentId = 0,
                     userName = u,
@@ -2184,15 +2195,10 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                     immediate = mustInsert,
                 )
             }
+            } finally {
+                pendingMomentPosts.remove(postKey)
+            }
         }
-    }
-
-    private fun resolveMentionedOperator(raw: String): Operator? {
-        val normalized = raw.trim().removePrefix("@").trim()
-        if (normalized.isBlank()) return null
-        val ops = _operators.value
-        return ops.find { it.id == normalized || it.name == normalized }
-            ?: ops.find { normalized.contains(it.name) }
     }
 
     private fun buildMentionedCommentPrompt(operatorName: String, userName: String, content: String): String = """
@@ -2319,7 +2325,8 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 val more = cursor?.let { repository.getMomentsBefore(it.createdAt, it.id, MOMENT_PAGE_SIZE + 1) }.orEmpty()
                 _hasMoreMoments.value = more.size > MOMENT_PAGE_SIZE
                 if (more.isNotEmpty()) {
-                    appState.refreshMoments((current + more.take(MOMENT_PAGE_SIZE)).distinctBy { it.id }.sortedWith(compareByDescending<Moment> { it.createdAt }.thenByDescending { it.id }))
+                    val latest = appState.moments.value
+                    appState.refreshMoments((latest + more.take(MOMENT_PAGE_SIZE)).distinctBy { it.id }.sortedWith(compareByDescending<Moment> { it.createdAt }.thenByDescending { it.id }))
                 }
             } finally {
                 _isLoadingMoments.value = false

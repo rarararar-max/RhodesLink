@@ -105,7 +105,7 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Text("罗德岛动态", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = TextPrimary, modifier = Modifier.weight(1f).padding(start = 4.dp))
             TextButton(onClick = onUnreadMessages) {
-                Text(if (unreadMsgCount > 0) "未读消息 $unreadMsgCount" else "未读消息", fontSize = 12.sp, color = if (unreadMsgCount > 0) AccentOrange else TextSecondary, fontWeight = if (unreadMsgCount > 0) FontWeight.Bold else FontWeight.Normal)
+                Text(if (unreadMsgCount > 0) "互动消息 $unreadMsgCount" else "互动消息", fontSize = 12.sp, color = if (unreadMsgCount > 0) AccentOrange else TextSecondary, fontWeight = if (unreadMsgCount > 0) FontWeight.Bold else FontWeight.Normal)
             }
             if (!genStatus.running) {
                 TextButton(onClick = { viewModel.forceGenerateMoments() }) {
@@ -154,7 +154,7 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
             }
     }
     }
-    if (showPost) PostDialog(operators = viewModel.operators.collectAsState().value, onDismiss = { showPost = false }, onPost = { content, mentioned -> scrollToTopAfterPost = true; viewModel.postUserMoment(content, mentioned); showPost = false })
+    if (showPost) PostDialog(operators = viewModel.operators.collectAsState().value, onDismiss = { showPost = false }, onPost = { content, mentionedIds -> scrollToTopAfterPost = true; viewModel.postUserMoment(content, mentionedIds); showPost = false })
 
     // Reply dialog at screen level
     // Reply dialog - with key to prevent flash
@@ -277,48 +277,61 @@ private fun MomentCardWithInteraction(moment: MomentEntity, viewModel: MainViewM
 }
 
 @Composable private fun PostDialog(operators: List<com.rhodes.privatechat.data.db.entity.OperatorEntity>, onDismiss: () -> Unit, onPost: (String, List<String>) -> Unit) {
-    var text by remember { mutableStateOf("") }; var showAtPicker by remember { mutableStateOf(false) }; var selectedMentions by remember { mutableStateOf(setOf<String>()) }; val names = remember(operators) { operators.filter { it.name != "系统" }.map { it.name } }
-    // 从文本中解析已被 @ 的干员
-    val mentionedInText = remember(text) { names.filter { Regex("@${Regex.escape(it)}(\\s|\$|，|。|！|？)").containsMatchIn(text) } }
+    var text by remember { mutableStateOf("") }
+    var showAtPicker by remember { mutableStateOf(false) }
+    var selectedMentionIds by remember { mutableStateOf(setOf<String>()) }
+    var insertedMentionIds by remember { mutableStateOf(setOf<String>()) }
+    var draftMentionIds by remember { mutableStateOf(setOf<String>()) }
+    var isPosting by remember { mutableStateOf(false) }
+    val mentionableOperators = remember(operators) { operators.filter { it.name != "系统" } }
+    val selectedNames = remember(selectedMentionIds, mentionableOperators) {
+        mentionableOperators.filter { it.id in selectedMentionIds }.map { it.name }
+    }
     AlertDialog(onDismissRequest = onDismiss, title = { Text("发布动态", color = TextPrimary) }, text = {
         Column {
-            OutlinedTextField(value = text, onValueChange = { text = it }, modifier = Modifier.fillMaxWidth().height(100.dp), placeholder = { Text("用 @+干员名 艾特干员，如：@能天使", color = TextTertiary) }, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Primary, unfocusedBorderColor = Divider))
-            Spacer(Modifier.height(8.dp)); Row(verticalAlignment = Alignment.CenterVertically) { Text("艾特好友：", fontSize = 12.sp, color = TextSecondary); Spacer(Modifier.weight(1f)); TextButton(onClick = { selectedMentions = mentionedInText.toSet(); showAtPicker = true }) { Text("选择干员", fontSize = 13.sp, color = Primary) } }
-            if (mentionedInText.isNotEmpty()) {
+            OutlinedTextField(value = text, onValueChange = { text = it }, modifier = Modifier.fillMaxWidth().height(100.dp), placeholder = { Text("选择干员即可艾特，可编辑正文", color = TextTertiary) }, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Primary, unfocusedBorderColor = Divider))
+            Spacer(Modifier.height(8.dp)); Row(verticalAlignment = Alignment.CenterVertically) { Text("艾特好友：", fontSize = 12.sp, color = TextSecondary); Spacer(Modifier.weight(1f)); TextButton(onClick = { draftMentionIds = selectedMentionIds; showAtPicker = true }) { Text("选择干员", fontSize = 13.sp, color = Primary) } }
+            if (selectedNames.isNotEmpty()) {
                 Spacer(Modifier.height(4.dp))
-                Text("已艾特：${mentionedInText.joinToString("、") { "@$it" }}", fontSize = 11.sp, color = Primary)
+                Text("已艾特：${selectedNames.joinToString("、") { "@$it" }}", fontSize = 11.sp, color = Primary)
             }
         }
-    }, confirmButton = { TextButton(onClick = {
-        if (text.isNotBlank()) {
-            val mentioned = names.filter { text.contains("@$it") }
-            onPost(text, mentioned)
+    }, confirmButton = { TextButton(enabled = text.isNotBlank() && !isPosting, onClick = {
+        if (text.isNotBlank() && !isPosting) {
+            isPosting = true
+            onPost(text, selectedMentionIds.toList())
         } else onDismiss()
     }) { Text("发布", color = if (text.isNotBlank()) Primary else TextTertiary) } }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消", color = TextSecondary) } })
     if (showAtPicker) {
         val allOps = operators
         AlertDialog(onDismissRequest = { showAtPicker = false }, title = { Text("@谁？", color = TextPrimary) }, text = {
             Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
-                names.forEach { name ->
-                    val checked = name in selectedMentions
-                    val opEntity = allOps.find { it.name == name }
+                mentionableOperators.forEach { opEntity ->
+                    val checked = opEntity.id in draftMentionIds
                     Row(Modifier.fillMaxWidth().clickable {
-                        selectedMentions = if (checked) selectedMentions - name else selectedMentions + name
+                        draftMentionIds = if (checked) draftMentionIds - opEntity.id else draftMentionIds + opEntity.id
                     }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        OperatorAvatarImage(avatarUri = opEntity?.avatarUri ?: "", name = name, modifier = Modifier.size(32.dp))
+                        OperatorAvatarImage(avatarUri = opEntity.avatarUri, name = opEntity.name, modifier = Modifier.size(32.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text(name, fontSize = 14.sp, color = TextPrimary, modifier = Modifier.weight(1f))
-                        Checkbox(checked = checked, onCheckedChange = { selectedMentions = if (checked) selectedMentions - name else selectedMentions + name }, colors = CheckboxDefaults.colors(checkedColor = Primary))
+                        Text(opEntity.name, fontSize = 14.sp, color = TextPrimary, modifier = Modifier.weight(1f))
+                        Checkbox(checked = checked, onCheckedChange = { draftMentionIds = if (checked) draftMentionIds - opEntity.id else draftMentionIds + opEntity.id }, colors = CheckboxDefaults.colors(checkedColor = Primary))
                     }
                 }
             }
         }, confirmButton = { TextButton(onClick = {
-            val existing = names.filter { text.contains("@$it") }.toSet()
-            val additions = selectedMentions - existing
+            val removals = insertedMentionIds - draftMentionIds
+            removals.forEach { id ->
+                val name = mentionableOperators.find { it.id == id }?.name ?: return@forEach
+                text = text.replace("@$name ", "").replace("@$name", "").replace(Regex(" {2,}"), " ").trimEnd()
+            }
+            val additions = draftMentionIds - insertedMentionIds
             if (additions.isNotEmpty()) {
                 val spacer = if (text.isBlank() || text.endsWith(" ") || text.endsWith("\n")) "" else " "
-                text = "${text}${spacer}${additions.joinToString(" ") { "@$it" }} "
+                val names = mentionableOperators.filter { it.id in additions }.joinToString(" ") { "@${it.name}" }
+                text = "${text}${spacer}${names} "
             }
+            selectedMentionIds = draftMentionIds
+            insertedMentionIds = draftMentionIds
             showAtPicker = false
         }) { Text("确定", color = Primary) } })
     }

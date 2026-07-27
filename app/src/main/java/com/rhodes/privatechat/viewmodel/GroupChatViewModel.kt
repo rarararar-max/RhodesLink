@@ -274,13 +274,14 @@ class GroupChatViewModel(
     fun restartGroupSession(groupId: String) {
         if (groupId.isBlank()) return
         cancelGroupRequests(groupId)
+        val now = System.currentTimeMillis()
+        // Publish the new boundary before cleanup suspends so the first new turn cannot see old history.
+        settings.putSessionRestartAt(groupId, now)
+        settings.putSummaryCursor(groupId, 0L)
+        settings.putMemoryExtractionCursor(groupId, 0L)
+        if (_currentGroupId.value == groupId) _groupRestartAt.value = now
         scope.launch {
-            val now = System.currentTimeMillis()
             repository.deleteMemoryV2BySession(groupId)
-            settings.putSessionRestartAt(groupId, now)
-            settings.putSummaryCursor(groupId, 0L)
-            settings.putMemoryExtractionCursor(groupId, 0L)
-            if (_currentGroupId.value == groupId) _groupRestartAt.value = now
             repository.sendMessage(groupId, ChatMessage(
                 id = repository.getNextMessageId(),
                 sessionId = groupId,
@@ -406,7 +407,7 @@ class GroupChatViewModel(
                     val session = repository.getSession(groupId) ?: break
                     val mode = getGroupChatMode(groupId)
                     var responseCompleted = false
-                    sendGroupMessage(groupId, groupName, "", mode, isAuto = true, onResponseComplete = { responseCompleted = true })
+                    sendGroupMessage(groupId, groupName, "", mode, isAuto = true, autoGeneration = generation, onResponseComplete = { responseCompleted = true })
                     while (!responseCompleted && isAutoGroupChatEnabled(groupId) && autoChatGenerations[groupId] == generation) {
                         delay(100)
                     }
@@ -493,7 +494,7 @@ class GroupChatViewModel(
             }
     }
 
-    fun sendGroupMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online", autoSpeak: Boolean = false, isAuto: Boolean = false, userMessageAlreadyStored: Boolean = false, onMessageSent: () -> Unit = {}, onResponseComplete: () -> Unit = {}) {
+    fun sendGroupMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online", autoSpeak: Boolean = false, isAuto: Boolean = false, autoGeneration: Long? = null, userMessageAlreadyStored: Boolean = false, onMessageSent: () -> Unit = {}, onResponseComplete: () -> Unit = {}) {
         if (isAuto && !settings.autoAiEnabled) { onResponseComplete(); return }
         if (isAuto && groupAiJobs[groupSessionId]?.isActive == true) { onResponseComplete(); return }
         if (!isAuto && !userMessageAlreadyStored && text.isNotBlank()) {
@@ -515,6 +516,7 @@ class GroupChatViewModel(
                     id = userMsgId, sessionId = groupSessionId,
                     senderName = "我", content = text, type = "text", mode = mode, isMe = true
                 ))
+                DebugLogger.chatEvent("群聊", "发送消息", "已保存", "群=$groupName，模式=$mode")
                 pendingUserMessageIds.computeIfAbsent(groupSessionId) { ConcurrentHashMap.newKeySet() }.add(userMsgId)
                 DebugLogger.log("GroupChat/DB", "群用户消息已写入, session=$groupSessionId, id=$userMsgId, text=${text.take(50)}")
                 onMessageSent()
@@ -528,6 +530,7 @@ class GroupChatViewModel(
                 mutexFor(groupSessionId).lock()
                 mutexLocked = true
                 if ((groupGenerations[groupSessionId] ?: 0L) != generation) return@launch
+                if (isAuto && autoGeneration != null && autoChatGenerations[groupSessionId] != autoGeneration) return@launch
                 if (!isAuto) delay(250)
                 var batchIds = emptySet<Long>()
                 val requestText = if (!isAuto && text.isNotBlank() && !userMessageAlreadyStored && userMessageId != null) {
@@ -735,9 +738,13 @@ class GroupChatViewModel(
                 var finalSystemPrompt = "$groupFoundation\n\n" + sharedUtils.compactTemplate(sharedUtils.applyTemplate(grpTpl, grpReplacements)) + """
 
                     |【最近话题连续性 · 最高优先级】
-                    |- 优先承接最近一轮最后一个有效发言、尚未回答的问题、邀约、分歧或行动。
-                    |- 本轮至少一名成员必须回应上述具体内容；不要无关联地突然换话题。
-                    |- 只有用户明确转题，或当前话题自然收束后，才能转题；转题必须有自然过渡。
+                    |- 先确定最近一轮最后一个有效发言、尚未回答的问题、邀约、分歧或行动；它是本轮所有输出共同承接的主线。
+                    |- 当前主线未收束时，每位成员的台词、插话和每条 narration 都必须直接回应、补充或推进这条主线；不得只有一名成员承接，而其他成员各自开启无关话题、事件或地点。
+                    |- 仅在用户明确转题，或主线已经自然收束后，才能转题；转题必须由当前台词或旁白给出自然过渡，禁止重新开场或无关联跳题。
+                    |- 线下和导演模式中，上一轮已确认的地点、时间、人物位置、在场成员和进行中动作默认保持不变。narration 只是同一场景的补充镜头，不能为了凑旁白段数而换地点、切换时间、让成员无故到达/离场或另起剧情；移动必须先明确交代过程。
+                    |【记忆使用边界 · 高于模板中的记忆描述】
+                    |- 向量检索记忆、群聊摘要、关系提示、公开动态和私聊背景都是过去发生、从他人处听说或用于核对的背景事实；只可在当前话题明确相关时自然引用，不能被当作正在发生的当前场景。
+                    |- 当前用户发言及最近对话已确认的地点、时间、人物位置、在场成员、状态、行动和未收束主线优先于所有记忆。不得依据旧记忆擅自换地点、改变人物状态、让成员出现/离场、恢复旧事件或另起剧情。
                 """.trimMargin()
                 val historyLimit = settings.historyMessages
                 val activeNames = activeMembers.map { it.name }.toSet() + "我" + "系统"
@@ -762,6 +769,7 @@ class GroupChatViewModel(
                     val userMsg = if (autoSpeak) "（群聊已空闲一段时间，干员们自然地闲聊起来，无需等待用户发言。）" else requestText
                     apiMessages.add(AiMessage("user", "用户：$userMsg"))
                 }
+                DebugLogger.chatEvent("群聊", "请求模型", "开始", "群=$groupName，模式=$mode，成员=${activeMembers.size}，自动=$isAuto")
                 // 估算总 token，超限则丢弃最早的历史消息
                 val maxPromptTokens = settings.maxContextTokens - 2000
                 var totalTokens = apiMessages.sumOf { estimateTokens(it.content) + 10 }
@@ -814,10 +822,13 @@ class GroupChatViewModel(
                 var needsFormatRepair = requiresFormatRepair(rawBase, filtered)
 
                 if (needsFormatRepair) {
+                    DebugLogger.chatEvent("群聊", "格式修复", "开始", "首次输出格式异常")
                     DebugLogger.trace("AI/GroupFormatRepair", "ORIGINAL_MALFORMED_RESPONSE\n$rawBase")
                     filtered = repairOrKeepUsableReply(rawBase, filtered, "首次输出")
+                    DebugLogger.chatEvent("群聊", "格式修复", if (filtered.isNotEmpty()) "成功" else "失败", "可用条目=${filtered.size}")
                 }
                 if (filtered.isEmpty()) {
+                    DebugLogger.chatEvent("群聊", "内容重试", "开始", "首次输出不可用")
                     // The format model only preserves content. Regenerate once when the reply still
                     // lacks the minimum visible structure for the current mode.
                     DebugLogger.trace("AI/GroupContentRetry", "ORIGINAL_UNUSABLE_RESPONSE\n$rawBase")
@@ -834,16 +845,20 @@ class GroupChatViewModel(
                     filtered = normalizeReply(rawBase)
                     needsFormatRepair = requiresFormatRepair(rawBase, filtered)
                     if (needsFormatRepair) {
+                        DebugLogger.chatEvent("群聊", "格式修复", "开始", "重试输出格式异常")
                         DebugLogger.trace("AI/GroupFormatRepair", "RETRY_MALFORMED_RESPONSE\n$rawBase")
                         filtered = repairOrKeepUsableReply(rawBase, filtered, "重试输出")
+                        DebugLogger.chatEvent("群聊", "格式修复", if (filtered.isNotEmpty()) "成功" else "失败", "可用条目=${filtered.size}")
                     }
                 }
                 if (filtered.isEmpty()) {
                     if ((groupGenerations[groupSessionId] ?: 0L) != generation) return@launch
+                    if (isAuto && autoGeneration != null && autoChatGenerations[groupSessionId] != autoGeneration) return@launch
                     DebugLogger.log(
                         "GroupChat/InvalidResponse",
                         "模型返回内容无法解析为有效群聊: ${rawBase.take(500)}"
                     )
+                    DebugLogger.chatEvent("群聊", "返回解析", "失败", "无法得到可展示消息")
                     repository.sendMessage(groupSessionId, ChatMessage(
                         id = repository.getNextMessageId(), sessionId = groupSessionId,
                         senderName = "系统", content = "AI 回复格式异常，请再发一遍吧",
@@ -853,8 +868,10 @@ class GroupChatViewModel(
                     val dialogueCount = filtered.count { it.type == "dialogue" }
                     val narrationCount = filtered.count { it.type == "narration" }
                     DebugLogger.log("GroupChat/Decision", "最终展示${filtered.size}条消息：成员台词${dialogueCount}条，旁白${narrationCount}条${if (narrationCount == 0 && mode != "online") "；缺少旁白但优先展示可读内容" else ""}")
+                    DebugLogger.chatEvent("群聊", "返回解析", "成功", "台词=$dialogueCount，旁白=$narrationCount")
                 }
                 if (filtered.isNotEmpty()) {
+                    if (isAuto && autoGeneration != null && autoChatGenerations[groupSessionId] != autoGeneration) return@launch
                     if ((groupGenerations[groupSessionId] ?: 0L) != generation) return@launch
                     val aiMsgId = repository.getNextMessageId()
                     val storedContent = if (filtered.isNotEmpty()) {
@@ -867,6 +884,7 @@ class GroupChatViewModel(
                         senderName = groupName, content = storedContent,
                         type = "ai_json", mode = mode, isMe = false
                     ))
+                    DebugLogger.chatEvent("群聊", "回复落库", "成功", "群=$groupName，条目=${filtered.size}")
                     // Auto messages and replies can arrive while the group is open, so unread-based
                     // restoration alone is insufficient after the user removed it from the home page.
                     unhideSession(groupSessionId)
@@ -895,16 +913,20 @@ class GroupChatViewModel(
                 }
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                 if ((groupGenerations[groupSessionId] ?: 0L) != generation) return@launch
+                if (isAuto && autoGeneration != null && autoChatGenerations[groupSessionId] != autoGeneration) return@launch
                 Log.e("GroupChat", "Timeout: ${e.message}")
                 DebugLogger.log("GroupChat/Error", "AI 响应超时：${e.message ?: "超过90秒"}")
+                DebugLogger.chatEvent("群聊", "请求模型", "超时", "群=$groupName")
                 repository.sendMessage(groupSessionId, ChatMessage(id = repository.getNextMessageId(), sessionId = groupSessionId, senderName = "系统", content = "AI 响应超时，请稍后重试", type = "system", mode = mode, isMe = false))
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // 被新消息取消，不做任何事
             } catch (e: Exception) {
                 if ((groupGenerations[groupSessionId] ?: 0L) != generation) return@launch
+                if (isAuto && autoGeneration != null && autoChatGenerations[groupSessionId] != autoGeneration) return@launch
                 val errMsg = classifyGroupError(e)
                 Log.e("GroupChat", "Error: ${e.message}", e)
                 DebugLogger.log("GroupChat/Error", "发送失败: $errMsg")
+                DebugLogger.chatEvent("群聊", "请求模型", "失败", errMsg)
                 repository.sendMessage(groupSessionId, ChatMessage(id = repository.getNextMessageId(), sessionId = groupSessionId, senderName = "系统", content = errMsg, type = "system", mode = mode, isMe = false))
                 _lastSendError.value = errMsg
             } finally {

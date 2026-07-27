@@ -160,6 +160,7 @@ private fun logPreview(message: String): String =
     if (message.length <= 800) message else "${message.take(800)}\n… 已省略列表预览，点击查看完整内容"
 
 private fun logDescription(tag: String): String = when {
+    tag.startsWith("ChatEvent/") -> "聊天流程事件：请求、模型返回、解析、重试、格式修复和最终写入结果。"
     tag == "AI/→GroupChat" -> "群聊传给大模型的内容：完整提示词、历史消息和本轮用户输入。"
     tag == "AI/←GroupChat" -> "群聊大模型返回：本次请求的完整上下文，以及模型返回的原始内容。"
     tag.startsWith("AI/→Chat") || tag.startsWith("AI/→VisionChat") -> "私聊传给大模型的内容：完整提示词、历史消息和本轮用户输入。"
@@ -181,6 +182,7 @@ private fun logDescription(tag: String): String = when {
 }
 
 private fun logTitle(tag: String): String = when {
+    tag.startsWith("ChatEvent/") -> "聊天流程"
     tag.startsWith("AI/→GroupChat") -> "群聊传给大模型"
     tag.startsWith("AI/←GroupChat") -> "群聊大模型返回"
     tag.startsWith("AI/→Chat") || tag.startsWith("AI/→VisionChat") -> "私聊传给大模型"

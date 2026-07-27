@@ -31,6 +31,14 @@ object DebugLogger {
         }
     }
 
+    /** Compact lifecycle records for the in-app debug screen; never include chat content. */
+    fun chatEvent(surface: String, event: String, status: String, details: String = "") {
+        log("ChatEvent/$surface", buildString {
+            append("$surface | $event | $status")
+            if (details.isNotBlank()) append(" | $details")
+        })
+    }
+
     /** Full local-only prompt/response trace. Only call this after the user explicitly enables debug logging. */
     fun trace(tag: String, message: String) {
         if (!enabled) return

@@ -117,14 +117,38 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         val location = Regex("【位置：([^】]*)】").find(raw)?.groupValues?.getOrNull(1)?.trim() ?: ""
         val state = Regex("【状态：([^】]*)】").find(raw)?.groupValues?.getOrNull(1)?.trim() ?: ""
         val segments = mutableListOf<Segment>()
-        val regex = Regex("【(旁白|台词)：([^】]*)】")
-        for (m in regex.findAll(raw)) {
-            val type = if (m.groupValues[1] == "旁白") "narration" else "dialogue"
-            val content = m.groupValues[2].trim()
-            if (content.isNotBlank()) {
-                segments.add(Segment(type = type, content = content))
+        var currentType: String? = null
+        val content = StringBuilder()
+        fun flush() {
+            val type = currentType ?: return
+            val text = content.toString().trim()
+            if (text.isNotBlank()) segments += Segment(type = type, content = text)
+            content.clear()
+        }
+        raw.lineSequence().forEach { line ->
+            val cleanLine = line.trim()
+            val inline = Regex("^【(旁白|台词)：([^】]*)】$").matchEntire(cleanLine)
+            val bracketed = Regex("^【(旁白|台词)】\\s*(.*)$").matchEntire(cleanLine)
+            when {
+                inline != null -> {
+                    flush()
+                    currentType = if (inline.groupValues[1] == "旁白") "narration" else "dialogue"
+                    content.append(inline.groupValues[2])
+                    flush()
+                    currentType = null
+                }
+                bracketed != null -> {
+                    flush()
+                    currentType = if (bracketed.groupValues[1] == "旁白") "narration" else "dialogue"
+                    content.append(bracketed.groupValues[2])
+                }
+                currentType != null -> {
+                    if (content.isNotEmpty()) content.append('\n')
+                    content.append(line)
+                }
             }
         }
+        flush()
         if (segments.isEmpty()) {
             val tagged = Regex("""(?m)^(?:干员动作|旁白|动作)\s*[：:]\s*(.+)$|^(?:干员台词|台词|对话)\s*[：:]\s*(.+)$""")
             for (match in tagged.findAll(raw)) {

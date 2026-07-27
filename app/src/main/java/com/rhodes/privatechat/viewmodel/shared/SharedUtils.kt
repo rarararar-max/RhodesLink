@@ -379,7 +379,7 @@ class SharedUtils(
 
     fun sourceAwareUsageRule(surface: MemorySurface): String {
         if (!settings.sourceAwareMemoryEnabled) return ""
-        val base = "不要说“系统记录”“记忆锚点”“摘要显示”。需要时自然表现你是从哪里知道的。"
+        val base = "不要说“系统记录”“记忆锚点”“摘要显示”。这些内容是过往经历、听说的故事或背景事实，只用于核对事实和理解关系；当前用户发言与最近对话已确认的地点、时间、位置、状态、在场人物、进行中行动和话题优先，绝不能因旧记忆擅自切换当前场景、状态或剧情。需要时自然表现你是从哪里知道的。"
         return when (surface) {
             MemorySurface.PRIVATE_CHAT -> "$base 可以说“你上次跟我说过”“我看到你评论了”“群里之前聊到”。"
             MemorySurface.GROUP_CHAT -> "$base 可以说“之前群里聊过”“我听谁提过”“动态下面有人说”。"

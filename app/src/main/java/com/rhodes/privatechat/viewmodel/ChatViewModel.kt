@@ -140,8 +140,8 @@ class ChatViewModel(
             _loadingSessions.update { it - sessionId }
         }
     }
-    private var modeTransitionNotice = ""
-    private var modeTransitionRetryPending = false
+    private val modeTransitionNotices = ConcurrentHashMap<String, String>()
+    private val modeTransitionRetryPending = ConcurrentHashMap<String, Boolean>()
     private var messagesJob: Job? = null
     private val chatAiJobs = ConcurrentHashMap<String, Job>()
     private val pendingUserMessageIds = ConcurrentHashMap<String, MutableSet<Long>>()
@@ -315,7 +315,10 @@ ${text}"""
             }
             messagesJob?.cancel()
             if (!sameSession) {
+                _messages.value = emptyList()
                 _hasMoreMessages.value = true
+                _isLoadingOlderMessages.value = false
+                _scrollToMessageId.value = null
             }
             messagesJob = viewModelScope.launch {
                 try {
@@ -360,7 +363,10 @@ ${text}"""
             }
             messagesJob?.cancel()
             if (!sameSession) {
+                _messages.value = emptyList()
                 _hasMoreMessages.value = true
+                _isLoadingOlderMessages.value = false
+                _scrollToMessageId.value = null
             }
             messagesJob = viewModelScope.launch {
                 try {
@@ -400,13 +406,14 @@ ${text}"""
     fun restartSession() {
         val session = _currentSession.value ?: return
         cancelSessionRequests(session.id)
+        val now = System.currentTimeMillis()
+        // Establish the new boundary before cleanup suspends so new messages cannot see old history.
+        settings.putSessionRestartAt(session.id, now)
+        settings.putSummaryCursor(session.id, 0L)
+        settings.putMemoryExtractionCursor(session.id, 0L)
+        _sessionRestartAt.value = now
         viewModelScope.launch {
-            val now = System.currentTimeMillis()
             repository.deleteMemoryV2BySession(session.id)
-            settings.putSessionRestartAt(session.id, now)
-            settings.putSummaryCursor(session.id, 0L)
-            settings.putMemoryExtractionCursor(session.id, 0L)
-            _sessionRestartAt.value = now
             repository.clearSessionPreview(session.id, now)
             repository.sendMessage(session.id, ChatMessage(
                 id = repository.getNextMessageId(),
@@ -531,9 +538,11 @@ ${text}"""
     }
 
     private fun mergeMessagesFromFlow(messages: List<ChatMessage>) {
-        val sortedIncoming = messages.distinctBy { it.id }.sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
+        val sessionId = _currentSession.value?.id ?: return
+        val sortedIncoming = messages.filter { it.sessionId == sessionId }
+            .distinctBy { it.id }.sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
         val olderLoaded = sortedIncoming.firstOrNull()?.let { firstRecent ->
-            _messages.value.filter { it.timestamp < firstRecent.timestamp || (it.timestamp == firstRecent.timestamp && it.id < firstRecent.id) }
+            _messages.value.filter { it.sessionId == sessionId && (it.timestamp < firstRecent.timestamp || (it.timestamp == firstRecent.timestamp && it.id < firstRecent.id)) }
         } ?: emptyList()
         val merged = (olderLoaded + sortedIncoming)
             .distinctBy { it.id }
@@ -556,7 +565,7 @@ ${text}"""
         _currentMode.value = mode
         viewModelScope.launch {
             repository.updateSessionMode(session.id, mode)
-            modeTransitionNotice = when {
+            modeTransitionNotices[session.id] = when {
                 oldMode == "online" && mode == "offline" -> "【系统通知：用户放下了通讯终端，走到了你的面前，现在你们面对面站在一起。】"
                 oldMode == "offline" && mode == "online" -> "【系统通知：用户退后了几步，重新拿起通讯终端连接你，现在你们又回到远程通讯了。】"
                 oldMode == "director" && mode == "offline" -> "【用户走近了你，站在你的身边。场景变得更近、更真实了。】"
@@ -565,7 +574,7 @@ ${text}"""
                 oldMode == "director" && mode == "online" -> "【眼前的场景像雾气一样散去，你回到了罗德岛的走廊，通讯器里传来用户的声音。】"
                 else -> "【系统通知：模式已切换。】"
             }
-            modeTransitionRetryPending = false
+            modeTransitionRetryPending.remove(session.id)
             settings.putLastMode(session.operatorId, mode)
         }
     }
@@ -678,6 +687,7 @@ ${text}"""
             onShowToast(error)
             return
         }
+        val originalText = text
         _inputText.value = ""
         generateDailyIfNeeded()
 
@@ -689,11 +699,14 @@ ${text}"""
             val mode = _currentMode.value
             var aiMsgId = 0L
             var mutexLocked = false
+            var userMessagePersisted = false
             try {
                 repository.sendMessage(session.id, ChatMessage(
                     id = msgId, sessionId = session.id,
                     senderName = "我", content = text, type = "text", mode = _currentMode.value, isMe = true
                 ))
+                userMessagePersisted = true
+                DebugLogger.chatEvent("私聊", "发送消息", "已保存", "会话=${session.operatorName}，模式=$mode")
                 pendingUserMessageIds.computeIfAbsent(session.id) { ConcurrentHashMap.newKeySet() }.add(msgId)
                 // A new user message is activity even when this session is currently open.
                 // Do not rely on unread state to restore a session removed from the home page.
@@ -807,6 +820,7 @@ ${recentDialogues}
                 while (retryCount < maxRetries) {
                     try {
                         val apiMessages = buildApiMessages(session, text, effectiveHistoryMessages, batchIds.toSet(), mode = mode)
+                        DebugLogger.chatEvent("私聊", "请求模型", "开始", "会话=${session.operatorName}，模式=$mode，历史轮数=$effectiveHistoryMessages")
                         DebugLogger.log("Chat/AI", "请求AI, session=${session.id}, mode=$mode, prompt长度=${apiMessages.size}")
                         logPrivatePromptTrace(
                             stage = "REQUEST",
@@ -816,6 +830,7 @@ ${recentDialogues}
                             messages = apiMessages
                         )
                         val parsed = generateCompletePrivateReply(apiMessages, mode)
+                        DebugLogger.chatEvent("私聊", "返回解析", if (isCompletePrivateReply(parsed, mode)) "成功" else "不完整", "segments=${parsed.segments.orEmpty().size}")
                         logPrivatePromptTrace(
                             stage = "RESPONSE",
                             sessionId = session.id,
@@ -836,11 +851,12 @@ ${recentDialogues}
                         if (hasVisibleReply) {
                             if ((sessionGenerations[session.id] ?: 0L) != generation) return@launch
                             repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = rawJson, type = "ai_json", mode = mode, isMe = false))
+                            DebugLogger.chatEvent("私聊", "回复落库", "成功", "会话=${session.operatorName}，可见段=$aiResponseCount")
                             onUnhideSession(session.id)
                             notifyIfBackground(session, replyPreview(parsed).ifBlank { "发来一条消息" })
                             DebugLogger.log("Chat/DB", "AI响应已写入, session=${session.id}, id=$aiMsgId")
-                            modeTransitionNotice = ""
-                            modeTransitionRetryPending = false
+                            modeTransitionNotices.remove(session.id)
+                            modeTransitionRetryPending.remove(session.id)
                             // Only a visible reply counts as a completed interaction.
                             val affectionMod = 2 + parsed.affection_mod.coerceIn(-2, 2)
                             val currentDate = sharedUtils.beijingSdf("yyyyMMdd").format(java.util.Date())
@@ -857,17 +873,18 @@ ${recentDialogues}
                         } else {
                             DebugLogger.log("Chat/AI", "AI没有生成可见回复，不结算互动: session=${session.id}")
                             savePrivateFailure(session.id, aiMsgId, mode)
-                            if (modeTransitionRetryPending) {
-                                modeTransitionNotice = ""
-                                modeTransitionRetryPending = false
-                            } else if (modeTransitionNotice.isNotBlank()) {
-                                modeTransitionRetryPending = true
+                            DebugLogger.chatEvent("私聊", "回复落库", "失败", "模型输出不完整")
+                            if (modeTransitionRetryPending.remove(session.id) == true) {
+                                modeTransitionNotices.remove(session.id)
+                            } else if (modeTransitionNotices[session.id].orEmpty().isNotBlank()) {
+                                modeTransitionRetryPending[session.id] = true
                             }
                         }
                         lastError = null
                         break  // 成功，退出重试循环
                     } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                         DebugLogger.log("Chat/AI", "AI超时, session=${session.id}")
+                        DebugLogger.chatEvent("私聊", "请求模型", "超时", "会话=${session.operatorName}")
                         if ((sessionGenerations[session.id] ?: 0L) != generation) return@launch
                         savePrivateFailure(session.id, aiMsgId, mode)
                         break
@@ -885,6 +902,7 @@ ${recentDialogues}
                             effectiveHistoryMessages = newLimit
                             retryCount++
                             DebugLogger.log("Chat/AI", "上下文超限，降级历史轮数为$newLimit，第${retryCount}次重试")
+                            DebugLogger.chatEvent("私聊", "请求模型", "上下文重试", "历史轮数=$newLimit")
                             continue
                         }
                         lastError = e
@@ -896,7 +914,18 @@ ${recentDialogues}
                     if ((sessionGenerations[session.id] ?: 0L) != generation) return@launch
                     Log.e("ChatVM", "私聊AI最终错误 session=${session.id} err=${lastError.message?.take(120)}")
                     DebugLogger.log("Chat/AI", "AI错误: ${lastError.message?.take(100)}, session=${session.id}")
+                    DebugLogger.chatEvent("私聊", "请求模型", "失败", "${lastError.message?.take(80)}")
                     savePrivateFailure(session.id, aiMsgId, mode)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (!userMessagePersisted) {
+                    if (_inputText.value.isBlank()) _inputText.value = originalText
+                    onShowToast("消息保存失败，请重试")
+                    DebugLogger.log("Chat/DB", "用户消息保存失败: ${e.message?.take(100)}")
+                } else {
+                    DebugLogger.log("Chat/AI", "发送流程异常: ${e.message?.take(100)}")
                 }
             } finally {
                 finishLoading(session.id, requestId)
@@ -1277,7 +1306,7 @@ ${recentDialogues}
                 _messages.value = _messages.value.map { message -> if (message.id == msgId) originalReply else message }
                 DebugLogger.log("Chat/Regenerate", "重新生成失败: ${e.message?.take(100)}")
                 savePrivateFailure(session.id, repository.getNextMessageId(), mode)
-            } finally { finishLoading(session.id, requestId); if (mutexLocked) aiMutexFor(session.id).unlock(); modeTransitionNotice = "" }
+            } finally { finishLoading(session.id, requestId); if (mutexLocked) aiMutexFor(session.id).unlock(); modeTransitionNotices.remove(session.id) }
         }
         chatAiJobs[session.id] = job
     }
@@ -1297,7 +1326,7 @@ ${recentDialogues}
                 aiMutexFor(session.id).lock()
                 mutexLocked = true
                 val previousUser = _messages.value.take(idx).lastOrNull { it.isMe }
-                modeTransitionNotice = "【继续指令】请自然地继续说下去，不要复述或总结之前说过的话。"
+                modeTransitionNotices[session.id] = "【继续指令】请自然地继续说下去，不要复述或总结之前说过的话。"
 
                 // 深度分析模式（和 sendMessage 一致）
                 if (settings.dualModel && previousUser != null) {
@@ -1356,7 +1385,7 @@ ${recentDialogues}
                     } catch (_: Exception) { analysisGuidanceBySession[session.id] = "" }
                 }
 
-                val apiMessages = buildApiMessages(session, previousUser?.content ?: "", mode = mode)
+                val apiMessages = buildApiMessages(session, "请自然地继续你上一条未说完的内容，不要重复已经说过的话。", mode = mode)
                 val parsed = generateCompletePrivateReply(apiMessages, mode, "ChatContinue")
                 sharedUtils.trackTokens("private", apiMessages, parsed.toString())
                 val serializedJson = runCatching { json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), parsed) }.getOrNull()
@@ -1373,7 +1402,7 @@ ${recentDialogues}
             } catch (e: Exception) {
                 savePrivateFailure(session.id, aiMsgId, mode)
             }
-            finally { finishLoading(session.id, requestId); if (mutexLocked) aiMutexFor(session.id).unlock(); modeTransitionNotice = "" }
+            finally { finishLoading(session.id, requestId); if (mutexLocked) aiMutexFor(session.id).unlock(); modeTransitionNotices.remove(session.id) }
         }
         chatAiJobs[session.id] = job
     }
@@ -1696,7 +1725,8 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
 - 不要直接说“我被催眠了”，除非用户指令要求。
 剩余${_hypnosisRounds.value}轮
 """ else ""
-        val transitionNotice = if (modeTransitionNotice.isNotBlank()) "【场景变更】\n${modeTransitionNotice}\n" else ""
+        val transition = modeTransitionNotices[session.id].orEmpty()
+        val transitionNotice = if (transition.isNotBlank()) "【场景变更】\n$transition\n" else ""
         val wantsRecall = UnifiedMemoryContext.shouldIncludeTimeSummary(userContent)
         val recallQuery = repository.getMessagesSync(session.id)
             .takeLast(3)
@@ -1853,8 +1883,12 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         appendLine("- 结合最近对话和用户本轮发言，先确认用户正在问什么、想确认什么、表达什么情绪，以及希望得到回应还是行动反馈。")
         appendLine("- 对“这个、那个、他、她、它、这里、刚才、第二个、嗯、好、不要”等代称或短回复，优先从最近未结束的话题、选项、人物和行动中确定指向；证据不足时才简短确认。")
         appendLine("- 优先回应用户明确表达的内容；只有最近上下文有充分依据时，才自然照顾可能的隐含情绪或需求，不能把猜测当成事实。")
-        appendLine("- 本轮必须提供新的有效回应：不要换词复述上一轮已经完成的答案、安慰、提问、邀请、动作或场景。用户明确要求重复时除外。")
+        appendLine("- 本轮必须提供新的有效回应：不要换词复述上一轮已经完成的答案、安慰、提问或邀请。同一场景中的地点、位置、姿势和持续动作可以自然延续，不必为了变化而切换。用户明确要求重复时除外。")
         appendLine("- 自定义提示词可规定角色性格、语气、世界观和互动偏好，但不能要求角色无故忽略用户当前发言、无故跳场景或机械重复。")
+        appendLine("【记忆与当前场景的优先级】")
+        appendLine("- 向量检索记忆、长期印象、群聊回顾和短期摘要都是过往经历、听说的故事或背景事实，只用于核对已知信息、理解关系和承接用户明确提起的旧事。")
+        appendLine("- 当前用户发言和最近对话中已确认的地点、时间、位置、状态、在场人物、进行中行动与未收束话题优先于所有记忆。旧记忆不得被当成此刻正在发生的事，更不得据此擅自换地点、改状态、让人物出现/离开或开启旧剧情。")
+        appendLine("- 只有用户明确追问、回忆或自然承接旧事时，才可简短引用相关记忆；引用后仍须回到当前场景和本轮话题。")
         if (mode != "online") {
             appendLine("【线下/导演场景连续性】")
             appendLine("- 最近一轮已确认的地点、人物位置、姿势、动作、物品、在场人物、情绪和未完成事件默认持续有效。")
@@ -1912,7 +1946,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             "从陪伴和试探切入，不沿用上一版安慰方式"
         ).random()
         val avoid = formatPrivateHistoryForPrompt(ChatMessage(id = 0L, sessionId = session.id, content = previousReply, type = "ai_json", senderName = session.operatorName, isMe = false)).take(1600)
-        modeTransitionNotice = """【重说任务 · 最高优先级】
+        modeTransitionNotices[session.id] = """【重说任务 · 最高优先级】
 用户要求你重新回答上一轮消息。
 本次重写角度：$angle
 

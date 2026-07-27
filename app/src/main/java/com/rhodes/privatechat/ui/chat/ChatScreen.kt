@@ -555,9 +555,6 @@ private fun PropShopDialog(
                                 try {
                                     val temp = settings.aiTemperature
                                     val op = viewModel.selectedOperator.value
-                                    val mood = op?.emotion ?: "平静"
-                                    val loc = op?.location ?: "罗德岛"
-                                    val stateDesc = op?.activity ?: "休息"
                                     val profile = viewModel.getUserProfile()
                                     val persona = op?.privatePrompt?.ifBlank { op?.description } ?: ""
                                     val recentChats = viewModel.messages.value.takeLast(6).joinToString("\n") { msg ->
@@ -577,9 +574,6 @@ private fun PropShopDialog(
 
 【当前场景】
 现在的时间是：${viewModel.sharedUtils.beijingPromptTime()}
-你所在的位置是：${loc}
-你正在做的事情是：${stateDesc}
-你此刻的情绪是：${mood}
 
 【用户信息】
 用户扮演的角色是：
@@ -593,7 +587,7 @@ ${recentChats.ifBlank { "暂无" }}
 【独白要求】
 - 100~200字，纯心理活动，不输出任何格式标记、JSON、括号动作
 - 像日记一样自然，是角色当下对自己的想法
-- 结合人设、当前状态和刚才的聊天记录；没有依据时不要编造情绪或关系进展
+                                    - 结合人设和刚才的聊天记录；没有依据时不要编造情绪或关系进展
 - 表达要克制、具体、连贯，不必制造反转、冲突或高潮
 - 不要默认出现嫉妒、不安、期待等情绪，只有当前上下文明确支持时才能体现
 - 不确定时可以写观察、犹豫或尚未形成的判断，不要把推测写成事实

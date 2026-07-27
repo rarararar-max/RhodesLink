@@ -46,7 +46,7 @@ fun UnreadMessagesScreen(viewModel: MainViewModel, onBack: () -> Unit, onMomentC
     Column(Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
         Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
-            Text("未读消息", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, modifier = Modifier.weight(1f))
+            Text("互动消息", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, modifier = Modifier.weight(1f))
             TextButton(onClick = {
                 viewModel.markAllCommentsRead()
                 onBack()
@@ -57,7 +57,7 @@ fun UnreadMessagesScreen(viewModel: MainViewModel, onBack: () -> Unit, onMomentC
         if (!loaded) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("加载中...", color = TextTertiary) }
         } else if (comments.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("暂无未读消息", color = TextTertiary) }
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("暂无互动消息", color = TextTertiary) }
         } else {
             LazyColumn {
                 items(comments, key = { it.id }) { c ->

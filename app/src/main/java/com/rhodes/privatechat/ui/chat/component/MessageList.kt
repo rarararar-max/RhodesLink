@@ -125,6 +125,8 @@ fun MessageList(
                             kotlinx.coroutines.delay((1_000L + (Math.random() * 500)).toLong())
                         }
                         displayCount = i + 1
+                        // Persist progress per segment so a new user message cannot replay this batch.
+                        lastMessageCount = i + 1
                     }
                 }
                 lastMessageCount = currentSize

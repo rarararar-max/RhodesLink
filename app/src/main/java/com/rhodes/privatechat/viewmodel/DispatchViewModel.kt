@@ -173,13 +173,6 @@ class DispatchViewModel(
                 Log.d(TAG, "[startDispatch] 导航到进度页")
                 onSuccess()
 
-                // 3. 更新干员状态
-                for (opId in operatorIds) {
-                    val op = repository.getOperator(opId) ?: continue
-                    repository.updateOperator(op.copy(location = "外出", activity = task, emotion = "专注"))
-                }
-                operatorStateUpdater.notifyNearbyObservers(operatorIds)
-
                 // 3. 生成开局段（轻量，20s 超时）
                 val ops = operatorIds.mapNotNull { repository.getOperator(it) }
                 val dMn = settings.dispatchMinChars; val dMx = settings.dispatchMaxChars

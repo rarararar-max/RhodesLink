@@ -163,7 +163,7 @@ private fun logDescription(tag: String): String = when {
     tag.startsWith("ChatEvent/") -> "聊天流程事件：请求、模型返回、解析、重试、格式修复和最终写入结果。"
     tag == "AI/→GroupChat" -> "群聊实际请求：系统提示词、历史消息和本轮用户输入。"
     tag == "AI/←GroupChat" -> "群聊实际请求与模型原始返回。"
-    tag == "AI/→GroupTurnPlanner" -> "群聊模型1规划请求：成员短人设、最近三轮完整群聊和本轮用户输入。"
+    tag == "AI/→GroupTurnPlanner" -> "群聊模型1规划请求：成员短人设、最近两轮完整群聊和本轮用户输入。"
     tag == "AI/←GroupTurnPlanner" -> "群聊模型1规划返回：每位成员的短回应方向 JSON。"
     tag == "AI/GroupTurnPlannerResult" -> "群聊模型1解析结果：是否向群聊生成模型注入成员回应方向。"
     tag == "AI/→PrivateTurnAnalysis" -> "私聊模型1状态分析请求：人设摘要、上一轮状态、最近三轮对话和本轮用户输入。"

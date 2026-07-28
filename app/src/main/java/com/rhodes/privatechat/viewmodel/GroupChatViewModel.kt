@@ -164,10 +164,13 @@ $modeRule
 - goals 必须且只能覆盖资料中全部当前成员，成员顺序与资料一致。
 - operator_id 必须逐字使用资料中的 operator_id。
 - goal 不超过30个汉字，不能为空，不得写“不发言”。"""
+        // The planner only needs a compact thread to stay within its 9-second budget.
         val history = recentGroupRounds(
             repository.getMessagesSync(groupSessionId).filter { it.id !in excludedMessageIds && it.type != "system" },
-            3
-        ).joinToString("\n") { formatGroupHistoryForPrompt(it).take(500) }.ifBlank { "无" }
+            2
+        ).joinToString("\n") { formatGroupHistoryForPrompt(it).take(180) }
+            .takeLast(2_000)
+            .ifBlank { "无" }
         val members = activeMembers.joinToString("\n") { member ->
             val persona = member.groupPrompt.ifBlank { member.privatePrompt.ifBlank { member.description } }
                 .replace(Regex("[\\r\\n]+"), " ").trim().take(100).ifBlank { "未提供" }
@@ -189,7 +192,11 @@ $requestText
 【资料结束】"""
         return try {
             val raw = withTimeout(9_000) {
-                sharedUtils.chat(listOf(AiMessage("system", systemPrompt), AiMessage("user", userMaterial)), "GroupTurnPlanner")
+                sharedUtils.chat(
+                    listOf(AiMessage("system", systemPrompt), AiMessage("user", userMaterial)),
+                    "GroupTurnPlanner",
+                    temperature = 0.2
+                )
             }
             sharedUtils.trackTokens("group_analysis", listOf(AiMessage("system", systemPrompt), AiMessage("user", userMaterial)), raw)
             val parsed = json.decodeFromString<GroupTurnPlan>(sharedUtils.aiService.cleanJson(raw))
@@ -217,7 +224,8 @@ $requestText
             guidance
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException && e !is kotlinx.coroutines.TimeoutCancellationException) throw e
-            DebugLogger.trace("AI/GroupTurnPlannerResult", "【模型1未注入】\n原因：${e.message?.take(160) ?: "超时或输出无法解析"}\n模型2将使用通用回应方向。")
+            val reason = if (e is kotlinx.coroutines.TimeoutCancellationException) "超过9秒未返回" else e.message?.take(160) ?: "输出无法解析"
+            DebugLogger.trace("AI/GroupTurnPlannerResult", "【模型1未注入】\n原因：$reason\n异常：${e::class.simpleName}\n模型2将使用通用回应方向。")
             fallback
         }
     }

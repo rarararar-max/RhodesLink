@@ -117,16 +117,15 @@ fun MessageList(
                     // History pages are prepended; never present them as delayed new messages.
                     displayCount = currentSize
                 } else {
-                    for (i in lastMessageCount until currentSize) {
+                    val newMessageStart = lastMessageCount
+                    for (i in newMessageStart until currentSize) {
                         // One AI response can expand into several private or group bubbles.
                         // Keep its first segment immediate, then reveal later segments like a person typing in parts.
-                        if (i > lastMessageCount && !messages[i].isMe &&
+                        if (i > newMessageStart && !messages[i].isMe &&
                             messages[i].originalMessageId == messages[i - 1].originalMessageId) {
                             kotlinx.coroutines.delay((1_000L + (Math.random() * 500)).toLong())
                         }
                         displayCount = i + 1
-                        // Persist progress per segment so a new user message cannot replay this batch.
-                        lastMessageCount = i + 1
                     }
                 }
                 lastMessageCount = currentSize

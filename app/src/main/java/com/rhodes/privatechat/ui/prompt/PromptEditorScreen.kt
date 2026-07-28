@@ -72,9 +72,8 @@ fun PromptEditorScreen(
 
     val privModeLabels = listOf("线上模式", "线下模式", "导演模式", "主动消息")
     val privModes = listOf("online", "offline", "director", "proactive")
-    // Automatic group chat reuses the group's current online/offline/director template.
-    val grpModeLabels = listOf("线上模式", "线下模式", "导演模式")
-    val grpModes = listOf("online", "offline", "director")
+    val grpModeLabels = listOf("线上模式", "线下模式", "导演模式", "自动群聊")
+    val grpModes = listOf("online", "offline", "director", "auto")
     val dispatchModeLabels = listOf("开局", "过程", "结局")
     val dispatchModes = listOf("start", "progress", "ending")
 
@@ -168,7 +167,7 @@ fun PromptEditorScreen(
         "{{USER_BIO}}" to "用户简介",
         "{{USER_GENDER_BIO}}" to "用户性别+简介拼接",
         "{{CURRENT_TIME}}" to "当前北京时间",
-        "{{AI_ANALYSIS}}" to "双模型分析结果（为空则不注入）",
+        "{{AI_ANALYSIS}}" to "双模型本轮状态卡：角色当前情绪、位置、动作、用户意图与回复重点；关闭双模型、超时或分析失败时不注入",
         "{{HYPNOSIS}}" to "催眠指令（为空则不注入）",
         "{{TRANSITION_NOTICE}}" to "模式切换、继续说、重说等临时系统指令",
         "{{PROACTIVE_TRIGGER_TYPE}}" to "主动触发类型（idle）",
@@ -216,6 +215,7 @@ fun PromptEditorScreen(
         "{{AUTO_REASON}}" to "自动触发原因",
         "{{AUTO_REASON_TEXT}}" to "自动触发说明",
         "{{GROUP_MODE_FORMAT}}" to "自动群聊格式提示",
+        "{{GROUP_TURN_GUIDANCE}}" to "群聊模型1生成的成员本轮回应方向；关闭、超时或失败时为通用兜底方向",
         "{{USER_MESSAGE}}" to "用户最新发言内容",
         "{{OUTPUT_FORMAT}}" to "输出JSON格式规范",
         "{{GROUP_NAR_SEG_MIN}}" to "群聊旁白段数下限",
@@ -409,6 +409,30 @@ fun PromptEditorScreen(
                     }
                     Spacer(Modifier.height(8.dp))
                 }
+                if (tabIndex == 0 && currentMode() != "proactive" && !textFieldValue.text.contains("{{AI_ANALYSIS}}")) {
+                    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFFF9500).copy(alpha = 0.10f))) {
+                        Text(
+                            "当前模板未包含 {{AI_ANALYSIS}}。开启双模型深度分析后，本轮角色状态卡不会进入最终回复提示词。",
+                            fontSize = 11.sp,
+                            color = TextSecondary,
+                            lineHeight = 16.sp,
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+                if (tabIndex == 1 && currentMode() != "auto" && !textFieldValue.text.contains("{{GROUP_TURN_GUIDANCE}}")) {
+                    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFFF9500).copy(alpha = 0.10f))) {
+                        Text(
+                            "当前模板未包含 {{GROUP_TURN_GUIDANCE}}。开启群聊本轮规划后，模型1生成的成员回应方向不会进入最终群聊提示词。",
+                            fontSize = 11.sp,
+                            color = TextSecondary,
+                            lineHeight = 16.sp,
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
                 OutlinedTextField(
                     value = textFieldValue,
                     onValueChange = {
@@ -472,7 +496,11 @@ fun PromptEditorScreen(
                     .padding(12.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                allPlaceholders.filter { (key, _) -> key.removePrefix("{{").removeSuffix("}}") in PromptPlaceholderRegistry.allowed(currentType()) }.forEach { (key, desc) ->
+                val allowed = PromptPlaceholderRegistry.allowed(currentType(), currentMode())
+                val recommended = PromptPlaceholderRegistry.recommended(currentType(), currentMode())
+                allPlaceholders.filter { (key, _) -> key.removePrefix("{{").removeSuffix("}}") in allowed }
+                    .sortedBy { (key, _) -> if (key.removePrefix("{{").removeSuffix("}}") in recommended) 0 else 1 }
+                    .forEach { (key, desc) ->
                     Row(
                         modifier = Modifier.padding(vertical = 6.dp),
                         verticalAlignment = Alignment.Top
@@ -484,7 +512,11 @@ fun PromptEditorScreen(
                             color = Blue400,
                             modifier = Modifier.width(200.dp)
                         )
-                        Text(desc, fontSize = 13.sp, color = TextSecondary)
+                        Text(
+                            if (key.removePrefix("{{").removeSuffix("}}") in recommended) desc else "$desc（旧版兼容，可能为空）",
+                            fontSize = 13.sp,
+                            color = TextSecondary
+                        )
                     }
                 }
             }
@@ -527,12 +559,16 @@ fun PromptEditorScreen(
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     Text(
-                        "仅展示当前模板可用的占位符。私聊和群聊下的子标签页（线上/线下/导演模式）会根据所选模式独立加载和保存；未识别的占位符会原样保留在最终提示词中。",
+                        "优先使用推荐占位符；标注“旧版兼容”的字段仅为旧模板保留，部分场景可能为空。私聊和群聊子标签页会根据所选模式独立加载和保存；未识别的占位符会原样保留在最终提示词中。",
                         fontSize = 13.sp,
                         color = TextSecondary,
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
-                    allPlaceholders.filter { (key, _) -> key.removePrefix("{{").removeSuffix("}}") in PromptPlaceholderRegistry.allowed(currentType()) }.forEach { (key, desc) ->
+                    val allowed = PromptPlaceholderRegistry.allowed(currentType(), currentMode())
+                    val recommended = PromptPlaceholderRegistry.recommended(currentType(), currentMode())
+                    allPlaceholders.filter { (key, _) -> key.removePrefix("{{").removeSuffix("}}") in allowed }
+                        .sortedBy { (key, _) -> if (key.removePrefix("{{").removeSuffix("}}") in recommended) 0 else 1 }
+                        .forEach { (key, desc) ->
                         Row(
                             modifier = Modifier.padding(vertical = 4.dp),
                             verticalAlignment = Alignment.Top
@@ -544,7 +580,11 @@ fun PromptEditorScreen(
                                 color = Blue400,
                                 modifier = Modifier.width(170.dp)
                             )
-                            Text(desc, fontSize = 13.sp, color = TextSecondary)
+                            Text(
+                                if (key.removePrefix("{{").removeSuffix("}}") in recommended) desc else "$desc（旧版兼容，可能为空）",
+                                fontSize = 13.sp,
+                                color = TextSecondary
+                            )
                         }
                     }
                 }

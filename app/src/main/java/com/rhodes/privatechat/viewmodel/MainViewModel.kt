@@ -216,6 +216,8 @@ class MainViewModel(
 
     fun isDualModel(): Boolean = settings.dualModel
 
+    fun getPrivateTurnStateForHeader(sessionId: String) = chatViewModel.getPrivateTurnStateForHeader(sessionId)
+
     fun setDualModel(enabled: Boolean) { settings.dualModel = enabled }
 
     private val _comments = MutableStateFlow<List<MomentComment>>(emptyList())
@@ -255,7 +257,7 @@ class MainViewModel(
         settings.putString(key, template)
         settings.putBoolean("${key}_custom", true)
         settings.putPromptTemplateVersion(type, mode, PromptTemplates.VERSION)
-        val allowed = PromptPlaceholderRegistry.allowed(type)
+        val allowed = PromptPlaceholderRegistry.allowed(type, mode)
         val unsupported = Regex("\\{\\{([A-Z0-9_]+)\\}\\}").findAll(template).map { it.groupValues[1] }
             .filter { it !in allowed }.distinct().sorted()
             .map { "{{$it}} 不适用于当前模板，运行时会保留原文。" }
@@ -505,6 +507,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             "OPERATOR_PERSONA" to (op.privatePrompt.ifBlank { op.description }),
             "OPERATOR_GENDER" to (op.gender.ifBlank { "" }),
             "LONG_TERM_IMPRESSION" to "无",
+            "PERSONAL_MEMORY_REFERENCE_STYLE" to personalMemoryReferenceRule(),
             "USER_PREFS" to "无",
             "MEMORY_ANCHORS" to unifiedMemory,
             "MEMORY_V2_CONTEXT" to unifiedMemory,

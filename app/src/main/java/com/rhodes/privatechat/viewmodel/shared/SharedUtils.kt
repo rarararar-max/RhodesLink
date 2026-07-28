@@ -106,9 +106,34 @@ class SharedUtils(
 
     fun logAiCall(tag: String, prompt: String, response: String, allMessages: List<AiMessage>? = null) {
         if (!DebugLogger.enabled) return
+        val isPrivateTurnAnalysis = tag.removePrefix("AI/→").removePrefix("AI/←") == "PrivateTurnAnalysis"
+        val isGroupTurnPlanner = tag.removePrefix("AI/→").removePrefix("AI/←") == "GroupTurnPlanner"
         val details = buildString {
-            append("【发送给大模型的内容】\n")
-            append(allMessages?.mapIndexed { index, message -> "[$index][${message.role}]\n${message.content}" }?.joinToString("\n\n") ?: prompt)
+            val messages = allMessages.orEmpty()
+            append("【实际发送给大模型的完整请求】\n")
+            if (messages.isEmpty()) {
+                append(if (isPrivateTurnAnalysis || isGroupTurnPlanner) "\n【模型1固定系统规则】\n" else "\n【系统提示词】\n")
+                append(prompt)
+            } else {
+                messages.firstOrNull { it.role == "system" }?.let { system ->
+                    append(if (isPrivateTurnAnalysis || isGroupTurnPlanner) "\n【模型1固定系统规则】\n" else "\n【系统提示词】\n")
+                    append(system.content)
+                }
+                val conversation = messages.filter { it.role != "system" }
+                if (conversation.isNotEmpty()) {
+                    append(if (isPrivateTurnAnalysis || isGroupTurnPlanner) "\n\n【模型1本轮分析资料（user）】\n" else "\n\n【对话上下文与本轮输入】\n")
+                    conversation.forEachIndexed { index, message ->
+                        val role = when (message.role) {
+                            "user" -> if (isPrivateTurnAnalysis || isGroupTurnPlanner) "分析资料" else "用户"
+                            "assistant" -> "模型/角色"
+                            else -> message.role
+                        }
+                        append("\n[$role ${index + 1}]\n")
+                        append(message.content)
+                        if (index != conversation.lastIndex) append("\n")
+                    }
+                }
+            }
             append("\n\n【模型响应状态或结果】\n")
             append(response)
         }
@@ -259,6 +284,7 @@ class SharedUtils(
         map.putIfAbsent("SOURCE_AWARE_RULES", "")
         map.putIfAbsent("KNOWN_FROM_CONTEXT", "无")
         map.putIfAbsent("GROUP_MODE_FORMAT", "")
+        map.putIfAbsent("GROUP_TURN_GUIDANCE", "")
         map.putIfAbsent("USER_OBSERVING", "")
         map.putIfAbsent("AUTO_REASON", "manual")
         map.putIfAbsent("AUTO_REASON_TEXT", "用户主动发言。")

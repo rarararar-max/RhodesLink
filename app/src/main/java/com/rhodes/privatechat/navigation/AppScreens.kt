@@ -100,7 +100,9 @@ data class ChatOperator(val operatorId: String) : Screen {
         val operators by viewModel.operators.collectAsState()
         val operator = remember(operators, operatorId) { operators.find { it.id == operatorId } }
         var ready by remember { mutableStateOf(false) }
-        LaunchedEffect(operatorId, operator) {
+        // Operator fields such as intimacy update after an AI reply. Re-select only when this
+        // route's stable operator ID changes, otherwise the temporary unready state disposes chat.
+        LaunchedEffect(operatorId, operator?.id) {
             if (operator != null) {
                 ready = false
                 try {

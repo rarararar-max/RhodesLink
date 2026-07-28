@@ -30,6 +30,18 @@ data class AiMessage(
 )
 
 @Serializable
+data class GroupTurnPlan(
+    val user_intent: String = "",
+    val goals: List<GroupTurnGoal> = emptyList()
+)
+
+@Serializable
+data class GroupTurnGoal(
+    val operator_id: String = "",
+    val goal: String = ""
+)
+
+@Serializable
 data class StreamChunk(
     val choices: List<StreamChoice>? = null
 )
@@ -161,6 +173,23 @@ data class GoogleGenerationRequest(
     val contents: List<GoogleContent>,
     @SerialName("system_instruction") val systemInstruction: GoogleContent? = null,
     @SerialName("generationConfig") val generationConfig: GoogleGenerationConfig? = null
+)
+
+@Serializable
+data class PrivateTurnAnalysis(
+    val operator_emotion: String = "",
+    val operator_location: String = "",
+    val operator_activity: String = "",
+    val user_intent: String = "",
+    val reply_goal: String = ""
+)
+
+@Serializable
+data class PrivateTurnState(
+    val emotion: String = "平静",
+    val location: String = "未确认",
+    val activity: String = "未确认",
+    val updatedAt: Long = 0L
 )
 
 @Serializable

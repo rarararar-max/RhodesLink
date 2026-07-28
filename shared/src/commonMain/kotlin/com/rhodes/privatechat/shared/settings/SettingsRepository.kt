@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
+import com.rhodes.privatechat.shared.model.PrivateTurnState
 import kotlinx.coroutines.flow.map
 import kotlin.math.max
 
@@ -119,6 +120,10 @@ class SettingsRepository(private val settings: ObservableSettings) {
     var dualModel: Boolean
         get() = getBoolean("dual_model", false)
         set(value) = putBoolean("dual_model", value)
+
+    var groupTurnPlannerEnabled: Boolean
+        get() = getBoolean("group_turn_planner_enabled", false)
+        set(value) = putBoolean("group_turn_planner_enabled", value)
 
     var debugLogEnabled: Boolean
         get() = getBoolean("debug_log_enabled", false)
@@ -949,6 +954,16 @@ class SettingsRepository(private val settings: ObservableSettings) {
     fun getSessionRestartAt(sessionId: String): Long = getLong("session_restart_at_$sessionId", 0L)
 
     fun putSessionRestartAt(sessionId: String, value: Long) = putLong("session_restart_at_$sessionId", value)
+
+    fun getPrivateTurnState(sessionId: String): PrivateTurnState? {
+        val raw = getString("private_turn_state_$sessionId", "")
+        return raw.takeIf { it.isNotBlank() }?.let { runCatching { Json.decodeFromString<PrivateTurnState>(it) }.getOrNull() }
+    }
+
+    fun putPrivateTurnState(sessionId: String, value: PrivateTurnState) =
+        putString("private_turn_state_$sessionId", Json.encodeToString(value))
+
+    fun clearPrivateTurnState(sessionId: String) = remove("private_turn_state_$sessionId")
 
     fun getSummaryCursor(sessionId: String): Long = getLong("summary_cursor_session_$sessionId", 0L)
 

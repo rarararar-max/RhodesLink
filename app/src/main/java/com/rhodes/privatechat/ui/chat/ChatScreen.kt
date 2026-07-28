@@ -86,6 +86,7 @@ import com.rhodes.privatechat.shared.voice.hasTtsConfiguration
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import org.koin.compose.koinInject
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 
 private const val PROP_PRICE = 100
 
@@ -93,6 +94,13 @@ private fun String.compactHeaderPart(maxChars: Int): String {
     val clean = trim().replace(Regex("\\s+"), " ")
     return if (clean.length <= maxChars) clean else clean.take(maxChars) + "..."
 }
+
+private fun privateTurnHeaderText(emotion: String, location: String, activity: String): String =
+    listOf(
+        emotion.compactHeaderPart(5),
+        location.compactHeaderPart(5),
+        activity.compactHeaderPart(10)
+    ).joinToString(" | ")
 
 @Composable
 fun ChatScreen(
@@ -113,6 +121,9 @@ fun ChatScreen(
     val scrollToMessageId by viewModel.scrollToMessageId.collectAsState()
     val currentOp by viewModel.selectedOperator.collectAsState()
     val currentSession by viewModel.currentSession.collectAsState()
+    var privateTurnState by remember(currentSession?.id) {
+        mutableStateOf(currentSession?.id?.let(viewModel::getPrivateTurnStateForHeader))
+    }
     val displayOp = currentOp ?: operator
     val canSend = currentSession?.operatorId == operator.id
     val listState = rememberLazyListState()
@@ -122,6 +133,20 @@ fun ChatScreen(
     val visionReady = settings.visionBaseUrl.isNotBlank() &&
         settings.visionModelName.isNotBlank() &&
         settings.visionApiKey.ifBlank { settings.apiKey }.isNotBlank()
+
+    LaunchedEffect(currentSession?.id) {
+        val sessionId = currentSession?.id ?: return@LaunchedEffect
+        while (true) {
+            privateTurnState = viewModel.getPrivateTurnStateForHeader(sessionId)
+            delay(30_000)
+        }
+    }
+
+    LaunchedEffect(rawMessages, currentSession?.id) {
+        currentSession?.id?.let { sessionId ->
+            privateTurnState = viewModel.getPrivateTurnStateForHeader(sessionId)
+        }
+    }
 
     // 使用 MessageParser 将原始消息转换为统一 UI 模型
     val messages = remember(rawMessages, op, userProfile, sessionRestartAt) {
@@ -251,7 +276,9 @@ fun ChatScreen(
                 avatarUri = displayOp.avatarUri,
                 mode = currentMode,
                 isLoading = isLoading,
-                subtitleText = "",
+                subtitleText = privateTurnState?.let {
+                    privateTurnHeaderText(it.emotion, it.location, it.activity)
+                }.orEmpty(),
                 onBack = onBack,
                 onModeClick = { showModePicker.value = true },
                 voiceEnabled = voiceEnabled,

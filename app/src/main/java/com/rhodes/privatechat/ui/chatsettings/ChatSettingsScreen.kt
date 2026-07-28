@@ -346,6 +346,26 @@ private fun GeneralTab(settings: SettingsRepository, onPromptEditor: () -> Unit 
     }
     Spacer(modifier = Modifier.height(6.dp))
 
+    var groupTurnPlannerEnabled by remember { mutableStateOf(settings.groupTurnPlannerEnabled) }
+    Row(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Card).padding(12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("群聊本轮规划（双模型）", fontSize = 13.sp, color = TextPrimary)
+                HelpButton("仅在用户主动发送文字群聊时运行。模型1先为每位成员规划一句回应方向，再由群聊模型生成实际消息。开启后每轮群聊通常增加一次模型调用。")
+            }
+            Text("模型1超时或解析失败时，群聊会自动按原有规则继续生成", fontSize = 11.sp, color = TextSecondary)
+        }
+        Switch(checked = groupTurnPlannerEnabled, onCheckedChange = {
+            groupTurnPlannerEnabled = it
+            settings.groupTurnPlannerEnabled = it
+        }, colors = SwitchDefaults.colors(checkedThumbColor = Blue400, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
+    }
+    Spacer(modifier = Modifier.height(6.dp))
+
 
     Text("高级功能：修改各场景的角色说话规则。不了解的话建议保持默认。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
     Button(

@@ -118,11 +118,11 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     // === 聊天设置 ===
     var dualModel: Boolean
-        get() = getBoolean("dual_model", false)
+        get() = getBoolean("dual_model", true)
         set(value) = putBoolean("dual_model", value)
 
     var groupTurnPlannerEnabled: Boolean
-        get() = getBoolean("group_turn_planner_enabled", false)
+        get() = getBoolean("group_turn_planner_enabled", true)
         set(value) = putBoolean("group_turn_planner_enabled", value)
 
     var debugLogEnabled: Boolean
@@ -990,7 +990,6 @@ class SettingsRepository(private val settings: ObservableSettings) {
         contextMode = mode
         when (mode) {
             "economy" -> {
-                dualModel = false
                 historyMessages = 6
                 putInt("private_memory_extraction_threshold", 20)
                 putInt("group_memory_extraction_threshold", 20)
@@ -1007,7 +1006,6 @@ class SettingsRepository(private val settings: ObservableSettings) {
                 putInt("comment_bystander_max", 1)
             }
             "standard" -> {
-                dualModel = false
                 historyMessages = 10
                 putInt("private_memory_extraction_threshold", 12)
                 putInt("group_memory_extraction_threshold", 12)
@@ -1024,7 +1022,6 @@ class SettingsRepository(private val settings: ObservableSettings) {
                 putInt("comment_bystander_max", 3)
             }
             "full" -> {
-                dualModel = false
                 historyMessages = 40
                 putInt("private_memory_extraction_threshold", 8)
                 putInt("group_memory_extraction_threshold", 8)

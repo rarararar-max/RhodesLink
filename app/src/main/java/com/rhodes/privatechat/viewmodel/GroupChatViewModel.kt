@@ -191,7 +191,7 @@ $history
 $requestText
 【资料结束】"""
         return try {
-            val raw = withTimeout(9_000) {
+            val raw = withTimeout(10_000) {
                 sharedUtils.chat(
                     listOf(AiMessage("system", systemPrompt), AiMessage("user", userMaterial)),
                     "GroupTurnPlanner",
@@ -224,7 +224,7 @@ $requestText
             guidance
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException && e !is kotlinx.coroutines.TimeoutCancellationException) throw e
-            val reason = if (e is kotlinx.coroutines.TimeoutCancellationException) "超过9秒未返回" else e.message?.take(160) ?: "输出无法解析"
+            val reason = if (e is kotlinx.coroutines.TimeoutCancellationException) "超过10秒未返回" else e.message?.take(160) ?: "输出无法解析"
             DebugLogger.trace("AI/GroupTurnPlannerResult", "【模型1未注入】\n原因：$reason\n异常：${e::class.simpleName}\n模型2将使用通用回应方向。")
             fallback
         }

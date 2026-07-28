@@ -442,13 +442,10 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         modelName: String = "deepseek-v4-flash",
         customUrl: String = "",
         temperature: Double = 0.95,
-        maxRetries: Int = 2,
-        logTag: String = "Chat",
         jsonMode: Boolean = false,
         mode: String = "",
         trace: (String, String) -> Unit = { _, _ -> }
     ): OfflineModeResponse {
-        @Suppress("UNUSED_VARIABLE", "UNUSED_PARAMETER") val ignoredRetries = maxRetries to logTag
         val original = chat(apiKey, messages, providerId, modelName, customUrl, temperature, jsonMode).content
         val parsed = runCatching { normalizeOfflineResponse(original) }.getOrNull()
         if (parsed != null && isUsableResponse(parsed, mode)) return parsed

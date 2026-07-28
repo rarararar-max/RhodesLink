@@ -334,10 +334,10 @@ private fun GeneralTab(settings: SettingsRepository, onPromptEditor: () -> Unit 
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("深度分析模式（双模型生成回复）", fontSize = 13.sp, color = TextPrimary)
-                HelpButton("开启后，每次回复会先用一个模型分析你的意图，再用另一个模型生成回复。对话会更贴切，但每次花的钱翻倍。如果不缺AI使用次数可以常开。")
+                Text("私聊连续性优化", fontSize = 13.sp, color = TextPrimary)
+                HelpButton("回复前会先整理角色当前情绪、场景和你的表达意图，再生成正式回复。能让私聊更自然地承接上下文；会略微增加等待时间和模型消耗。")
             }
-            Text("分析模型预处理 + 生成模型输出，回复更贴合上下文", fontSize = 11.sp, color = TextSecondary)
+            Text("关闭后直接根据当前对话生成回复，响应更快", fontSize = 11.sp, color = TextSecondary)
         }
         Switch(checked = dualModel, onCheckedChange = {
             dualModel = it
@@ -354,10 +354,10 @@ private fun GeneralTab(settings: SettingsRepository, onPromptEditor: () -> Unit 
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("群聊本轮规划（双模型）", fontSize = 13.sp, color = TextPrimary)
-                HelpButton("仅在用户主动发送文字群聊时运行。模型1先为每位成员规划一句回应方向，再由群聊模型生成实际消息。开启后每轮群聊通常增加一次模型调用。")
+                Text("群聊连续性优化", fontSize = 13.sp, color = TextPrimary)
+                HelpButton("回复前会先规划群成员各自适合如何回应，再生成正式群聊内容。能减少成员重复附和和话题跑偏；会略微增加等待时间和模型消耗。")
             }
-            Text("模型1超时或解析失败时，群聊会自动按原有规则继续生成", fontSize = 11.sp, color = TextSecondary)
+            Text("关闭后直接生成群成员回复，响应更快", fontSize = 11.sp, color = TextSecondary)
         }
         Switch(checked = groupTurnPlannerEnabled, onCheckedChange = {
             groupTurnPlannerEnabled = it

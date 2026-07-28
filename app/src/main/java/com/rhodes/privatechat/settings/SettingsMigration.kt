@@ -14,6 +14,18 @@ object SettingsMigration {
     private const val TARGET_SP = "rhodes_settings"
     private const val MIGRATION_DONE_KEY = "prefs_migration_done_v1"
     private const val MIGRATION_FIX_V2_KEY = "prefs_migration_fix_v2"
+    private const val CONTINUITY_OPTIMIZATIONS_INITIALIZED_KEY = "continuity_optimizations_initialized_v1"
+
+    private fun initializeContinuityOptimizations(target: SharedPreferences) {
+        if (safeBoolean(target, CONTINUITY_OPTIMIZATIONS_INITIALIZED_KEY, false)) return
+        val editor = target.edit()
+        // This is the first release of these player-facing switches. Start everyone enabled once,
+        // then preserve every later user choice across updates.
+        editor.putBoolean("dual_model", true)
+        editor.putBoolean("group_turn_planner_enabled", true)
+        editor.putBoolean(CONTINUITY_OPTIMIZATIONS_INITIALIZED_KEY, true)
+        editor.apply()
+    }
 
     private val intFixKeys = listOf(
         "msg_counter", "impression_msg_counter", "summary_threshold",
@@ -42,6 +54,7 @@ object SettingsMigration {
         val target = context.getSharedPreferences(TARGET_SP, Context.MODE_PRIVATE)
         if (safeBoolean(target, MIGRATION_DONE_KEY, false)) {
             runFixV2IfNeeded(context, target)
+            initializeContinuityOptimizations(target)
             return
         }
 
@@ -127,6 +140,7 @@ object SettingsMigration {
         editor.putBoolean(MIGRATION_DONE_KEY, true)
         editor.putBoolean(MIGRATION_FIX_V2_KEY, true)
         editor.apply()
+        initializeContinuityOptimizations(target)
     }
 
     private fun runFixV2IfNeeded(context: Context, target: SharedPreferences) {

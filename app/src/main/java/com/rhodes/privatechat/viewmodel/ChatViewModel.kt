@@ -704,7 +704,7 @@ $userContent
             AiMessage("user", userMaterial)
         )
         try {
-            val raw = withTimeout(6_000) { sharedUtils.chat(messages, "PrivateTurnAnalysis") }
+            val raw = withTimeout(8_000) { sharedUtils.chat(messages, "PrivateTurnAnalysis") }
             val parsed = json.decodeFromString<PrivateTurnAnalysis>(sharedUtils.aiService.cleanJson(raw))
             fun field(value: String, limit: Int, fallback: String): String =
                 value.replace(Regex("[\\r\\n]+"), " ").trim().take(limit).ifBlank { fallback }

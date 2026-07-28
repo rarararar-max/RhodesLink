@@ -89,15 +89,15 @@ class SharedUtils(
         return result.content
     }
 
-    /** 非流式聊天 + JSON解析重试：解析失败时重新请求，最多重试3次 */
-    suspend fun chatWithRetry(messages: List<AiMessage>, logTag: String = "Chat", category: String = "", maxRetries: Int = 2, mode: String = ""): com.rhodes.privatechat.shared.model.OfflineModeResponse {
+    /** Non-streaming chat with one content regeneration and one format repair when needed. */
+    suspend fun chatWithRetry(messages: List<AiMessage>, logTag: String = "Chat", mode: String = ""): com.rhodes.privatechat.shared.model.OfflineModeResponse {
         validateChatConfiguration()
         val temp = settings.aiTemperature
         val prompt = messages.firstOrNull()?.content ?: ""
         logAiCall("→$logTag", prompt, "请求已发送。模型会在 JSON 无法解析时自动重试。", messages)
         val result = aiService.chatWithRetry(
             settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl,
-            temperature = temp, maxRetries = maxRetries, logTag = logTag, jsonMode = true, mode = mode,
+            temperature = temp, jsonMode = true, mode = mode,
             trace = { stage, detail -> DebugLogger.trace("AI/$stage", detail) }
         )
         logAiCall("←$logTag", prompt, result.toString(), messages)

@@ -5,9 +5,12 @@ import android.content.Context
 import com.rhodes.privatechat.di.appModule
 import com.rhodes.privatechat.settings.SettingsMigration
 import com.rhodes.privatechat.automation.DailyContentScheduler
+import com.rhodes.privatechat.automation.GroupAutoChatScheduler
 import com.rhodes.privatechat.shared.db.DatabaseWrapper
 import com.rhodes.privatechat.shared.di.sharedModule
 import com.rhodes.privatechat.shared.settings.AndroidSettingsFactory
+import com.rhodes.privatechat.shared.data.ChatRepository
+import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.util.DebugLogger
 import org.koin.android.ext.koin.androidContext
 import org.koin.android.ext.koin.androidLogger
@@ -29,6 +32,11 @@ class RhodesApplication : Application() {
             modules(sharedModule(DatabaseWrapper(this@RhodesApplication)), appModule)
             DailyContentScheduler.schedulePlanner(this@RhodesApplication)
         }
+        GroupAutoChatScheduler.reconcile(
+            this,
+            org.koin.java.KoinJavaComponent.get(ChatRepository::class.java),
+            org.koin.java.KoinJavaComponent.get(SettingsRepository::class.java)
+        )
     }
     
     private fun clearNavigationStateIfNeeded() {

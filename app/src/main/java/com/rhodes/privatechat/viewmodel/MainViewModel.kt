@@ -163,6 +163,7 @@ class MainViewModel(
     val momentsViewModel = MomentsViewModel(repository, settings, appState, viewModelScope) { getUserProfile() }
     val dispatchViewModel = DispatchViewModel(repository, settings, sharedUtils, operatorStateUpdater, appState, viewModelScope, { refreshAllOperatorStatus(force = true) }, { getUserProfile() })
     val groupChatViewModel = GroupChatViewModel(
+        application,
         repository,
         settings,
         sharedUtils,
@@ -754,6 +755,12 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     fun clearMessages() = chatViewModel.clearMessages()
     fun restartSession() = chatViewModel.restartSession()
     fun erasePrivateSessionAndRestart() = chatViewModel.erasePrivateSessionAndRestart()
+    fun archiveCapacity(intimacy: Int) = chatViewModel.archiveCapacity(intimacy)
+    suspend fun getCurrentChatArchives() = chatViewModel.getCurrentChatArchives()
+    fun createCurrentArchive(title: String, note: String, onSaved: (String) -> Unit = {}) = chatViewModel.createCurrentArchive(title, note, onSaved)
+    fun retryArchiveSummary(archiveId: String) = chatViewModel.retryArchiveSummary(archiveId)
+    fun loadArchive(archiveId: String, onComplete: (Boolean) -> Unit = {}) = chatViewModel.loadArchive(archiveId, onComplete)
+    fun deleteArchive(archiveId: String) = chatViewModel.deleteArchive(archiveId)
 
     suspend fun getOperatorMemoryItems(operatorId: String) = repository.getMemoryItemsByOwner("operator", operatorId)
 
@@ -969,6 +976,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     suspend fun searchCurrentSessionMessages(keyword: String, limit: Long = 200) = chatViewModel.searchCurrentSessionMessages(keyword, limit)
     suspend fun getCurrentSessionMessageDates() = chatViewModel.getCurrentSessionMessageDates()
     suspend fun getCurrentSessionMessagesByDate(date: String) = chatViewModel.getCurrentSessionMessagesByDate(date)
+    suspend fun getCurrentHistorySegments() = chatViewModel.getCurrentHistorySegments()
     fun jumpToCurrentSessionMessage(messageId: Long) = chatViewModel.jumpToCurrentSessionMessage(messageId)
     fun consumeChatScrollTarget() = chatViewModel.consumeScrollTarget()
     fun clearGroupMessages(groupId: String) = groupChatViewModel.clearGroupMessages(groupId)
@@ -1011,6 +1019,12 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     fun updateInputText(text: String) = chatViewModel.updateInputText(text)
 
     fun sendMessage() = chatViewModel.sendMessage()
+
+    suspend fun getDisplayEvents(sessionId: String) = repository.getDisplayEvents(sessionId)
+
+    suspend fun addDisplayEventIfAbsent(sessionId: String, messageId: Long, segmentIndex: Int) =
+        repository.addDisplayEventIfAbsent(sessionId, messageId, segmentIndex)
+    suspend fun deleteMessageDisplayEvents(messageId: Long) = repository.deleteMessageDisplayEvents(messageId)
 
     fun setMode(mode: String) = chatViewModel.setMode(mode)
 

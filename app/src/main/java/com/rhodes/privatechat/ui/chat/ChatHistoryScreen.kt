@@ -40,6 +40,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.shared.model.ChatMessage
+import com.rhodes.privatechat.shared.model.ChatHistorySegment
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
 import com.rhodes.privatechat.ui.theme.BG
 import com.rhodes.privatechat.ui.theme.Card
 import com.rhodes.privatechat.ui.theme.Primary
@@ -66,6 +69,9 @@ fun ChatHistoryScreen(
     var selectedDate by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
     var pendingJump by remember { mutableStateOf<ChatMessage?>(null) }
+    var historySegments by remember { mutableStateOf<List<ChatHistorySegment>>(emptyList()) }
+    var historyMatches by remember { mutableStateOf<List<ChatHistorySegment>>(emptyList()) }
+    var openedHistory by remember { mutableStateOf<ChatHistorySegment?>(null) }
 
     fun loadDate(date: String) {
         selectedDate = date
@@ -75,6 +81,7 @@ fun ChatHistoryScreen(
 
     LaunchedEffect(Unit) {
         dates = viewModel.getCurrentSessionMessageDates()
+        historySegments = viewModel.getCurrentHistorySegments()
         dates.firstOrNull()?.let { first ->
             selectedDate = first
             results = viewModel.getCurrentSessionMessagesByDate(first)
@@ -103,7 +110,12 @@ fun ChatHistoryScreen(
                 onValueChange = {
                     keyword = it
                     selectedDate = ""
-                    scope.launch { results = if (it.isBlank()) emptyList() else viewModel.searchCurrentSessionMessages(it) }
+                    scope.launch {
+                        results = if (it.isBlank()) emptyList() else viewModel.searchCurrentSessionMessages(it)
+                        historyMatches = if (it.isBlank()) emptyList() else historySegments.filter { segment ->
+                            segment.title.contains(it, true) || segment.messagesJson.contains(it, true)
+                        }
+                    }
                 },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
@@ -111,6 +123,25 @@ fun ChatHistoryScreen(
             )
             Spacer(Modifier.height(10.dp))
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxSize()) {
+                if (keyword.isBlank() && historySegments.isNotEmpty()) {
+                    item { Text("历史聊天", color = TextSecondary, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 4.dp)) }
+                    items(historySegments, key = { it.id }) { segment ->
+                        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Card).clickable { openedHistory = segment }.padding(12.dp)) {
+                            Text(segment.title, color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                            Text("仅供回看，不会影响当前剧情", color = TextTertiary, fontSize = 12.sp, modifier = Modifier.padding(top = 3.dp))
+                        }
+                    }
+                    item { Text("当前聊天", color = TextSecondary, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp)) }
+                }
+                if (keyword.isNotBlank() && historyMatches.isNotEmpty()) {
+                    item { Text("历史聊天结果", color = TextSecondary, fontWeight = FontWeight.SemiBold) }
+                    items(historyMatches, key = { it.id }) { segment ->
+                        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Card).clickable { openedHistory = segment }.padding(12.dp)) {
+                            Text(segment.title, color = TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                            Text("历史聊天中的匹配内容", color = TextTertiary, fontSize = 12.sp, modifier = Modifier.padding(top = 3.dp))
+                        }
+                    }
+                }
                 if (keyword.isBlank()) {
                     item {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -144,6 +175,21 @@ fun ChatHistoryScreen(
                 }) { Text("确认跳转", color = Primary) }
             },
             dismissButton = { TextButton(onClick = { pendingJump = null }) { Text("取消", color = TextSecondary) } }
+        )
+    }
+    openedHistory?.let { segment ->
+        val messages = remember(segment.id) {
+            runCatching { Json { ignoreUnknownKeys = true }.decodeFromString(ListSerializer(ChatMessage.serializer()), segment.messagesJson) }.getOrDefault(emptyList())
+        }
+        AlertDialog(
+            onDismissRequest = { openedHistory = null },
+            title = { Text(segment.title, color = TextPrimary) },
+            text = {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(messages, key = { "${it.id}_${it.timestamp}" }) { msg -> HistoryMessageItem(msg, onClick = {}) }
+                }
+            },
+            confirmButton = { TextButton(onClick = { openedHistory = null }) { Text("关闭", color = Primary) } }
         )
     }
 }

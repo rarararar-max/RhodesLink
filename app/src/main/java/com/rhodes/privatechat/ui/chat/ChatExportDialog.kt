@@ -50,7 +50,7 @@ fun ChatExportDialog(
                 if (segs != null) {
                     segs.mapNotNull {
                         val seg = it.jsonObject
-                        if (seg["type"]?.jsonPrimitive?.content == "dialogue") seg["content"]?.jsonPrimitive?.content else null
+                        if (!seg["recalled"]?.jsonPrimitive?.content.equals("true", true) && seg["type"]?.jsonPrimitive?.content == "dialogue") seg["content"]?.jsonPrimitive?.content else null
                     }.joinToString(" ")
                 } else msg.content.take(80)
             } catch (_: Exception) { msg.content.take(80) }

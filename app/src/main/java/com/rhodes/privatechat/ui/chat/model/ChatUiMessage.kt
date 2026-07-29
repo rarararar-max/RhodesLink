@@ -27,4 +27,6 @@ data class ChatUiMessage(
     val originalMessageId: Long = id,
     /** 在原始 JSON segments 数组中的索引，用于单条撤回；-1 表示非多段消息 */
     val segmentIndex: Int = -1,
+    /** Whether this bubble originated from an ai_json segment and may reveal progressively. */
+    val isAiSegment: Boolean = false,
 )

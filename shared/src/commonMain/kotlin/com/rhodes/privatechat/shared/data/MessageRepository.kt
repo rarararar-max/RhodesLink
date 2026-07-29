@@ -13,6 +13,12 @@ import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.Json
 
+data class ChatDisplayEvent(
+    val messageId: Long,
+    val segmentIndex: Int,
+    val revealOrder: Long,
+)
+
 class MessageRepository(private val wrapper: DatabaseWrapper) {
 
     private val db: RhodesDatabase get() = wrapper.database
@@ -57,6 +63,29 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
         db.chatMessagesQueries.updateContent(content, id)
         // Regenerating an older reply must not replace a newer chat-list preview or move the session backward.
         db.chatSessionsQueries.updateLastMessageIfNotNewer(previewFromAiJson(content), timestamp, sessionId, timestamp)
+    }
+
+    suspend fun getDisplayEvents(sessionId: String): List<ChatDisplayEvent> = withContext(Dispatchers.Default) {
+        db.chatDisplayEventsQueries.getDisplayEvents(sessionId) { messageId, segmentIndex, revealOrder ->
+            ChatDisplayEvent(messageId, segmentIndex.toInt(), revealOrder)
+        }.executeAsList()
+    }
+
+    suspend fun addDisplayEventIfAbsent(sessionId: String, messageId: Long, segmentIndex: Int): Long = idMutex.withLock {
+        withContext(Dispatchers.Default) {
+            db.chatDisplayEventsQueries.getDisplayEventOrder(messageId, segmentIndex.toLong()).executeAsOneOrNull()?.let { return@withContext it }
+            val nextOrder = (db.chatDisplayEventsQueries.getNextRevealOrder(sessionId).executeAsOne().MAX ?: 0L) + 1L
+            db.chatDisplayEventsQueries.insertDisplayEventIfAbsent(messageId, segmentIndex.toLong(), sessionId, nextOrder)
+            db.chatDisplayEventsQueries.getDisplayEventOrder(messageId, segmentIndex.toLong()).executeAsOneOrNull() ?: nextOrder
+        }
+    }
+
+    suspend fun deleteMessageDisplayEvents(messageId: Long) = withContext(Dispatchers.Default) {
+        db.chatDisplayEventsQueries.deleteMessageDisplayEvents(messageId)
+    }
+
+    suspend fun deleteDisplayEvent(messageId: Long, segmentIndex: Int) = withContext(Dispatchers.Default) {
+        db.chatDisplayEventsQueries.deleteDisplayEvent(messageId, segmentIndex.toLong())
     }
 
     suspend fun sendMessage(sessionId: String, message: ChatMessage) = idMutex.withLock { withContext(Dispatchers.Default) {
@@ -139,6 +168,7 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
     }
 
     suspend fun deleteSessionMessages(sessionId: String) = withContext(Dispatchers.Default) {
+        db.chatDisplayEventsQueries.deleteSessionDisplayEvents(sessionId)
         db.chatMessagesQueries.deleteSessionMessages(sessionId)
     }
 
@@ -146,8 +176,14 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
         db.chatSessionsQueries.updateLastMessage("", timestamp, sessionId)
     }
 
-    suspend fun deleteMessage(id: Long) = withContext(Dispatchers.Default) { db.chatMessagesQueries.deleteMessage(id) }
-    suspend fun deleteOldMessages(cutoff: Long) = withContext(Dispatchers.Default) { db.chatMessagesQueries.deleteOldMessages(cutoff) }
+    suspend fun deleteMessage(id: Long) = withContext(Dispatchers.Default) {
+        db.chatDisplayEventsQueries.deleteMessageDisplayEvents(id)
+        db.chatMessagesQueries.deleteMessage(id)
+    }
+    suspend fun deleteOldMessages(cutoff: Long) = withContext(Dispatchers.Default) {
+        db.chatDisplayEventsQueries.deleteOldDisplayEvents(cutoff)
+        db.chatMessagesQueries.deleteOldMessages(cutoff)
+    }
     suspend fun getMessageCount(): Int = withContext(Dispatchers.Default) { db.chatMessagesQueries.getMessageCount().executeAsOne().toInt() }
 
     suspend fun getMessageCountPerSender(): List<SenderCount> = withContext(Dispatchers.Default) {

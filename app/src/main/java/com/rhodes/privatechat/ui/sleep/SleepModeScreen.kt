@@ -79,7 +79,10 @@ import com.rhodes.privatechat.viewmodel.MainViewModel
 import com.rhodes.privatechat.viewmodel.shared.SleepPrompts
 import com.rhodes.privatechat.shared.voice.prepareTtsSpeech
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import org.koin.compose.koinInject
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -90,6 +93,7 @@ private const val SLEEP_FRAME_DELAY_MS = 300L
 private const val SLEEP_TALKING_FRAME_DELAY_MS = 200L
 private const val DIM_CLOCK_VISIBLE_MS = 8 * 1000L
 private const val DIM_CLOCK_PERIOD_MS = 60 * 1000L
+private const val SLEEP_TTS_TIMEOUT_MS = 70_000L
 
 private enum class SleepVisualState { Idle, Talking, FallingAsleep, Sleeping, WakingUp }
 private enum class SleepInputMode { Manual, Auto, Sleeping }
@@ -137,6 +141,29 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
     var wakeSummaryText by rememberSaveable { mutableStateOf("") }
     var wakeTextMode by rememberSaveable { mutableStateOf(if (settings.sleepWakeTextMode == "fixed") WakeTextMode.Fixed else WakeTextMode.Ai) }
     var fixedWakeText by rememberSaveable { mutableStateOf(settings.sleepFixedWakeText) }
+    var voiceJob by remember { mutableStateOf<Job?>(null) }
+    var wakeTextJob by remember { mutableStateOf<Job?>(null) }
+    var voiceRequestId by remember { mutableLongStateOf(0L) }
+
+    fun setKeepScreenOn(enabled: Boolean) {
+        activity?.window?.let { window ->
+            if (enabled) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    fun cancelVoiceWork(cancelWakeText: Boolean = true) {
+        voiceRequestId += 1
+        voiceJob?.cancel()
+        voiceJob = null
+        if (cancelWakeText) {
+            wakeTextJob?.cancel()
+            wakeTextJob = null
+        }
+        audio.stopPlayback()
+        callState = com.rhodes.privatechat.shared.call.CallState.Listening
+        if (visualState == SleepVisualState.Talking) visualState = SleepVisualState.Idle
+    }
 
     fun saveSettings() {
         settings.sleepAlarmHour = alarmHour
@@ -155,13 +182,13 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
         sleepSegmentStartedAt?.let { totalRestMillis += System.currentTimeMillis() - it }
         if (recording) stopRecordingSafe()
         recording = false
-        audio.stopPlayback()
+        cancelVoiceWork()
         audio.setSpeakerEnabled(false)
         saveSettings()
         onBack()
     }
 
-    suspend fun speak(text: String) {
+    suspend fun speak(text: String, requestId: Long) {
         val speech = prepareTtsSpeech(text, 240, "我在。慢慢睡吧。")
         val ttsKey = settings.ttsApiKey.ifBlank { settings.apiKey }
         Log.d("RHODES_AUDIO", "speak: text前50=${text.take(50)} ttsBaseUrl='${settings.ttsBaseUrl}' ttsModelName='${settings.ttsModelName}' apiKey非空=${ttsKey.isNotBlank()}")
@@ -170,7 +197,10 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
         val tts = createTtsGateway(settings.ttsBaseUrl, ttsKey, settings.ttsModelName, settings.ttsProvider)
         Log.d("RHODES_AUDIO", "TTS实例类: ${tts::class.simpleName}")
         callState = com.rhodes.privatechat.shared.call.CallState.AiSpeaking
-        val bytes = tts.synthesize(TtsRequest(text = speech, voiceId = voiceId, speed = operator.voiceSpeed.toDoubleOrNull() ?: 1.0)).audioBytes
+        val bytes = withTimeout(SLEEP_TTS_TIMEOUT_MS) {
+            tts.synthesize(TtsRequest(text = speech, voiceId = voiceId, speed = operator.voiceSpeed.toDoubleOrNull() ?: 1.0)).audioBytes
+        }
+        if (requestId != voiceRequestId || hasEnded) return
         Log.d("RHODES_AUDIO", "synthesize返回: audioBytes=${bytes?.size}")
         val file = bytes?.let { audio.saveTtsAudio(it) }
         Log.d("RHODES_AUDIO", "文件保存结果: ${file?.path} 大小=${if (file != null) java.io.File(file.path).length() else 0}")
@@ -179,6 +209,7 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
             Log.d("RHODES_AUDIO", "开始播放: ${file.path}")
             audio.play(file.path, settings.getOperatorVoiceVolume(operator.id)) {
                 audio.deleteAudio(file.path)
+                if (requestId != voiceRequestId || hasEnded) return@play
                 callState = com.rhodes.privatechat.shared.call.CallState.Listening
                 visualState = SleepVisualState.Idle
             }
@@ -204,7 +235,23 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
         val speech = prepareTtsSpeech(text, 120, "时间到了，该醒了。")
         aiReply = speech
         turns += operator.name to speech
-        scope.launch { speak(speech) }
+        // Keep the current wake-text generation alive while replacing only its playback.
+        cancelVoiceWork(cancelWakeText = false)
+        val requestId = voiceRequestId + 1
+        voiceRequestId = requestId
+        voiceJob = scope.launch {
+            try {
+                speak(speech, requestId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (requestId == voiceRequestId) {
+                    callState = com.rhodes.privatechat.shared.call.CallState.Failed
+                    visualState = SleepVisualState.Idle
+                    Toast.makeText(context, "叫醒语音失败：${e.message?.take(40) ?: "未知错误"}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
     }
 
     fun triggerWake() {
@@ -217,7 +264,8 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
         alarmRinging = true
         wakeAttempt += 1
         inputMode = SleepInputMode.Manual
-        audio.stopPlayback()
+        cancelVoiceWork()
+        setKeepScreenOn(true)
         visualState = SleepVisualState.WakingUp
         transcript = "叫醒时间到了。"
         val restText = formatDuration(totalRestMillis)
@@ -225,7 +273,7 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
         if (wakeTextMode == WakeTextMode.Fixed) {
             playWakeText(fixedWakeText.trim().ifBlank { "时间到了。该醒了，我在这里。" }.take(120))
         } else {
-            scope.launch {
+            wakeTextJob = scope.launch {
                 try {
                     val rules = buildString {
                         append(SleepPrompts.WAKE)
@@ -241,22 +289,31 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
                     ))
                         .trim().take(120).ifBlank { fixedWakeText }
                     playWakeText(text)
-                } catch (_: Exception) { playWakeText(fixedWakeText) }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    if (alarmRinging && !hasEnded) playWakeText(fixedWakeText)
+                }
             }
         }
     }
 
     fun snooze() {
+        cancelVoiceWork()
         alarmRinging = false
         alarmTargetAt = System.currentTimeMillis() + snoozeMinutes * 60 * 1000L
         visualState = SleepVisualState.Sleeping
         dimmed = true
+        setKeepScreenOn(false)
         sleepSegmentStartedAt = System.currentTimeMillis()
         transcript = "再睡${snoozeMinutes}分钟。"
     }
 
     fun processAudio(recorded: RecordedAudio) {
-        scope.launch {
+        cancelVoiceWork()
+        val requestId = voiceRequestId + 1
+        voiceRequestId = requestId
+        voiceJob = scope.launch {
             try {
                 callState = com.rhodes.privatechat.shared.call.CallState.Thinking
                 transcript = "正在识别..."
@@ -280,10 +337,15 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
                 aiReply = reply
                 turns += operator.name to reply
                 viewModel.chatViewModel.saveVoiceExchange(sessionId, text, reply, "sleep_mode")
-                speak(reply)
+                speak(reply, requestId)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                callState = com.rhodes.privatechat.shared.call.CallState.Failed
-                Toast.makeText(context, "陪睡语音失败：${e.message?.take(40) ?: "未知错误"}", Toast.LENGTH_SHORT).show()
+                if (requestId == voiceRequestId) {
+                    callState = com.rhodes.privatechat.shared.call.CallState.Failed
+                    visualState = SleepVisualState.Idle
+                    Toast.makeText(context, "陪睡语音失败：${e.message?.take(40) ?: "未知错误"}", Toast.LENGTH_SHORT).show()
+                }
             } finally {
                 audio.deleteAudio(recorded.path)
             }
@@ -300,10 +362,13 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
         audio.setSpeakerEnabled(true)
         onDispose {
             if (recording) stopRecordingSafe()
-            audio.stopPlayback()
-            audio.setSpeakerEnabled(false)
+            cancelVoiceWork()
+            audio.release()
             if (oldOrientation != null) activity.requestedOrientation = oldOrientation
-            activity?.window?.attributes = activity?.window?.attributes?.apply { flags = oldFlags } ?: return@onDispose
+            activity?.window?.let { window ->
+                if (oldFlags and WindowManager.LayoutParams.FLAG_FULLSCREEN == 0) window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+                if (oldFlags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON == 0) window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
         }
     }
 
@@ -376,7 +441,11 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
                 inputMode = SleepInputMode.Sleeping
                 if (sleepSegmentStartedAt == null) sleepSegmentStartedAt = System.currentTimeMillis()
                 delay(dimAfterSeconds * 1000L)
-                if (visualState == SleepVisualState.Sleeping) { dimmed = true; dimClockVisible = true }
+                if (visualState == SleepVisualState.Sleeping) {
+                    dimmed = true
+                    dimClockVisible = true
+                    setKeepScreenOn(false)
+                }
             }
             SleepVisualState.WakingUp -> {
                 delay(1800L)
@@ -420,6 +489,7 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
         if (dimmed) {
             settleRestSegment()
             dimmed = false
+            setKeepScreenOn(true)
             visualState = SleepVisualState.WakingUp
             inputMode = SleepInputMode.Manual
             transcript = "已唤醒。需要的话，可以重新打开自动陪睡。"
@@ -495,6 +565,7 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     SleepButton("我醒了") {
                         alarmRinging = false
+                        cancelVoiceWork()
                         alarmTargetAt = null
                         wakeSummaryText = "已醒来 · 本次大概休息 ${formatDuration(totalRestMillis)}"
                         wakeSummaryUntil = System.currentTimeMillis() + 8_000L
@@ -521,7 +592,7 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
                         enabled = visualState != SleepVisualState.FallingAsleep && visualState != SleepVisualState.WakingUp) {
                         when {
                             recording -> { recording = false; stopRecordingSafe()?.let { processAudio(it) } }
-                            callState == com.rhodes.privatechat.shared.call.CallState.AiSpeaking -> audio.stopPlayback()
+                            callState == com.rhodes.privatechat.shared.call.CallState.AiSpeaking || callState == com.rhodes.privatechat.shared.call.CallState.Thinking -> cancelVoiceWork()
                             else -> MainActivity.requestMicrophonePermission { granted ->
                                 if (!granted) Toast.makeText(context, "需要允许麦克风权限才能使用陪睡语音。", Toast.LENGTH_LONG).show()
                                 else recording = audio.startRecording().also { if (!it) Toast.makeText(context, "无法开始录音", Toast.LENGTH_SHORT).show() }
@@ -663,6 +734,7 @@ private fun statusText(visualState: SleepVisualState, inputMode: SleepInputMode,
 private fun primaryButtonText(visualState: SleepVisualState, recording: Boolean, callState: com.rhodes.privatechat.shared.call.CallState): String = when {
     recording -> "结束并发送"
     callState == com.rhodes.privatechat.shared.call.CallState.AiSpeaking -> "打断"
+    callState == com.rhodes.privatechat.shared.call.CallState.Thinking -> "取消处理中"
     else -> "开始说话"
 }
 

@@ -7,6 +7,7 @@ import android.util.Log
 object DatabaseCompatibility {
     private const val DB_NAME = "rhodes_terminal.db"
     private const val TAG = "DbCompatibility"
+    // SQLDelight owns migrations 10+. Never advance beyond its last legacy schema here.
     private const val TARGET_VERSION = 9
     private const val SETTINGS_SP = "rhodes_settings"
     private const val DERIVED_CLEAN_KEY = "derived_data_cleaned_for_1_05"
@@ -34,8 +35,12 @@ object DatabaseCompatibility {
                     ensureOperatorsCompatibility(db)
                 }
 
-                ensureCompatibilitySchema(db)
-                advanceUserVersionIfSchemaComplete(db, userVersion)
+                // Older databases must let SQLDelight run its numbered migrations first; adding
+                // their columns here would make those ALTER TABLE statements fail.
+                if (userVersion >= TARGET_VERSION) {
+                    ensureCompatibilitySchema(db)
+                    advanceUserVersionIfSchemaComplete(db, userVersion)
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "数据库兼容准备失败: ${e.message}", e)
@@ -67,6 +72,16 @@ object DatabaseCompatibility {
 
     private fun ensureCompatibilitySchema(db: SQLiteDatabase) {
         ensureOperatorsCompatibility(db)
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS chat_display_events (
+                messageId INTEGER NOT NULL,
+                segmentIndex INTEGER NOT NULL DEFAULT -1,
+                sessionId TEXT NOT NULL,
+                revealOrder INTEGER NOT NULL,
+                PRIMARY KEY (messageId, segmentIndex)
+            )
+        """.trimIndent())
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_chat_display_events_session_order ON chat_display_events(sessionId, revealOrder)")
         ensureColumns(
             db = db,
             table = "memory_anchors",
@@ -197,7 +212,14 @@ object DatabaseCompatibility {
                     activityLevel REAL NOT NULL DEFAULT 0.5
                 )
             """.trimIndent(),
-            columns = listOf("memoryInjection" to "TEXT NOT NULL DEFAULT ''")
+            columns = listOf(
+                "activityLevel" to "REAL NOT NULL DEFAULT 0.5",
+                "gender" to "TEXT NOT NULL DEFAULT ''",
+                "memoryInjection" to "TEXT NOT NULL DEFAULT ''",
+                "voiceName" to "TEXT NOT NULL DEFAULT ''",
+                "voiceSpeed" to "TEXT NOT NULL DEFAULT ''",
+                "voicePitch" to "TEXT NOT NULL DEFAULT ''",
+            )
         )
     }
 

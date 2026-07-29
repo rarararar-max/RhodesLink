@@ -120,6 +120,7 @@ data class ChatOperator(val operatorId: String) : Screen {
                 onEditOperator = { navigator.push(EditOperator(operator.id)) },
                 onViewStatus = { navigator.push(OperatorDetailRoute(operator.id)) },
                 onViewHistory = { navigator.push(ChatHistoryRoute(operator.id)) },
+                onViewArchives = { navigator.push(ChatArchiveRoute(operator.id)) },
                 onVoiceCall = { navigator.push(VoiceCallRoute(operator.id)) }
             )
         } else {
@@ -209,6 +210,38 @@ data class ChatHistoryRoute(val operatorId: String) : Screen {
                 operatorName = operator.name,
                 onBack = { navigator.pop() }
             )
+        }
+    }
+}
+
+data class ChatArchiveRoute(val operatorId: String) : Screen {
+    @Composable
+    override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        val viewModel: MainViewModel = koinViewModel()
+        val operators by viewModel.operators.collectAsState()
+        val operator = remember(operators, operatorId) { operators.find { it.id == operatorId } }
+        var ready by remember { mutableStateOf(false) }
+        LaunchedEffect(operator) {
+            if (operator != null) {
+                ready = false
+                try {
+                    viewModel.chatViewModel.selectOperatorSync(operator)
+                    ready = viewModel.currentSession.value?.operatorId == operator.id
+                } catch (_: Exception) {
+                }
+            }
+        }
+        if (ready && operator != null) {
+            com.rhodes.privatechat.ui.chat.ChatArchiveScreen(
+                viewModel = viewModel,
+                operator = operator,
+                onBack = { navigator.pop() }
+            )
+        } else {
+            androidx.compose.foundation.layout.Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
+                androidx.compose.material3.Text("正在恢复聊天…")
+            }
         }
     }
 }

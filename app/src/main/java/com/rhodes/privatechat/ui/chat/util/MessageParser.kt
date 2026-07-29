@@ -105,6 +105,7 @@ object MessageParser {
             }
             val result = arr.mapIndexedNotNull { idx, el ->
                 val obj = el.jsonObject
+                if (obj["recalled"]?.jsonPrimitive?.content.equals("true", true)) return@mapIndexedNotNull null
                 val rawName = obj["speaker"]?.jsonPrimitive?.content ?: obj["sender"]?.jsonPrimitive?.content ?: obj["name"]?.jsonPrimitive?.content ?: return@mapIndexedNotNull null
                 val rawContent = obj["message"]?.jsonPrimitive?.content ?: obj["content"]?.jsonPrimitive?.content ?: obj["text"]?.jsonPrimitive?.content ?: return@mapIndexedNotNull null
                 val msgType = if (rawName == "旁白" || obj["type"]?.jsonPrimitive?.content.equals("narration", true)) "narration" else "dialogue"
@@ -115,16 +116,16 @@ object MessageParser {
                 val uid = msg.id * 1000 + idx
                 if (msgType == "narration" || name == "旁白") {
                     ChatUiMessage(uid, "旁白", TextTertiary, content, msg.timestamp,
-                        isSystem = true, isNarration = true, mode = msg.mode, isArchived = isArchived(msg, restartAt), originalMessageId = msg.id, segmentIndex = idx)
+                        isSystem = true, isNarration = true, mode = msg.mode, isArchived = isArchived(msg, restartAt), originalMessageId = msg.id, segmentIndex = idx, isAiSegment = true)
                 } else {
                     ChatUiMessage(uid, name, senderColor(name), content, msg.timestamp,
-                        avatarUri = senderAvatar(name), mode = msg.mode, isArchived = isArchived(msg, restartAt), originalMessageId = msg.id, segmentIndex = idx)
+                        avatarUri = senderAvatar(name), mode = msg.mode, isArchived = isArchived(msg, restartAt), originalMessageId = msg.id, segmentIndex = idx, isAiSegment = true)
                 }
             }
             result
         } catch (_: Exception) {
             listOf(ChatUiMessage(msg.id, msg.senderName, Gray100, safeDisplayText(msg.content), msg.timestamp,
-                avatarUri = senderAvatar(msg.senderName), mode = msg.mode, originalMessageId = msg.id))
+                avatarUri = senderAvatar(msg.senderName), mode = msg.mode, isArchived = isArchived(msg, restartAt), originalMessageId = msg.id))
         }
     }
 
@@ -148,15 +149,15 @@ object MessageParser {
         if (emotion.isNotBlank() || msg.location.isNotBlank() || msg.activity.isNotBlank()) {
             // 不单独添加元数据消息，而是附加到第一条 dialogue 消息上
         }
-        var segIdx = 0
-        for (seg in segments) {
+        for ((segIdx, seg) in segments.withIndex()) {
+            if (isPrivateSegmentRecalled(msg.content, segIdx)) continue
             val displayContent = stripLeakedSegmentLabel(seg.content)
             if (displayContent.isBlank()) continue
             if (seg.type == "narration") {
                 if (!isOnline) {
                     result.add(ChatUiMessage(
                         msg.id * 1000 + segIdx, "旁白", TextTertiary, displayContent, msg.timestamp,
-                        isSystem = true, isNarration = true, mode = msg.mode, isArchived = isArchived(msg, restartAt), originalMessageId = msg.id, segmentIndex = segIdx
+                        isSystem = true, isNarration = true, mode = msg.mode, isArchived = isArchived(msg, restartAt), originalMessageId = msg.id, segmentIndex = segIdx, isAiSegment = true
                     ))
                 }
             } else {
@@ -165,10 +166,9 @@ object MessageParser {
                     avatarUri = aiAvatarUri, mode = msg.mode,
                     emotion = emotion, activity = msg.activity, location = msg.location,
                     isArchived = isArchived(msg, restartAt),
-                    originalMessageId = msg.id, segmentIndex = segIdx
+                    originalMessageId = msg.id, segmentIndex = segIdx, isAiSegment = true
                 ))
             }
-            segIdx++
         }
         return result
     }
@@ -268,6 +268,11 @@ object MessageParser {
         extractStringFieldLenient(content, "message")?.takeIf { it.isNotBlank() && !looksLikeJson(it) }?.let { return it }
         return if (looksLikeJson(content)) "[消息格式异常，已隐藏原始结构]" else content.ifBlank { "[消息解析失败]" }
     }
+
+    private fun isPrivateSegmentRecalled(content: String, index: Int): Boolean = runCatching {
+        val segments = json.parseToJsonElement(content).jsonObject["segments"] as? JsonArray ?: return@runCatching false
+        segments.getOrNull(index)?.jsonObject?.get("recalled")?.jsonPrimitive?.content.equals("true", true)
+    }.getOrDefault(false)
 
     /** Removes only the exact structural labels leaked at the start of a model segment. */
     private fun stripLeakedSegmentLabel(content: String): String = content.trimStart()

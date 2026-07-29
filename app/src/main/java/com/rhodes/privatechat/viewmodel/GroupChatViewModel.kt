@@ -1,6 +1,8 @@
 package com.rhodes.privatechat.viewmodel
 
 import android.util.Log
+import android.content.Context
+import com.rhodes.privatechat.automation.GroupAutoChatScheduler
 import com.rhodes.privatechat.shared.model.AnchorType
 import com.rhodes.privatechat.shared.model.ChatMessage
 import com.rhodes.privatechat.shared.model.ChatSession
@@ -47,13 +49,17 @@ import java.io.IOException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import kotlinx.coroutines.withTimeout
+import kotlin.coroutines.resume
 
 private val json = Json { ignoreUnknownKeys = true }
 
 class GroupChatViewModel(
+    private val context: Context,
     private val repository: ChatRepository,
     private val settings: SettingsRepository,
     private val sharedUtils: SharedUtils,
@@ -338,7 +344,7 @@ $requestText
         groupMessagesJob = null
         groupAiJobs.values.forEach { it.cancel() }
         groupAiJobs.clear()
-        stopAllAutoGroupChats()
+        stopInMemoryAutoGroupChats()
         scope.cancel()
     }
 
@@ -346,10 +352,58 @@ $requestText
         _groupMessages.value = _groupMessages.value.filter { it.id != msgId }
     }
 
-    /** 撤回群聊消息：删除整条（不分段） */
+    /** Recalls one group AI segment while retaining other speakers in the same response. */
     fun recallMessageSegment(msgId: Long, segmentIndex: Int) {
-        removeMessage(msgId)
-        scope.launch { repository.deleteMessage(msgId) }
+        val message = _groupMessages.value.firstOrNull { it.id == msgId }
+        if (message == null || message.type != "ai_json" || segmentIndex < 0) {
+            removeMessage(msgId)
+            scope.launch { repository.deleteMessage(msgId) }
+            return
+        }
+        val updated = markSegmentRecalled(message.content, segmentIndex)
+        if (updated == null) {
+            removeMessage(msgId)
+            scope.launch { repository.deleteMessage(msgId) }
+            return
+        }
+        _groupMessages.value = _groupMessages.value.map { if (it.id == msgId) it.copy(content = updated) else it }
+        scope.launch {
+            repository.updateMessageContentAndPreview(message.sessionId, msgId, updated, message.timestamp)
+            repository.deleteDisplayEvent(msgId, segmentIndex)
+            repository.deleteMemoryV2BySession(message.sessionId)
+            repository.deleteMemoriesBySession(message.sessionId)
+        }
+    }
+
+    private fun markSegmentRecalled(content: String, segmentIndex: Int): String? {
+        return try {
+            val root = json.parseToJsonElement(content)
+            val array = when (root) {
+                is kotlinx.serialization.json.JsonArray -> root
+                is kotlinx.serialization.json.JsonObject ->
+                    (root["messages"] as? kotlinx.serialization.json.JsonArray) ?: (root["segments"] as? kotlinx.serialization.json.JsonArray) ?: return null
+                else -> return null
+            }
+            if (segmentIndex !in array.indices) return null
+            val list = array.toMutableList()
+            val target = list[segmentIndex] as? kotlinx.serialization.json.JsonObject ?: return null
+            list[segmentIndex] = kotlinx.serialization.json.buildJsonObject {
+                target.forEach { (key, value) -> put(key, value) }
+                put("recalled", true)
+            }
+            if (list.all { (it as? kotlinx.serialization.json.JsonObject)?.get("recalled")?.jsonPrimitive?.content == "true" }) return null
+            val replaced = list.joinToString(",", "[", "]") { it.toString() }
+            when (root) {
+                is kotlinx.serialization.json.JsonArray -> replaced
+                is kotlinx.serialization.json.JsonObject -> {
+                    val segmentKey = if (root["messages"] is kotlinx.serialization.json.JsonArray) "messages" else "segments"
+                    kotlinx.serialization.json.buildJsonObject {
+                        root.forEach { (key, value) -> put(key, if (key == segmentKey) json.parseToJsonElement(replaced) else value) }
+                    }.toString()
+                }
+                else -> null
+            }
+        } catch (_: Exception) { null }
     }
 
     private fun removeSegmentFromArray(content: String, segmentIndex: Int): String? {
@@ -409,7 +463,9 @@ $requestText
         cancelGroupRequests(groupSessionId)
         stopAutoGroupChat(groupSessionId)
         settings.remove("group_auto_$groupSessionId")
+        settings.remove("group_auto_plan_complete_$groupSessionId")
         settings.remove("group_event_auto_$groupSessionId")
+        GroupAutoChatScheduler.cancel(context, settings, groupSessionId)
         settings.putBoolean("group_deleted_$groupSessionId", true)
         scope.launch {
             repository.purgeSessionData(groupSessionId)
@@ -423,9 +479,11 @@ $requestText
 
     fun setAutoGroupChatEnabled(groupId: String, enabled: Boolean) {
         settings.putGroupAuto(groupId, enabled)
+        if (enabled) settings.putGroupAutoChatComplete(groupId, false)
         logAutoInterval(groupId, "SET_ENABLED", "enabled=$enabled autoAiEnabled=${settings.autoAiEnabled}")
         if (enabled && settings.autoAiEnabled) {
             autoRoundCounts[groupId] = 0
+            GroupAutoChatScheduler.resetPlan(context, settings, groupId)
             if (autoGroupChatJobs[groupId]?.isActive == true) {
                 DebugLogger.log("GroupChat/Auto", "跳过启动: id=$groupId, 已有活跃协程")
                 return
@@ -462,66 +520,15 @@ $requestText
             logAutoInterval(groupId, "START", "generation=$generation groupName=$groupName")
             val job = scope.launch(start = CoroutineStart.LAZY) {
                 while (isAutoGroupChatEnabled(groupId)) {
-                    val nextRound = (autoRoundCounts[groupId] ?: 0) + 1
-                    val maxRounds = settings.groupAutoMaxRounds
-                    if (nextRound > maxRounds) {
-                        DebugLogger.log("GroupChat/Auto", "达到连续轮数上限暂停: id=$groupId, max=$maxRounds")
-                        break
-                    }
                     if (autoChatGenerations[groupId] != generation) {
                         DebugLogger.log("GroupChat/Auto", "gen变化退出: id=$groupId")
                         break
                     }
-                    // Read the latest values every round so setting changes take effect without toggling auto chat.
-                    val minMs = settings.groupChatMinInterval * 1000L
-                    val maxMs = settings.groupChatMaxInterval * 1000L
-                    var interval = minMs + (Math.random() * (maxMs - minMs).coerceAtLeast(0L)).toLong()
-                    DebugLogger.log("GroupChat/Auto", "第${nextRound}轮: id=$groupId, 等待${interval/1000}秒, gen=$generation")
-                    val waitStartedAt = System.currentTimeMillis()
-                    logAutoInterval(
-                        groupId,
-                        "INTERVAL_SELECTED",
-                        "generation=$generation round=$nextRound minMs=$minMs maxMs=$maxMs selectedMs=$interval startedAt=$waitStartedAt"
-                    )
-                    val tickMs = 1000L
-                    var remaining = interval
-                    var elapsed = 0L
-                    while (remaining > 0 && isAutoGroupChatEnabled(groupId)) {
-                        if (autoChatGenerations[groupId] != generation) break
-                        val waited = minOf(remaining, tickMs)
-                        delay(waited)
-                        remaining -= waited
-                        elapsed += waited
-                        // Never fire earlier than a newly raised minimum while this timer is running.
-                        val latestMinMs = settings.groupChatMinInterval * 1000L
-                        if (interval < latestMinMs) {
-                            val previousInterval = interval
-                            interval = latestMinMs
-                            remaining = (interval - elapsed).coerceAtLeast(0L)
-                            logAutoInterval(
-                                groupId,
-                                "INTERVAL_RAISED",
-                                "generation=$generation round=$nextRound previousMs=$previousInterval latestMinMs=$latestMinMs elapsedMs=$elapsed remainingMs=$remaining"
-                            )
-                        }
-                    }
+                    val plan = GroupAutoChatScheduler.ensurePlan(context, settings, groupId) ?: break
+                    if (plan.dueAt < 0L) { delay(250); continue }
+                    delay((plan.dueAt - System.currentTimeMillis()).coerceAtLeast(0L))
                     if (autoChatGenerations[groupId] != generation) break
-                    // 等够间隔，发消息
-                    autoRoundCounts[groupId] = nextRound
-                    DebugLogger.log("GroupChat/Auto", "发消息: id=$groupId, round=$nextRound")
-                    val firedAt = System.currentTimeMillis()
-                    logAutoInterval(
-                        groupId,
-                        "MESSAGE_FIRED",
-                        "generation=$generation round=$nextRound selectedMs=$interval actualElapsedMs=${firedAt - waitStartedAt} firedAt=$firedAt"
-                    )
-                    val session = repository.getSession(groupId) ?: break
-                    val mode = getGroupChatMode(groupId)
-                    var responseCompleted = false
-                    sendGroupMessage(groupId, groupName, "", mode, isAuto = true, autoGeneration = generation, onResponseComplete = { responseCompleted = true })
-                    while (!responseCompleted && isAutoGroupChatEnabled(groupId) && autoChatGenerations[groupId] == generation) {
-                        delay(100)
-                    }
+                    runScheduledAutoTurn(groupId, plan.token, generation)
                 }
             }
             // Register before dispatching so concurrent refresh calls observe this timer.
@@ -547,6 +554,7 @@ $requestText
         logAutoInterval(groupId, "RESET", "reason=user_message autoEnabled=${isAutoGroupChatEnabled(groupId)}")
         lastUserMsgTime[groupId] = System.currentTimeMillis()
         autoRoundCounts[groupId] = 0
+        GroupAutoChatScheduler.resetPlan(context, settings, groupId)
         if (isAutoGroupChatEnabled(groupId)) {
             synchronized(autoGroupChatLock) {
                 autoChatGenerations[groupId] = nextAutoGroupGeneration()
@@ -573,9 +581,19 @@ $requestText
             autoGroupChatJobs.remove(groupId)
             autoRoundCounts.remove(groupId)
         }
+        GroupAutoChatScheduler.cancel(context, settings, groupId)
     }
 
     fun stopAllAutoGroupChats() {
+        stopInMemoryAutoGroupChats()
+        scope.launch {
+            repository.getAllSessionsSync()
+                .filter { it.operatorId.startsWith("group_") || it.operatorId.startsWith("group") }
+                .forEach { if (!settings.autoAiEnabled) GroupAutoChatScheduler.cancel(context, settings, it.id) }
+        }
+    }
+
+    private fun stopInMemoryAutoGroupChats() {
         synchronized(autoGroupChatLock) {
             autoChatGenerations.keys.forEach { groupId -> autoChatGenerations[groupId] = nextAutoGroupGeneration() }
             activeAutoGroupRuns.clear()
@@ -597,6 +615,7 @@ $requestText
                 .forEach { group ->
                     if (settings.getGroupAuto(group.id)) {
                         logAutoInterval(group.id, "REFRESH", "autoEnabled=true")
+                        GroupAutoChatScheduler.ensurePlan(context, settings, group.id)
                         startAutoGroupChat(group.id, group.operatorName)
                     } else {
                         stopAutoGroupChat(group.id)
@@ -1065,6 +1084,36 @@ $requestText
         }
     }
 
+    /** Used by either the foreground timer or WorkManager after both validate the same plan token. */
+    suspend fun runScheduledAutoTurn(groupId: String, token: String, expectedGeneration: Long? = null): Boolean {
+        // Idle chat never preempts a user reply. Do not consume the durable plan until the queue is free.
+        while (groupAiJobs[groupId]?.isActive == true && isAutoGroupChatEnabled(groupId)) delay(100)
+        val plan = GroupAutoChatScheduler.claim(settings, groupId, token) ?: return false
+        if (expectedGeneration != null && autoChatGenerations[groupId] != expectedGeneration) {
+            GroupAutoChatScheduler.releaseClaim(context, settings, groupId, plan.round - 1)
+            return false
+        }
+        val session = repository.getSession(groupId) ?: run {
+            GroupAutoChatScheduler.cancel(context, settings, groupId)
+            return false
+        }
+        autoRoundCounts[groupId] = plan.round
+        return kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
+            try {
+                sendGroupMessage(groupId, session.operatorName, "", getGroupChatMode(groupId), isAuto = true,
+                    autoGeneration = expectedGeneration, onResponseComplete = {
+                        // The existing pipeline writes errors as system messages. Move on to one fresh
+                        // plan rather than retrying an ambiguous remote request and risking duplicates.
+                        if (isAutoGroupChatEnabled(groupId)) GroupAutoChatScheduler.scheduleNext(context, settings, groupId, plan.round, plan.token)
+                        if (continuation.isActive) continuation.resume(true)
+                    })
+            } catch (_: Exception) {
+                GroupAutoChatScheduler.releaseClaim(context, settings, groupId, plan.round - 1)
+                if (continuation.isActive) continuation.resume(false)
+            }
+        }
+    }
+
     /** A group round starts with a user message; automatic AI batches remain individual rounds. */
     private fun recentGroupRounds(messages: List<ChatMessage>, roundLimit: Int): List<ChatMessage> {
         if (roundLimit <= 0) return messages
@@ -1087,12 +1136,27 @@ $requestText
         return try {
             val items = extractGroupResults(msg.content)
             if (items.isNotEmpty()) {
-                items.joinToString("\n") { r -> if (r.type == "narration" || r.speaker == "旁白") "旁白：${r.message}" else "${r.speaker}：${r.message}" }
+                items.filterIndexed { index, _ -> !isGroupSegmentRecalled(msg.content, index) }
+                    .joinToString("\n") { r -> if (r.type == "narration" || r.speaker == "旁白") "旁白：${r.message}" else "${r.speaker}：${r.message}" }
             } else "群聊回复：[上一条消息格式异常]"
         } catch (_: Exception) {
             "群聊回复：[上一条消息格式异常]"
         }
     }
+
+    private fun isGroupSegmentRecalled(content: String, index: Int): Boolean = runCatching {
+        val root = json.parseToJsonElement(content)
+        val array = when (root) {
+            is kotlinx.serialization.json.JsonArray -> root
+            is kotlinx.serialization.json.JsonObject -> (root["messages"] as? kotlinx.serialization.json.JsonArray)
+                ?: (root["segments"] as? kotlinx.serialization.json.JsonArray) ?: return@runCatching false
+            else -> return@runCatching false
+        }
+        array.getOrNull(index)?.let { element ->
+            (element as? kotlinx.serialization.json.JsonObject)
+                ?.get("recalled")?.jsonPrimitive?.content.equals("true", true)
+        } == true
+    }.getOrDefault(false)
 
     private fun formatGroupMessageForMemory(msg: ChatMessage, limit: Int): String {
         if (msg.type == "system") return ""
@@ -1102,7 +1166,9 @@ $requestText
         if (msg.type == "system") return "系统：${msg.content.take(limit)}"
         if (msg.type != "ai_json") return "${msg.senderName}：${msg.content.take(limit)}"
         return try {
-            val items = extractGroupResults(msg.content).takeLast(16)
+            val items = extractGroupResults(msg.content)
+                .filterIndexed { index, _ -> !isGroupSegmentRecalled(msg.content, index) }
+                .takeLast(16)
             if (items.isNotEmpty()) {
                 items.joinToString("\n") { r ->
                     if (r.type == "narration" || r.speaker == "旁白") "旁白：${r.message.take(limit)}" else "${r.speaker}：${r.message.take(limit)}"

@@ -149,12 +149,13 @@ class SessionRepository(private val wrapper: DatabaseWrapper) {
                     if (segs != null) {
                         segs.mapNotNull { seg ->
                             val segObj = seg as? kotlinx.serialization.json.JsonObject
-                            if ((segObj?.get("type") as? kotlinx.serialization.json.JsonPrimitive)?.content == "dialogue")
+                            if ((segObj?.get("recalled") as? kotlinx.serialization.json.JsonPrimitive)?.content.equals("true", true)) null
+                            else if ((segObj?.get("type") as? kotlinx.serialization.json.JsonPrimitive)?.content == "dialogue")
                                 (segObj["content"] as? kotlinx.serialization.json.JsonPrimitive)?.content
                             else null
                         }.joinToString(" ")
-                    } else m.content.take(80)
-                } catch (_: Exception) { m.content.take(80) }
+                    } else ""
+                } catch (_: Exception) { "" }
             } else m.content.take(80)
             lines.add("$name：$text")
         }

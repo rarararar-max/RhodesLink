@@ -543,7 +543,16 @@ class MemoryV2Pipeline(
             sdf.format(java.util.Date(msg.timestamp))
         } else "unknown"
         val speaker = if (msg.isMe) "用户" else msg.senderName.ifBlank { "AI" }
-        return "[$time] $speaker：${msg.content.take(240)}"
+        val content = if (msg.type == "ai_json") runCatching {
+            val obj = json.parseToJsonElement(msg.content).jsonObject
+            val segments = obj["segments"]?.jsonArray ?: return@runCatching ""
+            segments.mapNotNull { element ->
+                val segment = element.jsonObject
+                if (segment["recalled"]?.jsonPrimitive?.contentOrNull.equals("true", true)) null
+                else segment["content"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            }.joinToString(" ")
+        }.getOrDefault("") else msg.content
+        return content.takeIf { it.isNotBlank() }?.let { "[$time] $speaker：${it.take(240)}" }.orEmpty()
     }
 
     private suspend fun extractL1(
@@ -600,6 +609,7 @@ class MemoryV2Pipeline(
                     ?: kotlinx.serialization.json.JsonArray(emptyList())
                 arr.mapNotNull { element ->
                     val obj = element.jsonObject
+                    if (obj["recalled"]?.jsonPrimitive?.contentOrNull.equals("true", true)) return@mapNotNull null
                     val speaker = obj["speaker"]?.jsonPrimitive?.contentOrNull
                         ?: obj["sender"]?.jsonPrimitive?.contentOrNull
                         ?: return@mapNotNull null
@@ -612,6 +622,7 @@ class MemoryV2Pipeline(
             }.getOrDefault(emptyList())
             if (items.isNotEmpty()) return "[$time] 群聊「$groupName」中，${items.joinToString("\n").take(800)}"
         }
+        if (msg.type == "ai_json") return ""
         return "[$time] 群聊「$groupName」中，${msg.senderName.ifBlank { "成员" }}：${msg.content.take(240)}"
     }
 

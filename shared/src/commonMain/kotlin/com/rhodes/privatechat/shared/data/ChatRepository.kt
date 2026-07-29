@@ -35,6 +35,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     val cleanup = CleanupRepository(wrapper)
     val memoryV2 = MemoryV2Repository(wrapper)
     val sharedExperiences = SharedExperienceRepository(wrapper)
+    val archives = ChatArchiveRepository(wrapper)
 
     // --- Backward-compatible forwarding methods ---
     val allOperators: Flow<List<Operator>> get() = operators.allOperators
@@ -74,6 +75,11 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun updateMessageContent(id: Long, content: String) = messages.updateMessageContent(id, content)
     suspend fun updateMessageContentAndPreview(sessionId: String, id: Long, content: String, timestamp: Long) =
         messages.updateMessageContentAndPreview(sessionId, id, content, timestamp)
+    suspend fun getDisplayEvents(sessionId: String) = messages.getDisplayEvents(sessionId)
+    suspend fun addDisplayEventIfAbsent(sessionId: String, messageId: Long, segmentIndex: Int) =
+        messages.addDisplayEventIfAbsent(sessionId, messageId, segmentIndex)
+    suspend fun deleteDisplayEvent(messageId: Long, segmentIndex: Int) = messages.deleteDisplayEvent(messageId, segmentIndex)
+    suspend fun deleteMessageDisplayEvents(messageId: Long) = messages.deleteMessageDisplayEvents(messageId)
     suspend fun sendMessage(sessionId: String, message: ChatMessage) = messages.sendMessage(sessionId, message)
     suspend fun restoreMessage(message: ChatMessage) = messages.restoreMessage(message)
     suspend fun getNextMessageId() = messages.getNextMessageId()
@@ -87,6 +93,41 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun searchMessagesInSession(sessionId: String, keyword: String, limit: Long = 200) = messages.searchMessagesInSession(sessionId, keyword, limit)
     suspend fun getMessagesBySessionInRange(sessionId: String, start: Long, end: Long) = messages.getMessagesBySessionInRange(sessionId, start, end)
     suspend fun getMessageDatesBySession(sessionId: String) = messages.getMessageDatesBySession(sessionId)
+    suspend fun getChatArchives(sessionId: String) = archives.getArchives(sessionId)
+    suspend fun getChatArchive(id: String) = archives.getArchive(id)
+    suspend fun getPendingChatArchives() = archives.getPendingArchives()
+    suspend fun saveChatArchive(archive: ChatArchive) = archives.save(archive)
+    suspend fun updateChatArchiveSummary(id: String, summary: String, status: String, now: Long) = archives.updateSummary(id, summary, status, now)
+    suspend fun updateChatArchiveTitle(id: String, title: String, now: Long) = archives.updateTitle(id, title, now)
+    suspend fun updateChatArchiveContext(id: String, contextJson: String, now: Long) = archives.updateContext(id, contextJson, now)
+    suspend fun deleteChatArchive(id: String) = archives.delete(id)
+    suspend fun getChatHistorySegments(sessionId: String) = archives.getHistorySegments(sessionId)
+    suspend fun saveChatHistorySegment(segment: ChatHistorySegment) = archives.saveHistory(segment)
+
+    /** Applies a validated save point atomically so a failed read never leaves an empty chat. */
+    suspend fun restoreChatArchive(sessionId: String, operatorId: String, history: ChatHistorySegment?, messagesToRestore: List<ChatMessage>, summary: Memory) = withContext(Dispatchers.Default) {
+        val db = wrapper.database
+        memoryV2.invalidateDerivedBySession(sessionId)
+        db.transaction {
+            if (history != null) {
+                db.chatArchivesQueries.insertHistorySegment(history.id, history.sessionId, history.title, history.reason, history.messagesJson, history.createdAt)
+            }
+            db.chatDisplayEventsQueries.deleteSessionDisplayEvents(sessionId)
+            db.chatMessagesQueries.deleteSessionMessages(sessionId)
+            db.memoriesQueries.deleteMemoriesBySession(sessionId)
+            db.memoriesQueries.deleteLongTermByOperator(operatorId)
+            db.memoryAnchorsQueries.deleteAnchorsBySession(sessionId)
+            db.vectorMemoriesQueries.deleteVectorsForMemorySession(sessionId)
+            db.memoryItemsQueries.deleteMemoryItemsBySession(sessionId)
+            db.memorySourceQueueQueries.deleteMemorySourcesBySession(sessionId)
+            db.vectorMemoriesQueries.deleteVectorMemoriesBySourceId(sessionId)
+            db.memoriesQueries.insertMemory(summary.sessionId, summary.operatorId, summary.type.name, summary.content, summary.keywords, summary.preferences, summary.taboos, summary.createdAt, summary.expiresAt)
+            messagesToRestore.forEach { message ->
+                db.chatMessagesQueries.insertMessage(message.id, sessionId, message.senderId, message.senderName, message.content, message.type, message.mode, message.emotion, message.activity, message.location, message.narration, message.segmentGroup, message.intimacyChange.toLong(), message.timestamp, if (message.isMe) 1L else 0L)
+            }
+            db.memoryLinksQueries.deleteOrphanedMemoryLinks()
+        }
+    }
 
     suspend fun getShortTermMemory(sessionId: String) = memories.getShortTermMemory(sessionId)
     suspend fun clearSessionPreview(sessionId: String, timestamp: Long) = messages.clearSessionPreview(sessionId, timestamp)
@@ -135,6 +176,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
         val db = wrapper.database
         memoryV2.invalidateDerivedBySession(sessionId)
         db.transaction {
+            db.chatDisplayEventsQueries.deleteSessionDisplayEvents(sessionId)
             db.chatMessagesQueries.deleteSessionMessages(sessionId)
             db.memoriesQueries.deleteMemoriesBySession(sessionId)
             db.memoryAnchorsQueries.deleteAnchorsBySession(sessionId)
@@ -146,6 +188,8 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
             db.vectorMemoriesQueries.deleteVectorMemoriesBySourceId(sessionId)
             db.memoryLinksQueries.deleteOrphanedMemoryLinks()
         }
+        archives.deleteBySession(sessionId)
+        archives.deleteHistoryBySession(sessionId)
     }
 
     /** Removes an operator's private and derived state before deleting the operator row. */
@@ -186,6 +230,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
             .filter { it.sourceKind == MemorySourceKind.PRIVATE_CHAT || it.sourceKind == MemorySourceKind.MANUAL_MEMORY && it.privacy == "private" }
             .map { it.vectorId }.filter { it.isNotBlank() }
         db.transaction {
+            db.chatDisplayEventsQueries.deleteSessionDisplayEvents(sessionId)
             db.chatMessagesQueries.deleteSessionMessages(sessionId)
             db.memoriesQueries.deleteMemoriesBySession(sessionId)
             db.memoriesQueries.deleteLongTermByOperator(operatorId)
@@ -195,6 +240,8 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
             db.memoryItemsQueries.deletePrivateRelationshipMemoryItems("operator", operatorId)
             db.memorySourceQueueQueries.deletePrivateRelationshipSources("operator", operatorId)
             db.vectorMemoriesQueries.deleteVectorMemoriesBySourceId(sessionId)
+            db.chatArchivesQueries.deleteArchivesBySession(sessionId)
+            db.chatArchivesQueries.deleteHistorySegmentsBySession(sessionId)
             db.chatMessagesQueries.insertMessage(systemMessageId, sessionId, "", "系统", "已清空与该角色的私聊关系记录和私密记忆，现在开始新的会话。", "system", mode, "", "", "", "", "", 0L, now, 0L)
         }
         vectorIds

@@ -1,0 +1,27 @@
+CREATE TABLE IF NOT EXISTS chat_archives (
+    id TEXT NOT NULL PRIMARY KEY,
+    sessionId TEXT NOT NULL,
+    operatorId TEXT NOT NULL,
+    title TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    mode TEXT NOT NULL DEFAULT 'online',
+    messagesJson TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    stateJson TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending',
+    createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_archives_session_created ON chat_archives(sessionId, createdAt DESC);
+
+CREATE TABLE IF NOT EXISTS chat_history_segments (
+    id TEXT NOT NULL PRIMARY KEY,
+    sessionId TEXT NOT NULL,
+    title TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    messagesJson TEXT NOT NULL,
+    createdAt INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_history_segments_session_created ON chat_history_segments(sessionId, createdAt DESC);

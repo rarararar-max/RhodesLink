@@ -1,0 +1,10 @@
+CREATE TABLE IF NOT EXISTS chat_display_events (
+    messageId INTEGER NOT NULL,
+    segmentIndex INTEGER NOT NULL DEFAULT -1,
+    sessionId TEXT NOT NULL,
+    revealOrder INTEGER NOT NULL,
+    PRIMARY KEY (messageId, segmentIndex)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_display_events_session_order
+ON chat_display_events(sessionId, revealOrder);

@@ -40,7 +40,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -65,6 +64,8 @@ import com.rhodes.privatechat.ui.common.ThemedDropdownMenu
 import com.rhodes.privatechat.ui.chat.formatChatTime
 import com.rhodes.privatechat.ui.chat.model.ChatUiMessage
 import com.rhodes.privatechat.ui.theme.*
+import com.rhodes.privatechat.shared.data.ChatDisplayEvent
+import kotlinx.coroutines.delay
 
 
 /**
@@ -76,10 +77,11 @@ import com.rhodes.privatechat.ui.theme.*
  * @param onRegenerate 重说回调（私聊专用，null 则不显示）
  * @param onContinue 继续说回调（私聊专用，null 则不显示）
  * @param onSenderClick 点击发送者头像/名称回调（群聊专用，null 则不响应点击）
- * @param progressiveDisplay 是否启用渐进展示（群聊专用）
+ * @param progressiveDisplay 是否启用 ai_json 分段渐进展示
  */
 @Composable
 fun MessageList(
+    displaySessionKey: String,
     messages: List<ChatUiMessage>,
     listState: LazyListState,
     onRecall: (Long, Int) -> Unit,
@@ -87,6 +89,10 @@ fun MessageList(
     onContinue: ((Long) -> Unit)? = null,
     onSenderClick: ((String) -> Unit)? = null,
     progressiveDisplay: Boolean = false,
+    displayEvents: List<ChatDisplayEvent> = emptyList(),
+    displayEventsLoaded: Boolean = false,
+    legacyMessageCutoff: Long = Long.MAX_VALUE,
+    onReveal: (suspend (ChatUiMessage) -> Long)? = null,
     onLoadOlder: (() -> Unit)? = null,
     isLoadingOlder: Boolean = false,
     hasMore: Boolean = false,
@@ -95,66 +101,94 @@ fun MessageList(
     speakingMessageKey: String = "",
     modifier: Modifier = Modifier,
 ) {
-    var displayCount by remember { mutableIntStateOf(Int.MAX_VALUE) }
-    var initialLoadDone by remember { mutableStateOf(false) }
-    var lastMessageCount by remember { mutableIntStateOf(0) }
-    var lastFirstMessageId by remember { mutableStateOf<Long?>(null) }
-    if (progressiveDisplay) {
-        LaunchedEffect(messages.size) {
-            val currentSize = messages.size
-            if (currentSize == 0) {
-                displayCount = 0
-                initialLoadDone = false
-                lastMessageCount = 0
-            } else if (!initialLoadDone) {
-                displayCount = currentSize
-                initialLoadDone = true
-                lastMessageCount = currentSize
-                lastFirstMessageId = messages.firstOrNull()?.id
-            } else if (currentSize > lastMessageCount) {
-                val prepended = lastFirstMessageId != null && messages.firstOrNull()?.id != lastFirstMessageId
-                if (prepended) {
-                    // History pages are prepended; never present them as delayed new messages.
-                    displayCount = currentSize
-                } else {
-                    val newMessageStart = lastMessageCount
-                    for (i in newMessageStart until currentSize) {
-                        // One AI response can expand into several private or group bubbles.
-                        // Keep its first segment immediate, then reveal later segments like a person typing in parts.
-                        if (i > newMessageStart && !messages[i].isMe &&
-                            messages[i].originalMessageId == messages[i - 1].originalMessageId) {
-                            kotlinx.coroutines.delay((1_000L + (Math.random() * 500)).toLong())
-                        }
-                        displayCount = i + 1
-                    }
-                }
-                lastMessageCount = currentSize
-                lastFirstMessageId = messages.firstOrNull()?.id
-            } else if (currentSize < lastMessageCount) {
-                displayCount = currentSize
-                lastMessageCount = currentSize
-                lastFirstMessageId = messages.firstOrNull()?.id
-            } else {
-                displayCount = currentSize
-                lastMessageCount = currentSize
-            }
-        }
-    } else {
-        displayCount = messages.size
-    }
-    val displayMessages = messages.take(displayCount)
+    fun eventKey(message: ChatUiMessage) = "${message.originalMessageId}:${message.segmentIndex}"
+    var localEvents by remember(displaySessionKey) { mutableStateOf(emptyList<ChatDisplayEvent>()) }
+    var legacyMaterialized by remember(displaySessionKey) { mutableStateOf(false) }
+    LaunchedEffect(displayEvents) { localEvents = displayEvents }
 
-    var lastBottomMessageId by remember { mutableStateOf<Long?>(null) }
-    LaunchedEffect(displayMessages.lastOrNull()?.id) {
+    // Histories created before display events existed retain their chronological appearance.
+    LaunchedEffect(displayEventsLoaded, messages, legacyMaterialized, legacyMessageCutoff) {
+        if (!progressiveDisplay || onReveal == null || legacyMaterialized || !displayEventsLoaded || localEvents.isNotEmpty() || messages.isEmpty()) return@LaunchedEffect
+        messages.filter { it.timestamp <= legacyMessageCutoff }.forEach { message ->
+            val order = onReveal(message)
+            localEvents = localEvents + ChatDisplayEvent(message.originalMessageId, message.segmentIndex, order)
+        }
+        legacyMaterialized = true
+    }
+    // User/system bubbles are immediate. Their persisted event puts them ahead of delayed AI segments.
+    LaunchedEffect(messages, localEvents, displayEventsLoaded) {
+        if (!progressiveDisplay || onReveal == null || !displayEventsLoaded || (!legacyMaterialized && localEvents.isEmpty())) return@LaunchedEffect
+        messages.filter { !it.isAiSegment && localEvents.none { event -> event.messageId == it.originalMessageId && event.segmentIndex == it.segmentIndex } }
+            .forEach { message ->
+                val order = onReveal(message)
+                localEvents = localEvents + ChatDisplayEvent(message.originalMessageId, message.segmentIndex, order)
+            }
+    }
+    val nextAi = messages.firstOrNull { message ->
+        message.isAiSegment && localEvents.none { event -> event.messageId == message.originalMessageId && event.segmentIndex == message.segmentIndex }
+    }
+    LaunchedEffect(nextAi?.let(::eventKey), displayEventsLoaded, legacyMaterialized) {
+        val message = nextAi ?: return@LaunchedEffect
+        if (!progressiveDisplay || onReveal == null || !displayEventsLoaded || (!legacyMaterialized && localEvents.isEmpty())) return@LaunchedEffect
+        val priorAiSegmentIsVisible = messages.indexOf(message).takeIf { it > 0 }?.let { index ->
+            val previous = messages[index - 1]
+            previous.isAiSegment && previous.originalMessageId == message.originalMessageId &&
+                localEvents.any { it.messageId == previous.originalMessageId && it.segmentIndex == previous.segmentIndex }
+        } == true
+        if (priorAiSegmentIsVisible) delay((1_000L + (Math.random() * 500)).toLong())
+        if (localEvents.none { it.messageId == message.originalMessageId && it.segmentIndex == message.segmentIndex }) {
+            val order = onReveal(message)
+            localEvents = localEvents + ChatDisplayEvent(message.originalMessageId, message.segmentIndex, order)
+        }
+    }
+    val eventOrder = localEvents.associate { "${it.messageId}:${it.segmentIndex}" to it.revealOrder }
+    val displayMessages = if (!progressiveDisplay) messages else {
+        val historicalWithoutEvent = messages.filter { it.timestamp <= legacyMessageCutoff && eventKey(it) !in eventOrder }
+            .sortedWith(compareBy<ChatUiMessage> { it.timestamp }.thenBy { it.originalMessageId }.thenBy { it.segmentIndex })
+        val revealed = messages.filter { eventKey(it) in eventOrder }
+            .sortedWith(compareBy<ChatUiMessage> { eventOrder.getValue(eventKey(it)) }.thenBy { it.originalMessageId }.thenBy { it.segmentIndex })
+        historicalWithoutEvent + revealed
+    }
+
+    var lastBottomMessageId by remember(displaySessionKey) { mutableStateOf<Long?>(null) }
+    var lastDisplayMessageCount by remember(displaySessionKey) { mutableStateOf(0) }
+    var initialPositioned by remember(displaySessionKey) { mutableStateOf(false) }
+    var prependAnchorKey by remember(displaySessionKey) { mutableStateOf<String?>(null) }
+    var prependAnchorOffset by remember(displaySessionKey) { mutableStateOf(0) }
+    var awaitingPrepend by remember(displaySessionKey) { mutableStateOf(false) }
+    var prependLoadingStarted by remember(displaySessionKey) { mutableStateOf(false) }
+    var initialContentSettled by remember(displaySessionKey) { mutableStateOf(false) }
+
+    // Display-event hydration can update the initial list more than once. Wait for one quiet
+    // frame before positioning so those updates cannot trigger a visible second scroll.
+    LaunchedEffect(displaySessionKey, displayEventsLoaded, displayMessages.lastOrNull()?.id, displayMessages.size) {
+        if (!initialPositioned && displayEventsLoaded && displayMessages.isNotEmpty()) {
+            initialContentSettled = false
+            delay(80)
+            try {
+                // Index zero is the permanent top spacer, so the final message is size.
+                listState.scrollToItem(displayMessages.size)
+            } catch (_: Exception) {
+            }
+            // scrollToItem updates list state synchronously, but LazyColumn applies that state on
+            // the next display frame. Do not reveal the list until that frame has elapsed.
+            delay(16)
+            initialPositioned = true
+            initialContentSettled = true
+        }
+    }
+    LaunchedEffect(displayMessages.lastOrNull()?.id, displayMessages.size) {
         val lastId = displayMessages.lastOrNull()?.id ?: return@LaunchedEffect
         val isInitial = lastBottomMessageId == null
+        val isRemoval = displayMessages.size < lastDisplayMessageCount
         val nearBottom = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= displayMessages.lastIndex - 2 } ?: true
-        if (!isLoadingOlder && (forceScrollToLatest || isInitial || nearBottom)) {
+        if (initialContentSettled && !isRemoval && !isInitial && !isLoadingOlder && (forceScrollToLatest || nearBottom)) {
             try {
-                listState.scrollToItem(displayMessages.size - 1)
+                listState.scrollToItem(displayMessages.size)
             } catch (_: Exception) {}
         }
         lastBottomMessageId = lastId
+        lastDisplayMessageCount = displayMessages.size
     }
 
     // Keep a conversation already at the bottom visible when the IME reduces the viewport.
@@ -162,24 +196,50 @@ fun MessageList(
     LaunchedEffect(imeBottom) {
         if (imeBottom > 0 && displayMessages.isNotEmpty()) {
             val nearBottom = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= displayMessages.lastIndex - 2 } ?: true
-            if (nearBottom) listState.animateScrollToItem(displayMessages.lastIndex)
+            if (nearBottom) listState.animateScrollToItem(displayMessages.size)
         }
     }
 
     LaunchedEffect(listState.firstVisibleItemIndex, displayMessages.size, isLoadingOlder, hasMore) {
-        if (onLoadOlder != null && hasMore && !isLoadingOlder && displayMessages.isNotEmpty() && listState.firstVisibleItemIndex <= 1) {
+        if (initialContentSettled && !awaitingPrepend && onLoadOlder != null && hasMore && !isLoadingOlder && displayMessages.isNotEmpty() && listState.firstVisibleItemIndex <= 1) {
+            val anchorMessage = displayMessages.getOrNull((listState.firstVisibleItemIndex - 1).coerceAtLeast(0))
+            prependAnchorKey = anchorMessage?.let(::eventKey)
+            prependAnchorOffset = listState.firstVisibleItemScrollOffset
+            awaitingPrepend = true
+            prependLoadingStarted = false
             onLoadOlder()
         }
     }
 
-    LazyColumn(state = listState, modifier = modifier.fillMaxWidth()) {
+    // Prepending an older page shifts every list index. Restore the previously visible message
+    // and its pixel offset so scrolling upward never makes the reader lose their place.
+    LaunchedEffect(isLoadingOlder, displayMessages.size, prependAnchorKey, awaitingPrepend, prependLoadingStarted) {
+        if (awaitingPrepend && isLoadingOlder) {
+            prependLoadingStarted = true
+        }
+        if (!isLoadingOlder && awaitingPrepend && prependLoadingStarted) {
+            val key = prependAnchorKey ?: return@LaunchedEffect
+            val index = displayMessages.indexOfFirst { eventKey(it) == key }
+            if (index >= 0) {
+                try {
+                    listState.scrollToItem(index + 1, prependAnchorOffset)
+                } catch (_: Exception) {
+                }
+            }
+            prependAnchorKey = null
+            awaitingPrepend = false
+            prependLoadingStarted = false
+        }
+    }
+
+    LazyColumn(state = listState, modifier = modifier.fillMaxWidth().alpha(if (initialContentSettled || displayMessages.isEmpty()) 1f else 0f)) {
         item { Spacer(modifier = Modifier.height(8.dp)) }
         if (isLoadingOlder) {
             item {
                 Text("加载历史消息...", fontSize = 12.sp, color = TextTertiary, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), textAlign = TextAlign.Center)
             }
         }
-        items(displayMessages.size, key = { i -> "${displayMessages[i].originalMessageId}_${displayMessages[i].segmentIndex}_${displayMessages[i].id}_$i" }) { i ->
+        items(displayMessages.size, key = { i -> "${displayMessages[i].originalMessageId}_${displayMessages[i].segmentIndex}" }) { i ->
             val msg = displayMessages[i]
             val prevTime = if (i > 0) displayMessages[i - 1].timestamp else 0L
             val showTime = prevTime == 0L || (msg.timestamp - prevTime) > 3 * 60 * 1000

@@ -772,6 +772,30 @@ class SettingsRepository(private val settings: ObservableSettings) {
     fun putGroupAuto(groupId: String, value: Boolean) =
         putBoolean("group_auto_$groupId", value)
 
+    /** Durable one-turn plan used by the foreground timer and WorkManager fallback. */
+    data class GroupAutoChatPlan(val token: String, val dueAt: Long, val round: Int)
+
+    fun getGroupAutoChatPlan(groupId: String): GroupAutoChatPlan = GroupAutoChatPlan(
+        getString("group_auto_plan_token_$groupId", ""),
+        getLong("group_auto_plan_due_$groupId", 0L),
+        getInt("group_auto_plan_round_$groupId", 0)
+    )
+
+    fun putGroupAutoChatPlan(groupId: String, plan: GroupAutoChatPlan) {
+        putString("group_auto_plan_token_$groupId", plan.token)
+        putLong("group_auto_plan_due_$groupId", plan.dueAt)
+        putInt("group_auto_plan_round_$groupId", plan.round)
+    }
+
+    fun clearGroupAutoChatPlan(groupId: String) {
+        remove("group_auto_plan_token_$groupId")
+        remove("group_auto_plan_due_$groupId")
+        remove("group_auto_plan_round_$groupId")
+    }
+
+    fun isGroupAutoChatComplete(groupId: String): Boolean = getBoolean("group_auto_plan_complete_$groupId", false)
+    fun putGroupAutoChatComplete(groupId: String, value: Boolean) = putBoolean("group_auto_plan_complete_$groupId", value)
+
     fun getGroupEventAuto(groupId: String): Boolean =
         getBoolean("group_event_auto_$groupId", false)
 

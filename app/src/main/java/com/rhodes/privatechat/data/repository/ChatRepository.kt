@@ -32,6 +32,11 @@ class ChatRepository(
     suspend fun updateMessageContent(id: Long, content: String) = shared.updateMessageContent(id, content)
     suspend fun updateMessageContentAndPreview(sessionId: String, id: Long, content: String, timestamp: Long) =
         shared.updateMessageContentAndPreview(sessionId, id, content, timestamp)
+    suspend fun getDisplayEvents(sessionId: String) = shared.getDisplayEvents(sessionId)
+    suspend fun addDisplayEventIfAbsent(sessionId: String, messageId: Long, segmentIndex: Int) =
+        shared.addDisplayEventIfAbsent(sessionId, messageId, segmentIndex)
+    suspend fun deleteDisplayEvent(messageId: Long, segmentIndex: Int) = shared.deleteDisplayEvent(messageId, segmentIndex)
+    suspend fun deleteMessageDisplayEvents(messageId: Long) = shared.deleteMessageDisplayEvents(messageId)
 
     suspend fun sendMessage(sessionId: String, message: ChatMessage) = shared.sendMessage(sessionId, message)
 
@@ -177,6 +182,18 @@ class ChatRepository(
     suspend fun deleteSession(id: String) = shared.deleteSession(id)
 
     suspend fun deleteSessionMessages(sessionId: String) = shared.deleteSessionMessages(sessionId)
+    suspend fun getChatArchives(sessionId: String) = shared.getChatArchives(sessionId)
+    suspend fun getChatArchive(id: String) = shared.getChatArchive(id)
+    suspend fun getPendingChatArchives() = shared.getPendingChatArchives()
+    suspend fun saveChatArchive(archive: ChatArchive) = shared.saveChatArchive(archive)
+    suspend fun updateChatArchiveSummary(id: String, summary: String, status: String, now: Long) = shared.updateChatArchiveSummary(id, summary, status, now)
+    suspend fun updateChatArchiveTitle(id: String, title: String, now: Long) = shared.updateChatArchiveTitle(id, title, now)
+    suspend fun updateChatArchiveContext(id: String, contextJson: String, now: Long) = shared.updateChatArchiveContext(id, contextJson, now)
+    suspend fun deleteChatArchive(id: String) = shared.deleteChatArchive(id)
+    suspend fun getChatHistorySegments(sessionId: String) = shared.getChatHistorySegments(sessionId)
+    suspend fun saveChatHistorySegment(segment: ChatHistorySegment) = shared.saveChatHistorySegment(segment)
+    suspend fun restoreChatArchive(sessionId: String, operatorId: String, history: ChatHistorySegment?, messages: List<ChatMessage>, summary: Memory) =
+        shared.restoreChatArchive(sessionId, operatorId, history, messages, summary)
 
     suspend fun deleteMessage(id: Long) = shared.deleteMessage(id)
 

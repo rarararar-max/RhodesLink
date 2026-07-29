@@ -64,25 +64,25 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
     val listState = rememberLazyListState()
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    var bgUri by remember { mutableStateOf<String?>(settings.getString("gbg_$groupId", "")) }
-    var cropTarget by remember { mutableStateOf<Uri?>(null) }
+    var bgUri by remember(groupId) { mutableStateOf<String?>(settings.getString("gbg_$groupId", "")) }
+    var cropTarget by remember(groupId) { mutableStateOf<Uri?>(null) }
     val bgPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
             cropTarget = com.rhodes.privatechat.util.copyToCache(ctx, uri)
             if (cropTarget == null) android.widget.Toast.makeText(ctx, "无法读取此图片，请尝试选择JPG/PNG图片", android.widget.Toast.LENGTH_SHORT).show()
         }
     }
-    var showBgReset by remember { mutableStateOf(false) }
-    var showShare by remember { mutableStateOf(false) }
-    var showClearConfirm by remember { mutableStateOf(false) }
+    var showBgReset by remember(groupId) { mutableStateOf(false) }
+    var showShare by remember(groupId) { mutableStateOf(false) }
+    var showClearConfirm by remember(groupId) { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
-    var currentMode by remember { mutableStateOf(settings.getGroupMode(groupId)) }
-    val showModePicker = remember { mutableStateOf(false) }
-    var inputText by rememberSaveable { mutableStateOf("") }
-    var pendingImageUri by rememberSaveable { mutableStateOf("") }
-    var imageSending by rememberSaveable { mutableStateOf(false) }
-    var forceScrollThroughMessageCount by remember { mutableStateOf(0) }
-    var recordingVoice by rememberSaveable { mutableStateOf(false) }
+    var currentMode by remember(groupId) { mutableStateOf(settings.getGroupMode(groupId)) }
+    val showModePicker = remember(groupId) { mutableStateOf(false) }
+    var inputText by rememberSaveable(groupId) { mutableStateOf("") }
+    var pendingImageUri by rememberSaveable(groupId) { mutableStateOf("") }
+    var imageSending by rememberSaveable(groupId) { mutableStateOf(false) }
+    var forceScrollThroughMessageCount by remember(groupId) { mutableStateOf(0) }
+    var recordingVoice by rememberSaveable(groupId) { mutableStateOf(false) }
     val audioController = remember { LocalAudioController(ctx) }
     var voiceEnabled by rememberSaveable(groupId) { mutableStateOf(settings.getBoolean("group_tts_$groupId", false)) }
     val enteredAt = remember(groupId) { System.currentTimeMillis() }
@@ -99,12 +99,19 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
     val groupLoading by viewModel.groupLoading.collectAsState()
     val sessions by viewModel.allSessions.collectAsState()
     val groupSession = remember(groupId, sessions) { sessions.find { it.id == groupId } }
+    val messageListOpenedAt = remember(groupId) { System.currentTimeMillis() }
+    var displayEvents by remember(groupId) { mutableStateOf(emptyList<com.rhodes.privatechat.shared.data.ChatDisplayEvent>()) }
+    var displayEventsLoaded by remember(groupId) { mutableStateOf(false) }
     val sendError by viewModel.groupChatViewModel.lastSendError.collectAsState()
     LaunchedEffect(sendError) {
         if (sendError.isNotBlank()) {
             android.widget.Toast.makeText(ctx, sendError, android.widget.Toast.LENGTH_LONG).show()
             viewModel.groupChatViewModel.clearSendError()
         }
+    }
+    LaunchedEffect(groupId) {
+        if (groupId.isNotBlank()) displayEvents = viewModel.getDisplayEvents(groupId)
+        displayEventsLoaded = true
     }
 
     DisposableEffect(groupId) {
@@ -146,6 +153,10 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
             ChatTrace.e("GroupScreen", "parse.ERROR group=$groupId raw=${groupMessages.size} err=${e.message}", e)
             emptyList()
         }
+    }
+
+    LaunchedEffect(groupMessages, groupId) {
+        if (groupId.isNotBlank()) displayEvents = viewModel.getDisplayEvents(groupId)
     }
 
     LaunchedEffect(uiMessages, voiceEnabled, allOperators) {
@@ -239,6 +250,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
 
             Column(modifier = Modifier.weight(1f).imePadding().clipToBounds()) {
                 MessageList(
+                    displaySessionKey = groupId,
                     messages = uiMessages,
                     listState = listState,
                     onRecall = { msgId, segIdx -> viewModel.recallMessageSegment(msgId, segIdx) },
@@ -255,6 +267,14 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                     },
                     speakingMessageKey = speakingMessageKey,
                     progressiveDisplay = true,
+                    displayEvents = displayEvents,
+                    displayEventsLoaded = displayEventsLoaded,
+                    legacyMessageCutoff = messageListOpenedAt,
+                    onReveal = { message ->
+                        val order = viewModel.addDisplayEventIfAbsent(groupId, message.originalMessageId, message.segmentIndex)
+                        displayEvents = viewModel.getDisplayEvents(groupId)
+                        order
+                    },
                     onLoadOlder = { viewModel.loadOlderGroupMessages() },
                     isLoadingOlder = isLoadingOlder,
                     hasMore = hasMoreMessages,

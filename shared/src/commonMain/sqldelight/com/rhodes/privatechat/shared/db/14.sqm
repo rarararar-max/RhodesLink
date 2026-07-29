@@ -1,0 +1,29 @@
+CREATE TABLE IF NOT EXISTS relationships (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    operatorId TEXT NOT NULL,
+    relatedOperatorId TEXT NOT NULL,
+    relatedOperatorName TEXT NOT NULL,
+    type TEXT NOT NULL,
+    intimacy INTEGER NOT NULL DEFAULT 0,
+    isPreset INTEGER NOT NULL DEFAULT 0,
+    note TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS shared_experiences (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    sourceKind TEXT NOT NULL,
+    sourceRefId TEXT NOT NULL,
+    groupId TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL,
+    importance INTEGER NOT NULL DEFAULT 50,
+    status TEXT NOT NULL DEFAULT 'active',
+    createdAt INTEGER NOT NULL DEFAULT 0,
+    expiresAt INTEGER NOT NULL DEFAULT 9223372036854775807
+);
+
+CREATE TABLE IF NOT EXISTS shared_experience_participants (
+    experienceId INTEGER NOT NULL,
+    operatorId TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'participant',
+    PRIMARY KEY(experienceId, operatorId)
+);

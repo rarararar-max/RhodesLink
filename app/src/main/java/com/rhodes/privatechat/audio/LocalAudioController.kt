@@ -142,10 +142,10 @@ class LocalAudioController(private val context: Context) {
                 }
                 setDataSource(file.absolutePath)
                 setVolume(volume.coerceIn(0f, 1f), volume.coerceIn(0f, 1f))
-                prepareAsync()
                 setOnPreparedListener { it.start() }
                 setOnCompletionListener { finishPlayback(true) }
                 setOnErrorListener { _, _, _ -> finishPlayback(false); true }
+                prepareAsync()
             }
         }.getOrElse { finishPlayback(false) }
     }

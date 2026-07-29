@@ -107,7 +107,7 @@ fun ChatScreen(
     viewModel: MainViewModel, onBack: () -> Unit,
     operator: Operator,
     onEditOperator: () -> Unit = {}, onViewStatus: () -> Unit = {},
-    onViewHistory: () -> Unit = {}, onVoiceCall: () -> Unit = {},
+    onViewHistory: () -> Unit = {}, onViewArchives: () -> Unit = {}, onVoiceCall: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val settings: SettingsRepository = koinInject()
@@ -121,6 +121,10 @@ fun ChatScreen(
     val scrollToMessageId by viewModel.scrollToMessageId.collectAsState()
     val currentOp by viewModel.selectedOperator.collectAsState()
     val currentSession by viewModel.currentSession.collectAsState()
+    val displaySessionId = currentSession?.id.orEmpty()
+    val messageListOpenedAt = remember(displaySessionId) { System.currentTimeMillis() }
+    var displayEvents by remember(displaySessionId) { mutableStateOf(emptyList<com.rhodes.privatechat.shared.data.ChatDisplayEvent>()) }
+    var displayEventsLoaded by remember(displaySessionId) { mutableStateOf(false) }
     var privateTurnState by remember(currentSession?.id) {
         mutableStateOf(currentSession?.id?.let(viewModel::getPrivateTurnStateForHeader))
     }
@@ -134,8 +138,10 @@ fun ChatScreen(
         settings.visionModelName.isNotBlank() &&
         settings.visionApiKey.ifBlank { settings.apiKey }.isNotBlank()
 
-    LaunchedEffect(currentSession?.id) {
-        val sessionId = currentSession?.id ?: return@LaunchedEffect
+    LaunchedEffect(displaySessionId) {
+        val sessionId = displaySessionId.ifBlank { return@LaunchedEffect }
+        displayEvents = viewModel.getDisplayEvents(sessionId)
+        displayEventsLoaded = true
         while (true) {
             privateTurnState = viewModel.getPrivateTurnStateForHeader(sessionId)
             delay(30_000)
@@ -145,6 +151,7 @@ fun ChatScreen(
     LaunchedEffect(rawMessages, currentSession?.id) {
         currentSession?.id?.let { sessionId ->
             privateTurnState = viewModel.getPrivateTurnStateForHeader(sessionId)
+            displayEvents = viewModel.getDisplayEvents(sessionId)
         }
     }
 
@@ -207,7 +214,7 @@ fun ChatScreen(
         }
     }
 
-    var bgUri by remember { mutableStateOf<String?>(settings.getString("bg_${op.id}", "")) }
+    var bgUri by remember(op.id) { mutableStateOf<String?>(settings.getString("bg_${op.id}", "")) }
     var cropTarget by remember { mutableStateOf<Uri?>(null) }
     val bgPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
@@ -299,6 +306,11 @@ fun ChatScreen(
                         leadingIcon = { Icon(Icons.Default.DateRange, null, tint = TextPrimary) },
                         onClick = { onViewHistory() }
                     )
+                    ChatDropdownMenuItem(
+                        text = { Text("剧情存档") },
+                        leadingIcon = { Icon(Icons.Default.Restore, null, tint = TextPrimary) },
+                        onClick = onViewArchives
+                    )
                     HorizontalDivider(color = Stroke)
                     ChatDropdownMenuItem(
                         text = { Text("编辑干员") },
@@ -328,9 +340,18 @@ fun ChatScreen(
 
             Column(modifier = Modifier.weight(1f).imePadding().clipToBounds()) {
                 MessageList(
+                    displaySessionKey = displaySessionId,
                     messages = messages,
                     listState = listState,
                     progressiveDisplay = true,
+                    displayEvents = displayEvents,
+                    displayEventsLoaded = displayEventsLoaded,
+                    legacyMessageCutoff = messageListOpenedAt,
+                    onReveal = { message ->
+                        val order = viewModel.addDisplayEventIfAbsent(displaySessionId, message.originalMessageId, message.segmentIndex)
+                        displayEvents = viewModel.getDisplayEvents(displaySessionId)
+                        order
+                    },
                     onRecall = { msgId, segIdx -> viewModel.recallMessageSegment(msgId, segIdx) },
                     onRegenerate = { viewModel.regenerateAiMessage(it) },
                     onContinue = { viewModel.continueAiMessage(it) },

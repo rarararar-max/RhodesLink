@@ -46,9 +46,13 @@ fun PermissionsScreen(
         modifier = modifier.fillMaxSize().background(BG).systemBarsPadding(),
         icon = { Icon(Icons.Default.Build, null, tint = Primary) },
         onSaveRequest = { completeSave ->
-            if (pendingDeletionIds.isEmpty()) completeSave()
+            val finish = {
+                completeSave()
+                viewModel.refreshAutoGroupChats()
+            }
+            if (pendingDeletionIds.isEmpty()) finish()
             else {
-                finishSave = completeSave
+                finishSave = finish
                 showDeleteConfirm = true
             }
         }
@@ -152,7 +156,7 @@ private fun GroupPermTab(groups: List<com.rhodes.privatechat.data.db.entity.Chat
                         }
                         Switch(checked = idleAuto, onCheckedChange = { b ->
                             idleAuto = b
-                            viewModel.setAutoGroupChatEnabled(g.id, b)
+                            settings.putGroupAuto(g.id, b)
                         }, colors = SwitchDefaults.colors(checkedThumbColor = Primary, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
                     }
                     HorizontalDivider(color = Divider)

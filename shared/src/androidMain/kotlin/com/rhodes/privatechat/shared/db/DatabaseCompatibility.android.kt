@@ -17,6 +17,7 @@ object DatabaseCompatibility {
         if (!dbFile.exists()) return
         try {
             SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+                ensureMahjongSavesTable(db)
                 val memoryColumnsBefore = existingColumns(db, "memory_anchors")
                 val needsMemoryAnchorReset = memoryAnchorCompatibilityColumns.any { it.first !in memoryColumnsBefore }
                 val userVersion = db.rawQuery("PRAGMA user_version", null).use { cursor ->
@@ -71,6 +72,7 @@ object DatabaseCompatibility {
     }
 
     private fun ensureCompatibilitySchema(db: SQLiteDatabase) {
+        ensureMahjongSavesTable(db)
         ensureOperatorsCompatibility(db)
         db.execSQL("""
             CREATE TABLE IF NOT EXISTS chat_display_events (
@@ -133,6 +135,14 @@ object DatabaseCompatibility {
             columns = memoryItemCompatibilityColumns
         )
         val newTables = mapOf(
+            "mahjong_saves" to """
+                CREATE TABLE IF NOT EXISTS mahjong_saves (
+                    id TEXT NOT NULL PRIMARY KEY DEFAULT 'current',
+                    saveJson TEXT NOT NULL,
+                    ruleType TEXT NOT NULL DEFAULT '',
+                    savedAt INTEGER NOT NULL DEFAULT 0
+                )
+            """.trimIndent(),
             "memory_batches" to """
                 CREATE TABLE IF NOT EXISTS memory_batches (
                     id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -182,6 +192,17 @@ object DatabaseCompatibility {
         if (tableExists(db, "vector_memories") && "embeddingSignature" !in existingColumns(db, "vector_memories")) {
             db.execSQL("ALTER TABLE vector_memories ADD COLUMN embeddingSignature TEXT NOT NULL DEFAULT ''")
         }
+    }
+
+    private fun ensureMahjongSavesTable(db: SQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS mahjong_saves (
+                id TEXT NOT NULL PRIMARY KEY DEFAULT 'current',
+                saveJson TEXT NOT NULL,
+                ruleType TEXT NOT NULL DEFAULT '',
+                savedAt INTEGER NOT NULL DEFAULT 0
+            )
+        """.trimIndent())
     }
 
     private fun ensureOperatorsCompatibility(db: SQLiteDatabase) {

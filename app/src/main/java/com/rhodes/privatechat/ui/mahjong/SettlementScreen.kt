@@ -12,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,6 +44,21 @@ fun SettlementScreen(
             val isWinner = result.winnerName == r.name || r.rank == 1
             val line = if (player?.isHuman == true) "" else AiChat.settlementLine(player, r.name, isWinner, result.winType == "流局", r.rank, r.netGain).substringAfter("：")
             (r.opId.ifBlank { r.name }) to line
+        }
+    }
+    val generatedLines = remember(result.gameId) { mutableStateMapOf<String, String>() }
+    LaunchedEffect(result.gameId) {
+        result.rankings.forEach { ranking ->
+            val player = players.find { it.opId == ranking.opId || it.name == ranking.name }
+            if (player?.isHuman == true) return@forEach
+            val key = ranking.opId.ifBlank { ranking.name }
+            val fallback = settlementLines[key].orEmpty()
+            onGenerateLine?.invoke(
+                player, ranking.name, result.winnerName == ranking.name || ranking.rank == 1,
+                result.winType == "流局", ranking.rank, ranking.netGain, result.summary, fallback
+            ) { generated ->
+                if (generated.isNotBlank()) generatedLines[key] = generated
+            }
         }
     }
     Box(Modifier.fillMaxSize()) {
@@ -79,7 +95,8 @@ fun SettlementScreen(
                 val player = players.find { it.opId == r.opId || it.name == r.name }
                 val shouldSpeak = player?.isHuman != true
                 val isWinner = result.winnerName == r.name || r.rank == 1
-                val line = settlementLines[r.opId.ifBlank { r.name }].orEmpty()
+                val lineKey = r.opId.ifBlank { r.name }
+                val line = generatedLines[lineKey] ?: settlementLines[lineKey].orEmpty()
                 Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(if (r.rank == 1) Color(0xFFFFD54F).copy(alpha = 0.14f) else Color.White.copy(alpha = 0.08f)).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(medal, fontSize = 20.sp)
                     Spacer(Modifier.width(8.dp))
@@ -94,7 +111,7 @@ fun SettlementScreen(
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
                         Text(r.name, fontSize = 16.sp, fontWeight = if (r.rank <= 2) FontWeight.SemiBold else FontWeight.Normal, color = Color.White)
-                        if (r.yakus.isNotEmpty()) Text("牌型：" + r.yakus.joinToString("·"), fontSize = 11.sp, color = Color(0xFFFFD54F))
+                        if (r.yakus.isNotEmpty()) Text("牌型：${r.yakus.joinToString("·")} · ${r.han}点", fontSize = 11.sp, color = Color(0xFFFFD54F))
                         if (shouldSpeak && line.isNotBlank()) Text(line, fontSize = 11.sp, color = Color.White.copy(alpha = 0.68f), lineHeight = 15.sp)
                     }
                     Column(horizontalAlignment = Alignment.End) {

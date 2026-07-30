@@ -67,6 +67,20 @@ object DailyContentScheduler {
         }
     }
 
+    /** Replaces only today's pending deliveries after the user saves new automatic-content settings. */
+    fun rebuildTodayPlan(context: Context, repository: ChatRepository, settings: SettingsRepository) = runBlocking {
+        val cycle = cycleId()
+        val operators = repository.getAllOperatorsSync()
+        val workManager = WorkManager.getInstance(context)
+        operators.forEach { op ->
+            // dailyMomentTarget is capped at three, so these cover every possible old plan.
+            repeat(3) { index -> workManager.cancelUniqueWork(workName(cycle, TYPE_MOMENT, op.id, index.toString())) }
+            workManager.cancelUniqueWork(workName(cycle, TYPE_PRIVATE, op.id, "0"))
+        }
+        settings.remove("daily_content_planned_$cycle")
+        ensureTodayPlan(context, repository, settings)
+    }
+
     private suspend fun hasConversationContext(repository: ChatRepository, operatorId: String): Boolean {
         val session = repository.getSessionByOperator(operatorId)
         return session != null && (repository.getMessagesSync(session.id).isNotEmpty() ||
@@ -75,7 +89,7 @@ object DailyContentScheduler {
 
     private fun schedule(context: Context, type: String, operatorId: String, deliveryId: String, scheduledAt: Long) {
         val cycle = cycleId()
-        val name = "daily-content-$cycle-$type-$operatorId-$deliveryId"
+        val name = workName(cycle, type, operatorId, deliveryId)
         val request = OneTimeWorkRequestBuilder<DailyContentWorker>()
             .setInitialDelay((scheduledAt - System.currentTimeMillis()).coerceAtLeast(0), TimeUnit.MILLISECONDS)
             .setBackoffCriteria(BackoffPolicy.LINEAR, 15, TimeUnit.MINUTES)
@@ -84,6 +98,9 @@ object DailyContentScheduler {
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(name, ExistingWorkPolicy.KEEP, request)
     }
+
+    private fun workName(cycle: String, type: String, operatorId: String, deliveryId: String) =
+        "daily-content-$cycle-$type-$operatorId-$deliveryId"
 
     fun cycleId(now: Long = System.currentTimeMillis()): String {
         val cal = Calendar.getInstance(zone).apply { timeInMillis = now }

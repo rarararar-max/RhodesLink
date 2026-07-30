@@ -320,28 +320,52 @@ class MemoryV2Pipeline(
         }
     }
 
-    suspend fun buildPrivateMemoryContext(operatorId: String, limitL1: Int, limitL2: Int, limitL3: Int, query: String = ""): String {
-        val personal = buildOwnerMemoryContext("operator", operatorId, limitL1, limitL2, limitL3, query)
+    suspend fun buildPrivateMemoryContext(
+        operatorId: String,
+        limitL1: Int,
+        limitL2: Int,
+        limitL3: Int,
+        query: String = "",
+        applyPrivateSourceFilter: Boolean = false,
+        allowedSources: Set<String>? = null,
+    ): String {
+        val sourcePolicy = allowedSources ?: if (applyPrivateSourceFilter) privateChatAllowedSources() else null
+        if (sourcePolicy != null && sourcePolicy.isEmpty()) return ""
+        val personal = buildOwnerMemoryContext(
+            "operator", operatorId, limitL1, limitL2, limitL3, query,
+            sourcePolicy
+        )
         return listOf(
             personal.takeIf { it.isNotBlank() },
         ).filterNotNull().joinToString("\n")
     }
 
     /** Private chat prioritizes recent facts without letting long-term memories fill the candidate pool. */
-    suspend fun buildPrivateChatMemoryContext(operatorId: String, query: String): String {
+    suspend fun buildPrivateChatMemoryContext(
+        operatorId: String,
+        query: String,
+        allowedSources: Set<String> = privateChatAllowedSources(),
+        allowPrivateVisualRecall: Boolean = settings.privateRecallPrivateChatMemory,
+    ): String {
         if (query.isBlank()) return ""
         val now = System.currentTimeMillis()
         val vectorService = memoryVectorService ?: return ""
         val budget = privateRecallBudget(settings.memoryRecallMode)
         val recentCutoff = now - 30L * 86_400_000L
         val candidates = buildList {
-            addAll(recallPrivateTier(vectorService, operatorId, query, "memory_v2_l1", budget.recentL1, recentCutoff, Long.MAX_VALUE, true, now))
-            addAll(recallPrivateTier(vectorService, operatorId, query, "memory_v2_l1", budget.olderL1, 0L, recentCutoff, false, now))
-            addAll(recallPrivateTier(vectorService, operatorId, query, "memory_v2_l2", budget.l2, 0L, Long.MAX_VALUE, false, now))
-            addAll(recallPrivateTier(vectorService, operatorId, query, "memory_v2_l3", budget.l3, 0L, Long.MAX_VALUE, false, now))
-            addAll(recallPrivateTier(vectorService, operatorId, query, "manual_memory", budget.manual, 0L, Long.MAX_VALUE, false, now))
-            if (isVisualRecallQuery(query)) {
-                addAll(recallPrivateTier(vectorService, operatorId, query, "anchor_vision", 10, recentCutoff, Long.MAX_VALUE, true, now))
+            addAll(recallPrivateTier(vectorService, operatorId, query, "memory_v2_l1", budget.recentL1, recentCutoff, Long.MAX_VALUE, true, now, allowedSources))
+            addAll(recallPrivateTier(vectorService, operatorId, query, "memory_v2_l1", budget.olderL1, 0L, recentCutoff, false, now, allowedSources))
+            addAll(recallPrivateTier(vectorService, operatorId, query, "memory_v2_l2", budget.l2, 0L, Long.MAX_VALUE, false, now, allowedSources))
+            addAll(recallPrivateTier(vectorService, operatorId, query, "memory_v2_l3", budget.l3, 0L, Long.MAX_VALUE, false, now, allowedSources))
+            if (MemorySourceKind.MANUAL_MEMORY.name in allowedSources) {
+                addAll(recallPrivateTier(
+                    vectorService, operatorId, query, "manual_memory", budget.manual, 0L,
+                    Long.MAX_VALUE, false, now, setOf(MemorySourceKind.MANUAL_MEMORY.name)
+                ))
+            }
+            if (isVisualRecallQuery(query) && allowPrivateVisualRecall) {
+                // Legacy visual anchors predate source-kind tags; they are private owner-scoped records.
+                addAll(recallPrivateTier(vectorService, operatorId, query, "anchor_vision", 10, recentCutoff, Long.MAX_VALUE, true, now, null))
             }
         }.distinctBy { it.id }
 
@@ -375,16 +399,27 @@ class MemoryV2Pipeline(
         maxCreatedAt: Long,
         preferRecent: Boolean,
         now: Long,
+        allowedSources: Set<String>?,
     ): List<VectorMemory> {
-        if (limit <= 0) return emptyList()
+        if (limit <= 0 || allowedSources?.isEmpty() == true) return emptyList()
         return runCatching {
             vectorService.search(VectorSearchRequest(
                 ownerType = "operator", ownerId = operatorId, query = query,
                 limit = limit, sourceTypes = listOf(sourceType), minScore = 0.0, now = now,
                 candidateLimit = limit, minCreatedAt = minCreatedAt,
                 maxCreatedAt = maxCreatedAt, candidateSourceType = sourceType, preferRecentCandidates = preferRecent,
+                sourceKinds = allowedSources?.toList().orEmpty(),
             ))
         }.getOrDefault(emptyList())
+    }
+
+    fun privateChatAllowedSources(): Set<String> = buildSet {
+        if (settings.privateRecallPrivateChatMemory) add(MemorySourceKind.PRIVATE_CHAT.name)
+        if (settings.privateRecallGroupChatMemory) add(MemorySourceKind.GROUP_CHAT.name)
+        if (settings.privateRecallMomentMemory) add(MemorySourceKind.MOMENT.name)
+        if (settings.privateRecallMomentCommentMemory) add(MemorySourceKind.MOMENT_COMMENT.name)
+        if (settings.privateRecallDiaryMemory) add(MemorySourceKind.DIARY.name)
+        if (settings.privateRecallManualMemory) add(MemorySourceKind.MANUAL_MEMORY.name)
     }
 
     private fun minimumPrivateSimilarity(sourceType: String, memoryType: String, query: String): Double {
@@ -467,6 +502,7 @@ class MemoryV2Pipeline(
                         query = query,
                         limit = policy.candidateLimit,
                         sourceTypes = listOf("memory_v2_l1", "memory_v2_l2", "memory_v2_l3"),
+                        sourceKinds = listOf(MemorySourceKind.PRIVATE_CHAT.name),
                         minScore = 0.16,
                         now = now,
                         candidateLimit = 50,
@@ -503,13 +539,23 @@ class MemoryV2Pipeline(
             .orEmpty()
     }
 
-    suspend fun buildPublicMemoryContext(query: String, limit: Int = 3): String =
-        buildOwnerMemoryContext("global", "public", limit, 0, 0, query)
+    suspend fun buildPublicMemoryContext(
+        query: String,
+        limit: Int = 3,
+        allowedSources: Set<String> = buildSet {
+            if (settings.privateRecallMomentMemory) add(MemorySourceKind.MOMENT.name)
+            if (settings.privateRecallMomentCommentMemory) add(MemorySourceKind.MOMENT_COMMENT.name)
+        },
+    ): String {
+        return if (allowedSources.isEmpty()) "" else buildOwnerMemoryContext(
+            "global", "public", limit, 0, 0, query, allowedSources
+        )
+    }
 
-    suspend fun buildOwnerMemoryContext(ownerType: String, ownerId: String, limitL1: Int, limitL2: Int, limitL3: Int, query: String = ""): String {
+    suspend fun buildOwnerMemoryContext(ownerType: String, ownerId: String, limitL1: Int, limitL2: Int, limitL3: Int, query: String = "", allowedSources: Set<String>? = null): String {
         val now = System.currentTimeMillis()
         val vectorService = memoryVectorService ?: return ""
-        if (query.isBlank()) return ""
+        if (query.isBlank() || allowedSources?.isEmpty() == true) return ""
         val candidateLimit = when (settings.memoryRecallMode) {
             "fast" -> 100
             "deep" -> 700
@@ -523,6 +569,7 @@ class MemoryV2Pipeline(
                     query = query,
                     limit = maxOf(limitL1, limitL2, limitL3).coerceIn(2, 8),
                     sourceTypes = listOf("memory_v2_l1", "memory_v2_l2", "memory_v2_l3", "manual_memory"),
+                    sourceKinds = allowedSources?.toList().orEmpty(),
                     minScore = if (settings.memoryRecallMode == "fast") 0.24 else 0.16,
                     now = now,
                     candidateLimit = candidateLimit,

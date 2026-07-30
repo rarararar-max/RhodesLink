@@ -71,6 +71,9 @@ enum class MatchMode { QUICK, EAST, HALF }
 
 @Serializable
 data class GameState(
+    // Missing on older JSON saves means version 1 and is intentionally not resumed.
+    val saveVersion: Int = 1,
+    var gameId: String = "",
     val players: MutableList<PlayerState> = mutableListOf(),
     val ruleType: String = "basic_cn",
     val roundWind: Seat = Seat.EAST,
@@ -90,7 +93,31 @@ data class GameState(
     var chatLog: MutableList<String> = mutableListOf(),
     var matchStatus: String = "playing"
 ) {
+    fun isCompatibleSave(): Boolean {
+        if (saveVersion != CURRENT_SAVE_VERSION || players.size != 4 || wall.any { it !in Tile.allTiles() }) return false
+        if (players.count { it.isHuman } != 1 || players.map { it.seat }.toSet().size != 4) return false
+        if (players.map { it.opId }.any { it.isBlank() } || players.map { it.opId }.toSet().size != 4) return false
+        if (players.any { player ->
+                player.melds.size > 4 || player.melds.any { meld ->
+                    when (meld.type) {
+                        MeldType.CHI -> meld.tiles.size != 3 || meld.tiles.any { it.isHonor() } ||
+                            meld.tiles.map { it.suit }.toSet().size != 1 ||
+                            meld.tiles.map { it.number }.sorted() != listOf(meld.tiles.minOf { it.number }, meld.tiles.minOf { it.number } + 1, meld.tiles.minOf { it.number } + 2)
+                        MeldType.PON -> meld.tiles.size != 3 || meld.tiles.distinct().size != 1
+                        MeldType.KAN, MeldType.ANKAN -> meld.tiles.size != 4 || meld.tiles.distinct().size != 1
+                    }
+                } || player.hand.size !in run {
+                    val meldTileCount = player.melds.sumOf { it.tiles.size }
+                    val kanCount = player.melds.count { it.type == MeldType.KAN || it.type == MeldType.ANKAN }
+                    setOf(14 - meldTileCount + kanCount, 13 - meldTileCount + kanCount)
+                }
+            }) return false
+        val allTiles = wall + players.flatMap { it.hand + it.discards + it.melds.flatMap { meld -> meld.tiles } }
+        return allTiles.size == 136 && allTiles.groupingBy { it }.eachCount().all { it.value == 4 }
+    }
+
     fun normalizeTurn() {
+        if (gameId.isBlank()) gameId = "mahjong_${System.currentTimeMillis()}_${Random.nextLong()}"
         if (players.isEmpty()) {
             currentTurn = 0
             dealerIdx = 0
@@ -119,11 +146,12 @@ data class GameState(
     fun assistantPlayer() = players.find { it.opId == assistantOpId }
     fun roundLabel(): String = when (matchMode) {
         MatchMode.QUICK -> "快速局"
-        MatchMode.EAST -> "东风战·东${round}"
-        MatchMode.HALF -> if (round <= 4) "半庄·东${round}" else "半庄·南${round - 4}"
+        MatchMode.EAST -> "四局积分赛·第${round}局"
+        MatchMode.HALF -> "八局积分赛·第${round}局"
     }
 
     companion object {
+        const val CURRENT_SAVE_VERSION = 2
         fun create(
             opIds: List<String>, opNames: List<String>,
             styles: List<Triple<Float, Float, String>>,
@@ -140,7 +168,7 @@ data class GameState(
             ))
             players.add(PlayerState(opId = userId, name = userName, seat = seats[3], isHuman = true))
             val maxR = when (matchMode) { MatchMode.QUICK -> 1; MatchMode.EAST -> 4; MatchMode.HALF -> 8 }
-            return GameState(players = players,
+            return GameState(saveVersion = CURRENT_SAVE_VERSION, gameId = "mahjong_${System.currentTimeMillis()}_${Random.nextLong()}", players = players,
                 dealerIdx = di, currentTurn = di,
                 wall = Tile.fullWall().apply { shuffle() },
                 assistantOpId = assistantId,
@@ -151,6 +179,7 @@ data class GameState(
 
 @Serializable
 data class SettlementResult(
+    val gameId: String = "",
     val rankings: List<PlayerResult>, val userNetGain: Int,
     val exchangeRate: Int = 100, val basePoints: Int = 25000,
     val chatLog: List<String> = emptyList(),

@@ -24,9 +24,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.rhodes.privatechat.automation.DailyContentScheduler
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.ui.theme.BG
 import com.rhodes.privatechat.ui.theme.Card
@@ -40,6 +42,7 @@ import org.koin.compose.koinInject
 fun DailyContentSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     val settings: SettingsRepository = koinInject()
     val viewModel: MainViewModel = koinInject()
+    val context = LocalContext.current
     var autoEnabled by remember { mutableStateOf(settings.autoAiEnabled) }
     var dailyMomentsEnabled by remember { mutableStateOf(settings.dailyAutoMomentEnabled) }
     var proactiveEnabled by remember { mutableStateOf(settings.idleProactiveChatEnabled) }
@@ -51,6 +54,11 @@ fun DailyContentSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier
         icon = { Icon(Icons.Default.AutoAwesome, null, tint = Primary) },
         onSaveRequest = { completeSave ->
             completeSave()
+            DailyContentScheduler.rebuildTodayPlan(
+                context = context,
+                repository = viewModel.repository,
+                settings = settings
+            )
             viewModel.refreshAutoGroupChats()
         }
     ) {
@@ -67,8 +75,6 @@ fun DailyContentSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier
                 settings.dailyAutoMomentEnabled = it
             }
             SettingsParamSlider(settings, "daily_moment_target", "每角色每日动态数", 1, 0f..3f, "每个角色每天自动发几条动态。建议1。太高（超过3）信息流刷屏太快看不过来。", step = 1f, enabled = autoEnabled)
-            SettingsParamSlider(settings, "moment_min_chars", "动态最少字数", 50, 20f..300f, "每条动态最少写几个字。建议20-50。太低（低于10）只有几个字太敷衍。", step = 5f, pairKey = "moment_max_chars", isMinSide = true, enabled = autoEnabled)
-            SettingsParamSlider(settings, "moment_max_chars", "动态最多字数", 200, 80f..500f, "每条动态最多写几个字。建议120-200。太高（超过300）每条都是小作文。", step = 5f, pairKey = "moment_min_chars", isMinSide = false, enabled = autoEnabled)
             SettingsSectionTitle("主动私聊")
             DailyContentInfoCard("自然分散发送", "每天从有私聊权限的角色中抽人主动找你。每人每天最多一次；刚聊过15分钟内不会又来。")
             SettingsSwitchCard("主动私聊", "开启后，已授予主动消息权限且有聊天上下文的干员可能主动联系你。", proactiveEnabled, enabled = autoEnabled) {

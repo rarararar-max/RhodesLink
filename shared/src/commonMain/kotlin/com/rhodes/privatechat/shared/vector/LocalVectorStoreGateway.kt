@@ -32,7 +32,21 @@ class LocalVectorStoreGateway(
     override suspend fun search(request: VectorSearchRequest): List<VectorMemory> {
         val now = request.now.takeIf { it > 0L } ?: System.currentTimeMillis()
         val minCreatedAt = request.minCreatedAt.coerceAtLeast(0L)
-        val rows = if (request.candidateSourceType.isNotBlank()) {
+        val sourceKinds = request.sourceKinds.distinct()
+        val perSourceLimit = if (sourceKinds.isEmpty()) request.candidateLimit else {
+            ((request.candidateLimit + sourceKinds.size - 1) / sourceKinds.size).coerceAtLeast(1)
+        }
+        val rows = if (request.candidateSourceType.isNotBlank() && sourceKinds.isNotEmpty()) {
+            sourceKinds.flatMap { sourceKind ->
+                db.vectorMemoriesQueries.getVectorCandidatesByOwnerAndSourceTypeAndSourceKind(
+                    request.ownerType, request.ownerId, request.candidateSourceType, sourceKind, sourceKind,
+                    now, minCreatedAt, request.maxCreatedAt, request.minImportance, request.embeddingSignature,
+                    if (request.preferRecentCandidates) 1L else 0L,
+                    if (request.preferRecentCandidates) 1L else 0L,
+                    perSourceLimit.toLong(),
+                ).executeAsList()
+            }
+        } else if (request.candidateSourceType.isNotBlank()) {
             db.vectorMemoriesQueries.getVectorCandidatesByOwnerAndSourceType(
                 request.ownerType,
                 request.ownerId,
@@ -46,6 +60,13 @@ class LocalVectorStoreGateway(
                 if (request.preferRecentCandidates) 1L else 0L,
                 request.candidateLimit.toLong(),
             ).executeAsList()
+        } else if (request.candidateLimit > 0 && sourceKinds.isNotEmpty()) {
+            sourceKinds.flatMap { sourceKind ->
+                db.vectorMemoriesQueries.getVectorCandidatesByOwnerAndSourceKind(
+                    request.ownerType, request.ownerId, sourceKind, sourceKind, now, minCreatedAt,
+                    request.minImportance, request.embeddingSignature, perSourceLimit.toLong(),
+                ).executeAsList()
+            }
         } else if (request.candidateLimit > 0) {
             db.vectorMemoriesQueries.getVectorCandidatesByOwner(
                 request.ownerType,
@@ -62,6 +83,9 @@ class LocalVectorStoreGateway(
         val filtered = rows
             .asSequence()
             .filter { row -> request.sourceTypes.isEmpty() || row.sourceType in request.sourceTypes }
+            .filter { row ->
+                sourceKinds.isEmpty() || row.tags.split(',').any { it in sourceKinds }
+            }
             .filter { row -> request.visibilities.isEmpty() || row.visibility in request.visibilities }
             .filter { row -> request.embeddingSignature.isBlank() || row.embeddingSignature == request.embeddingSignature }
             .filter { row -> row.expiresAt > now }

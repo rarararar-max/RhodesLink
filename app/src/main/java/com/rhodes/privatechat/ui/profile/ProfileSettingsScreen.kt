@@ -104,14 +104,15 @@ fun ProfileSettingsScreen(
         }
     }
 
-    val saveProfile: () -> Unit = save@{
+    val saveProfile: () -> Boolean = save@{
         val cleanName = nickname.trim()
         if (cleanName.isBlank()) {
             android.widget.Toast.makeText(context, "昵称不能为空", android.widget.Toast.LENGTH_SHORT).show()
-            return@save
+            return@save false
         }
         viewModel.saveUserProfile(cleanName, gender, bio, avatarUri ?: "")
         prefSettings.putInt("user_avatar_index", avatarIndex)
+        true
     }
 
     fun requestBack() {
@@ -125,7 +126,7 @@ fun ProfileSettingsScreen(
         Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = { requestBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Text("身份设置", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, modifier = Modifier.weight(1f))
-            TextButton(onClick = { saveProfile(); onBack() }) { Text("保存", color = Primary, fontWeight = FontWeight.SemiBold) }
+            TextButton(onClick = { if (saveProfile()) onBack() }) { Text("保存", color = Primary, fontWeight = FontWeight.SemiBold) }
         }
         HorizontalDivider(color = Divider)
 
@@ -177,7 +178,7 @@ fun ProfileSettingsScreen(
             onDismissRequest = { showUnsavedDialog = false },
             title = { Text("有未保存的修改", color = TextPrimary) },
             text = { Text("你已经修改了身份设置。要保存后离开，还是放弃这些修改？", color = TextSecondary) },
-            confirmButton = { TextButton(onClick = { saveProfile(); showUnsavedDialog = false; onBack() }) { Text("保存修改", color = Primary) } },
+            confirmButton = { TextButton(onClick = { if (saveProfile()) { showUnsavedDialog = false; onBack() } }) { Text("保存修改", color = Primary) } },
             dismissButton = {
                 Row {
                     TextButton(onClick = { showUnsavedDialog = false; onBack() }) { Text("放弃修改", color = ErrorRed) }

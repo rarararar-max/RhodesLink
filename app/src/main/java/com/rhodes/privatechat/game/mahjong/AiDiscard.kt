@@ -43,9 +43,17 @@ object AiDiscard {
         return chosen
     }
 
+    fun recommendedDiscard(hand: List<Tile>): Tile? {
+        if (hand.isEmpty()) return null
+        return hand.distinct().minWithOrNull(
+            compareBy<Tile> { tile -> Engine.shanten(hand.toMutableList().also { it.remove(tile) }) }
+                .thenBy { it.ordinalForSort() }
+        )
+    }
+
     fun effectiveAttack(player: PlayerState, gameState: GameState): Float {
         var a = player.attack
-        if (player.isTenpai || Engine.isTenpai(player.hand)) a += 0.2f
+        if (player.isTenpai || Engine.isTenpaiState(player.hand, player.melds)) a += 0.2f
         if (player.points > 40000) a += 0.1f
         if (player.specialTraits.any { it.contains("激进") || it.contains("冲") }) a += 0.15f
         if (player.specialTraits.any { it.contains("稳健") || it.contains("谨慎") }) a -= 0.1f
@@ -56,7 +64,7 @@ object AiDiscard {
         var d = player.defense
         val dealer = gameState.currentPlayerOrNull()?.takeIf { gameState.isDealer(it.seat) }
             ?: gameState.players.getOrNull(gameState.dealerIdx)
-        if (dealer != null && (dealer.isRiichi || Engine.isTenpai(dealer.hand))) d += 0.25f
+        if (dealer != null && Engine.isTenpaiState(dealer.hand, dealer.melds)) d += 0.25f
         if (player.points < 10000) d += 0.15f
         if (player.points < 5000) d += 0.3f
         if (player.specialTraits.any { it.contains("稳健") || it.contains("谨慎") }) d += 0.15f
@@ -74,7 +82,7 @@ object AiDiscard {
             else -> 0f
         }
         if (effectiveDefense(player, gameState) > 0.7f) return false
-        if (Engine.isTenpai(player.hand)) return false
+        if (Engine.isTenpaiState(player.hand, player.melds)) return false
         if (player.specialTraits.any { it.contains("激进") || it.contains("冲") }) return Random.nextFloat() < (baseChance + 0.2f)
         return Random.nextFloat() < baseChance
     }

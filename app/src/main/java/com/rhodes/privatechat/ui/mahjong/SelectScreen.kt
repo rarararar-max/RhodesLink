@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -62,7 +63,7 @@ fun SelectScreen(
     var showRules by remember { mutableStateOf(false) }
     val settings: SettingsRepository = koinInject()
     val lmbPrefs = settings
-    val canSeatTable = operators.size >= 4
+    val canSeatTable = operators.size >= 3
     val historyEntries = remember(showHistory) {
         if (!showHistory) emptyList<MahjongHistoryEntry>()
         else try {
@@ -70,9 +71,9 @@ fun SelectScreen(
             json.decodeFromString<List<MahjongHistoryEntry>>(jsonStr)
         } catch (_: Exception) { emptyList() }
     }
-    LaunchedEffect(opponentIds.toList(), operators) {
-        if (assistantId in opponentIds || operators.none { it.id == assistantId }) {
-            assistantId = operators.firstOrNull { it.id !in opponentIds }?.id.orEmpty()
+    LaunchedEffect(opponentIds.toList()) {
+        if (assistantId !in opponentIds) {
+            assistantId = opponentIds.firstOrNull().orEmpty()
         }
     }
 
@@ -83,8 +84,7 @@ fun SelectScreen(
             Text("选择对手", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, modifier = Modifier.weight(1f))
             IconButton(onClick = { showHistory = true }) { Icon(Icons.Default.History, "历史记录", tint = TextSecondary) }
         }
-        HorizontalDivider(color = Divider)
-
+        Column(modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
         // 规则提示
         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).background(Color(0xFF101820), RoundedCornerShape(12.dp)).padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -94,15 +94,15 @@ fun SelectScreen(
             }
             Spacer(Modifier.height(4.dp))
             val ruleDesc = when (matchMode) {
-                MatchMode.QUICK -> "基础麻将：四组牌加一对将即可胡，支持自摸、点炮、吃碰杠、七对、对对胡、清一色。快速一局，结算写入锚点、动态和龙门币变化。"
-                MatchMode.EAST -> "四局积分战，基础胡牌规则，累计筹码排名。庄家胡牌可连庄，每局结算后进入下一局。"
-                MatchMode.HALF -> "八局积分战，基础胡牌规则，适合更完整的活动室对局。"
+                MatchMode.QUICK -> "罗德岛休闲麻将：四组牌加一对将或七对即可胡，支持自摸、点炮、吃碰杠。固定点数，快速一局后结算龙门币。"
+                MatchMode.EAST -> "四局积分赛，基础胡牌规则，累计筹码排名。庄家获胜或听牌流局时可继续坐庄。"
+                MatchMode.HALF -> "八局积分赛，基础胡牌规则，适合更完整的活动室对局。"
             }
             Text(ruleDesc, fontSize = 12.sp, color = Color.White.copy(alpha = 0.78f), lineHeight = 17.sp)
             Text("龙门币只按结算输赢变化；干员次日会自动保底补到2000，防止大家破产散桌。", fontSize = 11.sp, color = Color(0xFFFFD54F).copy(alpha = 0.82f), lineHeight = 16.sp, modifier = Modifier.padding(top = 4.dp))
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(MatchMode.QUICK to "快速一局", MatchMode.EAST to "东风战", MatchMode.HALF to "半庄").forEach { (mode, label) ->
+                listOf(MatchMode.QUICK to "快速一局", MatchMode.EAST to "四局积分", MatchMode.HALF to "八局积分").forEach { (mode, label) ->
                     val selected = matchMode == mode
                     Box(modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(if (selected) Color(0xFFFFD54F) else Color.White.copy(alpha = 0.1f)).clickable { matchMode = mode }.padding(horizontal = 10.dp, vertical = 4.dp)) {
                         Text(label, fontSize = 11.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal, color = if (selected) Color.Black else Color.White.copy(alpha = 0.7f))
@@ -117,7 +117,7 @@ fun SelectScreen(
 
         // 对手选择
         Text("选择对手（${opponentIds.size}/3）", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
-        LazyVerticalGrid(columns = GridCells.Fixed(4), modifier = Modifier.weight(1f).fillMaxWidth().background(Surface).padding(8.dp)) {
+        LazyVerticalGrid(columns = GridCells.Fixed(4), modifier = Modifier.fillMaxWidth().heightIn(min = 300.dp, max = 420.dp).background(Surface).padding(8.dp)) {
             items(operators) { op ->
                 val selected = opponentIds.contains(op.id)
                 Column(modifier = Modifier
@@ -128,7 +128,7 @@ fun SelectScreen(
                         if (selected) opponentIds.remove(op.id)
                         else if (opponentIds.size < 3) {
                             opponentIds.add(op.id)
-                            if (assistantId == op.id) assistantId = operators.firstOrNull { it.id !in opponentIds }?.id.orEmpty()
+                            if (assistantId.isBlank()) assistantId = op.id
                         }
                     }.padding(8.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
@@ -142,16 +142,17 @@ fun SelectScreen(
         }
 
         // 助手选择
-        Text("选择助手（1名）", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+        Text("指定牌桌助手（从已选对手中选1名）", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
         Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(8.dp).horizontalScroll(rememberScrollState())) {
-            operators.filter { it.id !in opponentIds }.forEach { op ->
+            operators.filter { it.id in opponentIds }.forEach { op ->
                 val sel = assistantId == op.id
                 Column(modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(if (sel) Primary.copy(alpha = 0.15f) else Color.Transparent).clickable { assistantId = op.id }.padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     OperatorAvatarImage(avatarUri = op.avatarUri, name = op.name, modifier = Modifier.size(36.dp))
                     Text(op.name.take(4), fontSize = 9.sp, color = TextPrimary)
-                    if (sel) Text("已选", fontSize = 8.sp, color = Primary)
+                    if (sel) Text("助手", fontSize = 8.sp, color = Primary)
                 }
             }
+            if (opponentIds.isEmpty()) Text("请先选择三名对手", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(8.dp))
         }
 
         HorizontalDivider(color = Divider)
@@ -167,20 +168,22 @@ fun SelectScreen(
             HorizontalDivider(color = Divider)
         }
 
-        // 底部
+        }
+
+        // 底部操作固定在屏幕底部，不会因对手列表过长被挤出屏幕。
         Row(Modifier.fillMaxWidth().background(Surface).padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column {
-                Text("${when(matchMode){MatchMode.QUICK->"快速一局";MatchMode.EAST->"东风战";MatchMode.HALF->"半庄"}} · 结算后计入龙门币", fontSize = 13.sp, color = TextSecondary)
+                Text("${when(matchMode){MatchMode.QUICK->"快速一局";MatchMode.EAST->"四局积分";MatchMode.HALF->"八局积分"}} · 结算后计入龙门币", fontSize = 13.sp, color = TextSecondary)
                 Text("你的龙门币：${userLmb}", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
             }
             OutlinedButton(onClick = {
-                val pool = operators.filter { op -> op.id != assistantId }.shuffled()
+                val pool = operators.shuffled()
                 opponentIds.clear()
                 opponentIds.addAll(pool.take(3).map { it.id })
-                if (assistantId.isBlank() || assistantId in opponentIds) assistantId = operators.firstOrNull { it.id !in opponentIds }?.id.orEmpty()
+                assistantId = opponentIds.firstOrNull().orEmpty()
             }, enabled = canSeatTable) { Text("随机组桌", fontSize = 12.sp) }
             Button(onClick = {
-                if (opponentIds.size != 3 || assistantId.isBlank() || assistantId in opponentIds || operators.none { it.id == assistantId }) return@Button
+                if (opponentIds.size != 3 || assistantId !in opponentIds) return@Button
                 val ops = opponentIds.mapNotNull { id -> operators.find { it.id == id } }
                 val styles = ops.map { Triple(it.attack, it.defense, it.meldPref) }
                 val game = GameState.create(
@@ -188,7 +191,7 @@ fun SelectScreen(
                     "user", userName, assistantId, matchMode
                 )
                 onStart(game)
-            }, enabled = opponentIds.size == 3 && assistantId.isNotBlank() && assistantId !in opponentIds && operators.any { it.id == assistantId },
+            }, enabled = opponentIds.size == 3 && assistantId in opponentIds,
                 colors = ButtonDefaults.buttonColors(containerColor = Primary)) {
                 Text("开始牌局", fontWeight = FontWeight.SemiBold)
             }

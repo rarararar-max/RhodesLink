@@ -138,6 +138,9 @@ class ChatViewModel(
     private var voiceRecallTerms: Set<String> = emptySet()
     private var voiceRecallContext = ""
     private var voiceRecallAt = 0L
+    private var voiceRecallSessionId = ""
+    private var voiceRecallSourcePolicy = ""
+    private var voiceRecallQuery = ""
     private fun beginLoading(sessionId: String, requestId: Long) {
         activeRequestBySession[sessionId] = requestId
         _loadingSessions.update { it + sessionId }
@@ -976,12 +979,12 @@ $userContent
         _loadingSessions.update { it - sessionId }
     }
 
-    private suspend fun savePrivateFailure(sessionId: String, messageId: Long, mode: String) {
+    private suspend fun savePrivateFailure(sessionId: String, messageId: Long, mode: String, error: Exception? = null) {
         repository.sendMessage(sessionId, ChatMessage(
             id = messageId,
             sessionId = sessionId,
             senderName = "系统",
-            content = "通讯出现波动，再发一遍吧",
+            content = error?.let(::classifyError) ?: "通讯出现波动，再发一遍吧",
             type = "system",
             mode = mode,
             isMe = false
@@ -1115,7 +1118,7 @@ $userContent
                         DebugLogger.log("Chat/AI", "AI超时, session=${session.id}")
                         DebugLogger.chatEvent("私聊", "请求模型", "超时", "会话=${session.operatorName}")
                         if ((sessionGenerations[session.id] ?: 0L) != generation) return@launch
-                        savePrivateFailure(session.id, aiMsgId, mode)
+                        savePrivateFailure(session.id, aiMsgId, mode, e)
                         break
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         DebugLogger.log("Chat/AI", "AI被取消, session=${session.id}")
@@ -1144,7 +1147,7 @@ $userContent
                     Log.e("ChatVM", "私聊AI最终错误 session=${session.id} err=${lastError.message?.take(120)}")
                     DebugLogger.log("Chat/AI", "AI错误: ${lastError.message?.take(100)}, session=${session.id}")
                     DebugLogger.chatEvent("私聊", "请求模型", "失败", "${lastError.message?.take(80)}")
-                    savePrivateFailure(session.id, aiMsgId, mode)
+                    savePrivateFailure(session.id, aiMsgId, mode, lastError)
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -1299,7 +1302,7 @@ $userContent
             } catch (e: Exception) {
                 Log.e("RHODES_VISION", "sendImageMessage 异常: ${e.message}", e)
                 val errId = repository.getNextMessageId()
-                savePrivateFailure(session.id, errId, mode)
+                savePrivateFailure(session.id, errId, mode, e)
                 onResult(false)
             } finally {
                 if (mutexLocked) aiMutexFor(session.id).unlock()
@@ -1367,7 +1370,7 @@ $userContent
                 sourceId = anchor.sessionId,
                 content = anchor.content,
                 importance = if (anchor.importance == AnchorSourcePolicy.STRONG) 1.0 else 0.6,
-                tags = anchor.type.name,
+                tags = "${anchor.type.name},${com.rhodes.privatechat.shared.model.MemorySourceKind.PRIVATE_CHAT.name}",
                 visibility = if (anchor.isPrivate) "private" else "shared",
                 createdAt = anchor.createdAt,
                 expiresAt = anchor.expiresAt
@@ -1567,7 +1570,7 @@ $userContent
                 repository.updateMessageContent(msgId, previousReply)
                 _messages.value = _messages.value.map { message -> if (message.id == msgId) originalReply else message }
                 DebugLogger.log("Chat/Regenerate", "重新生成失败: ${e.message?.take(100)}")
-                savePrivateFailure(session.id, repository.getNextMessageId(), mode)
+                savePrivateFailure(session.id, repository.getNextMessageId(), mode, e)
             } finally { finishLoading(session.id, requestId); if (mutexLocked) aiMutexFor(session.id).unlock(); modeTransitionNotices.remove(session.id) }
         }
         chatAiJobs[session.id] = job
@@ -1606,7 +1609,7 @@ $userContent
                 DebugLogger.log("Chat/Continue", "继续说被取消, session=${session.id}")
                 throw e
             } catch (e: Exception) {
-                savePrivateFailure(session.id, aiMsgId, mode)
+                savePrivateFailure(session.id, aiMsgId, mode, e)
             }
             finally { finishLoading(session.id, requestId); if (mutexLocked) aiMutexFor(session.id).unlock(); modeTransitionNotices.remove(session.id) }
         }
@@ -1776,16 +1779,18 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         }.filterNotNull().joinToString("\n")
         val recallQuery = (recent + "\n" + userText).take(700)
         val terms = voiceRecallTerms(userText)
+        val sourcePolicy = privateMemorySourcePolicyKey(archiveContextActive, archivePrivateRecallReady)
         val needsRecall = (!archiveContextActive || archivePrivateRecallReady) && settings.memoryV2Enabled && shouldRecallVoice(userText, terms)
         val now = System.currentTimeMillis()
         val recalled = when {
             !needsRecall -> ""
-            voiceRecallContext.isNotBlank() && now - voiceRecallAt < 5 * 60_000L && terms.intersect(voiceRecallTerms).isNotEmpty() -> voiceRecallContext
+            voiceRecallContext.isNotBlank() && voiceRecallSessionId == sessionId && voiceRecallSourcePolicy == sourcePolicy && voiceRecallQuery == recallQuery && now - voiceRecallAt < 5 * 60_000L -> voiceRecallContext
             else -> {
                 val personalMemories = memoryV2Pipeline.buildPrivateMemoryContext(
-                    session.operatorId, limitL1 = 2, limitL2 = 1, limitL3 = 1, query = recallQuery
+                    session.operatorId, limitL1 = 2, limitL2 = 1, limitL3 = 1, query = recallQuery,
+                    applyPrivateSourceFilter = true,
                 )
-                val relationshipMemories = if (archiveContextActive) "" else memoryV2Pipeline.buildRelationshipPrivateMemoryContext(
+                val relationshipMemories = if (archiveContextActive || !settings.privateRecallRelationshipMemory) "" else memoryV2Pipeline.buildRelationshipPrivateMemoryContext(
                     session.operatorId, recallQuery
                 )
                 val memories = UnifiedMemoryContext.mergeBlocks(
@@ -1801,10 +1806,13 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
                     voiceRecallTerms = terms
                     voiceRecallContext = it
                     voiceRecallAt = now
+                    voiceRecallSessionId = sessionId
+                    voiceRecallSourcePolicy = sourcePolicy
+                    voiceRecallQuery = recallQuery
                 }
             }
         }
-        val group = if (archiveContextActive) "无" else buildPrivateGroupContext(session.operatorId, userText)
+        val group = if (archiveContextActive || !settings.privateRecallGroupChatMemory) "无" else buildPrivateGroupContext(session.operatorId, userText)
         return listOfNotNull(
             op?.userRelation?.takeIf { it.isNotBlank() }?.let { "你与用户的关系：$it" },
             recent.takeIf { it.isNotBlank() }?.let { "最近私聊：\n$it" },
@@ -1822,6 +1830,24 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             .filter { it !in setOf("今天", "昨天", "我们", "你们", "这个", "那个", "就是") }
             .take(12)
             .toSet()
+
+    private fun privateMemorySourcePolicyKey(
+        archiveContextActive: Boolean = false,
+        archivePrivateRecallReady: Boolean = false,
+    ): String = listOf(
+        settings.privateRecallPrivateChatMemory,
+        settings.privateRecallGroupChatMemory,
+        settings.privateRecallMomentMemory,
+        settings.privateRecallMomentCommentMemory,
+        settings.privateRecallRelationshipMemory,
+        settings.privateRecallDiaryMemory,
+        settings.privateRecallManualMemory,
+        settings.globalPublicMemoryEnabled,
+        settings.memoryV2Enabled,
+        settings.memoryRecallMode,
+        archiveContextActive,
+        archivePrivateRecallReady,
+    ).joinToString(separator = ":")
 
     private suspend fun extractPrivateMemoryIfNeeded(session: ChatSession) {
         if (!settings.memoryV2Enabled) return
@@ -1955,15 +1981,20 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             .ifBlank { userContent }
         val archiveContextActive = settings.getBoolean("archive_context_active_${session.id}", false)
         val archivePrivateRecallReady = settings.getBoolean("archive_private_recall_ready_${session.id}", false)
+        val privateRecallSources = memoryV2Pipeline.privateChatAllowedSources()
+        val allowGroupRecall = settings.privateRecallGroupChatMemory
+        val allowRelationshipRecall = settings.privateRecallRelationshipMemory
         // A loaded save must not be spoiled by later group or public events from the old timeline.
-        val groupContext = if (archiveContextActive) "无" else buildPrivateGroupContext(session.operatorId, userContent)
+        val groupContext = if (archiveContextActive || !allowGroupRecall) "无" else buildPrivateGroupContext(session.operatorId, userContent)
         val allowPrivateRecall = !archiveContextActive || archivePrivateRecallReady
         val stableImpression = if (allowPrivateRecall) memoryV2Pipeline.buildPrivateStableImpression(session.operatorId) else ""
         val personalMemoryContext = if (allowPrivateRecall) memoryV2Pipeline.buildPrivateChatMemoryContext(
             operatorId = session.operatorId,
-            query = recallQuery
+            query = recallQuery,
+            allowedSources = privateRecallSources,
+            allowPrivateVisualRecall = com.rhodes.privatechat.shared.model.MemorySourceKind.PRIVATE_CHAT.name in privateRecallSources,
         ) else ""
-        val relationshipMemoryContext = if (!archiveContextActive) memoryV2Pipeline.buildRelationshipPrivateMemoryContext(
+        val relationshipMemoryContext = if (!archiveContextActive && allowRelationshipRecall) memoryV2Pipeline.buildRelationshipPrivateMemoryContext(
             operatorId = session.operatorId,
             query = recallQuery,
         ) else ""
@@ -1975,8 +2006,12 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             ).ifBlank { "无" },
             sharedUtils.contextBlockLimit()
         )
-        val publicMemoryContext = if (!archiveContextActive && settings.globalPublicMemoryEnabled) {
-            memoryV2Pipeline.buildPublicMemoryContext(recallQuery, limit = 2).ifBlank { "无" }
+        val publicMemorySources = privateRecallSources.intersect(setOf(
+            com.rhodes.privatechat.shared.model.MemorySourceKind.MOMENT.name,
+            com.rhodes.privatechat.shared.model.MemorySourceKind.MOMENT_COMMENT.name,
+        ))
+        val publicMemoryContext = if (!archiveContextActive && settings.globalPublicMemoryEnabled && publicMemorySources.isNotEmpty()) {
+            memoryV2Pipeline.buildPublicMemoryContext(recallQuery, limit = 2, allowedSources = publicMemorySources).ifBlank { "无" }
         } else "无"
         val recallMemoryContext = UnifiedMemoryContext.mergeBlocks(
             maxChars = sharedUtils.contextBlockLimit(2),

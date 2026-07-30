@@ -528,7 +528,7 @@ data object MahjongSelectRoute : Screen {
             onBack = { navigator.pop() },
             savedGame = savedGame,
             onResume = { game ->
-                val replayData = game.toReplayDataOrNull()
+                val replayData = game.takeIf { it.isValidMahjongGame() }?.toReplayDataOrNull()
                 if (replayData == null) {
                     viewModel.deleteMahjongSave()
                     savedGame = null
@@ -549,7 +549,7 @@ data object MahjongSelectRoute : Screen {
     }
 }
 
-private fun GameState.isValidMahjongGame(): Boolean = toReplayDataOrNull() != null
+private fun GameState.isValidMahjongGame(): Boolean = isCompatibleSave() && toReplayDataOrNull() != null
 
 private fun GameState.toReplayDataOrNull(): GameStateCreateParams? {
     val opponents = players.filter { !it.isHuman }
@@ -613,6 +613,8 @@ data class MahjongSettlementRoute(
 
         LaunchedEffect(Unit) {
             if (!isFinalSettlement) return@LaunchedEffect
+            val settlementKey = "mahjong_settled_${result.gameId}"
+            if (result.gameId.isBlank() || settings.getBoolean(settlementKey, false)) return@LaunchedEffect
             // 1. 统一更新龙门币：用户
             settings.addLmb(result.userNetGain)
             // 2. 统一更新龙门币：对手（用 Operator.lmb 字段）
@@ -653,13 +655,14 @@ data class MahjongSettlementRoute(
 
             // 5. 清理存档
             viewModel.deleteMahjongSave()
+            settings.putBoolean(settlementKey, true)
         }
 
         val avatarMap = viewModel.operators.value.associate { it.id to it.avatarUri } + ("user" to profile.avatarUri)
 
         com.rhodes.privatechat.ui.mahjong.SettlementScreen(
             result = result,
-            onBack = { navigator.pop() },
+            onBack = { navigator.replace(MahjongSelectRoute) },
             avatarMap = avatarMap,
             players = gameState.players,
             isFinalSettlement = isFinalSettlement,
@@ -672,6 +675,7 @@ data class MahjongSettlementRoute(
                     replayData.userId, replayData.userName, replayData.assistantId,
                     replayData.matchMode
                 )
+                viewModel.saveMahjongGame(GameSerializer.serialize(newGame), newGame.matchMode.name)
                 navigator.replace(MahjongGameRoute(newGame, replayData))
             },
             onNextRound = if (result.matchMode != MatchMode.QUICK && result.currentRound < result.maxRounds) {
@@ -679,7 +683,7 @@ data class MahjongSettlementRoute(
                     val nextRound = result.currentRound + 1
                     val dealer = gameState.players.getOrNull(gameState.dealerIdx)
                     val dealerWon = result.winnerName.isNotBlank() && dealer?.name == result.winnerName
-                    val dealerTenpaiDraw = result.winnerName.isBlank() && dealer?.let { Engine.isTenpaiState(it.hand) } == true
+                    val dealerTenpaiDraw = result.winnerName.isBlank() && dealer?.let { Engine.isTenpaiState(it.hand, it.melds) } == true
                     val nextDealerIdx = if (dealerWon || dealerTenpaiDraw) gameState.dealerIdx else (gameState.dealerIdx + 1) % gameState.players.size
                     val cumulative = result.cumulativePoints
                     val nextGame = GameState.create(
@@ -700,6 +704,7 @@ data class MahjongSettlementRoute(
                         val prev = cumulative[p.name]
                         if (prev != null) p.points = prev
                     }
+                    viewModel.saveMahjongGame(GameSerializer.serialize(nextGame), nextGame.matchMode.name)
                     navigator.replace(MahjongGameRoute(nextGame, replayData))
                 }
             } else null

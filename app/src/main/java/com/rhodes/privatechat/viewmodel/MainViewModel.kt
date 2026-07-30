@@ -472,7 +472,10 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         // 构建替换映射
         val shortTerm = repository.getShortTermMemory(session.id)
         val analysisBlock = if (isDualModel() && analysisGuidance.isNotBlank()) "【AI分析指导】\n${analysisGuidance}\n" else ""
-        val v2Memories = memoryV2Pipeline.buildPrivateMemoryContext(op.id, limitL1 = 1, limitL2 = 2, limitL3 = 2, query = op.name).ifBlank { "无" }
+        val v2Memories = memoryV2Pipeline.buildPrivateMemoryContext(
+            op.id, limitL1 = 1, limitL2 = 2, limitL3 = 2, query = op.name,
+            applyPrivateSourceFilter = true,
+        ).ifBlank { "无" }
         val unifiedMemory = UnifiedMemoryContext.mergeBlocks(
             sharedUtils.contextBlockLimit(2),
             v2Memories,

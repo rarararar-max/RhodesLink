@@ -19,13 +19,9 @@ object AiChat {
         "discard" to listOf(
             "这张先不要了。","先打这个，你们别太紧张。","我换个方向做牌。","这张应该没人要吧？"
         ),
-        "draw" to listOf(
-            "摸了一张牌","新牌到手","看了一眼摸到的牌","手指摩挲着新牌","微微点头","若有所思"
-        ),
         "pon" to listOf("碰！","这个我要了","等的就是这张","终于来了！"),
         "chi" to listOf("吃！","借用了~","这个组合不错","刚好能用"),
         "kan" to listOf("杠！","又凑齐了","杠上开花！","意外收获"),
-        "riichi" to listOf("听牌了。","这把有机会。","你们小心点。","我快成了。"),
         "ron" to listOf("和了！","赢了！","就等这一刻","不好意思了~"),
         "tsumo" to listOf("自摸！","没想到自摸了","好运气来了","这张等好久了"),
         "exhaustive" to listOf("流局了…","又流局了","大家都太稳了","白忙一场")
@@ -77,12 +73,6 @@ object AiChat {
             "我杠这一口怎么样，怕不怕？",
             "杠了啊，我说我要和了你们信吗？",
             "补张好牌，牌山别演我。"
-        ),
-        "riichi" to listOf(
-            "听牌了，接下来你们自己小心。",
-            "听了，谁敢打出来试试？",
-            "我先立了，剩下交给牌山。",
-            "就等那张了，别让我等太久。"
         ),
         "ron" to listOf(
             "和了，不好意思啊。",
@@ -187,19 +177,16 @@ object AiChat {
     ).random()
 
     fun help(player: PlayerState, hand: List<Tile>, shanten: Int): String {
-        val r = Random
         val style = helpStyleOf(player)
         val lines = helpReplies[style] ?: helpReplies["随机"]!!
         val tpl = lines.random()
-        val tiles = hand.map { Tile.tileName(it) }.distinct()
-        val t1 = if (tiles.isNotEmpty()) tiles[r.nextInt(tiles.size)] else "这张"
-        val otherTiles = tiles.filter { it != t1 }
-        val t2 = if (otherTiles.isNotEmpty()) otherTiles[r.nextInt(otherTiles.size)] else t1
+        val t1 = AiDiscard.recommendedDiscard(hand)?.let(Tile::tileName) ?: "这张"
+        val t2 = hand.firstOrNull { Tile.tileName(it) != t1 }?.let(Tile::tileName) ?: t1
         return tpl.replace("{1}", t1).replace("{2}", t2)
     }
 
     fun chatEmoji(event: String): String = when (event) {
-        "discard" -> "\uD83C\uDC04"; "pon","chi","kan" -> "\uD83D\uDCA5"; "riichi" -> "\uD83C\uDF8B"
+        "discard" -> "\uD83C\uDC04"; "pon","chi","kan" -> "\uD83D\uDCA5"
         "ron","tsumo" -> "\uD83C\uDF89"; "exhaustive" -> "\uD83C\uDF00"; else -> "\uD83D\uDCAC"
     }
 

@@ -222,9 +222,9 @@ $requestText
                 activeMembers.zip(goals).forEach { (member, goal) -> appendLine("- ${member.name}：$goal") }
                 appendLine("【使用规则】")
                 appendLine("- 回应方向只决定可选回应方向，不是已发生事实、已完成动作或场景结果。")
-                appendLine("- 某成员一旦发言，应优先完成自己的回应方向；不发言的成员无需强行插话。")
+                appendLine("- 每位当前成员都必须按群聊发言次数规则发言，并优先完成自己的回应方向；不得遗漏成员。")
                 appendLine("- 用户本轮明确内容优先；实际台词、旁白、角色语气、场景连续性和 JSON 格式仍遵守当前群聊规则。")
-                append("- 没有特殊说明时，至少一名当前成员发言；不要为了凑人数让无关成员机械附和。")
+                append("- 所有成员围绕同一主线分工回应，避免机械附和或各自开启无关话题。")
             }
             DebugLogger.trace("AI/GroupTurnPlannerResult", "【模型1解析成功并注入模型2】\n$guidance")
             guidance
@@ -870,12 +870,12 @@ $requestText
                     "online" -> """
                         |【群聊固定模式与参数规则 · 高于自定义模板】
                         |- 当前为线上群聊：只允许 type="dialogue"，narration 固定为0段；即使自定义模板另有要求也不得输出旁白、动作或环境描写。
-                        |- 没有特殊说明时，本轮至少一名当前成员发言；群聊规则、用户本轮明确要求或本轮成员回应方向要求更多成员时，以其为准。每条 ${settings.groupMsgMin}~${settings.groupMsgMax} 字。
+                        |- 本轮每位当前成员必须发言 ${settings.groupSpeechMin}~${settings.groupSpeechMax} 次；每条 ${settings.groupMsgMin}~${settings.groupMsgMax} 字。旁白不计入成员发言。
                         |- 只能让当前成员名单中的角色发言，不替用户发言；严格输出 JSON 数组，每项包含 speaker、message、type。
                     """.trimMargin()
                     else -> """
                         |【群聊固定模式与参数规则 · 高于自定义模板】
-                        |- 当前为${if (mode == "director") "导演" else "线下"}群聊：没有特殊说明时，本轮至少一名当前成员发言；群聊规则、用户本轮明确要求或本轮成员回应方向要求更多成员时，以其为准。每条 ${settings.groupMsgMin}~${settings.groupMsgMax} 字。
+                        |- 当前为${if (mode == "director") "导演" else "线下"}群聊：本轮每位当前成员必须发言 ${settings.groupSpeechMin}~${settings.groupSpeechMax} 次；每条 ${settings.groupMsgMin}~${settings.groupMsgMax} 字。旁白不计入成员发言。
                         |- narration 共 ${settings.groupNarSegMin}~${settings.groupNarSegMax} 段，每段 ${settings.groupNarMin}~${settings.groupNarMax} 字；旁白使用 speaker="旁白"、type="narration"，只写第三人称可见动作、环境或气氛。
                         |- 只能让当前成员名单中的角色发言，不替用户发言；严格输出 JSON 数组，每项包含 speaker、message、type。
                     """.trimMargin()

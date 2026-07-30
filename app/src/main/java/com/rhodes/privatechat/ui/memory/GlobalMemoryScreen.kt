@@ -204,7 +204,7 @@ fun GlobalMemoryScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 val progress = rebuildProgress
                 if (working && progress != null) {
                     Text("正在重建：${progress.first} / ${progress.second}")
-                } else Text("重新为所有角色的有效记忆生成向量索引。\n\n什么情况下需要做：\n• 更换了向量模型后，旧向量和新模型不兼容\n• 部分记忆显示“未建立索引”\n• 你觉得角色召回记忆不准确\n\n什么情况下不需要做：\n• 日常使用中，新增的记忆会自动索引\n• 删除记忆后，对应的索引会自动清理\n\n注意：使用了阿里等付费 embedding 服务时，重建会对每条有效记忆发起一次 API 请求，可能产生费用。")
+                } else Text("重新为所有有效的私聊、群聊和公开记忆生成向量索引。\n\n什么情况下需要做：\n• 更换了向量模型后，旧向量和新模型不兼容\n• 部分记忆显示“未建立索引”\n• 你觉得角色召回记忆不准确\n\n什么情况下不需要做：\n• 日常使用中，新增的记忆会自动索引\n• 删除记忆后，对应的索引会自动清理\n\n重建只更新向量索引，不会删除记忆，也不会改变私聊记忆来源开关。\n\n注意：使用了阿里等付费 embedding 服务时，重建会对每条有效记忆发起一次 API 请求，可能产生费用。")
             },
             confirmButton = {
                 TextButton(enabled = !working, onClick = {

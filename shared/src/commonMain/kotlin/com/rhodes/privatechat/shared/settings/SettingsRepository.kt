@@ -213,6 +213,36 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = getInt("global_public_memory_count", 5).coerceIn(0, 20)
         set(value) = putInt("global_public_memory_count", value.coerceIn(0, 20))
 
+    // These switches only control what may be recalled into a private-chat prompt.
+    // They do not stop source memories from being stored, indexed, or used in their own surfaces.
+    var privateRecallPrivateChatMemory: Boolean
+        get() = getBoolean("private_recall_private_chat_memory", true)
+        set(value) = putBoolean("private_recall_private_chat_memory", value)
+
+    var privateRecallGroupChatMemory: Boolean
+        get() = getBoolean("private_recall_group_chat_memory", true)
+        set(value) = putBoolean("private_recall_group_chat_memory", value)
+
+    var privateRecallMomentMemory: Boolean
+        get() = getBoolean("private_recall_moment_memory", true)
+        set(value) = putBoolean("private_recall_moment_memory", value)
+
+    var privateRecallMomentCommentMemory: Boolean
+        get() = getBoolean("private_recall_moment_comment_memory", true)
+        set(value) = putBoolean("private_recall_moment_comment_memory", value)
+
+    var privateRecallRelationshipMemory: Boolean
+        get() = getBoolean("private_recall_relationship_memory", true)
+        set(value) = putBoolean("private_recall_relationship_memory", value)
+
+    var privateRecallDiaryMemory: Boolean
+        get() = getBoolean("private_recall_diary_memory", true)
+        set(value) = putBoolean("private_recall_diary_memory", value)
+
+    var privateRecallManualMemory: Boolean
+        get() = getBoolean("private_recall_manual_memory", true)
+        set(value) = putBoolean("private_recall_manual_memory", value)
+
     var memoryV2PromoteL1Threshold: Int
         get() = getInt("memory_v2_promote_l1_threshold", 20).coerceIn(5, 200)
         set(value) = putInt("memory_v2_promote_l1_threshold", value.coerceIn(5, 200))
@@ -231,8 +261,8 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putInt("private_group_context_count", value.coerceIn(0, 10))
 
     var groupMemberMemoryCount: Int
-        get() = getInt("group_member_memory_count", 2).coerceIn(0, 10)
-        set(value) = putInt("group_member_memory_count", value.coerceIn(0, 10))
+        get() = getInt("group_member_memory_count", 2).coerceIn(0, 2)
+        set(value) = putInt("group_member_memory_count", value.coerceIn(0, 2))
 
     var privateMemoryExtractionThreshold: Int
         get() = getInt("private_memory_extraction_threshold", 12).coerceIn(3, 30)
@@ -1050,7 +1080,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
                 putInt("private_memory_extraction_threshold", 8)
                 putInt("group_memory_extraction_threshold", 8)
                 putInt("private_group_context_count", 4)
-                putInt("group_member_memory_count", 4)
+                putInt("group_member_memory_count", 2)
                 putInt("event_context_count", 8)
                 putInt("daily_moment_target", 3)
                 putInt("daily_proactive_chance", 90)

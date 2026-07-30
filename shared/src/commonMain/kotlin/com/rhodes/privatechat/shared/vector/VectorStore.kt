@@ -30,6 +30,8 @@ data class VectorSearchRequest(
     val queryEmbedding: List<Double> = emptyList(),
     val limit: Int = 6,
     val sourceTypes: List<String> = emptyList(),
+    /** Original memory source kinds allowed into the candidate pool before similarity scoring. */
+    val sourceKinds: List<String> = emptyList(),
     val visibilities: List<String> = emptyList(),
     val minScore: Double = 0.0,
     val now: Long = 0L,

@@ -38,11 +38,46 @@ ORDER BY
   createdAt DESC
 LIMIT ?;
 
+getVectorCandidatesByOwnerAndSourceKind:
+SELECT * FROM vector_memories
+WHERE ownerType = ?
+  AND ownerId = ?
+  AND (tags = ? OR tags LIKE '%,' || ?)
+  AND expiresAt > ?
+  AND createdAt >= ?
+  AND importance >= ?
+  AND embeddingSignature = ?
+ORDER BY
+  CASE sourceType
+    WHEN 'memory_v2_l3' THEN 3
+    WHEN 'memory_v2_l2' THEN 2
+    ELSE 1
+  END DESC,
+  importance DESC,
+  createdAt DESC
+LIMIT ?;
+
 getVectorCandidatesByOwnerAndSourceType:
 SELECT * FROM vector_memories
 WHERE ownerType = ?
   AND ownerId = ?
   AND sourceType = ?
+  AND expiresAt > ?
+  AND createdAt >= ?
+  AND createdAt < ?
+  AND importance >= ?
+  AND embeddingSignature = ?
+ORDER BY
+  CASE WHEN ? = 1 THEN createdAt ELSE importance END DESC,
+  CASE WHEN ? = 1 THEN importance ELSE createdAt END DESC
+LIMIT ?;
+
+getVectorCandidatesByOwnerAndSourceTypeAndSourceKind:
+SELECT * FROM vector_memories
+WHERE ownerType = ?
+  AND ownerId = ?
+  AND sourceType = ?
+  AND (tags = ? OR tags LIKE '%,' || ?)
   AND expiresAt > ?
   AND createdAt >= ?
   AND createdAt < ?

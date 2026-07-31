@@ -37,6 +37,24 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     val sharedExperiences = SharedExperienceRepository(wrapper)
     val archives = ChatArchiveRepository(wrapper)
 
+    suspend fun getGiftsByOperator(operatorId: String): List<GiftRecord> = withContext(Dispatchers.Default) {
+        wrapper.database.giftRecordsQueries.getByOperator(operatorId) { id, opId, imageUri, giftName, senderName, createdAt ->
+            GiftRecord(id, opId, imageUri, giftName, senderName, createdAt)
+        }.executeAsList()
+    }
+
+    suspend fun insertGift(gift: GiftRecord) = withContext(Dispatchers.Default) {
+        wrapper.database.giftRecordsQueries.insert(gift.id, gift.operatorId, gift.imageUri, gift.giftName, gift.senderName, gift.createdAt)
+    }
+
+    suspend fun deleteGift(id: Long) = withContext(Dispatchers.Default) {
+        wrapper.database.giftRecordsQueries.delete(id)
+    }
+
+    suspend fun deleteGiftsByOperator(operatorId: String) = withContext(Dispatchers.Default) {
+        wrapper.database.giftRecordsQueries.deleteByOperator(operatorId)
+    }
+
     // --- Backward-compatible forwarding methods ---
     val allOperators: Flow<List<Operator>> get() = operators.allOperators
     suspend fun getAllOperatorsSync() = operators.getAllOperatorsSync()

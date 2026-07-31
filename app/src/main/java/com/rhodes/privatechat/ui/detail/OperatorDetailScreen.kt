@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -22,6 +23,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -57,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.rhodes.privatechat.data.db.entity.OperatorEntity
+import com.rhodes.privatechat.shared.model.GiftRecord
 import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.data.db.entity.RelationshipEntity
 import com.rhodes.privatechat.data.db.entity.RelationshipType
@@ -84,6 +87,7 @@ fun OperatorDetailScreen(
     var isLoading by remember { mutableStateOf(true) }
     var sharedMemories by remember { mutableStateOf("") }
     var interactionStats by remember { mutableStateOf(OperatorInteractionStats()) }
+    var gifts by remember { mutableStateOf<List<GiftRecord>>(emptyList()) }
     // 从状态列表获取最新数据，确保 userRelation 等字段更新
     val currentOperator = operators.find { it.id == operator.id } ?: operator
 
@@ -96,6 +100,7 @@ fun OperatorDetailScreen(
         }
         val sessions = viewModel.repository.getAllSessionsSync()
         val privateSession = sessions.firstOrNull { it.operatorId == currentOperator.id }
+        gifts = viewModel.getGiftsByOperator(currentOperator.id)
         val groupSessions = sessions.filter { session ->
             (session.id.startsWith("group") || session.operatorId.startsWith("group")) &&
                 session.members.split(',').map(String::trim).any { it == currentOperator.id }
@@ -128,6 +133,7 @@ fun OperatorDetailScreen(
         LazyColumn {
             item { ProfileSection(currentOperator) }
             item { IntimacySection(currentOperator.intimacy) }
+            item { GiftWallSection(gifts, onDelete = { id -> viewModel.deleteGift(id); gifts = gifts.filterNot { it.id == id } }, onClear = { viewModel.clearGiftWall(currentOperator.id); gifts = emptyList() }) }
             item { InteractionSection(interactionStats, onGroupClick) }
             item { RelationsSection(operatorName = currentOperator.name, graphNodes = graphNodes, isLoading = isLoading, userRelation = currentOperator.userRelation, operators = operators, userAvatarUri = userProfile.avatarUri, onNameClick = { name -> if (name == "用户") { /* 点击用户节点无跳转 */ } else { val op = operators.find { it.name == name }; if (op != null) onOperatorClick(op) } }) }
             item { SharedMemorySection(memories = sharedMemories) }
@@ -135,6 +141,48 @@ fun OperatorDetailScreen(
         }
     }
     }
+}
+
+@Composable
+private fun GiftWallSection(gifts: List<GiftRecord>, onDelete: (Long) -> Unit, onClear: () -> Unit) {
+    var showClear by remember { mutableStateOf(false) }
+    Column(modifier = Modifier.fillMaxWidth().background(Surface).padding(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text("礼物墙", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+            Spacer(Modifier.weight(1f))
+            if (gifts.isNotEmpty()) TextButton(onClick = { showClear = true }) { Text("清除礼物墙", color = ErrorRed, fontSize = 12.sp) }
+        }
+        if (gifts.isEmpty()) {
+            Text("还没有收到礼物", fontSize = 12.sp, color = TextTertiary, modifier = Modifier.padding(top = 8.dp))
+        } else {
+            LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(gifts, key = { it.id }) { gift ->
+                    Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Card).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        AsyncImage(model = gift.imageUri, contentDescription = gift.giftName, modifier = Modifier.size(64.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
+                        Spacer(Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(gift.giftName, color = TextPrimary, fontWeight = FontWeight.SemiBold, maxLines = 2)
+                            Text("${gift.senderName} · ${formatGiftTime(gift.createdAt)}", color = TextSecondary, fontSize = 11.sp, maxLines = 1)
+                        }
+                        TextButton(onClick = { onDelete(gift.id) }) { Text("删除", color = ErrorRed, fontSize = 12.sp) }
+                    }
+                }
+            }
+        }
+    }
+    HorizontalDivider(color = BG, thickness = 8.dp)
+    if (showClear) {
+        androidx.compose.material3.AlertDialog(onDismissRequest = { showClear = false }, containerColor = Card,
+            title = { Text("清除礼物墙", color = TextPrimary) },
+            text = { Text("将删除当前角色礼物墙中的全部礼物，聊天中的送礼记录不会删除。", color = TextSecondary) },
+            confirmButton = { TextButton(onClick = { onClear(); showClear = false }) { Text("确认清除", color = ErrorRed) } },
+            dismissButton = { TextButton(onClick = { showClear = false }) { Text("取消", color = TextSecondary) } })
+    }
+}
+
+private fun formatGiftTime(time: Long): String {
+    val format = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault())
+    return format.format(java.util.Date(time))
 }
 
 private data class OperatorInteractionStats(

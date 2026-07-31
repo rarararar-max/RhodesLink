@@ -40,6 +40,11 @@ class ChatRepository(
 
     suspend fun sendMessage(sessionId: String, message: ChatMessage) = shared.sendMessage(sessionId, message)
 
+    suspend fun getGiftsByOperator(operatorId: String) = shared.getGiftsByOperator(operatorId)
+    suspend fun insertGift(gift: GiftRecord) = shared.insertGift(gift)
+    suspend fun deleteGift(id: Long) = shared.deleteGift(id)
+    suspend fun deleteGiftsByOperator(operatorId: String) = shared.deleteGiftsByOperator(operatorId)
+
     suspend fun updateSessionMode(sessionId: String, mode: String) = shared.updateSessionMode(sessionId, mode)
 
     suspend fun getNextMessageId(): Long = shared.getNextMessageId()

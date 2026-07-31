@@ -15,6 +15,7 @@ import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.shared.memory.AnchorSourcePolicy
 import com.rhodes.privatechat.shared.network.AIService
 import com.rhodes.privatechat.shared.model.ChatMessage
+import com.rhodes.privatechat.shared.model.GiftRecord
 import com.rhodes.privatechat.shared.model.ChatSession
 import com.rhodes.privatechat.shared.model.DispatchRecord
 import com.rhodes.privatechat.shared.model.MemoryAnchor
@@ -764,6 +765,42 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     fun retryArchiveSummary(archiveId: String) = chatViewModel.retryArchiveSummary(archiveId)
     fun loadArchive(archiveId: String, onComplete: (Boolean) -> Unit = {}) = chatViewModel.loadArchive(archiveId, onComplete)
     fun deleteArchive(archiveId: String) = chatViewModel.deleteArchive(archiveId)
+
+    fun sendPrivateGift(operatorId: String, imageUri: String, giftName: String) {
+        val session = currentSession.value ?: return
+        val sender = getUserProfile().nickname.ifBlank { "我" }
+        viewModelScope.launch {
+            if (settings.lmb < 100) return@launch
+            val gift = GiftRecord(repository.getNextMessageId(), operatorId, imageUri, giftName, sender, System.currentTimeMillis())
+            repository.insertGift(gift)
+            if (!settings.trySpendLmb(100)) { repository.deleteGift(gift.id); return@launch }
+            operatorStateUpdater.updateOperatorIntimacy(operatorId, 2)
+            chatViewModel.sendHiddenGiftMessage("（用户给你送了一个礼物，是$giftName）")
+        }
+    }
+
+    fun sendGroupGift(groupId: String, groupName: String, memberIds: List<String>, imageUri: String, giftName: String, mode: String) {
+        val sender = getUserProfile().nickname.ifBlank { "我" }
+        viewModelScope.launch {
+            val total = memberIds.size * 100
+            if (memberIds.isEmpty() || settings.lmb < total) return@launch
+            val now = System.currentTimeMillis()
+            val gifts = memberIds.map { operatorId -> GiftRecord(repository.getNextMessageId(), operatorId, imageUri, giftName, sender, now) }
+            gifts.forEach { repository.insertGift(it) }
+            if (!settings.trySpendLmb(total)) {
+                gifts.forEach { repository.deleteGift(it.id) }
+                return@launch
+            }
+            memberIds.forEach { operatorStateUpdater.updateOperatorIntimacy(it, 2) }
+            val names = memberIds.mapNotNull { id -> appState.operators.value.find { it.id == id }?.name }
+            val target = names.joinToString("、")
+            groupChatViewModel.sendHiddenGiftMessage(groupId, groupName, "（用户给${target}都送了一个礼物，礼物是$giftName）", mode)
+        }
+    }
+
+    suspend fun getGiftsByOperator(operatorId: String) = repository.getGiftsByOperator(operatorId)
+    fun deleteGift(id: Long) { viewModelScope.launch { repository.deleteGift(id) } }
+    fun clearGiftWall(operatorId: String) { viewModelScope.launch { repository.deleteGiftsByOperator(operatorId) } }
 
     suspend fun getOperatorMemoryItems(operatorId: String) = repository.getMemoryItemsByOwner("operator", operatorId)
 

@@ -40,6 +40,8 @@ import com.rhodes.privatechat.ui.chat.component.MenuChip
 import com.rhodes.privatechat.ui.chat.component.MessageList
 import com.rhodes.privatechat.ui.chat.model.ChatUiMessage
 import com.rhodes.privatechat.ui.chat.util.MessageParser
+import com.rhodes.privatechat.ui.gift.GiftDialog
+import com.rhodes.privatechat.ui.gift.GiftTarget
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.util.ChatTrace
@@ -75,6 +77,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
     var showBgReset by remember(groupId) { mutableStateOf(false) }
     var showShare by remember(groupId) { mutableStateOf(false) }
     var showClearConfirm by remember(groupId) { mutableStateOf(false) }
+    var showGiftDialog by rememberSaveable(groupId) { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
     var currentMode by remember(groupId) { mutableStateOf(settings.getGroupMode(groupId)) }
     val showModePicker = remember(groupId) { mutableStateOf(false) }
@@ -251,7 +254,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
             Column(modifier = Modifier.weight(1f).imePadding().clipToBounds()) {
                 MessageList(
                     displaySessionKey = groupId,
-                    messages = uiMessages,
+                    messages = uiMessages.filter { groupMessages.firstOrNull { raw -> raw.id == it.originalMessageId }?.type != "gift_hidden" },
                     listState = listState,
                     onRecall = { msgId, segIdx -> viewModel.recallMessageSegment(msgId, segIdx) },
                     onSenderClick = onOperatorClick,
@@ -319,6 +322,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                     showModePicker = showModePicker,
                     menuItems = {
                         MenuChip("切换模式", Primary) { showModePicker.value = true }
+                        MenuChip("送礼", AccentOrange) { showGiftDialog = true }
                         MenuChip("相册", Primary) {
                             if (visionReady) MainActivity.pickImage { pendingImageUri = it }
                             else android.widget.Toast.makeText(ctx, "图片聊天需要先设置识图模型，请在模型设置中填写识图地址、模型名和密钥。", android.widget.Toast.LENGTH_LONG).show()
@@ -373,6 +377,15 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
         confirmButton = { TextButton(onClick = { viewModel.restartGroupSession(groupId); showClearConfirm = false }) { Text("确认开始", color = Primary) } },
         dismissButton = { TextButton(onClick = { showClearConfirm = false }) { Text("取消", color = TextSecondary) } }
     )
+
+    if (showGiftDialog) {
+        val memberTargets = groupSession?.members.orEmpty().split(',').mapNotNull { id ->
+            allOperators.find { it.id == id.trim() || it.name == id.trim() }?.let { GiftTarget(it.id, it.name) }
+        }
+        GiftDialog(viewModel = viewModel, targets = memberTargets, onDismiss = { showGiftDialog = false }) { imageUri, giftName, selected ->
+            viewModel.sendGroupGift(groupId, groupName, selected, imageUri, giftName, currentMode)
+        }
+    }
 
     if (showBgReset) AlertDialog(onDismissRequest = { showBgReset = false }, title = { Text("恢复默认背景", color = TextPrimary) }, text = { Text("将移除当前背景图", color = TextSecondary) }, confirmButton = { TextButton(onClick = { bgUri = null; settings.remove("gbg_$groupId"); showBgReset = false }) { Text("确认", color = Primary) } }, dismissButton = { TextButton(onClick = { showBgReset = false }) { Text("取消", color = TextSecondary) } })
 

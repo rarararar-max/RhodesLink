@@ -1144,6 +1144,23 @@ $requestText
         }
     }
 
+    fun sendHiddenGiftMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online") {
+        scope.launch {
+            val id = repository.getNextMessageId()
+            repository.sendMessage(groupSessionId, ChatMessage(
+                id = id,
+                sessionId = groupSessionId,
+                senderName = "我",
+                content = text,
+                type = "gift_hidden",
+                mode = mode,
+                isMe = true
+            ))
+            unhideSession(groupSessionId)
+            sendGroupMessage(groupSessionId, groupName, text, mode, userMessageAlreadyStored = true)
+        }
+    }
+
     /** Used by either the foreground timer or WorkManager after both validate the same plan token. */
     suspend fun runScheduledAutoTurn(groupId: String, token: String, expectedGeneration: Long? = null): Boolean {
         // Idle chat never preempts a user reply. Do not consume the durable plan until the queue is free.

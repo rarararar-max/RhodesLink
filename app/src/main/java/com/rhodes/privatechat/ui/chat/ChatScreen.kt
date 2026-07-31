@@ -72,6 +72,8 @@ import com.rhodes.privatechat.ui.chat.model.ChatUiMessage
 import com.rhodes.privatechat.ui.chat.util.MessageParser
 import com.rhodes.privatechat.ui.common.ThemedAlertDialog
 import com.rhodes.privatechat.ui.common.softTextFieldColors
+import com.rhodes.privatechat.ui.gift.GiftDialog
+import com.rhodes.privatechat.ui.gift.GiftTarget
 import com.rhodes.privatechat.shared.model.Operator
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.util.ChatTrace
@@ -232,6 +234,7 @@ fun ChatScreen(
     var showEraseConfirm by rememberSaveable { mutableStateOf(false) }
     val showModePicker = remember { mutableStateOf(false) }
     var showPropShop by rememberSaveable { mutableStateOf(false) }
+    var showGiftDialog by rememberSaveable { mutableStateOf(false) }
     var pendingImageUri by rememberSaveable { mutableStateOf("") }
     var imageSending by rememberSaveable { mutableStateOf(false) }
     var forceScrollThroughMessageCount by remember { mutableStateOf(0) }
@@ -339,9 +342,9 @@ fun ChatScreen(
             )
 
             Column(modifier = Modifier.weight(1f).imePadding().clipToBounds()) {
-                MessageList(
+            MessageList(
                     displaySessionKey = displaySessionId,
-                    messages = messages,
+                    messages = messages.filter { rawMessages.firstOrNull { raw -> raw.id == it.originalMessageId }?.type != "gift_hidden" },
                     listState = listState,
                     progressiveDisplay = true,
                     displayEvents = displayEvents,
@@ -414,7 +417,8 @@ fun ChatScreen(
                     showModePicker = showModePicker,
                     menuItems = {
                         MenuChip("🔄 模式", Primary) { showModePicker.value = true }
-                        MenuChip("🎒 道具", AccentOrange) { showPropShop = true }
+                         MenuChip("🎒 道具", AccentOrange) { showPropShop = true }
+                         MenuChip("🎁 送礼", AccentOrange) { showGiftDialog = true }
                         MenuChip("🖼 相册", Primary) {
                             if (visionReady) MainActivity.pickImage { pendingImageUri = it }
                             else Toast.makeText(context, "图片聊天需要先设置识图模型，请在模型设置中填写识图地址、模型名和密钥。", Toast.LENGTH_LONG).show()
@@ -498,6 +502,11 @@ fun ChatScreen(
     )
     if (showPropShop) {
         PropShopDialog(viewModel = viewModel, context = context, scope = scope, onDismiss = { showPropShop = false })
+    }
+    if (showGiftDialog) {
+        GiftDialog(viewModel = viewModel, targets = listOf(GiftTarget(op.id, op.name)), onDismiss = { showGiftDialog = false }) { imageUri, giftName, _ ->
+            viewModel.sendPrivateGift(op.id, imageUri, giftName)
+        }
     }
     cropTarget?.let { uri ->
         com.rhodes.privatechat.ui.common.ImageCropperDialog(

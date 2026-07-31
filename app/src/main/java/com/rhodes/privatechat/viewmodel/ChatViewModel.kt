@@ -155,6 +155,7 @@ class ChatViewModel(
     private var messagesJob: Job? = null
     private val chatAiJobs = ConcurrentHashMap<String, Job>()
     private val pendingUserMessageIds = ConcurrentHashMap<String, MutableSet<Long>>()
+    private val pendingGiftMessages = ConcurrentHashMap.newKeySet<String>()
     private val sessionGenerations = ConcurrentHashMap<String, Long>()
     private val pageSize: Long get() = CHAT_PAGE_SIZE
     private val memoryV2Pipeline = MemoryV2Pipeline(repository, settings, sharedUtils.aiService, memoryVectorService) { appState.userProfile.value.nickname }
@@ -1020,9 +1021,10 @@ $userContent
             var mutexLocked = false
             var userMessagePersisted = false
             try {
+                val hiddenGift = pendingGiftMessages.remove(session.id)
                 repository.sendMessage(session.id, ChatMessage(
                     id = msgId, sessionId = session.id,
-                    senderName = "我", content = text, type = "text", mode = _currentMode.value, isMe = true
+                    senderName = "我", content = text, type = if (hiddenGift) "gift_hidden" else "text", mode = _currentMode.value, isMe = true
                 ))
                 userMessagePersisted = true
                 DebugLogger.chatEvent("私聊", "发送消息", "已保存", "会话=${session.operatorName}，模式=$mode")
@@ -1400,6 +1402,14 @@ $userContent
             repository.deleteMessage(msgId)
             rebuildPrivateContextAfterRecall(sessionId ?: _currentSession.value?.id.orEmpty())
         }
+    }
+
+    /** Sends a user event through the normal AI pipeline without rendering a user bubble. */
+    fun sendHiddenGiftMessage(content: String) {
+        val sessionId = _currentSession.value?.id ?: return
+        pendingGiftMessages.add(sessionId)
+        _inputText.value = content
+        sendMessage()
     }
 
     /** Recalls one AI JSON segment without changing the remaining segment identities. */

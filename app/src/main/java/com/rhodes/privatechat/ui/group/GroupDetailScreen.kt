@@ -315,7 +315,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                     enabled = !imageSending,
                     forceSendEnabled = pendingImageUri.isNotBlank(),
                     currentMode = currentMode,
-                    onModeChange = { currentMode = it; settings.putGroupMode(groupId, it) },
+                    onModeChange = { currentMode = it; viewModel.setGroupMode(groupId, it) },
                     showModePicker = showModePicker,
                     menuItems = {
                         MenuChip("切换模式", Primary) { showModePicker.value = true }

@@ -29,13 +29,29 @@ class OperatorViewModel(
         voiceName: String = "",
         voiceSpeed: String = "",
         voicePitch: String = "",
-        onComplete: () -> Unit = {}
+        onComplete: (String?) -> Unit = {}
     ) {
         scope.launch {
             try {
+                val cleanName = name.trim()
+                if (id.isBlank()) {
+                    onComplete("干员内部编号无效，请重新进入新建页面")
+                    return@launch
+                }
+                if (cleanName.isBlank()) {
+                    onComplete("请输入干员名称")
+                    return@launch
+                }
+                val duplicate = appState.getOperatorsSnapshot().firstOrNull {
+                    it.id != id && it.name.trim().equals(cleanName, ignoreCase = true)
+                }
+                if (duplicate != null && !existingNameMatches(id, cleanName)) {
+                    onComplete("已存在名为“$cleanName”的干员，请使用其他名称")
+                    return@launch
+                }
                 val existing = repository.getOperator(id)
                 val op = Operator(
-                    id = id, name = name, title = title,
+                    id = id, name = cleanName, title = title,
                     description = description, gender = gender,
                     location = existing?.location ?: "宿舍",
                     activity = existing?.activity ?: "休息", emotion = existing?.emotion ?: "平静",
@@ -56,7 +72,7 @@ class OperatorViewModel(
                 )
                 repository.insertOperator(op)
                 repository.syncOperatorAvatar(id, op.avatarUri)
-                repository.syncOperatorName(id, name)
+                repository.syncOperatorName(id, cleanName)
                 settings.putOperatorDynPermission(id, autoPost)
                 settings.putOperatorMsgPermission(id, allowChat)
                 repository.deleteRelationshipByOperator(id)
@@ -64,20 +80,24 @@ class OperatorViewModel(
                     repository.insertRelationship(rel.copy(operatorId = id))
                 }
                 onSelectedOperatorUpdated?.invoke(repository.getOperator(id))
-            } finally {
-                onComplete()
+                onComplete(null)
+            } catch (e: Exception) {
+                onComplete("保存失败：${e.message?.take(80) ?: "请稍后重试"}")
             }
         }
     }
+
+    private fun existingNameMatches(id: String, name: String): Boolean =
+        appState.getOperatorsSnapshot().firstOrNull { it.id == id }?.name?.trim().equals(name, ignoreCase = true)
 
     fun deleteOperator(operatorId: String) {
         deleteOperators(listOf(operatorId))
     }
 
-    fun deleteOperators(operatorIds: Collection<String>, onComplete: () -> Unit = {}) {
+    fun deleteOperators(operatorIds: Collection<String>, onComplete: (String?) -> Unit = {}) {
         val ids = operatorIds.filter { it.isNotBlank() }.distinct()
         if (ids.isEmpty()) {
-            onComplete()
+            onComplete("未选择可删除的干员")
             return
         }
         scope.launch {
@@ -98,8 +118,9 @@ class OperatorViewModel(
                         settings.getStringSet("deleted_preset_operator_ids") + operatorId
                     )
                 }
-            } finally {
-                onComplete()
+                onComplete(null)
+            } catch (e: Exception) {
+                onComplete("删除失败：${e.message?.take(80) ?: "请稍后重试"}")
             }
         }
     }

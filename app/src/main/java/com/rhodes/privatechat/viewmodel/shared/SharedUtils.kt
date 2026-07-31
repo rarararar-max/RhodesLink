@@ -33,17 +33,21 @@ class SharedUtils(
     }
 
     /** Keeps public social context small: specified people, the last three days, and related items only. */
-    suspend fun buildRecentSocialContext(participantIds: Set<String>, query: String, limit: Int = 3): String {
+    suspend fun buildRecentSocialContext(participantIds: Set<String>, query: String, limit: Int = 3, surface: String = "private_chat"): String {
+        val allowMoments = settings.isMemoryInjectionAllowed(surface, "MOMENT")
+        val allowComments = settings.isMemoryInjectionAllowed(surface, "MOMENT_COMMENT")
         val cutoff = System.currentTimeMillis() - RECENT_SOCIAL_WINDOW_MS
         val allowed = participantIds + "user"
-        val posts = repository.getAllMomentsSync()
+        val posts = (if (allowMoments) repository.getAllMomentsSync() else emptyList())
             .asSequence()
             .filter { it.createdAt >= cutoff && it.operatorId in allowed }
             .map { "${it.operatorName}发动态：${it.content.take(90)}" to it.createdAt }
-        val comments = repository.getAllCommentsForBackup()
+            .toList()
+        val comments = (if (allowComments) repository.getAllCommentsForBackup() else emptyList())
             .asSequence()
             .filter { it.createdAt >= cutoff && it.operatorId in allowed }
             .map { "${it.operatorName}评论：${it.content.take(70)}" to it.createdAt }
+            .toList()
         val keywords = socialKeywords(query)
         val ranked = (posts + comments).map { item ->
             item to keywords.count { item.first.lowercase().contains(it) }
@@ -398,7 +402,19 @@ class SharedUtils(
         userContent: String = ""
     ): String {
         if (!settings.sourceAwareMemoryEnabled || maxCount <= 0) return "无"
-        val picked = pickAnchorsForSurface(anchors, maxCount, surface, userContent)
+        val allowed = anchors.filter { anchor ->
+            val source = AnchorSourcePolicy.inferLegacy(anchor).source
+            val sourceKind = when (source) {
+                AnchorSourcePolicy.PRIVATE_CHAT -> "PRIVATE_CHAT"
+                AnchorSourcePolicy.GROUP_CHAT -> "GROUP_CHAT"
+                AnchorSourcePolicy.MOMENT -> "MOMENT"
+                AnchorSourcePolicy.COMMENT -> "MOMENT_COMMENT"
+                AnchorSourcePolicy.DIARY -> "DIARY"
+                else -> "MANUAL_MEMORY"
+            }
+            settings.isMemoryInjectionAllowed(surface.name.lowercase(), sourceKind)
+        }
+        val picked = pickAnchorsForSurface(allowed, maxCount, surface, userContent)
         if (picked.isEmpty()) return "无"
         return picked.joinToString("\n") { AnchorSourcePolicy.toPromptLine(it) }
     }
@@ -545,12 +561,24 @@ class SharedUtils(
         return ops.joinToString("\n") { "- ${it.content.take(50)}" }
     }
 
-    suspend fun getRelationEvents(operatorId: String): String {
+    suspend fun getRelationEvents(operatorId: String, surface: MemorySurface = MemorySurface.DIARY): String {
         val rels = repository.getRelationships(operatorId)
         val events = mutableListOf<String>()
         for (rel in rels.take(5)) {
             val anchors = repository.getPublicAnchors(rel.relatedOperatorId)
-            for (a in pickAnchors(anchors, 2)) {
+            val allowedAnchors = anchors.filter { anchor ->
+                val source = AnchorSourcePolicy.inferLegacy(anchor).source
+                val sourceKind = when (source) {
+                    AnchorSourcePolicy.PRIVATE_CHAT -> "PRIVATE_CHAT"
+                    AnchorSourcePolicy.GROUP_CHAT -> "GROUP_CHAT"
+                    AnchorSourcePolicy.MOMENT -> "MOMENT"
+                    AnchorSourcePolicy.COMMENT -> "MOMENT_COMMENT"
+                    AnchorSourcePolicy.DIARY -> "DIARY"
+                    else -> "MANUAL_MEMORY"
+                }
+                settings.isMemoryInjectionAllowed(surface.name.lowercase(), sourceKind)
+            }
+            for (a in pickAnchorsForSurface(allowedAnchors, 2, surface)) {
                 events.add("- ${rel.relatedOperatorName}：${a.content}")
             }
         }

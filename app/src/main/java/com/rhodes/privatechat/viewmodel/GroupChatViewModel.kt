@@ -7,6 +7,7 @@ import com.rhodes.privatechat.shared.model.AnchorType
 import com.rhodes.privatechat.shared.model.ChatMessage
 import com.rhodes.privatechat.shared.model.ChatSession
 import com.rhodes.privatechat.shared.model.MemoryAnchor
+import com.rhodes.privatechat.shared.model.MemorySourceKind
 import com.rhodes.privatechat.shared.model.Operator
 import com.rhodes.privatechat.util.DebugLogger
 import com.rhodes.privatechat.util.ChatTrace
@@ -126,6 +127,7 @@ class GroupChatViewModel(
     private val groupJobLock = Any()
     private val pendingUserMessageIds = ConcurrentHashMap<String, MutableSet<Long>>()
     private val groupGenerations = ConcurrentHashMap<String, Long>()
+    private val restartCleanupJobs = ConcurrentHashMap<String, Job>()
 
     private suspend fun planGroupTurn(
         groupSessionId: String,
@@ -357,21 +359,44 @@ $requestText
         val message = _groupMessages.value.firstOrNull { it.id == msgId }
         if (message == null || message.type != "ai_json" || segmentIndex < 0) {
             removeMessage(msgId)
-            scope.launch { repository.deleteMessage(msgId) }
+            scope.launch {
+                repository.deleteMessage(msgId)
+                rebuildGroupContextAfterRecall(message?.sessionId ?: _currentGroupId.value)
+            }
             return
         }
         val updated = markSegmentRecalled(message.content, segmentIndex)
         if (updated == null) {
             removeMessage(msgId)
-            scope.launch { repository.deleteMessage(msgId) }
+            scope.launch {
+                repository.deleteMessage(msgId)
+                rebuildGroupContextAfterRecall(message.sessionId)
+            }
             return
         }
         _groupMessages.value = _groupMessages.value.map { if (it.id == msgId) it.copy(content = updated) else it }
         scope.launch {
             repository.updateMessageContentAndPreview(message.sessionId, msgId, updated, message.timestamp)
             repository.deleteDisplayEvent(msgId, segmentIndex)
-            repository.deleteMemoryV2BySession(message.sessionId)
-            repository.deleteMemoriesBySession(message.sessionId)
+            rebuildGroupContextAfterRecall(message.sessionId)
+        }
+    }
+
+    /** Rebuild derived context immediately so recalling one reply does not reset the whole group. */
+    private suspend fun rebuildGroupContextAfterRecall(groupId: String) {
+        if (groupId.isBlank()) return
+        repository.deleteMemoryV2BySession(groupId)
+        repository.deleteMemoriesBySession(groupId)
+        settings.putMemoryExtractionCursor(groupId, 0L)
+        settings.putSummaryCursor(groupId, 0L)
+        val session = repository.getSession(groupId) ?: return
+        val restartAt = settings.getSessionRestartAt(groupId)
+        val messages = repository.getMessagesSync(groupId)
+            .filter { it.type != "system" && (restartAt <= 0L || it.timestamp >= restartAt) }
+        if (messages.isEmpty()) return
+        generateGroupShortTermSummary(groupId, session.operatorName)
+        if (settings.memoryV2Enabled && settings.groupMemoryGenerationEnabled && ingestGroupMemoryV2(groupId, session.operatorName, messages.takeLast(30))) {
+            settings.putMemoryExtractionCursor(groupId, messages.maxOf { it.id })
         }
     }
 
@@ -445,8 +470,10 @@ $requestText
         settings.putSummaryCursor(groupId, 0L)
         settings.putMemoryExtractionCursor(groupId, 0L)
         if (_currentGroupId.value == groupId) _groupRestartAt.value = now
-        scope.launch {
-            repository.deleteMemoryV2BySession(groupId)
+        restartCleanupJobs[groupId]?.cancel()
+        restartCleanupJobs[groupId] = scope.launch {
+            repository.deleteShortTermMemory(groupId)
+            repository.clearGroupRestartMemory(groupId)
             repository.sendMessage(groupId, ChatMessage(
                 id = repository.getNextMessageId(),
                 sessionId = groupId,
@@ -456,6 +483,7 @@ $requestText
                 timestamp = now,
                 isMe = false
             ))
+            restartCleanupJobs.remove(groupId)
         }
     }
 
@@ -637,6 +665,7 @@ $requestText
             // User sends queue behind the current reply. Idle chat never preempts a user request.
             val generation = groupGenerations[groupSessionId] ?: 0L
             scope.launch {
+            restartCleanupJobs[groupSessionId]?.join()
             // 步骤1: 用户消息立即插入（不持锁），消息即时显示
             var userMessageId: Long? = null
             if (!isAuto && !userMessageAlreadyStored && text.isNotBlank()) {
@@ -730,7 +759,7 @@ $requestText
                 }
 
                 val profile = getUserProfile()
-                val relContext = getGroupRelationshipContext(activeMembers)
+                val relContext = if (settings.isMemoryInjectionAllowed("group_chat", "RELATIONSHIP")) getGroupRelationshipContext(activeMembers) else ""
                 val relationHints = if (relContext.isNotBlank()) relContext else "无"
                 // Personal chat background becomes shared only when the user explicitly names
                 // that member in this round; vague recall questions must not expose it.
@@ -739,7 +768,12 @@ $requestText
                 }.take(settings.groupMemberMemoryCount.coerceAtMost(2))
                 val memberPrivateContext = buildString {
                     recalledMembers.forEach { member ->
-                        val knowledge = memoryV2Pipeline.buildPrivateMemoryContext(member.id, 1, 1, 1, requestText)
+                        val knowledge = if (settings.isMemoryInjectionAllowed("group_chat", "MEMBER_PRIVATE_CHAT")) {
+                            memoryV2Pipeline.buildPrivateMemoryContext(
+                                member.id, 1, 1, 1, requestText,
+                                allowedSources = setOf(MemorySourceKind.PRIVATE_CHAT.name),
+                            )
+                        } else ""
                         if (knowledge.isNotBlank()) {
                             appendLine("【用户本轮提起的${member.name}私聊背景，所有成员可自然回应】")
                             appendLine(knowledge)
@@ -752,27 +786,42 @@ $requestText
                     ?.content?.takeIf { it.isNotBlank() } ?: ""
                 val memberMemoryContext = ""
                 val sourceAwareMemories = "无"
-                val groupVectorMemories = memoryV2Pipeline.buildOwnerMemoryContext(
-                    ownerType = "group",
-                    ownerId = groupSessionId,
-                    limitL1 = 3,
-                    limitL2 = 0,
-                    limitL3 = 0,
-                    query = requestText,
-                ).ifBlank { "无" }
+                val groupVectorMemories = if (settings.isMemoryInjectionAllowed("group_chat", "GROUP_CHAT")) {
+                    val memoryRestartAt = settings.getSessionRestartAt(groupSessionId)
+                    memoryV2Pipeline.buildOwnerMemoryContext(
+                        ownerType = "group",
+                        ownerId = groupSessionId,
+                        limitL1 = 3,
+                        limitL2 = 0,
+                        limitL3 = 0,
+                        query = requestText,
+                        minCreatedAt = memoryRestartAt,
+                    ).ifBlank { "无" }
+                } else "无"
+                val groupPublicMemories = if (settings.isMemoryInjectionAllowed("group_chat", "MOMENT") || settings.isMemoryInjectionAllowed("group_chat", "MOMENT_COMMENT")) {
+                    val publicSources = buildSet {
+                        if (settings.isMemoryInjectionAllowed("group_chat", "MOMENT")) add(MemorySourceKind.MOMENT.name)
+                        if (settings.isMemoryInjectionAllowed("group_chat", "MOMENT_COMMENT")) add(MemorySourceKind.MOMENT_COMMENT.name)
+                    }
+                    memoryV2Pipeline.buildPublicMemoryContext(requestText, limit = 2, allowedSources = publicSources).ifBlank { "无" }
+                } else "无"
                 val recentSocialContext = sharedUtils.buildRecentSocialContext(
                     activeMembers.map { it.id }.toSet(),
                     requestText,
-                    limit = if (isAuto) 2 else 3
+                    limit = if (isAuto) 2 else 3,
+                    surface = "group_chat"
                 )
-                val groupDailySummary = if (UnifiedMemoryContext.shouldIncludeTimeSummary(text)) {
-                    repository.getLatestDailyBySession(groupSessionId)?.content ?: "无"
+                 val groupDailySummary = if (UnifiedMemoryContext.shouldIncludeTimeSummary(text)) {
+                     repository.getLatestDailyBySession(groupSessionId)
+                         ?.takeIf { restartAt <= 0L || it.createdAt >= restartAt }
+                         ?.content ?: "无"
                 } else "无"
                 val legacyMemberMemory = ""
                 val unifiedGroupMemory = UnifiedMemoryContext.mergeBlocks(
                     maxChars = sharedUtils.contextBlockLimit(2),
                     legacyMemberMemory,
-                    groupVectorMemories
+                    groupVectorMemories,
+                    groupPublicMemories
                 )
                 val unifiedKnownFrom = UnifiedMemoryContext.mergeBlocks(
                     maxChars = sharedUtils.contextBlockLimit(),
@@ -893,17 +942,25 @@ $requestText
                 """.trimMargin()
                 val historyLimit = settings.historyMessages
                 val activeNames = activeMembers.map { it.name }.toSet() + "我" + "系统"
+                val pendingModeTransition = settings.getPendingGroupModeTransition(groupSessionId)
                 val allHistory = repository.getMessagesSync(groupSessionId).let { msgs ->
                     val restartAt = settings.getSessionRestartAt(groupSessionId)
                     val currentConversation = if (restartAt > 0L) msgs.filter { it.timestamp >= restartAt } else msgs
-                    val limited = recentGroupRounds(currentConversation, historyLimit)
-                    limited.filter { msg -> (msg.id !in batchIds) && (msg.isMe || msg.type == "system" || msg.type == "ai_json" || msg.senderName in activeNames) }
+                    val dialogueHistory = recentGroupRounds(currentConversation, historyLimit)
+                    val recentSystemEvents = currentConversation.filter { it.type == "system" }.takeLast(3)
+                    (dialogueHistory + recentSystemEvents)
+                        .distinctBy { it.id }
+                        .sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
+                        .filter { msg -> (msg.id !in batchIds) && (msg.isMe || msg.type == "system" || msg.type == "ai_json" || msg.senderName in activeNames) }
                 }.toMutableList()
                 // Keep the pre-stored media row in history, but remove a non-batched trailing text row.
                 if (!isAuto && batchIds.isEmpty() && !userMessageAlreadyStored && allHistory.lastOrNull()?.isMe == true) {
                     allHistory.removeAt(allHistory.lastIndex)
                 }
                 val apiMessages = mutableListOf(AiMessage("system", finalSystemPrompt))
+                if (pendingModeTransition.isNotBlank()) {
+                    apiMessages.add(AiMessage("system", "【互动形式变更】$pendingModeTransition"))
+                }
                 allHistory.forEach { msg ->
                     val formatted = formatGroupHistoryForPrompt(msg)
                     if (formatted.isNotBlank()) {
@@ -1029,6 +1086,9 @@ $requestText
                         senderName = groupName, content = storedContent,
                         type = "ai_json", mode = mode, isMe = false
                     ))
+                    if (pendingModeTransition.isNotBlank()) {
+                        settings.clearPendingGroupModeTransition(groupSessionId)
+                    }
                     DebugLogger.chatEvent("群聊", "回复落库", "成功", "群=$groupName，条目=${filtered.size}")
                     // Auto messages and replies can arrive while the group is open, so unread-based
                     // restoration alone is insufficient after the user removed it from the home page.
@@ -1116,16 +1176,17 @@ $requestText
 
     /** A group round starts with a user message; automatic AI batches remain individual rounds. */
     private fun recentGroupRounds(messages: List<ChatMessage>, roundLimit: Int): List<ChatMessage> {
-        if (roundLimit <= 0) return messages
+        val dialogueMessages = messages.filter { it.type != "system" }
+        if (roundLimit <= 0) return dialogueMessages
         val roundStarts = mutableListOf<Int>()
-        messages.forEachIndexed { index, message ->
-            if (message.isMe || (index == 0 && !message.isMe) || (!message.isMe && messages[index - 1].isMe.not() && message.type == "ai_json")) {
+        dialogueMessages.forEachIndexed { index, message ->
+            if (message.isMe || (index == 0 && !message.isMe) || (!message.isMe && dialogueMessages[index - 1].isMe.not() && message.type == "ai_json")) {
                 roundStarts += index
             }
         }
-        if (roundStarts.isEmpty()) return messages.takeLast(roundLimit)
+        if (roundStarts.isEmpty()) return dialogueMessages.takeLast(roundLimit)
         val startIndex = roundStarts.getOrElse((roundStarts.size - roundLimit).coerceAtLeast(0)) { 0 }
-        return messages.drop(startIndex)
+        return dialogueMessages.drop(startIndex)
     }
 
     private fun formatGroupHistoryForPrompt(msg: ChatMessage): String {
@@ -1183,7 +1244,7 @@ $requestText
         return results.mapNotNull { raw ->
             val stripped = stripSpeakerPrefix(raw.message)
             var speaker = raw.speaker.trim().ifBlank { stripped.first.ifBlank { "旁白" } }
-            var message = stripped.second.ifBlank { raw.message }.trim()
+            var message = stripLeakedSegmentLabel(stripped.second.ifBlank { raw.message }).trim()
             var type = if (raw.type.equals("narration", true) || raw.type == "旁白") "narration" else "dialogue"
             if (stripped.first.isNotBlank() && stripped.first in validSpeakers) speaker = stripped.first
             if (speaker == "旁白") type = "narration"
@@ -1248,6 +1309,11 @@ $members
         val idx = listOf(content.indexOf('：'), content.indexOf(':')).filter { it in 1..12 }.minOrNull() ?: return "" to content
         return content.substring(0, idx).trim(' ', '“', '”', '"') to content.substring(idx + 1).trim()
     }
+
+    /** Removes structural dialogue labels that a model may leak into a group message. */
+    private fun stripLeakedSegmentLabel(content: String): String = content.trimStart()
+        .replaceFirst(Regex("^【(?:旁白|台词|台詞)(?:[：:])?】\\s*"), "")
+        .trimStart()
 
     private fun containsFirstPersonNarration(content: String): Boolean {
         val outsideQuotes = content
@@ -1383,6 +1449,7 @@ $members
     private fun currentVisionGateway(): VisionGateway = createVisionGateway(settings)
 
     private suspend fun saveGroupAnchorToVector(anchor: MemoryAnchor, groupSessionId: String, groupName: String) {
+        if (!settings.memoryV2Enabled || !settings.groupMemoryGenerationEnabled) return
         if (!repository.saveAnchor(anchor)) return
         val service = memoryVectorService ?: return
         val now = anchor.createdAt.takeIf { it > 0 } ?: System.currentTimeMillis()
@@ -1421,6 +1488,7 @@ $members
     }
 
     private suspend fun saveVisionVectorMemory(groupSessionId: String, caption: String, visionText: String) {
+        if (!settings.memoryV2Enabled || !settings.groupMemoryGenerationEnabled) return
         val service = memoryVectorService ?: return
         if (visionText.isBlank() || visionText.startsWith("[")) return
         try {
@@ -1534,6 +1602,7 @@ $members
         !isStrictGroupJson(raw) && extractGroupResults(raw).isNotEmpty()
 
     private suspend fun generateGroupDailySummary(groupSessionId: String, groupName: String) {
+        if (!settings.memoryV2Enabled || !settings.groupDailySummaryGenerationEnabled) return
         try {
             val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
             cal.add(java.util.Calendar.DAY_OF_MONTH, -1)
@@ -1566,6 +1635,7 @@ $members
     }
 
     private suspend fun generateGroupShortTermSummary(groupSessionId: String, groupName: String): Boolean {
+        if (!settings.memoryV2Enabled || !settings.groupSummaryGenerationEnabled) return false
         try {
             val retain = settings.summaryRetain.coerceAtLeast(5)
             val window = (settings.summaryThreshold + retain).coerceAtLeast(retain + 3)
@@ -1636,7 +1706,7 @@ $text"""
     }
 
     private suspend fun ingestGroupMemoryV2(groupSessionId: String, groupName: String, messages: List<ChatMessage>): Boolean {
-        if (!settings.memoryV2Enabled || messages.isEmpty()) return false
+        if (!settings.memoryV2Enabled || !settings.groupMemoryGenerationEnabled || messages.isEmpty()) return false
         return try {
             val memberIds = repository.getSession(groupSessionId)?.members
                 ?.split(',')?.map { it.trim() }?.filter { it.isNotBlank() }.orEmpty()
@@ -1649,7 +1719,7 @@ $text"""
     }
 
     private suspend fun extractGroupMemoryIfNeeded(groupSessionId: String, groupName: String) {
-        if (!settings.memoryV2Enabled) return
+        if (!settings.memoryV2Enabled || !settings.groupMemoryGenerationEnabled) return
         val cursor = settings.getMemoryExtractionCursor(groupSessionId)
         val restartAt = settings.getSessionRestartAt(groupSessionId)
         val pending = repository.getMessagesSync(groupSessionId)

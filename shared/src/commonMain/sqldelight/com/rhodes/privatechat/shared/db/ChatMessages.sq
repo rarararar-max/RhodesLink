@@ -17,10 +17,10 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 );
 
 getMessages:
-SELECT * FROM chat_messages WHERE sessionId = ? ORDER BY timestamp ASC;
+SELECT * FROM chat_messages WHERE sessionId = ? ORDER BY timestamp ASC, id ASC;
 
 getMessagesSync:
-SELECT * FROM chat_messages WHERE sessionId = ? ORDER BY timestamp ASC;
+SELECT * FROM chat_messages WHERE sessionId = ? ORDER BY timestamp ASC, id ASC;
 
 getRecentMessages:
 SELECT * FROM chat_messages WHERE sessionId = ? ORDER BY timestamp DESC, id DESC LIMIT ?;
@@ -44,7 +44,7 @@ getMessageCountPerSenderSince:
 SELECT senderName, COUNT(*) AS cnt FROM chat_messages WHERE isMe = 0 AND senderName != '' AND senderName != '系统' AND sessionId NOT LIKE 'group_%' AND timestamp >= ? GROUP BY senderName ORDER BY cnt DESC;
 
 getMessagesInRange:
-SELECT * FROM chat_messages WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp ASC;
+SELECT * FROM chat_messages WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp ASC, id ASC;
 
 searchMessagesInSession:
 SELECT * FROM chat_messages

@@ -276,8 +276,7 @@ object MessageParser {
 
     /** Removes only the exact structural labels leaked at the start of a model segment. */
     private fun stripLeakedSegmentLabel(content: String): String = content.trimStart()
-        .removePrefix("【旁白】")
-        .removePrefix("【台词】")
+        .replaceFirst(Regex("^【(?:旁白|台词|台詞)(?:[：:])?】\\s*"), "")
         .trimStart()
 
     private fun looksLikeJson(content: String): Boolean {

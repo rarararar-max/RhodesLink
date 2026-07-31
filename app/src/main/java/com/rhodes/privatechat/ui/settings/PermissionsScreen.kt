@@ -78,9 +78,13 @@ fun PermissionsScreen(
             confirmButton = {
                 TextButton(onClick = {
                     showDeleteConfirm = false
-                    viewModel.deleteOperators(pendingDeletionIds) {
-                        finishSave?.invoke()
-                        finishSave = null
+                    viewModel.deleteOperators(pendingDeletionIds) { error ->
+                        if (error == null) {
+                            finishSave?.invoke()
+                            finishSave = null
+                        } else {
+                            android.widget.Toast.makeText(context, error, android.widget.Toast.LENGTH_LONG).show()
+                        }
                     }
                 }) { Text("确认删除", color = ErrorRed) }
             },

@@ -860,7 +860,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         val id = repository.insertMemoryItem(item)
         if (id <= 0) return false
         val vectorId = "manual_memory_operator_${operatorId}_$id"
-        runCatching {
+        if (settings.memoryV2Enabled) runCatching {
             memoryVectorService?.saveMemory(VectorMemory(
                 id = vectorId, ownerType = "operator", ownerId = operatorId,
                 sourceType = "manual_memory", sourceId = id.toString(), content = MemoryVectorFormatter.content(item.copy(id = id)),
@@ -879,6 +879,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     }
 
     suspend fun rebuildOperatorMemoryIndexes(operatorId: String, onProgress: (Int, Int) -> Unit = { _, _ -> }): IndexRebuildResult {
+        if (!settings.memoryV2Enabled) return IndexRebuildResult(0, 0, 0, 0, listOf("统一记忆系统已关闭"))
         val now = System.currentTimeMillis()
         val errors = mutableListOf<String>()
         memoryVectorService?.listMemories("operator", operatorId)
@@ -913,6 +914,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     }
 
     suspend fun rebuildAllMemoryIndexes(onProgress: (Int, Int) -> Unit = { _, _ -> }): IndexRebuildResult {
+        if (!settings.memoryV2Enabled) return IndexRebuildResult(0, 0, 0, 0, listOf("统一记忆系统已关闭"))
         val now = System.currentTimeMillis()
         val items = repository.getAllMemoryItems().filter { it.status == "active" && it.expiresAt > now && it.content.isNotBlank() }
         if (memoryVectorService == null) return IndexRebuildResult(items.size, 0, 0, items.size)
@@ -952,6 +954,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     }
 
     private suspend fun recoverMissingMemoryIndexes(limit: Int = 200) {
+        if (!settings.memoryV2Enabled) return
         val service = memoryVectorService ?: return
         val now = System.currentTimeMillis()
         val pending = repository.getActiveMemoryItemsMissingVector(now, limit)
@@ -1030,6 +1033,20 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     suspend fun deleteMessageDisplayEvents(messageId: Long) = repository.deleteMessageDisplayEvents(messageId)
 
     fun setMode(mode: String) = chatViewModel.setMode(mode)
+
+    fun setGroupMode(groupId: String, mode: String) {
+        if (groupId.isBlank()) return
+        val oldMode = settings.getGroupMode(groupId)
+        val newMode = mode.trim().lowercase().takeIf { it in setOf("online", "offline", "director") } ?: "online"
+        if (oldMode == newMode) return
+        settings.putGroupMode(groupId, newMode)
+        val transition = when {
+            oldMode == "online" && newMode != "online" -> "大家从线上聊天转为线下见面互动。"
+            oldMode != "online" && newMode == "online" -> "大家回到群聊继续交流。"
+            else -> "大家继续以新的互动形式交流。"
+        }
+        settings.putPendingGroupModeTransition(groupId, transition)
+    }
 
     fun buyProp(propName: String, context: android.content.Context): String? {
         if (!settings.trySpendLmb(PROP_PRICE)) return "余额不足"
@@ -1342,11 +1359,11 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                      autoPost: Boolean = true, allowChat: Boolean = true,
                       relationships: List<com.rhodes.privatechat.shared.model.Relationship> = emptyList(),
                       activityLevel: Float = 0.5f,
-                      gender: String = "",
-                      voiceName: String = "",
-                      voiceSpeed: String = "",
-                      voicePitch: String = "",
-                      onComplete: () -> Unit = {}) =
+                       gender: String = "",
+                       voiceName: String = "",
+                       voiceSpeed: String = "",
+                       voicePitch: String = "",
+                       onComplete: (String?) -> Unit = {}) =
         operatorViewModel.saveOperator(id, name, title, description, privatePrompt, groupPrompt, memoryInjection, userRelation, avatarUri, autoPost, allowChat, relationships, activityLevel, gender, voiceName, voiceSpeed, voicePitch, onComplete)
 
     fun loadRelationships(operatorId: String, callback: (List<com.rhodes.privatechat.shared.model.Relationship>) -> Unit) =
@@ -1395,7 +1412,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
 
     fun deleteOperator(operatorId: String) = operatorViewModel.deleteOperator(operatorId)
 
-    fun deleteOperators(operatorIds: Collection<String>, onComplete: () -> Unit = {}) {
+    fun deleteOperators(operatorIds: Collection<String>, onComplete: (String?) -> Unit = {}) {
         if (chatViewModel.selectedOperator.value?.id in operatorIds) chatViewModel.clearSelection()
         operatorViewModel.deleteOperators(operatorIds, onComplete)
     }
@@ -1447,17 +1464,19 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         groupChatViewModel.sendGroupMessage(groupSessionId, groupName, text, mode, autoSpeak = autoSpeak, isAuto = isAuto, onMessageSent = onMessageSent)
 
     private suspend fun buildMomentMemoryContext(op: Operator, mentionUser: Boolean): MomentMemoryContext {
+        val allowedSources = memorySourcesFor("moment")
         val memories = memoryV2Pipeline.buildPrivateMemoryContext(
             op.id,
             limitL1 = 1,
             limitL2 = 2,
             limitL3 = 1,
             query = op.name,
+            allowedSources = allowedSources,
         ).ifBlank { "无" }
         return MomentMemoryContext(
             memories = memories,
             sourceAwareMemories = "无",
-            recentSocialContext = sharedUtils.buildRecentSocialContext(setOf(op.id), op.name)
+            recentSocialContext = sharedUtils.buildRecentSocialContext(setOf(op.id), op.name, surface = "moment")
         ).let { ctx ->
             if (mentionUser) ctx else ctx.copy(
                 sourceAwareMemories = "无",
@@ -1466,14 +1485,29 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     }
 
     private suspend fun buildCommenterMemoryContext(operatorId: String, surface: MemorySurface, query: String, includePrivateConversation: Boolean = false): Pair<String, String> {
+        val allowedSources = memorySourcesFor(if (surface == MemorySurface.COMMENT) "comment" else "moment")
         val memory = memoryV2Pipeline.buildPrivateMemoryContext(
             operatorId,
             limitL1 = 1,
             limitL2 = settings.commentMemoryCount.coerceIn(1, 3),
             limitL3 = 1,
             query = query,
+            allowedSources = allowedSources,
         ).ifBlank { "无" }
         return memory to "无"
+    }
+
+    private fun memorySourcesFor(surface: String): Set<String> = buildSet {
+        listOf(
+            com.rhodes.privatechat.shared.model.MemorySourceKind.PRIVATE_CHAT,
+            com.rhodes.privatechat.shared.model.MemorySourceKind.GROUP_CHAT,
+            com.rhodes.privatechat.shared.model.MemorySourceKind.MOMENT,
+            com.rhodes.privatechat.shared.model.MemorySourceKind.MOMENT_COMMENT,
+            com.rhodes.privatechat.shared.model.MemorySourceKind.DIARY,
+            com.rhodes.privatechat.shared.model.MemorySourceKind.MANUAL_MEMORY,
+        ).forEach { source ->
+            if (settings.isMemoryInjectionAllowed(surface, source.name)) add(source.name)
+        }
     }
 
     private fun commentTimeReplacements(now: Long = System.currentTimeMillis()): Map<String, String> {
@@ -1592,7 +1626,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                             if (isAuto) settings.putMomentCount(op.id, today, generated + 1)
                             val moment = Moment(operatorId = op.id, operatorName = op.name, content = content, createdAt = fakeTs)
                             val momentId = repository.insertMoment(moment)
-                            if (settings.memoryV2Enabled && settings.momentMemoryV2Enabled) {
+                            if (settings.memoryV2Enabled && settings.momentMemoryGenerationEnabled) {
                                 memoryV2Pipeline.ingestMoment(moment.copy(id = momentId))
                             }
                             totalGenerated++
@@ -1617,7 +1651,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                                                     .joinToString("\n") { "${it.operatorName}：${it.content.take(60)}" }
                                             } catch (_: Exception) { "" }
                                             val (commenterMemory, sourceAwareMemory) = buildCommenterMemoryContext(commenter.id, MemorySurface.COMMENT, c)
-                                            val recentSocialContext = sharedUtils.buildRecentSocialContext(setOf(commenter.id, op.id), c)
+                                             val recentSocialContext = sharedUtils.buildRecentSocialContext(setOf(commenter.id, op.id), c, surface = "comment")
                                             val cmtReplacements = mapOf(
                                                 "COMMENTER_NAME" to commenter.name, "COMMENTER_PERSONA" to publicCommentPersona(commenter),
                                                 "POST_AUTHOR_NAME" to op.name,
@@ -1648,7 +1682,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                                             if (cleanComment.isNotBlank()) {
                                                 val comment = MomentComment(momentId = momentId, operatorId = commenter.id, operatorName = commenter.name, content = cleanComment, createdAt = System.currentTimeMillis())
                                                  val savedCommentId = repository.insertComment(comment)
-                                                if (settings.memoryV2Enabled && settings.momentMemoryV2Enabled) {
+                                                 if (settings.memoryV2Enabled && settings.momentCommentMemoryGenerationEnabled) {
                                                     memoryV2Pipeline.ingestMomentComment(comment.copy(id = savedCommentId), momentId)
                                                 }
                                                 actualComments++
@@ -1780,7 +1814,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                     val today = beijingSdf("yyyyMMdd").format(java.util.Date(fakeTs))
                     settings.putMomentCount(op.id, today, settings.getMomentCount(op.id, today) + 1)
                 }
-                if (settings.memoryV2Enabled && settings.momentMemoryV2Enabled) {
+                if (settings.memoryV2Enabled && settings.momentMemoryGenerationEnabled) {
                     memoryV2Pipeline.ingestMoment(moment.copy(id = momentId))
                 }
                 momentId
@@ -1821,7 +1855,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                                 .joinToString("\n") { "${it.operatorName}：${it.content.take(60)}" }
                         } catch (_: Exception) { "" }
                         val (commenterMemory, sourceAwareMemory) = buildCommenterMemoryContext(commenter.id, MemorySurface.COMMENT, postContent)
-                        val recentSocialContext = sharedUtils.buildRecentSocialContext(setOf(commenter.id, op.id), postContent)
+                         val recentSocialContext = sharedUtils.buildRecentSocialContext(setOf(commenter.id, op.id), postContent, surface = "comment")
                         val cmtReplacements = commentTimeReplacements() + mapOf(
                             "COMMENTER_NAME" to commenter.name, "COMMENTER_PERSONA" to publicCommentPersona(commenter),
                             "POST_AUTHOR_NAME" to op.name,
@@ -1848,7 +1882,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                         if (cc.isNotBlank()) {
                             val comment = MomentComment(momentId = momentId, operatorId = commenter.id, operatorName = commenter.name, content = cc, createdAt = System.currentTimeMillis())
                             val commentId = repository.insertComment(comment)
-                            if (settings.memoryV2Enabled && settings.momentMemoryV2Enabled) {
+                            if (settings.memoryV2Enabled && settings.momentCommentMemoryGenerationEnabled) {
                                 memoryV2Pipeline.ingestMomentComment(comment.copy(id = commentId), momentId)
                             }
                             actualComments++
@@ -1897,7 +1931,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             Log.d("RHODES_MOMENT", "commentOnMoment: 评论已写入 id=$userCommentId")
             refreshMomentCommentCount(momentId)
             DebugLogger.log("Moment/DB", "评论已写入DB, momentId=$momentId, commentId=$userCommentId")
-            if (operatorId == "user" && settings.memoryV2Enabled && settings.momentMemoryV2Enabled) {
+            if (operatorId == "user" && settings.memoryV2Enabled && settings.momentCommentMemoryGenerationEnabled) {
                 // Public user comments deserve the same recall treatment as AI public comments.
                 runCatching { memoryV2Pipeline.ingestMomentComment(persistedUserComment, momentId) }
                     .onFailure { DebugLogger.log("MemoryV2", "用户公开评论记忆写入失败: ${it.message?.take(80)}") }
@@ -2027,7 +2061,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         val comment = MomentComment(momentId = momentId, operatorId = operator.id, operatorName = operator.name, content = content, parentCommentId = parentCommentId, replyToName = userName, createdAt = System.currentTimeMillis())
         val commentId = repository.insertComment(comment)
         val persistedComment = comment.copy(id = commentId)
-        if (settings.memoryV2Enabled && settings.momentMemoryV2Enabled) {
+        if (settings.memoryV2Enabled && settings.momentCommentMemoryGenerationEnabled) {
             runCatching { memoryV2Pipeline.ingestMomentComment(persistedComment, momentId) }
                 .onFailure { DebugLogger.log("MemoryV2", "评论分层记忆写入失败: ${it.message?.take(80)}") }
         }
@@ -2068,10 +2102,11 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                     memory.takeIf { it.isNotBlank() }?.let { "【你的相关记忆】\n$it" },
                     sourceAwareMemory.takeIf { it.isNotBlank() && it != "无" }?.let { "【你知道这些事的来源】\n$it\n${sharedUtils.sourceAwareUsageRule(MemorySurface.COMMENT)}" }
                 ).joinToString("\n")
-                val recentSocialContext = sharedUtils.buildRecentSocialContext(
-                    setOfNotNull(realOp?.id, moment?.operatorId),
-                    listOf(userContent, moment?.content.orEmpty(), recentComments).joinToString("\n")
-                )
+                 val recentSocialContext = sharedUtils.buildRecentSocialContext(
+                     setOfNotNull(realOp?.id, moment?.operatorId),
+                     listOf(userContent, moment?.content.orEmpty(), recentComments).joinToString("\n"),
+                     surface = "comment"
+                 )
                 sharedUtils.logMemoryContext(
                     surface = "comment",
                     title = "$currentSpeakerName/moment_$momentId",
@@ -2164,7 +2199,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             val moment = Moment(operatorId = "user", operatorName = userName, content = cleanContent, isUserPost = true, mentionedOperatorIds = mentionedOperatorIds.joinToString(","), createdAt = System.currentTimeMillis())
             val momentId = repository.insertMoment(moment)
             DebugLogger.log("Moment/DB", "动态已写入DB, id=$momentId")
-            if (settings.memoryV2Enabled && settings.momentMemoryV2Enabled) {
+            if (settings.memoryV2Enabled && settings.momentMemoryGenerationEnabled) {
                 runCatching { memoryV2Pipeline.ingestMoment(moment.copy(id = momentId)) }
                     .onFailure { DebugLogger.log("MemoryV2", "动态分层记忆写入失败: ${it.message?.take(80)}") }
             }
@@ -2412,20 +2447,22 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 val relevantGroupSessions = _allSessions.value.filter { session ->
                     session.operatorId.startsWith("group_") && session.members.split(",").map { it.trim() }.any { it == operatorId || it == op.name }
                 }
-                val groupRecordContext = relevantGroupSessions
+                val includeDiaryPrivate = settings.isMemoryInjectionAllowed("diary", "PRIVATE_CHAT")
+                val includeDiaryGroup = settings.isMemoryInjectionAllowed("diary", "GROUP_CHAT")
+                val groupRecordContext = if (includeDiaryGroup) relevantGroupSessions
                     .mapNotNull { session -> repository.getMessagesSync(session.id).filter { it.timestamp in yesterdayStart until yesterdayEnd }.takeLast(12).takeIf { it.isNotEmpty() }?.joinToString("；") { it.senderName + "：" + it.content.take(40) }?.let { c -> "- ${session.operatorName}：${c.take(160)}" } }
-                    .take(settings.diaryGroupSummaryCount)
-                val groupRollingSummaries = relevantGroupSessions.mapNotNull { session ->
+                    .take(settings.diaryGroupSummaryCount) else emptyList()
+                val groupRollingSummaries = if (includeDiaryGroup) relevantGroupSessions.mapNotNull { session ->
                     repository.getShortTermMemory(session.id)
                         ?.takeIf { it.createdAt in yesterdayStart..System.currentTimeMillis() && it.content.isNotBlank() }
                         ?.let { "- ${session.operatorName}近期群聊回顾：${it.content}" }
-                }.take(settings.diaryGroupSummaryCount)
+                }.take(settings.diaryGroupSummaryCount) else emptyList()
                 val groupSummaries = listOf(
                     groupRecordContext.takeIf { it.isNotEmpty() }?.let { "昨天实际群聊片段：\n${it.joinToString("\n")}" },
                     groupRollingSummaries.takeIf { it.isNotEmpty() }?.let { "近期生成的群聊滚动摘要：\n${it.joinToString("\n")}" }
                 ).filterNotNull().joinToString("\n").ifBlank { "无" }
-                val diaryV2Memories = memoryV2Pipeline.buildPrivateMemoryContext(operatorId, limitL1 = 3, limitL2 = 4, limitL3 = 3, query = "日记 回顾 ${op.name}").ifBlank { "无" }
-                val privateSummary = repository.getAllSessionsSync()
+                val diaryV2Memories = memoryV2Pipeline.buildPrivateMemoryContext(operatorId, limitL1 = 3, limitL2 = 4, limitL3 = 3, query = "日记 回顾 ${op.name}", allowedSources = memorySourcesFor("diary")).ifBlank { "无" }
+                val privateSummary = if (includeDiaryPrivate) repository.getAllSessionsSync()
                     .firstOrNull { it.operatorId == operatorId }
                     ?.let { privateSession ->
                         repository.getMessagesSync(privateSession.id)
@@ -2437,7 +2474,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                     }
                     ?.takeIf { it.isNotBlank() }
                     ?.let { "昨天你与${profile.nickname}的私聊：\n$it" }
-                    ?: ""
+                    ?: "" else ""
                 val recentMemories = UnifiedMemoryContext.mergeBlocks(
                     sharedUtils.contextBlockLimit(2),
                     diaryV2Memories,
@@ -2466,7 +2503,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                     "SELF_STATUS_CHANGES" to "${op.name}最近在${op.location}，正在${op.activity}，情绪${op.emotion}",
                     "KNOWN_FROM_CONTEXT" to "无",
                     "SOURCE_AWARE_RULES" to sharedUtils.sourceAwareUsageRule(MemorySurface.DIARY),
-                    "RELATION_EVENTS" to sharedUtils.getRelationEvents(operatorId).lines().filter { it.isNotBlank() }.take(settings.diaryRelationEventCount).joinToString("\n").ifBlank { "无" }
+                    "RELATION_EVENTS" to if (settings.isMemoryInjectionAllowed("diary", "RELATIONSHIP")) sharedUtils.getRelationEvents(operatorId, MemorySurface.DIARY).lines().filter { it.isNotBlank() }.take(settings.diaryRelationEventCount).joinToString("\n").ifBlank { "无" } else "无"
                 )
                 sharedUtils.logMemoryContext(
                     surface = "diary",
@@ -2505,7 +2542,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 if (text.isNotBlank()) {
                     val now = System.currentTimeMillis()
                     repository.insertDiary(Diary(operatorId = operatorId, operatorName = op.name, content = text, date = yesterdayStr, createdAt = now))
-                    if (settings.memoryV2Enabled) {
+                    if (settings.memoryV2Enabled && settings.diaryMemoryGenerationEnabled) {
                         memoryV2Pipeline.ingestDiary(operatorId, op.name, "diary_$now", text)
                     }
                     DebugLogger.log("Diary", "日记生成成功: ${text.take(50)}")

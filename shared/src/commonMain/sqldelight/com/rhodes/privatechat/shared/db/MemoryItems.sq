@@ -77,6 +77,9 @@ WHERE ownerType = ? AND ownerId = ? AND sourceKind = ? AND vectorId != '';
 getMemoryItemsBySource:
 SELECT * FROM memory_items WHERE sourceKind = ? AND sourceRefId = ?;
 
+getSourceRefIdsBySourcePrefix:
+SELECT DISTINCT sourceRefId FROM memory_items WHERE sourceKind = ? AND sourceRefId LIKE ?;
+
 getActiveMemoryItemByContent:
 SELECT * FROM memory_items
 WHERE ownerType = ? AND ownerId = ? AND memoryLevel = ? AND memoryType = ? AND content = ? AND status = 'active'
@@ -122,6 +125,16 @@ DELETE FROM memory_items WHERE ownerType = ? AND ownerId = ? AND sourceKind = ?;
 
 deleteMemoryItemsBySource:
 DELETE FROM memory_items WHERE sourceKind = ? AND sourceRefId = ?;
+
+deleteMemoryItemsBySourcePrefix:
+DELETE FROM memory_items WHERE sourceKind = ? AND sourceRefId LIKE ?;
+
+deleteVectorsBySourcePrefix:
+DELETE FROM vector_memories
+WHERE id IN (
+    SELECT vectorId FROM memory_items
+    WHERE sourceKind = ? AND sourceRefId LIKE ? AND vectorId != ''
+);
 
 deletePrivateRelationshipMemoryItems:
 DELETE FROM memory_items WHERE ownerType = ? AND ownerId = ? AND (sourceKind = 'PRIVATE_CHAT' OR (sourceKind = 'MANUAL_MEMORY' AND privacy = 'private'));

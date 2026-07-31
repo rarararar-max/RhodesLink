@@ -42,6 +42,7 @@ class MemoryV2Pipeline(
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     suspend fun ingestPrivateChat(sessionId: String, operatorId: String, operatorName: String, messages: List<ChatMessage>, currentRound: Int): Boolean {
+        if (!settings.memoryV2Enabled || !settings.privateMemoryGenerationEnabled) return false
         if (messages.isEmpty()) return true
         val sourceText = messages.joinToString("\n") { formatPrivateMessage(it) }
         val source = MemorySourceItem(
@@ -86,11 +87,14 @@ class MemoryV2Pipeline(
             ))
         }
         if (sourceId > 0) repository.markMemorySourceProcessedL1(sourceId)
-        maybePromotePrivateMemory(operatorId, thresholdL1 = settings.memoryV2PromoteL1Threshold, thresholdL2 = settings.memoryV2PromoteL2Threshold)
+        if (settings.privateMemoryPromotionEnabled) {
+            maybePromotePrivateMemory(operatorId, thresholdL1 = settings.memoryV2PromoteL1Threshold, thresholdL2 = settings.memoryV2PromoteL2Threshold)
+        }
         return true
     }
 
     suspend fun ingestGroupChat(groupId: String, groupName: String, messages: List<ChatMessage>, memberIds: List<String>): Boolean {
+        if (!settings.memoryV2Enabled || !settings.groupMemoryGenerationEnabled) return false
         if (messages.isEmpty()) return true
         val sourceText = messages.joinToString("\n") { formatGroupMessage(groupName, it) }
         // A group has many extraction windows.  Use the window identity rather than the group
@@ -137,27 +141,32 @@ class MemoryV2Pipeline(
                     "evaluation_opinion", "self_cognition_statement"
                 )
             }
-            memberIds.distinct().filter { it.isNotBlank() }.forEach { memberId ->
-                val personalItems = longTermShared.map { item ->
-                    item.copy(
-                        id = 0,
-                        ownerType = "operator",
-                        ownerId = memberId,
-                        sourceTarget = memberId,
-                        vectorId = "",
-                        createdAt = System.currentTimeMillis(),
-                        updatedAt = System.currentTimeMillis(),
-                    )
+            if (settings.groupMemoryCopyToMembersEnabled) {
+                memberIds.distinct().filter { it.isNotBlank() }.forEach { memberId ->
+                    val personalItems = longTermShared.map { item ->
+                        item.copy(
+                            id = 0,
+                            ownerType = "operator",
+                            ownerId = memberId,
+                            sourceTarget = memberId,
+                            vectorId = "",
+                            createdAt = System.currentTimeMillis(),
+                            updatedAt = System.currentTimeMillis(),
+                        )
+                    }
+                    saveMemoryItems(personalItems)
                 }
-                saveMemoryItems(personalItems)
             }
         }
         if (sourceId > 0) repository.markMemorySourceProcessedL1(sourceId)
-        maybePromoteOwnerMemory("group", groupId, MemorySourceKind.GROUP_CHAT, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
+        if (settings.groupMemoryPromotionEnabled) {
+            maybePromoteOwnerMemory("group", groupId, MemorySourceKind.GROUP_CHAT, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
+        }
         return true
     }
 
     suspend fun ingestMoment(moment: Moment, contextGroup: String = "") {
+        if (!settings.memoryV2Enabled || !settings.momentMemoryGenerationEnabled) return
         val sourceText = formatMoment(moment)
         val sourceId = repository.insertMemorySource(
             MemorySourceItem(
@@ -190,10 +199,13 @@ class MemoryV2Pipeline(
             ))
         }
         if (sourceId > 0) repository.markMemorySourceProcessedL1(sourceId)
-        maybePromoteOwnerMemory("operator", moment.operatorId, MemorySourceKind.MOMENT, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
+        if (settings.momentMemoryPromotionEnabled) {
+            maybePromoteOwnerMemory("operator", moment.operatorId, MemorySourceKind.MOMENT, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
+        }
     }
 
     suspend fun ingestMomentComment(comment: MomentComment, momentId: Long) {
+        if (!settings.memoryV2Enabled || !settings.momentCommentMemoryGenerationEnabled) return
         val sourceText = formatMomentComment(comment, momentId)
         val sourceId = repository.insertMemorySource(
             MemorySourceItem(
@@ -224,10 +236,13 @@ class MemoryV2Pipeline(
             ))
         }
         if (sourceId > 0) repository.markMemorySourceProcessedL1(sourceId)
-        maybePromoteOwnerMemory("operator", comment.operatorId, MemorySourceKind.MOMENT_COMMENT, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
+        if (settings.momentCommentMemoryPromotionEnabled) {
+            maybePromoteOwnerMemory("operator", comment.operatorId, MemorySourceKind.MOMENT_COMMENT, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
+        }
     }
 
     suspend fun ingestDiary(operatorId: String, operatorName: String, diaryId: String, content: String) {
+        if (!settings.memoryV2Enabled || !settings.diaryMemoryGenerationEnabled) return
         if (content.isBlank()) return
         val now = System.currentTimeMillis()
         val item = MemoryItem(
@@ -238,7 +253,9 @@ class MemoryV2Pipeline(
             createdAt = now, updatedAt = now, expiresAt = now + 30L * 86_400_000L,
         )
         saveMemoryItems(listOf(item))
-        maybePromoteOwnerMemory("operator", operatorId, MemorySourceKind.DIARY, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
+        if (settings.diaryMemoryPromotionEnabled) {
+            maybePromoteOwnerMemory("operator", operatorId, MemorySourceKind.DIARY, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
+        }
     }
 
     suspend fun maybePromotePrivateMemory(operatorId: String, thresholdL1: Int, thresholdL2: Int) {
@@ -329,6 +346,7 @@ class MemoryV2Pipeline(
         applyPrivateSourceFilter: Boolean = false,
         allowedSources: Set<String>? = null,
     ): String {
+        if (!settings.memoryV2Enabled) return ""
         val sourcePolicy = allowedSources ?: if (applyPrivateSourceFilter) privateChatAllowedSources() else null
         if (sourcePolicy != null && sourcePolicy.isEmpty()) return ""
         val personal = buildOwnerMemoryContext(
@@ -347,6 +365,7 @@ class MemoryV2Pipeline(
         allowedSources: Set<String> = privateChatAllowedSources(),
         allowPrivateVisualRecall: Boolean = settings.privateRecallPrivateChatMemory,
     ): String {
+        if (!settings.memoryV2Enabled) return ""
         if (query.isBlank()) return ""
         val now = System.currentTimeMillis()
         val vectorService = memoryVectorService ?: return ""
@@ -414,12 +433,16 @@ class MemoryV2Pipeline(
     }
 
     fun privateChatAllowedSources(): Set<String> = buildSet {
-        if (settings.privateRecallPrivateChatMemory) add(MemorySourceKind.PRIVATE_CHAT.name)
-        if (settings.privateRecallGroupChatMemory) add(MemorySourceKind.GROUP_CHAT.name)
-        if (settings.privateRecallMomentMemory) add(MemorySourceKind.MOMENT.name)
-        if (settings.privateRecallMomentCommentMemory) add(MemorySourceKind.MOMENT_COMMENT.name)
-        if (settings.privateRecallDiaryMemory) add(MemorySourceKind.DIARY.name)
-        if (settings.privateRecallManualMemory) add(MemorySourceKind.MANUAL_MEMORY.name)
+        listOf(
+            MemorySourceKind.PRIVATE_CHAT,
+            MemorySourceKind.GROUP_CHAT,
+            MemorySourceKind.MOMENT,
+            MemorySourceKind.MOMENT_COMMENT,
+            MemorySourceKind.DIARY,
+            MemorySourceKind.MANUAL_MEMORY,
+        ).forEach { source ->
+            if (settings.isMemoryInjectionAllowed("private_chat", source.name)) add(source.name)
+        }
     }
 
     private fun minimumPrivateSimilarity(sourceType: String, memoryType: String, query: String): Double {
@@ -486,6 +509,7 @@ class MemoryV2Pipeline(
      * recall a small, relevant subset of A's private-chat memories for the current response.
      */
     suspend fun buildRelationshipPrivateMemoryContext(operatorId: String, query: String): String {
+        if (!settings.memoryV2Enabled) return ""
         val vectorService = memoryVectorService ?: return ""
         if (query.isBlank()) return ""
         val now = System.currentTimeMillis()
@@ -529,6 +553,7 @@ class MemoryV2Pipeline(
     }
 
     suspend fun buildPrivateStableImpression(operatorId: String, limit: Int = 3): String {
+        if (!settings.memoryV2Enabled) return ""
         val now = System.currentTimeMillis()
         val items = repository.getActiveMemoryItemsByLevel("operator", operatorId, MemoryLevel.L3, now)
             .filter { it.sourceKind == MemorySourceKind.PRIVATE_CHAT }
@@ -543,16 +568,18 @@ class MemoryV2Pipeline(
         query: String,
         limit: Int = 3,
         allowedSources: Set<String> = buildSet {
-            if (settings.privateRecallMomentMemory) add(MemorySourceKind.MOMENT.name)
-            if (settings.privateRecallMomentCommentMemory) add(MemorySourceKind.MOMENT_COMMENT.name)
+            if (settings.isMemoryInjectionAllowed("private_chat", "MOMENT")) add(MemorySourceKind.MOMENT.name)
+            if (settings.isMemoryInjectionAllowed("private_chat", "MOMENT_COMMENT")) add(MemorySourceKind.MOMENT_COMMENT.name)
         },
     ): String {
+        if (!settings.memoryV2Enabled) return ""
         return if (allowedSources.isEmpty()) "" else buildOwnerMemoryContext(
             "global", "public", limit, 0, 0, query, allowedSources
         )
     }
 
-    suspend fun buildOwnerMemoryContext(ownerType: String, ownerId: String, limitL1: Int, limitL2: Int, limitL3: Int, query: String = "", allowedSources: Set<String>? = null): String {
+    suspend fun buildOwnerMemoryContext(ownerType: String, ownerId: String, limitL1: Int, limitL2: Int, limitL3: Int, query: String = "", allowedSources: Set<String>? = null, minCreatedAt: Long = 0L): String {
+        if (!settings.memoryV2Enabled) return ""
         val now = System.currentTimeMillis()
         val vectorService = memoryVectorService ?: return ""
         if (query.isBlank() || allowedSources?.isEmpty() == true) return ""
@@ -573,7 +600,7 @@ class MemoryV2Pipeline(
                     minScore = if (settings.memoryRecallMode == "fast") 0.24 else 0.16,
                     now = now,
                     candidateLimit = candidateLimit,
-                    minCreatedAt = if (settings.memoryRecallMode == "fast") now - 30L * 86_400_000L else 0L,
+                     minCreatedAt = maxOf(minCreatedAt, if (settings.memoryRecallMode == "fast") now - 30L * 86_400_000L else 0L),
                 )
             )
         }.getOrDefault(emptyList())

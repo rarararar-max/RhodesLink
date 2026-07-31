@@ -110,5 +110,7 @@ class MemoryRepository(private val wrapper: DatabaseWrapper) {
     suspend fun deleteAllImpressions() = withContext(Dispatchers.Default) { db.memoriesQueries.deleteAllLongTerm() }
     suspend fun deleteLongTermByOperator(operatorId: String) = withContext(Dispatchers.Default) { db.memoriesQueries.deleteLongTermByOperator(operatorId) }
     suspend fun deleteMemoriesBySession(sessionId: String) = withContext(Dispatchers.Default) { db.memoriesQueries.deleteMemoriesBySession(sessionId) }
+
+    suspend fun deleteShortTermMemory(sessionId: String) = withContext(Dispatchers.Default) { db.memoriesQueries.deleteShortTermMemories(sessionId) }
     suspend fun deleteMemoriesByOperator(operatorId: String) = withContext(Dispatchers.Default) { db.memoriesQueries.deleteMemoriesByOperator(operatorId) }
 }

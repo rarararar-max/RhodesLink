@@ -65,7 +65,7 @@ data class SettingEntry(val icon: ImageVector, val title: String, val desc: Stri
 @Composable
 fun SettingsScreen(
     onProfile: () -> Unit = {}, onModel: () -> Unit = {},
-    onChatParams: () -> Unit = {}, onDataManage: () -> Unit = {},
+    onChatParams: () -> Unit = {}, onMemory: () -> Unit = {}, onDataManage: () -> Unit = {},
     onPermissions: () -> Unit = {}, onCredits: () -> Unit = {},
     onAppearance: () -> Unit = {}, onStory: () -> Unit = {}, onDailyContent: () -> Unit = {},
     onDebugLog: () -> Unit = {},
@@ -106,7 +106,8 @@ fun SettingsScreen(
             }
             Spacer(Modifier.height(8.dp))
             WechatListGroup {
-                SettingItem(SettingEntry(Icons.Default.Tune, "聊天表现", "回复长短、上下文记忆、角色说话风格", iconColor = Color(0xFF00BCD4)), onClick = onChatParams)
+                SettingItem(SettingEntry(Icons.Default.Tune, "聊天表现", "回复长度、聊天模式和角色说话风格", iconColor = Color(0xFF00BCD4)), onClick = onChatParams)
+                SettingItem(SettingEntry(Icons.Default.Hub, "记忆", "记忆生成、注入来源、会话隔离和管理", iconColor = Color(0xFF7C3AED)), onClick = onMemory)
                 SettingItem(SettingEntry(Icons.AutoMirrored.Filled.MenuBook, "动态、日记与派遣", "每日动态、日记文本、派遣故事长度", iconColor = Color(0xFF795548)), onClick = onStory)
                 SettingItem(SettingEntry(Icons.Default.AutoAwesome, "每日自动内容", "计划动态、主动私聊和免打扰时段", iconColor = Color(0xFF7C3AED)), onClick = onDailyContent)
                 SettingItem(SettingEntry(Icons.Default.Build, "权限管理", "干员主动消息、动态和群聊权限", iconColor = Color(0xFFFF9800)), onClick = onPermissions)

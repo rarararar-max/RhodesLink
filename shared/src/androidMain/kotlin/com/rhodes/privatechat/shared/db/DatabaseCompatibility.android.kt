@@ -11,6 +11,7 @@ object DatabaseCompatibility {
     private const val TARGET_VERSION = 9
     private const val SETTINGS_SP = "rhodes_settings"
     private const val DERIVED_CLEAN_KEY = "derived_data_cleaned_for_1_05"
+    private const val MESSAGE_TIMESTAMPS_KEY = "chat_message_timestamps_normalized_v1"
 
     fun prepareBeforeOpen(context: Context) {
         val dbFile = context.getDatabasePath(DB_NAME)
@@ -42,6 +43,7 @@ object DatabaseCompatibility {
                     ensureCompatibilitySchema(db)
                     advanceUserVersionIfSchemaComplete(db, userVersion)
                 }
+                normalizeLegacyMessageTimestamps(context, db)
             }
         } catch (e: Exception) {
             Log.e(TAG, "数据库兼容准备失败: ${e.message}", e)
@@ -192,6 +194,60 @@ object DatabaseCompatibility {
         if (tableExists(db, "vector_memories") && "embeddingSignature" !in existingColumns(db, "vector_memories")) {
             db.execSQL("ALTER TABLE vector_memories ADD COLUMN embeddingSignature TEXT NOT NULL DEFAULT ''")
         }
+    }
+
+    /** Gives legacy rows with the schema default timestamp a stable chronological position. */
+    private fun normalizeLegacyMessageTimestamps(context: Context, db: SQLiteDatabase) {
+        val prefs = context.getSharedPreferences(SETTINGS_SP, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(MESSAGE_TIMESTAMPS_KEY, false) || !tableExists(db, "chat_messages")) return
+        data class LegacyMessage(val id: Long, val timestamp: Long)
+        val rowsBySession = linkedMapOf<String, MutableList<LegacyMessage>>()
+        db.rawQuery("SELECT sessionId, id, timestamp FROM chat_messages ORDER BY sessionId ASC, id ASC", null).use { cursor ->
+            val sessionIndex = cursor.getColumnIndexOrThrow("sessionId")
+            val idIndex = cursor.getColumnIndexOrThrow("id")
+            val timestampIndex = cursor.getColumnIndexOrThrow("timestamp")
+            while (cursor.moveToNext()) {
+                rowsBySession.getOrPut(cursor.getString(sessionIndex)) { mutableListOf() }
+                    .add(LegacyMessage(cursor.getLong(idIndex), cursor.getLong(timestampIndex)))
+            }
+        }
+        rowsBySession.forEach { (sessionId, messages) ->
+            if (messages.none { it.timestamp <= 0L }) return@forEach
+            // There is no safe calendar position to invent when every row lacks a timestamp.
+            // The stable id ordering already fixes display order without changing the date.
+            if (messages.all { it.timestamp <= 0L }) return@forEach
+            val sessionLastTimeValue: Long = db.rawQuery("SELECT lastTime FROM chat_sessions WHERE id = ?", arrayOf(sessionId)).use { cursor ->
+                if (cursor.moveToFirst()) cursor.getLong(0) else 0L
+            }
+            val sessionLastTime: Long = if (sessionLastTimeValue > 0L) sessionLastTimeValue else System.currentTimeMillis()
+            var index = 0
+            while (index < messages.size) {
+                if (messages[index].timestamp > 0L) {
+                    index++
+                    continue
+                }
+                val start = index
+                while (index < messages.size && messages[index].timestamp <= 0L) index++
+                val endExclusive = index
+                val previous = messages.getOrNull(start - 1)?.timestamp?.takeIf { it > 0L }
+                val next = messages.getOrNull(endExclusive)?.timestamp?.takeIf { it > 0L }
+                val count = endExclusive - start
+                val firstTimestamp = when {
+                    previous != null && next != null && next > previous -> previous + (next - previous) / (count + 1)
+                    previous != null -> previous + 1_000L
+                    next != null -> (next - count * 1_000L).coerceAtLeast(1L)
+                    else -> (sessionLastTime - count * 1_000L).coerceAtLeast(1L)
+                }
+                for (offset in 0 until count) {
+                    val timestamp: Long = when {
+                        previous != null && next != null && next > previous -> previous + (next - previous) * (offset + 1) / (count + 1)
+                        else -> firstTimestamp + offset * 1_000L
+                    }
+                    db.execSQL("UPDATE chat_messages SET timestamp = ? WHERE sessionId = ? AND id = ? AND timestamp <= 0", arrayOf<Any>(timestamp, sessionId, messages[start + offset].id))
+                }
+            }
+        }
+        prefs.edit().putBoolean(MESSAGE_TIMESTAMPS_KEY, true).apply()
     }
 
     private fun ensureMahjongSavesTable(db: SQLiteDatabase) {

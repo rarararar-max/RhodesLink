@@ -95,6 +95,7 @@ fun OperatorEditScreen(
     val scope = rememberCoroutineScope()
     val operators by viewModel.operators.collectAsState()
     val isNew = operator == null
+    val customOperatorId = remember(operator?.id) { operator?.id ?: "custom_${java.util.UUID.randomUUID()}" }
     var cropTarget by remember { mutableStateOf<android.net.Uri?>(null) }
 
     var name by remember { mutableStateOf(operator?.name ?: "新干员") }
@@ -107,13 +108,13 @@ fun OperatorEditScreen(
     var avatarUri by remember { mutableStateOf(operator?.avatarUri ?: "") }
     var privatePrompt by remember { mutableStateOf(operator?.privatePrompt ?: "") }
     var groupPrompt by remember { mutableStateOf(operator?.groupPrompt ?: "") }
-    val initialOpKey = operator?.id ?: name.lowercase()
+    val initialOpKey = customOperatorId
     var privateSlot by remember { mutableIntStateOf(settings.getInt("operator_prompt_slot_${initialOpKey}_private", 1).coerceIn(1, 3)) }
     var groupSlot by remember { mutableIntStateOf(settings.getInt("operator_prompt_slot_${initialOpKey}_group", 1).coerceIn(1, 3)) }
     var description by remember { mutableStateOf(operator?.description ?: "") }
     var userRelation by remember { mutableStateOf(operator?.userRelation ?: "") }
     var voiceName by remember { mutableStateOf(operator?.voiceName ?: "") }
-    var voiceVolume by remember { mutableFloatStateOf(settings.getOperatorVoiceVolume(operator?.id ?: name.lowercase())) }
+    var voiceVolume by remember { mutableFloatStateOf(settings.getOperatorVoiceVolume(customOperatorId)) }
     var relationships by remember { mutableStateOf<List<RelationshipEntity>>(emptyList()) }
     var initialRelationships by remember { mutableStateOf<List<RelationshipEntity>>(emptyList()) }
     var showAddPicker by remember { mutableStateOf(false) }
@@ -125,7 +126,7 @@ fun OperatorEditScreen(
     var promptReqText by remember { mutableStateOf("") }
     var isGeneratingPrompt by remember { mutableStateOf(false) }
 
-    fun opKey(): String = operator?.id ?: name.lowercase()
+    fun opKey(): String = customOperatorId
     fun slotKey(type: String, slot: Int): String = "operator_prompt_slot_${opKey()}_${type}_$slot"
     fun activeSlotKey(type: String): String = "operator_prompt_slot_${opKey()}_${type}"
     fun loadPromptSlot(type: String, slot: Int, fallback: String): String = settings.getString(slotKey(type, slot), "")?.ifBlank { null } ?: fallback
@@ -147,18 +148,27 @@ fun OperatorEditScreen(
         }
     }
 
-    val onSave: () -> Unit = {
+    val onSave: () -> Unit = save@{
+        val cleanName = name.trim()
+        if (cleanName.isBlank()) {
+            android.widget.Toast.makeText(context, "请输入干员名称", android.widget.Toast.LENGTH_SHORT).show()
+            return@save
+        }
+        if (cleanName != operator?.name?.trim() && operators.any { it.id != customOperatorId && it.name.trim().equals(cleanName, ignoreCase = true) }) {
+            android.widget.Toast.makeText(context, "已存在同名干员，请使用其他名称", android.widget.Toast.LENGTH_LONG).show()
+            return@save
+        }
         privateSlotDrafts = privateSlotDrafts + (privateSlot to privatePrompt)
         groupSlotDrafts = groupSlotDrafts + (groupSlot to groupPrompt)
         privateSlotDrafts.forEach { (slot, content) -> savePromptSlot("private", slot, content) }
         groupSlotDrafts.forEach { (slot, content) -> savePromptSlot("group", slot, content) }
         settings.putInt(activeSlotKey("private"), privateSlot)
         settings.putInt(activeSlotKey("group"), groupSlot)
-        settings.putOperatorVoiceVolume(operator?.id ?: name.lowercase(), voiceVolume)
+        settings.putOperatorVoiceVolume(customOperatorId, voiceVolume)
         viewModel.saveOperator(
-            id = operator?.id ?: name.lowercase(),
-            name = name, title = title,
-            description = description.ifBlank { "${name}，罗德岛干员" },
+            id = customOperatorId,
+            name = cleanName, title = title,
+            description = description.ifBlank { "${cleanName}，罗德岛干员" },
             privatePrompt = privatePrompt, groupPrompt = groupPrompt,
             memoryInjection = operator?.memoryInjection.orEmpty(),
             userRelation = userRelation, avatarUri = avatarUri,
@@ -167,7 +177,10 @@ fun OperatorEditScreen(
             activityLevel = activity,
             gender = gender,
             voiceName = voiceName,
-            onComplete = { onBack() }
+            onComplete = { error ->
+                if (error == null) onBack()
+                else android.widget.Toast.makeText(context, error, android.widget.Toast.LENGTH_LONG).show()
+            }
         )
     }
     val hasUnsavedChanges = name != (operator?.name ?: "新干员") ||
@@ -182,7 +195,7 @@ fun OperatorEditScreen(
         description != (operator?.description ?: "") ||
         userRelation != (operator?.userRelation ?: "") ||
         voiceName != (operator?.voiceName ?: "") ||
-        voiceVolume != settings.getOperatorVoiceVolume(operator?.id ?: name.lowercase()) ||
+        voiceVolume != settings.getOperatorVoiceVolume(customOperatorId) ||
         relationships != initialRelationships || slotDirty
     val requestBack = { if (hasUnsavedChanges) showUnsavedConfirm = true else onBack() }
 
@@ -448,7 +461,10 @@ fun OperatorEditScreen(
                     val operatorId = operator?.id.orEmpty()
                     if (operatorId.isBlank()) return@TextButton
                     showDeleteConfirm = false
-                    viewModel.deleteOperators(listOf(operatorId)) { onBack() }
+                    viewModel.deleteOperators(listOf(operatorId)) { error ->
+                        if (error == null) onBack()
+                        else android.widget.Toast.makeText(context, error, android.widget.Toast.LENGTH_LONG).show()
+                    }
                 }) { Text("确认删除", color = ErrorRed) }
             },
             dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("取消", color = TextSecondary) } }

@@ -191,6 +191,7 @@ private fun SettingsTabContent(navigator: Navigator) {
         onAppearance = { navigator.push(AppearanceSettingsRoute) },
         onModel = { navigator.push(ModelSettingsRoute) },
         onChatParams = { navigator.push(ChatSettingsRoute) },
+        onMemory = { navigator.push(MemorySettingsRoute) },
         onStory = { navigator.push(StorySettingsRoute) },
         onDailyContent = { navigator.push(DailyContentSettingsRoute) },
         onDataManage = { navigator.push(DataManagementRoute) },

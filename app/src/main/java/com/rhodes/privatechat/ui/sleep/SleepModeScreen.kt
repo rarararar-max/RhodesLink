@@ -328,9 +328,12 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
                 transcript = text
                 lastEffectiveUserSpeechAt = System.currentTimeMillis()
                 turns += "用户" to text
+                val recentTurns = turns.takeLast(8).joinToString("\n") { (speaker, content) -> "$speaker：$content" }
+                val memoryContext = viewModel.chatViewModel.buildVoiceContext(sessionId, text)
                 val reply = viewModel.chatViewModel.sharedChatForFeature(listOf(
                     AiMessage("system", SleepPrompts.CALL.replace("{{CURRENT_TIME}}", formatClockTime(System.currentTimeMillis()))),
                     AiMessage("system", "角色语气参考，不能覆盖上方规则：\n${operator.privatePrompt.ifBlank { operator.description }}"),
+                    AiMessage("system", "相关私聊背景（仅在当前话题自然相关时使用）：\n$memoryContext\n\n本次陪睡最近对话：\n${recentTurns.ifBlank { "无" }}"),
                     AiMessage("user", text)
                 ))
                     .trim().take(240).ifBlank { "我在。" }

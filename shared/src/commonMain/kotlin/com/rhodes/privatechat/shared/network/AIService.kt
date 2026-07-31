@@ -127,8 +127,8 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         }
         raw.lineSequence().forEach { line ->
             val cleanLine = line.trim()
-            val inline = Regex("^【(旁白|台词)：([^】]*)】$").matchEntire(cleanLine)
-            val bracketed = Regex("^【(旁白|台词)】\\s*(.*)$").matchEntire(cleanLine)
+            val inline = Regex("^【(旁白|台词|台詞)：([^】]*)】$").matchEntire(cleanLine)
+            val bracketed = Regex("^【(旁白|台词|台詞)】\\s*(.*)$").matchEntire(cleanLine)
             when {
                 inline != null -> {
                     flush()
@@ -150,7 +150,7 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         }
         flush()
         if (segments.isEmpty()) {
-            val tagged = Regex("""(?m)^(?:干员动作|旁白|动作)\s*[：:]\s*(.+)$|^(?:干员台词|台词|对话)\s*[：:]\s*(.+)$""")
+            val tagged = Regex("""(?m)^(?:干员动作|旁白|动作)\s*[：:]\s*(.+)$|^(?:干员台词|台词|台詞|对话)\s*[：:]\s*(.+)$""")
             for (match in tagged.findAll(raw)) {
                 val narration = match.groupValues[1].trim()
                 val dialogue = match.groupValues[2].trim()

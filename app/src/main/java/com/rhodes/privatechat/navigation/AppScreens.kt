@@ -744,7 +744,18 @@ data object ChatSettingsRoute : Screen {
     @Composable
     override fun Content() {
         val navigator = LocalNavigator.currentOrThrow
-        com.rhodes.privatechat.ui.chatsettings.ChatSettingsScreen(onBack = { navigator.pop() }, onPromptEditor = { navigator.push(PromptEditorRoute) }, onManageMemories = { navigator.push(GlobalMemoryRoute) })
+        com.rhodes.privatechat.ui.chatsettings.ChatSettingsScreen(onBack = { navigator.pop() }, onPromptEditor = { navigator.push(PromptEditorRoute) })
+    }
+}
+
+data object MemorySettingsRoute : Screen {
+    @Composable
+    override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        com.rhodes.privatechat.ui.settings.MemorySettingsScreen(
+            onBack = { navigator.pop() },
+            onManageMemories = { navigator.push(GlobalMemoryRoute) }
+        )
     }
 }
 

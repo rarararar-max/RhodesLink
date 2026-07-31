@@ -103,33 +103,23 @@ fun MessageList(
 ) {
     fun eventKey(message: ChatUiMessage) = "${message.originalMessageId}:${message.segmentIndex}"
     var localEvents by remember(displaySessionKey) { mutableStateOf(emptyList<ChatDisplayEvent>()) }
-    var legacyMaterialized by remember(displaySessionKey) { mutableStateOf(false) }
     LaunchedEffect(displayEvents) { localEvents = displayEvents }
 
-    // Histories created before display events existed retain their chronological appearance.
-    LaunchedEffect(displayEventsLoaded, messages, legacyMaterialized, legacyMessageCutoff) {
-        if (!progressiveDisplay || onReveal == null || legacyMaterialized || !displayEventsLoaded || localEvents.isNotEmpty() || messages.isEmpty()) return@LaunchedEffect
-        messages.filter { it.timestamp <= legacyMessageCutoff }.forEach { message ->
-            val order = onReveal(message)
-            localEvents = localEvents + ChatDisplayEvent(message.originalMessageId, message.segmentIndex, order)
-        }
-        legacyMaterialized = true
-    }
     // User/system bubbles are immediate. Their persisted event puts them ahead of delayed AI segments.
     LaunchedEffect(messages, localEvents, displayEventsLoaded) {
-        if (!progressiveDisplay || onReveal == null || !displayEventsLoaded || (!legacyMaterialized && localEvents.isEmpty())) return@LaunchedEffect
-        messages.filter { !it.isAiSegment && localEvents.none { event -> event.messageId == it.originalMessageId && event.segmentIndex == it.segmentIndex } }
+        if (!progressiveDisplay || onReveal == null || !displayEventsLoaded) return@LaunchedEffect
+        messages.filter { it.timestamp > legacyMessageCutoff && !it.isAiSegment && localEvents.none { event -> event.messageId == it.originalMessageId && event.segmentIndex == it.segmentIndex } }
             .forEach { message ->
                 val order = onReveal(message)
                 localEvents = localEvents + ChatDisplayEvent(message.originalMessageId, message.segmentIndex, order)
             }
     }
     val nextAi = messages.firstOrNull { message ->
-        message.isAiSegment && localEvents.none { event -> event.messageId == message.originalMessageId && event.segmentIndex == message.segmentIndex }
+        message.timestamp > legacyMessageCutoff && message.isAiSegment && localEvents.none { event -> event.messageId == message.originalMessageId && event.segmentIndex == message.segmentIndex }
     }
-    LaunchedEffect(nextAi?.let(::eventKey), displayEventsLoaded, legacyMaterialized) {
+    LaunchedEffect(nextAi?.let(::eventKey), displayEventsLoaded) {
         val message = nextAi ?: return@LaunchedEffect
-        if (!progressiveDisplay || onReveal == null || !displayEventsLoaded || (!legacyMaterialized && localEvents.isEmpty())) return@LaunchedEffect
+        if (!progressiveDisplay || onReveal == null || !displayEventsLoaded) return@LaunchedEffect
         val priorAiSegmentIsVisible = messages.indexOf(message).takeIf { it > 0 }?.let { index ->
             val previous = messages[index - 1]
             previous.isAiSegment && previous.originalMessageId == message.originalMessageId &&
@@ -143,11 +133,11 @@ fun MessageList(
     }
     val eventOrder = localEvents.associate { "${it.messageId}:${it.segmentIndex}" to it.revealOrder }
     val displayMessages = if (!progressiveDisplay) messages else {
-        val historicalWithoutEvent = messages.filter { it.timestamp <= legacyMessageCutoff && eventKey(it) !in eventOrder }
-            .sortedWith(compareBy<ChatUiMessage> { it.timestamp }.thenBy { it.originalMessageId }.thenBy { it.segmentIndex })
-        val revealed = messages.filter { eventKey(it) in eventOrder }
-            .sortedWith(compareBy<ChatUiMessage> { eventOrder.getValue(eventKey(it)) }.thenBy { it.originalMessageId }.thenBy { it.segmentIndex })
-        historicalWithoutEvent + revealed
+        val visible = messages.filter { message ->
+            message.timestamp <= legacyMessageCutoff || eventKey(message) in eventOrder
+        }
+        // Display events decide when a new segment appears, never where persisted history appears.
+        visible.sortedWith(compareBy<ChatUiMessage> { it.timestamp }.thenBy { it.originalMessageId }.thenBy { it.segmentIndex })
     }
 
     var lastBottomMessageId by remember(displaySessionKey) { mutableStateOf<Long?>(null) }

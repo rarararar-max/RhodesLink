@@ -62,11 +62,10 @@ import org.koin.compose.koinInject
 fun ChatSettingsScreen(
     onBack: () -> Unit,
     onPromptEditor: () -> Unit = {},
-    onManageMemories: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val settings: SettingsRepository = koinInject()
-    val tabs = listOf("预设", "私聊", "群聊", "记忆")
+    val tabs = listOf("预设", "私聊", "群聊")
     var tabIndex by rememberSaveable { mutableIntStateOf(0) }
 
     SaveableSettingsScaffold(
@@ -87,7 +86,6 @@ fun ChatSettingsScreen(
                 0 -> GeneralTab(settings, onPromptEditor)
                 1 -> PrivateTab(settings)
                 2 -> GroupTab(settings)
-                3 -> MemoryTab(settings, onManageMemories)
             }
         }
     }
@@ -159,102 +157,6 @@ private fun GroupTab(settings: SettingsRepository) {
     ParamSlider(settings, "group_nar_seg_max", "最多旁白段数", 1, 0f..20f, "线下和导演模式每轮最多出现几段旁白。默认1段；调高后动作和场景描写会更多。", pairKey = "group_nar_seg_min", pairDefaultVal = 1, isMinSide = false)
     ParamSlider(settings, "group_nar_min", "旁白最小字数", 20, 0f..200f, "每段场景描写最少写几个字。建议20。太低（0）场景描写太短没画面感。", step = 5f, pairKey = "group_nar_max", pairDefaultVal = 100, isMinSide = true)
     ParamSlider(settings, "group_nar_max", "旁白最大字数", 100, 50f..300f, "每段场景描写最多写几个字。建议100。太高（超过200）群聊里大段旁白像在写小说而不是聊天。", step = 5f, pairKey = "group_nar_min", pairDefaultVal = 20, isMinSide = false)
-}
-
-// ── Tab 2: 统一记忆 ──
-
-@Composable
-private fun MemoryTab(settings: SettingsRepository, onManageMemories: () -> Unit) {
-    ParamSlider(settings, "summary_threshold", "触发总结的聊天条数", 20, 3f..200f, "聊多少句话后，AI会总结前面的内容，方便以后记住。建议20-50。太低（低于10）聊几句就总结一次，既花钱又没必要；太高（超过100）AI记不住前面聊了什么，对话容易失忆。", step = 1f)
-    ParamSlider(settings, "summary_retain", "保留最近原始消息", 5, 1f..50f, "总结时保留最近几条完整的聊天原文不压缩，保证AI能接住刚说过的话。建议3-5。太低（低于2）刚说完的话就被压缩了，AI接话接不准；太高（超过10）保留太多原文，总结效果变差。", step = 1f)
-    Spacer(modifier = Modifier.height(12.dp))
-    ParamSlider(settings, "daily_intimacy_cap", "每日好感变化上限", 5, 1f..20f, "每个角色每天最多涨或掉多少好感。建议3-5。太低（低于2）关系推进非常慢，太高（超过10）聊几句好感就满了。", step = 1f)
-    Spacer(modifier = Modifier.height(12.dp))
-    ParamSlider(settings, "history_messages", "每次回复最多回看几轮", 10, 0f..200f, "一轮指用户一次发言及其后完整的 AI 回复；群聊中一整批成员回复也只算一轮。默认10轮。设为0就是不限制，但仍受模型自身上下文上限影响。", step = 1f)
-    Spacer(modifier = Modifier.height(12.dp))
-    ParamSlider(settings, "clean_days", "普通记忆保留天数", 30, 0f..365f, "角色从聊天中记住的普通事件、近期感受和短期信息默认保留多久。设为0时普通记忆不会自动过期；重要偏好、禁忌和关系会按更长规则保留。不会删除聊天记录、动态、日记或派遣记录。", step = 5f)
-    Spacer(modifier = Modifier.height(12.dp))
-    SectionTitle("记忆生成")
-    SettingsSwitchCard(
-        title = "摘要游标",
-        subtitle = "只总结上次以后新增的消息，避免旧聊天被反复总结",
-        tip = "开启后系统会记录每个会话已经总结到哪条消息，下一次只处理新增消息。建议开启。关闭后会退回旧逻辑。",
-        checked = settings.summaryCursorEnabled,
-        onCheckedChange = { settings.summaryCursorEnabled = it }
-    )
-    SettingsSwitchCard(
-        title = "自动形成记忆",
-        subtitle = "让角色记住你们聊过的重要事情",
-        tip = "开启后，角色会记住你们反复提到的重要事，比如约定、喜好和计划，以后聊天时能自然想起来。关闭后不再记新的内容；以前已经记住的内容会保留，可到下方“管理全部统一记忆”里删除。",
-        checked = settings.memoryV2Enabled,
-        onCheckedChange = { settings.memoryV2Enabled = it }
-    )
-    SettingsSwitchCard(
-        title = "记录公开动态和评论",
-        subtitle = "让公开动态和评论形成可检索记忆",
-        tip = "开启后，新的公开动态和评论会正常保存、提取并向量化。关闭不会删除已有公开记忆；已有内容是否可在私聊中引用，由下方“私聊可引用的记忆来源”单独控制。",
-        checked = settings.momentMemoryV2Enabled,
-        onCheckedChange = { settings.momentMemoryV2Enabled = it }
-    )
-    ParamSlider(settings, "memory_v2_promote_l1_threshold", "短期记忆合并阈值", 20, 5f..100f, "同一话题的短期记忆积累到多少条后，合并成一条中期记忆。建议20。太低（低于10）频繁合并、花钱多；太高（超过50）记忆太零散，角色记不住重点。", step = 1f)
-    ParamSlider(settings, "memory_v2_promote_l2_threshold", "中期记忆合并阈值", 10, 3f..50f, "同一话题的中期记忆积累到多少条后，合并成一条长期稳定记忆。建议10。太低（低于5）容易把一次聊天当成长期印象；太高（超过20）重要事情也沉淀不下来。", step = 1f)
-    ParamSlider(settings, "memory_v2_important_promotion_threshold", "重要记忆快速沉淀次数", 2, 2f..10f, "明确承诺、重要提醒、高重要度偏好等同一件事重复出现几次后，可提前合并。建议2。调高更谨慎、更省额度；调低会更快记住，但也更容易把一时的话当成长久记忆。", step = 1f)
-    ParamSlider(settings, "private_memory_extraction_threshold", "私聊记忆提取条数", 12, 3f..30f, "每积累多少条新消息后，提取一次可检索的记忆。这个和滚动摘要是两回事——摘要负责连续性，这个负责可搜索。建议12。太低（低于5）每条消息都提取，花钱多；太高（超过20）聊了很多才提取一次，中间的可能来不及记住。", step = 1f)
-    ParamSlider(settings, "group_memory_extraction_threshold", "群聊记忆提取条数", 12, 3f..30f, "每积累多少条新群消息后，提取一次群聊记忆。群聊自身始终可使用这些记忆；是否允许私聊引用，由下方来源开关控制。建议12。", step = 1f)
-    Spacer(modifier = Modifier.height(12.dp))
-    SectionTitle("角色知识与召回")
-    var memoryReferenceStyle by remember { mutableStateOf(settings.personalMemoryReferenceStyle) }
-    ChoiceSetting("共同经历引用", memoryReferenceStyle, listOf("restrained" to "克制", "natural" to "自然", "proactive" to "主动关联")) { memoryReferenceStyle = it; settings.personalMemoryReferenceStyle = it }
-    Text(
-        when (memoryReferenceStyle) {
-            "restrained" -> "克制：角色只在很确定的场合才会提起共同经历，私聊内容几乎不会在公开场合出现。适合喜欢界限分明的用户。"
-            "natural" -> "自然：角色像真人一样自然地引用共同经历，但会避免泄露明显隐私的内容。平衡推荐。"
-            "proactive" -> "主动关联：角色会主动把当前话题和你们的共同经历联系起来，关联性很强但可能偶尔关联过头。"
-            else -> ""
-        },
-        fontSize = 11.sp, color = TextSecondary
-    )
-    var memoryRecallMode by remember { mutableStateOf(settings.memoryRecallMode) }
-    ChoiceSetting("记忆检索强度", memoryRecallMode, listOf("fast" to "省电优先", "balanced" to "均衡推荐", "deep" to "深度回忆")) { memoryRecallMode = it; settings.memoryRecallMode = it }
-    Text(
-        when (memoryRecallMode) {
-            "fast" -> "省电优先：只搜索近 1 个月的重要记忆，匹配条件严格。省电省时间，但久远的事情容易想不起来。适合手机配置不高或追求省电的用户。"
-            "balanced" -> "均衡推荐：不限时间范围，记忆和速度之间比较平衡，适合大多数日常使用场景。"
-            "deep" -> "深度回忆：不限时间范围、候选多、匹配宽松。更容易想起很久以前的细节，但耗电更多、响应稍慢。适合希望角色记性很好的用户。"
-            else -> ""
-        },
-        fontSize = 11.sp, color = TextSecondary
-    )
-    Spacer(modifier = Modifier.height(8.dp))
-    ParamSlider(settings, "memory_recall_candidate_limit", "通用记忆候选上限", 300, 50f..1000f, "公开记忆等通用搜索每次最多比对多少条。建议300。太低（低于100）容易漏掉相关记忆，太高（超过500）搜索变慢、耗电增加。只在均衡模式下生效；私聊共同经历按来源分别分配候选。", step = 50f)
-    Spacer(modifier = Modifier.height(12.dp))
-    SectionTitle("私聊可引用的记忆来源")
-    Text("关闭后，相关记忆仍会保存、更新和用于原场景，但不会参与私聊的智能记忆检索或外部上下文。", fontSize = 11.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
-    SettingsSwitchCard("私聊共同经历", "允许检索当前角色的私聊智能记忆", "不影响最近消息、短期摘要和长期印象；关闭后仅不进行私聊来源的向量记忆召回。", settings.privateRecallPrivateChatMemory) { settings.privateRecallPrivateChatMemory = it }
-    var privateRecallGroupChatMemory by remember(settings.privateRecallGroupChatMemory) { mutableStateOf(settings.privateRecallGroupChatMemory) }
-    SettingsSwitchCard("所在群聊", "允许群聊记忆和近期群聊摘要进入私聊", "关闭后，群聊内容不会参与私聊向量检索，也不会自动注入群聊近况。用户在私聊中主动提到群聊时，本版本同样不会回读群聊历史。", privateRecallGroupChatMemory) {
-        privateRecallGroupChatMemory = it
-        settings.privateRecallGroupChatMemory = it
-    }
-    if (privateRecallGroupChatMemory) {
-        ParamSlider(settings, "private_group_context_count", "群聊回顾数量", 2, 0f..10f, "私聊最多自动回顾几个相关群的近期摘要。不影响群聊记忆的向量召回数量。", step = 1f)
-    }
-    SettingsSwitchCard("公开动态", "允许相关公开动态进入私聊", "关闭后，动态仍会保存和向量化，但不会参与私聊记忆检索。", settings.privateRecallMomentMemory) { settings.privateRecallMomentMemory = it }
-    SettingsSwitchCard("动态评论", "允许相关公开评论进入私聊", "关闭后，评论仍会保存和向量化，但不会参与私聊记忆检索。", settings.privateRecallMomentCommentMemory) { settings.privateRecallMomentCommentMemory = it }
-    SettingsSwitchCard("关系网转述", "允许其他角色的私聊记忆经关系网转述", "关闭后，不再根据角色之间的亲密度读取其他角色的私聊记忆。", settings.privateRecallRelationshipMemory) { settings.privateRecallRelationshipMemory = it }
-    SettingsSwitchCard("日记", "允许角色日记进入私聊", "关闭后，日记仍会保存和向量化，但不会参与私聊记忆检索。", settings.privateRecallDiaryMemory) { settings.privateRecallDiaryMemory = it }
-    SettingsSwitchCard("手动记忆", "允许已保存的手动记忆进入私聊", "关闭后，仍可创建和编辑手动记忆，但它们不会参与私聊记忆检索。", settings.privateRecallManualMemory) { settings.privateRecallManualMemory = it }
-    Spacer(modifier = Modifier.height(8.dp))
-    ParamSlider(settings, "group_member_memory_count", "群成员按需回忆数量", 2, 0f..2f, "群聊中当有人提到某个成员名字时，最多为该成员查几条个人相关记忆。建议1-2。普通闲聊不会查个人记忆，只靠群摘要。", step = 1f)
-    Spacer(modifier = Modifier.height(12.dp))
-    SectionTitle("记忆管理")
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Card).padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text("管理全部统一记忆", fontSize = 13.sp, color = TextPrimary)
-            Text("查看角色、群和公开动态资料；支持筛选、删除和索引重建。", fontSize = 11.sp, color = TextSecondary)
-        }
-        TextButton(onClick = onManageMemories) { Text("打开") }
-    }
 }
 
 @Composable

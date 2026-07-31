@@ -331,7 +331,7 @@ class ChatViewModel(
                 val now = System.currentTimeMillis()
                 repository.restoreChatArchive(session.id, session.operatorId, history, snapshot.second, Memory(sessionId = session.id, operatorId = session.operatorId, type = MemoryType.SHORT_TERM, content = snapshot.first.summary, createdAt = now, expiresAt = Long.MAX_VALUE))
                 val restoredPreview = snapshot.second.asReversed().firstOrNull { !it.isMe && it.type != "system" }?.let { message ->
-                    if (message.type == "ai_json") formatPrivateHistoryForPrompt(message).replace(Regex("【(?:旁白|台词)】"), " ").trim().take(50) else message.content.take(50)
+                    if (message.type == "ai_json") formatPrivateHistoryForPrompt(message).replace(Regex("【(?:旁白|台词|台詞)(?:[：:])?】"), " ").trim().take(50) else message.content.take(50)
                 }.orEmpty()
                 repository.updateLastMessage(session.id, restoredPreview, now)
                 settings.putString("archive_note_${session.id}", snapshot.first.note)
@@ -363,6 +363,7 @@ class ChatViewModel(
     }
 
     suspend fun generateShortTermSummary(session: ChatSession, messageSource: List<ChatMessage>? = null): Boolean {
+        if (!settings.memoryV2Enabled || !settings.privateSummaryGenerationEnabled) return false
         try {
             val restartAt = settings.getSessionRestartAt(session.id)
             val allMsgs = (messageSource ?: repository.getMessagesSync(session.id))
@@ -498,6 +499,7 @@ ${text}"""
             _currentSession.value = session
             _sessionRestartAt.value = settings.getSessionRestartAt(session.id)
             _currentMode.value = settings.getLastMode(operator.id)
+            settings.getPendingPrivateModeTransition(session.id).takeIf { it.isNotBlank() }?.let { modeTransitionNotices[session.id] = it }
             markSessionRead(session.id)
             if (sameSession && messagesJob?.isActive == true) return@launch
             if (sameSession) {
@@ -546,6 +548,7 @@ ${text}"""
             _currentSession.value = session
             _sessionRestartAt.value = settings.getSessionRestartAt(session.id)
             _currentMode.value = settings.getLastMode(operator.id)
+            settings.getPendingPrivateModeTransition(session.id).takeIf { it.isNotBlank() }?.let { modeTransitionNotices[session.id] = it }
             markSessionRead(session.id)
             if (sameSession && messagesJob?.isActive == true) return selectionId
             if (sameSession) {
@@ -784,6 +787,7 @@ ${text}"""
                 oldMode == "director" && mode == "online" -> "【眼前的场景像雾气一样散去，你回到了罗德岛的走廊，通讯器里传来用户的声音。】"
                 else -> "【系统通知：模式已切换。】"
             }
+            settings.putPendingPrivateModeTransition(session.id, modeTransitionNotices[session.id].orEmpty())
             modeTransitionRetryPending.remove(session.id)
             settings.putLastMode(session.operatorId, mode)
         }
@@ -967,8 +971,7 @@ $userContent
 
     /** Removes only the exact structural labels leaked at the start of a model segment. */
     private fun stripLeakedSegmentLabel(content: String): String = content.trimStart()
-        .removePrefix("【旁白】")
-        .removePrefix("【台词】")
+        .replaceFirst(Regex("^【(?:旁白|台词|台詞)(?:[：:])?】\\s*"), "")
         .trimStart()
 
     fun cancelSessionRequests(sessionId: String) {
@@ -1088,6 +1091,7 @@ $userContent
                             notifyIfBackground(session, replyPreview(parsed).ifBlank { "发来一条消息" })
                             DebugLogger.log("Chat/DB", "AI响应已写入, session=${session.id}, id=$aiMsgId")
                             modeTransitionNotices.remove(session.id)
+                            settings.clearPendingPrivateModeTransition(session.id)
                             modeTransitionRetryPending.remove(session.id)
                             // Only a visible reply counts as a completed interaction.
                             val affectionMod = 2 + parsed.affection_mod.coerceIn(-2, 2)
@@ -1323,6 +1327,7 @@ $userContent
     private fun currentVisionGateway(): VisionGateway = createVisionGateway(settings)
 
     private suspend fun saveVisionMemory(session: ChatSession, caption: String, visionText: String) {
+        if (!settings.memoryV2Enabled || !settings.privateMemoryGenerationEnabled) return
         if (visionText.isBlank() || visionText.startsWith("[")) return
         val cleanText = visionText.trim().removePrefix("```json").removePrefix("```").trim().removeSuffix("```").trim()
         val visionSummary = runCatching {
@@ -1347,7 +1352,9 @@ $userContent
             expiresAt = MemoryPolicy.anchorExpiresAt(settings, AnchorType.EVENT),
             isPrivate = true
         )
-        if (repository.saveAnchor(anchor)) saveAnchorToVector(anchor)
+        if (repository.saveAnchor(anchor)) {
+            saveAnchorToVector(anchor)
+        }
     }
 
     private fun notifyIfBackground(session: ChatSession, content: String) {
@@ -1360,6 +1367,7 @@ $userContent
     }
 
     private suspend fun saveAnchorToVector(anchor: MemoryAnchor) {
+        if (!settings.memoryV2Enabled || !settings.privateMemoryGenerationEnabled) return
         val service = memoryVectorService ?: return
         try {
             service.saveMemory(VectorMemory(
@@ -1381,6 +1389,7 @@ $userContent
     }
 
     fun recallMessage(msgId: Long) {
+        val sessionId = _messages.value.firstOrNull { it.id == msgId }?.sessionId
         _currentSession.value?.let { session ->
             chatAiJobs.remove(session.id)?.cancel()
             activeRequestBySession.remove(session.id)
@@ -1389,6 +1398,7 @@ $userContent
         _messages.value = _messages.value.filter { it.id != msgId }
         viewModelScope.launch {
             repository.deleteMessage(msgId)
+            rebuildPrivateContextAfterRecall(sessionId ?: _currentSession.value?.id.orEmpty())
         }
     }
 
@@ -1408,10 +1418,24 @@ $userContent
         viewModelScope.launch {
             repository.updateMessageContentAndPreview(message.sessionId, msgId, updated, message.timestamp)
             repository.deleteDisplayEvent(msgId, segmentIndex)
-            // Derived memory may retain wording from the original JSON response.
-            repository.deleteMemoryV2BySession(message.sessionId)
-            repository.deleteMemoriesBySession(message.sessionId)
-            _currentSession.value?.takeIf { it.id == message.sessionId }?.let { repository.deleteLongTermByOperator(it.operatorId) }
+            rebuildPrivateContextAfterRecall(message.sessionId)
+        }
+    }
+
+    /** Rebuild derived context immediately so recalling one reply does not reset the relationship. */
+    private suspend fun rebuildPrivateContextAfterRecall(sessionId: String) {
+        val session = repository.getSession(sessionId) ?: return
+        repository.deleteMemoryV2BySession(sessionId)
+        repository.deleteMemoriesBySession(sessionId)
+        settings.putMemoryExtractionCursor(sessionId, 0L)
+        settings.putSummaryCursor(sessionId, 0L)
+        val restartAt = settings.getSessionRestartAt(sessionId)
+        val messages = repository.getMessagesSync(sessionId)
+            .filter { it.type != "system" && (restartAt <= 0L || it.timestamp >= restartAt) }
+        if (messages.isEmpty()) return
+        generateShortTermSummary(session, messages)
+        if (settings.memoryV2Enabled && settings.privateMemoryGenerationEnabled && ingestPrivateMemoryV2(session, messages.takeLast(30))) {
+            settings.putMemoryExtractionCursor(sessionId, messages.maxOf { it.id })
         }
     }
 
@@ -1773,7 +1797,10 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         val archiveContextActive = settings.getBoolean("archive_context_active_$sessionId", false)
         val archivePrivateRecallReady = settings.getBoolean("archive_private_recall_ready_$sessionId", false)
         val op = appState.operators.value.find { it.id == session.operatorId }
-        val recent = repository.getMessagesSync(session.id).takeLast(4).map { message ->
+        val restartAt = settings.getSessionRestartAt(session.id)
+        val recent = repository.getMessagesSync(session.id)
+            .filter { restartAt <= 0L || it.timestamp >= restartAt }
+            .takeLast(4).map { message ->
             val text = if (message.isMe) message.content else formatPrivateHistoryForPrompt(message)
             text.takeIf { it.isNotBlank() }?.let { "${if (message.isMe) "用户" else session.operatorName}：${it.take(100)}" }
         }.filterNotNull().joinToString("\n")
@@ -1790,7 +1817,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
                     session.operatorId, limitL1 = 2, limitL2 = 1, limitL3 = 1, query = recallQuery,
                     applyPrivateSourceFilter = true,
                 )
-                val relationshipMemories = if (archiveContextActive || !settings.privateRecallRelationshipMemory) "" else memoryV2Pipeline.buildRelationshipPrivateMemoryContext(
+                val relationshipMemories = if (archiveContextActive || !settings.isMemoryInjectionAllowed("private_chat", "RELATIONSHIP")) "" else memoryV2Pipeline.buildRelationshipPrivateMemoryContext(
                     session.operatorId, recallQuery
                 )
                 val memories = UnifiedMemoryContext.mergeBlocks(
@@ -1812,7 +1839,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
                 }
             }
         }
-        val group = if (archiveContextActive || !settings.privateRecallGroupChatMemory) "无" else buildPrivateGroupContext(session.operatorId, userText)
+        val group = if (archiveContextActive || !settings.isMemoryInjectionAllowed("private_chat", "GROUP_CHAT")) "无" else buildPrivateGroupContext(session.operatorId, userText)
         return listOfNotNull(
             op?.userRelation?.takeIf { it.isNotBlank() }?.let { "你与用户的关系：$it" },
             recent.takeIf { it.isNotBlank() }?.let { "最近私聊：\n$it" },
@@ -1834,23 +1861,20 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
     private fun privateMemorySourcePolicyKey(
         archiveContextActive: Boolean = false,
         archivePrivateRecallReady: Boolean = false,
-    ): String = listOf(
-        settings.privateRecallPrivateChatMemory,
-        settings.privateRecallGroupChatMemory,
-        settings.privateRecallMomentMemory,
-        settings.privateRecallMomentCommentMemory,
-        settings.privateRecallRelationshipMemory,
-        settings.privateRecallDiaryMemory,
-        settings.privateRecallManualMemory,
+    ): String = (listOf(
+        "PRIVATE_CHAT", "GROUP_CHAT", "MOMENT", "MOMENT_COMMENT", "RELATIONSHIP", "DIARY", "MANUAL_MEMORY"
+    ).map { source ->
+        settings.isMemoryInjectionAllowed("private_chat", source)
+    } + listOf(
         settings.globalPublicMemoryEnabled,
         settings.memoryV2Enabled,
         settings.memoryRecallMode,
         archiveContextActive,
         archivePrivateRecallReady,
-    ).joinToString(separator = ":")
+    )).joinToString(separator = ":")
 
     private suspend fun extractPrivateMemoryIfNeeded(session: ChatSession) {
-        if (!settings.memoryV2Enabled) return
+        if (!settings.memoryV2Enabled || !settings.privateMemoryGenerationEnabled) return
         val cursor = settings.getMemoryExtractionCursor(session.id)
         val restartAt = settings.getSessionRestartAt(session.id)
         val pending = repository.getMessagesSync(session.id)
@@ -1967,7 +1991,8 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
 - 不要直接说“我被催眠了”，除非用户指令要求。
 剩余${_hypnosisRounds.value}轮
 """ else ""
-        val transition = modeTransitionNotices[session.id].orEmpty()
+        val transition = modeTransitionNotices[session.id]
+            ?: settings.getPendingPrivateModeTransition(session.id)
         val transitionNotice = if (transition.isNotBlank()) "【场景变更】\n$transition\n" else ""
         val wantsRecall = UnifiedMemoryContext.shouldIncludeTimeSummary(userContent)
         val recallQuery = repository.getMessagesSync(session.id)
@@ -1982,12 +2007,14 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         val archiveContextActive = settings.getBoolean("archive_context_active_${session.id}", false)
         val archivePrivateRecallReady = settings.getBoolean("archive_private_recall_ready_${session.id}", false)
         val privateRecallSources = memoryV2Pipeline.privateChatAllowedSources()
-        val allowGroupRecall = settings.privateRecallGroupChatMemory
-        val allowRelationshipRecall = settings.privateRecallRelationshipMemory
+        val allowGroupRecall = settings.isMemoryInjectionAllowed("private_chat", "GROUP_CHAT")
+        val allowRelationshipRecall = settings.isMemoryInjectionAllowed("private_chat", "RELATIONSHIP")
         // A loaded save must not be spoiled by later group or public events from the old timeline.
         val groupContext = if (archiveContextActive || !allowGroupRecall) "无" else buildPrivateGroupContext(session.operatorId, userContent)
         val allowPrivateRecall = !archiveContextActive || archivePrivateRecallReady
-        val stableImpression = if (allowPrivateRecall) memoryV2Pipeline.buildPrivateStableImpression(session.operatorId) else ""
+        val stableImpression = if (allowPrivateRecall && settings.isMemoryInjectionAllowed("private_chat", "PRIVATE_CHAT")) {
+            memoryV2Pipeline.buildPrivateStableImpression(session.operatorId)
+        } else ""
         val personalMemoryContext = if (allowPrivateRecall) memoryV2Pipeline.buildPrivateChatMemoryContext(
             operatorId = session.operatorId,
             query = recallQuery,
@@ -2252,6 +2279,7 @@ $avoid
     }
 
     private suspend fun generateDailySummary(dayBegin: java.util.Date): Boolean {
+        if (!settings.memoryV2Enabled || !settings.privateDailySummaryGenerationEnabled) return false
         try {
             repository.getAllSessionsSync()
                 .filterNot { it.operatorId.startsWith("group_") }
@@ -2274,6 +2302,7 @@ $avoid
     }
 
     private suspend fun generatePrivateDailySummary(operatorId: String, dayBegin: java.util.Date) {
+        if (!settings.memoryV2Enabled || !settings.privateDailySummaryGenerationEnabled) return
         try {
             val dayEnd = java.util.Date(dayBegin.time + 86_400_000)
             val session = repository.getSessionByOperator(operatorId) ?: return

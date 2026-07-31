@@ -65,6 +65,7 @@ class ChatRepository(
 
     suspend fun saveAnchors(anchors: List<MemoryAnchor>) = shared.saveAnchors(anchors)
     suspend fun deleteMemoriesBySession(sessionId: String) = shared.deleteMemoriesBySession(sessionId)
+    suspend fun deleteShortTermMemory(sessionId: String) = shared.deleteShortTermMemory(sessionId)
     suspend fun deleteAnchorsBySession(sessionId: String) = shared.deleteAnchorsBySession(sessionId)
 
     suspend fun getPublicAnchors(operatorId: String): List<MemoryAnchor> = shared.getPublicAnchors(operatorId)

@@ -145,12 +145,23 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun enforceMemoryRetain(sessionId: String, keepCount: Int) = memories.enforceMemoryRetain(sessionId, keepCount)
     suspend fun deleteAllImpressions() = memories.deleteAllImpressions()
     suspend fun deleteMemoriesBySession(sessionId: String) = memories.deleteMemoriesBySession(sessionId)
+    suspend fun deleteShortTermMemory(sessionId: String) = memories.deleteShortTermMemory(sessionId)
     suspend fun deleteMemoriesByOperator(operatorId: String) = memories.deleteMemoriesByOperator(operatorId)
     suspend fun deleteLongTermByOperator(operatorId: String) = memories.deleteLongTermByOperator(operatorId)
     suspend fun deleteMemoryV2BySession(sessionId: String) = memoryV2.deleteBySession(sessionId)
     suspend fun deleteMemoryV2ByOwnerAndSourceKind(ownerType: String, ownerId: String, sourceKind: MemorySourceKind) = memoryV2.deleteByOwnerAndSourceKind(ownerType, ownerId, sourceKind)
     suspend fun deleteMemoryItemsBySession(sessionId: String) = memoryV2.deleteMemoryItemsBySession(sessionId)
     suspend fun deleteMemoryV2BySource(sourceKind: MemorySourceKind, sourceRefId: String) = memoryV2.deleteBySource(sourceKind, sourceRefId)
+
+    /** Removes group-owned structured and direct vector records when a group starts a new timeline. */
+    suspend fun clearGroupRestartMemory(groupId: String) = withContext(Dispatchers.Default) {
+        memoryV2.deleteBySession(groupId)
+        memoryV2.deleteGroupChatMemoryByGroupId(groupId)
+        val db = wrapper.database
+        db.transaction {
+            db.vectorMemoriesQueries.deleteVectorMemoriesBySourceId(groupId)
+        }
+    }
     suspend fun getActiveMemoryItemsMissingVector(now: Long, limit: Int) = memoryV2.getActiveMemoryItemsMissingVector(now, limit)
     suspend fun deleteMemorySource(id: Long) = memoryV2.deleteMemorySource(id)
 

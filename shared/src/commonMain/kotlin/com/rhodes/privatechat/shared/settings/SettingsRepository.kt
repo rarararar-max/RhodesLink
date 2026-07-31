@@ -205,6 +205,95 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = getBoolean("moment_memory_v2_enabled", true)
         set(value) = putBoolean("moment_memory_v2_enabled", value)
 
+    /** Per-source generation switches. The old moment switch remains the fallback for upgrades. */
+    var privateMemoryGenerationEnabled: Boolean
+        get() = getBoolean("private_memory_generation_enabled", true)
+        set(value) = putBoolean("private_memory_generation_enabled", value)
+
+    var groupMemoryGenerationEnabled: Boolean
+        get() = getBoolean("group_memory_generation_enabled", true)
+        set(value) = putBoolean("group_memory_generation_enabled", value)
+
+    var momentMemoryGenerationEnabled: Boolean
+        get() = getBoolean("moment_memory_generation_enabled", momentMemoryV2Enabled)
+        set(value) = putBoolean("moment_memory_generation_enabled", value)
+
+    var momentCommentMemoryGenerationEnabled: Boolean
+        get() = getBoolean("moment_comment_memory_generation_enabled", momentMemoryV2Enabled)
+        set(value) = putBoolean("moment_comment_memory_generation_enabled", value)
+
+    var diaryMemoryGenerationEnabled: Boolean
+        get() = getBoolean("diary_memory_generation_enabled", true)
+        set(value) = putBoolean("diary_memory_generation_enabled", value)
+
+    var privateSummaryGenerationEnabled: Boolean
+        get() = getBoolean("private_summary_generation_enabled", true)
+        set(value) = putBoolean("private_summary_generation_enabled", value)
+    var groupSummaryGenerationEnabled: Boolean
+        get() = getBoolean("group_summary_generation_enabled", true)
+        set(value) = putBoolean("group_summary_generation_enabled", value)
+    var privateDailySummaryGenerationEnabled: Boolean
+        get() = getBoolean("private_daily_summary_generation_enabled", true)
+        set(value) = putBoolean("private_daily_summary_generation_enabled", value)
+    var groupDailySummaryGenerationEnabled: Boolean
+        get() = getBoolean("group_daily_summary_generation_enabled", true)
+        set(value) = putBoolean("group_daily_summary_generation_enabled", value)
+
+    var privateMemoryPromotionEnabled: Boolean
+        get() = getBoolean("private_memory_promotion_enabled", true)
+        set(value) = putBoolean("private_memory_promotion_enabled", value)
+
+    var groupMemoryPromotionEnabled: Boolean
+        get() = getBoolean("group_memory_promotion_enabled", true)
+        set(value) = putBoolean("group_memory_promotion_enabled", value)
+
+    var momentMemoryPromotionEnabled: Boolean
+        get() = getBoolean("moment_memory_promotion_enabled", true)
+        set(value) = putBoolean("moment_memory_promotion_enabled", value)
+
+    var momentCommentMemoryPromotionEnabled: Boolean
+        get() = getBoolean("moment_comment_memory_promotion_enabled", true)
+        set(value) = putBoolean("moment_comment_memory_promotion_enabled", value)
+
+    var diaryMemoryPromotionEnabled: Boolean
+        get() = getBoolean("diary_memory_promotion_enabled", true)
+        set(value) = putBoolean("diary_memory_promotion_enabled", value)
+
+    var groupMemoryCopyToMembersEnabled: Boolean
+        get() = getBoolean("group_memory_copy_to_members_enabled", false)
+        set(value) = putBoolean("group_memory_copy_to_members_enabled", value)
+
+    /** Per-surface source injection switches. */
+    fun isMemoryInjectionAllowed(surface: String, source: String): Boolean =
+        getBoolean("memory_inject_${surface}_${source.lowercase()}", legacyMemoryInjection(surface, source) ?: defaultMemoryInjection(surface, source))
+
+    fun setMemoryInjectionAllowed(surface: String, source: String, enabled: Boolean) =
+        putBoolean("memory_inject_${surface}_${source.lowercase()}", enabled)
+
+    private fun defaultMemoryInjection(surface: String, source: String): Boolean = when (surface) {
+        "private_chat" -> when (source) {
+            "PRIVATE_CHAT", "GROUP_CHAT", "MOMENT", "MOMENT_COMMENT", "DIARY", "MANUAL_MEMORY", "RELATIONSHIP" -> true
+            else -> false
+        }
+        "group_chat" -> source in setOf("GROUP_CHAT", "MOMENT", "MOMENT_COMMENT", "MANUAL_MEMORY")
+        "moment" -> source in setOf("GROUP_CHAT", "MOMENT", "MOMENT_COMMENT", "DIARY", "MANUAL_MEMORY")
+        "comment" -> source in setOf("GROUP_CHAT", "MOMENT", "MOMENT_COMMENT", "MANUAL_MEMORY")
+        "diary" -> source in setOf("PRIVATE_CHAT", "GROUP_CHAT", "MOMENT", "MOMENT_COMMENT", "DIARY", "MANUAL_MEMORY", "RELATIONSHIP")
+        else -> false
+    }
+
+    private fun legacyMemoryInjection(surface: String, source: String): Boolean? =
+        if (surface != "private_chat") null else when (source) {
+            "PRIVATE_CHAT" -> privateRecallPrivateChatMemory
+            "GROUP_CHAT" -> privateRecallGroupChatMemory
+            "MOMENT" -> privateRecallMomentMemory
+            "MOMENT_COMMENT" -> privateRecallMomentCommentMemory
+            "DIARY" -> privateRecallDiaryMemory
+            "MANUAL_MEMORY" -> privateRecallManualMemory
+            "RELATIONSHIP" -> privateRecallRelationshipMemory
+            else -> null
+        }
+
     var globalPublicMemoryEnabled: Boolean
         get() = getBoolean("global_public_memory_enabled", true)
         set(value) = putBoolean("global_public_memory_enabled", value)
@@ -838,6 +927,25 @@ class SettingsRepository(private val settings: ObservableSettings) {
     fun putGroupMode(groupId: String, value: String) =
         putString("group_mode_$groupId", value.trim().lowercase().takeIf { it in setOf("online", "offline", "director") } ?: "online")
 
+    /** One neutral bridge for the next generated group turn after its interaction form changes. */
+    fun getPendingGroupModeTransition(groupId: String): String =
+        getString("group_mode_transition_$groupId", "").trim()
+
+    fun putPendingGroupModeTransition(groupId: String, transition: String) =
+        putString("group_mode_transition_$groupId", transition.trim())
+
+    fun clearPendingGroupModeTransition(groupId: String) =
+        remove("group_mode_transition_$groupId")
+
+    fun getPendingPrivateModeTransition(sessionId: String): String =
+        getString("private_mode_transition_$sessionId", "").trim()
+
+    fun putPendingPrivateModeTransition(sessionId: String, transition: String) =
+        putString("private_mode_transition_$sessionId", transition.trim())
+
+    fun clearPendingPrivateModeTransition(sessionId: String) =
+        remove("private_mode_transition_$sessionId")
+
     fun getSessionMessageCounter(sessionId: String): Int =
         getInt("msg_counter_$sessionId", 0)
 
@@ -1056,6 +1164,8 @@ class SettingsRepository(private val settings: ObservableSettings) {
                 idleProactiveChatEnabled = true
                 quietHoursEnabled = true
                 momentMemoryV2Enabled = false
+                momentMemoryGenerationEnabled = false
+                momentCommentMemoryGenerationEnabled = false
                 autoDiaryEnabled = false
                 putInt("comment_bystander_max", 1)
             }
@@ -1072,6 +1182,8 @@ class SettingsRepository(private val settings: ObservableSettings) {
                 idleProactiveChatEnabled = true
                 quietHoursEnabled = true
                 momentMemoryV2Enabled = true
+                momentMemoryGenerationEnabled = true
+                momentCommentMemoryGenerationEnabled = true
                 autoDiaryEnabled = false
                 putInt("comment_bystander_max", 3)
             }
@@ -1088,6 +1200,8 @@ class SettingsRepository(private val settings: ObservableSettings) {
                 idleProactiveChatEnabled = true
                 quietHoursEnabled = true
                 momentMemoryV2Enabled = true
+                momentMemoryGenerationEnabled = true
+                momentCommentMemoryGenerationEnabled = true
                 autoDiaryEnabled = false
                 putInt("comment_bystander_max", 4)
             }

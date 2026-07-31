@@ -208,6 +208,22 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
         }
     }
 
+    suspend fun deleteGroupChatMemoryByGroupId(groupId: String) = withContext(Dispatchers.Default) {
+        val prefix = "$groupId:%"
+        // Delete each window through the normal source path so promoted L2/L3 descendants of
+        // copies given to group members are invalidated before their L1 evidence disappears.
+        val sourceRefIds = db.memoryItemsQueries
+            .getSourceRefIdsBySourcePrefix(MemorySourceKind.GROUP_CHAT.name, prefix)
+            .executeAsList()
+        sourceRefIds.forEach { sourceRefId -> deleteBySource(MemorySourceKind.GROUP_CHAT, sourceRefId) }
+        db.transaction {
+            db.memoryItemsQueries.deleteVectorsBySourcePrefix(MemorySourceKind.GROUP_CHAT.name, prefix)
+            db.memoryItemsQueries.deleteMemoryItemsBySourcePrefix(MemorySourceKind.GROUP_CHAT.name, prefix)
+            db.memorySourceQueueQueries.deleteMemorySourcesBySourcePrefix(MemorySourceKind.GROUP_CHAT.name, prefix)
+            db.memoryLinksQueries.deleteOrphanedMemoryLinks()
+        }
+    }
+
     /**
      * A deleted source invalidates every promoted conclusion that used it as evidence.  Those
      * conclusions are archived rather than silently kept in recall; remaining evidence can form

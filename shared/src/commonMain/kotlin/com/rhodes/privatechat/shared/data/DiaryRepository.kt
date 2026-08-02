@@ -8,17 +8,22 @@ import app.cash.sqldelight.coroutines.asFlow
 import app.cash.sqldelight.coroutines.mapToList
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 class DiaryRepository(private val wrapper: DatabaseWrapper) {
 
     private val db: RhodesDatabase get() = wrapper.database
+    private val insertMutex = Mutex()
 
     // --- Diaries ---
-    suspend fun insertDiary(diary: Diary) = withContext(Dispatchers.Default) {
+    suspend fun insertDiary(diary: Diary): Diary = insertMutex.withLock { withContext(Dispatchers.Default) {
         val version = diary.version.takeIf { it > 0 } ?: db.diariesQueries.getNextVersion(diary.operatorId, diary.date).executeAsOne().toInt()
         db.diariesQueries.insertDiary(diary.operatorId, diary.operatorName, diary.content, diary.date, version.toLong(), diary.createdAt)
-    }
+        val id = db.diariesQueries.getInsertedDiaryId(diary.operatorId, diary.date, version.toLong(), diary.createdAt, diary.content).executeAsOne()
+        diary.copy(id = id, version = version)
+    } }
 
     suspend fun getDiary(operatorId: String, date: String): Diary? = withContext(Dispatchers.Default) {
         db.diariesQueries.getDiary(operatorId, date) { id, opId, opName, content, date_, version, createdAt ->

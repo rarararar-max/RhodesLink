@@ -246,7 +246,7 @@ class ChatViewModel(
         viewModelScope.launch {
             val archives = repository.getChatArchives(session.id)
             if (archives.size >= archiveCapacity()) { onShowToast("当前好感度下的存档位置已满"); return@launch }
-            val all = currentChapterMessages(session.id).filter { it.type != "system" && it.type != "send_failed" }
+            val all = currentChapterMessages(session.id).filter { it.type != "system" && it.type != "send_failed" && it.type != "gift_reply_failed" }
             val rounds = all.chunkedByPrivateRound().filter { round -> round.any { it.isMe } && round.any { !it.isMe && it.type == "ai_json" } }
             if (rounds.isEmpty()) { onShowToast("至少完成一轮聊天后才能保存存档"); return@launch }
             val snapshot = rounds.takeLast(5).flatten()
@@ -383,7 +383,7 @@ class ChatViewModel(
         try {
             val restartAt = settings.getSessionRestartAt(session.id)
             val allMsgs = (messageSource ?: repository.getMessagesSync(session.id))
-                .filter { it.type != "send_failed" && (restartAt <= 0L || it.timestamp >= restartAt) }
+                .filter { it.type != "send_failed" && it.type != "gift_reply_failed" && (restartAt <= 0L || it.timestamp >= restartAt) }
             val retain = settings.summaryRetain.coerceAtLeast(1)
             val cursor = if (settings.summaryCursorEnabled && messageSource == null) settings.getSummaryCursor(session.id) else 0L
             val scopedMsgs = if (cursor > 0L) allMsgs.filter { it.id > cursor } else allMsgs
@@ -852,7 +852,7 @@ ${text}"""
                 ?: run { clearPrivateTurnState(session.id); null }
         } ?: PrivateTurnState()
         val historyMessages = repository.getMessagesSync(session.id)
-            .filter { it.type != "system" && it.type != "send_failed" && it.id !in excludedMessageIds }
+            .filter { it.type != "system" && it.type != "send_failed" && it.type != "gift_reply_failed" && it.id !in excludedMessageIds }
         val history = recentPrivateRounds(historyMessages, 3)
             .chunkedByPrivateRound()
             .takeLast(3)
@@ -1533,7 +1533,7 @@ $userContent
         settings.putSummaryCursor(sessionId, 0L)
         val restartAt = settings.getSessionRestartAt(sessionId)
         val messages = repository.getMessagesSync(sessionId)
-            .filter { it.type != "system" && it.type != "send_failed" && (restartAt <= 0L || it.timestamp >= restartAt) }
+            .filter { it.type != "system" && it.type != "send_failed" && it.type != "gift_reply_failed" && (restartAt <= 0L || it.timestamp >= restartAt) }
         if (messages.isEmpty()) return
         generateShortTermSummary(session, messages)
         if (settings.memoryV2Enabled && settings.privateMemoryGenerationEnabled && ingestPrivateMemoryV2(session, messages.takeLast(30))) {
@@ -1982,7 +1982,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         val cursor = settings.getMemoryExtractionCursor(session.id)
         val restartAt = settings.getSessionRestartAt(session.id)
         val pending = repository.getMessagesSync(session.id)
-            .filter { it.id > cursor && it.type != "system" && it.type != "send_failed" && (restartAt <= 0L || it.timestamp >= restartAt) }
+            .filter { it.id > cursor && it.type != "system" && it.type != "send_failed" && it.type != "gift_reply_failed" && (restartAt <= 0L || it.timestamp >= restartAt) }
             .take(settings.privateMemoryExtractionThreshold.coerceAtMost(30))
         if (pending.size < settings.privateMemoryExtractionThreshold) return
         if (ingestPrivateMemoryV2(session, pending)) {
@@ -2002,6 +2002,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
     }
 
     private fun formatPrivateHistoryForPrompt(msg: ChatMessage): String {
+        if (msg.type == "gift_reply_failed") return ""
         if (msg.type == "gift_hidden") return giftPromptText(msg.content)
         if (msg.type == "image" && msg.isMe) return formatImageMessageForPrompt(msg)
         if (msg.isMe) return "用户：${msg.content.take(500)}"
@@ -2029,6 +2030,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
 
     private fun formatPrivateMessageForMemory(msg: ChatMessage, limit: Int): String {
         if (msg.type == "system") return ""
+        if (msg.type == "gift_reply_failed") return ""
         if (msg.type == "gift_hidden") return giftPromptText(msg.content).take(limit)
         if (msg.type == "image" && msg.isMe) return formatImageMessageForPrompt(msg).take(limit)
         if (!msg.isMe && msg.type != "ai_json") return ""
@@ -2224,7 +2226,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             val restartAt = settings.getSessionRestartAt(session.id)
             val currentConversation = if (restartAt > 0L) scoped.filter { it.timestamp >= restartAt } else scoped
             val limit = historyLimitOverride ?: settings.historyMessages
-            val filtered = currentConversation.filter { it.id !in excludeMessageIds && it.type != "system" && it.type != "send_failed" }
+            val filtered = currentConversation.filter { it.id !in excludeMessageIds && it.type != "system" && it.type != "send_failed" && it.type != "gift_reply_failed" }
             recentPrivateRounds(filtered, limit)
         }.toMutableList()
         // 去掉最后一条用户消息，避免与 {{USER_CONTENT}} 重复

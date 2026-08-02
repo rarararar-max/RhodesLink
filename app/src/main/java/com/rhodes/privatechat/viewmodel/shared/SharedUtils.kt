@@ -8,6 +8,7 @@ import android.util.Log
 import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.shared.memory.AnchorSourcePolicy
 import com.rhodes.privatechat.shared.network.AIService
+import com.rhodes.privatechat.shared.network.providers
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.util.DebugLogger
 
@@ -216,6 +217,7 @@ class SharedUtils(
     fun getCustomUrl(): String = settings.customUrl
 
     fun chatConfigurationError(): String? = when {
+        settings.provider !in providers -> "当前聊天厂商无效，请在设置中重新选择模型厂商"
         settings.apiKey.isBlank() -> "请先在设置中配置 API Key"
         settings.modelName.isBlank() -> "请先在设置中配置模型名称"
         settings.provider == "custom" && settings.customUrl.isBlank() -> "请先在设置中配置自定义 API 地址"

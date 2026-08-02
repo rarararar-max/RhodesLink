@@ -2456,11 +2456,11 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     suspend fun updateImpression(impression: Memory) = dataViewModel.updateImpression(impression)
     suspend fun exportFullBackup(context: android.content.Context): java.io.File = dataViewModel.exportFullBackup(context, _operators.value)
     fun importFullBackup(payload: ExportPayload) = dataViewModel.importFullBackup(payload)
-    fun generateDiary(operatorId: String, auto: Boolean = false, onResult: (String) -> Unit) {
+    fun generateDiary(operatorId: String, auto: Boolean = false, onResult: (String, Long) -> Unit) {
         DebugLogger.log("Diary", "偷看日记: operatorId=$operatorId")
         viewModelScope.launch {
-            val text = generateDiaryText(operatorId, auto)
-            onResult(text)
+            val diary = generateDiaryText(operatorId, auto)
+            onResult(diary?.content.orEmpty(), diary?.id ?: 0L)
         }
     }
 
@@ -2490,13 +2490,13 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     }
 
     private suspend fun generateDiarySync(operatorId: String, auto: Boolean = false): Boolean {
-        return generateDiaryText(operatorId, auto).isNotBlank()
+        return generateDiaryText(operatorId, auto) != null
     }
 
-    private suspend fun generateDiaryText(operatorId: String, auto: Boolean = false): String {
+    private suspend fun generateDiaryText(operatorId: String, auto: Boolean = false): Diary? {
         val op = repository.getOperator(operatorId) ?: run {
             DebugLogger.log("Diary", "干员不存在: $operatorId")
-            return ""
+            return null
         }
             val profile = getUserProfile()
             try {
@@ -2505,7 +2505,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai"))
                 cal.add(java.util.Calendar.DAY_OF_MONTH, -1)
                 val yesterdayStr = sharedUtils.beijingSdf("yyyy-MM-dd").format(cal.time)
-                if (auto && repository.getDiary(operatorId, yesterdayStr) != null) return ""
+                if (auto && repository.getDiary(operatorId, yesterdayStr) != null) return null
                 val yesterdayDisplay = sharedUtils.beijingSdf("yyyy年MM月dd日").format(cal.time)
                 val yesterdayStart = cal.apply { set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0); set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0) }.timeInMillis
                 val yesterdayEnd = yesterdayStart + 86_400_000L
@@ -2609,18 +2609,18 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 sharedUtils.trackTokens("diary", prompt, text)
                 if (text.isNotBlank()) {
                     val now = System.currentTimeMillis()
-                    repository.insertDiary(Diary(operatorId = operatorId, operatorName = op.name, content = text, date = yesterdayStr, createdAt = now))
+                    val diary = repository.insertDiary(Diary(operatorId = operatorId, operatorName = op.name, content = text, date = yesterdayStr, createdAt = now))
                     if (settings.memoryV2Enabled && settings.diaryMemoryGenerationEnabled) {
                         memoryV2Pipeline.ingestDiary(operatorId, op.name, "diary_$now", text)
                     }
                     DebugLogger.log("Diary", "日记生成成功: ${text.take(50)}")
-                    return text
-                } else { DebugLogger.log("Diary", "日记生成为空"); return "" }
+                    return diary
+                } else { DebugLogger.log("Diary", "日记生成为空"); return null }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 DebugLogger.log("Diary", "日记生成异常: ${e.message?.take(100)}")
-                return ""
+                return null
             }
     }
 

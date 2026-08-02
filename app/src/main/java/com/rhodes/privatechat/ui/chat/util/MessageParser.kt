@@ -112,6 +112,7 @@ object MessageParser {
             isArchived = isArchived(msg, restartAt),
             imageUri = imageUri,
             imageStatus = status,
+            isSendFailed = status == "failed",
             originalMessageId = msg.id
         )
     }

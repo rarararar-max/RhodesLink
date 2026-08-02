@@ -114,7 +114,7 @@ fun DiaryScreen(
     var diaryEntries by remember { mutableStateOf<List<com.rhodes.privatechat.shared.model.Diary>>(emptyList()) }
     var currentDateIdx by remember { mutableIntStateOf(0) }
     var currentDiaryId by remember { mutableStateOf<Long?>(null) }
-    var pendingGeneratedContent by remember { mutableStateOf<String?>(null) }
+    var pendingGeneratedDiaryId by remember { mutableStateOf<Long?>(null) }
     var currentDateLabel by remember { mutableStateOf("") }
     var dataLoaded by remember { mutableStateOf(false) }
 
@@ -124,7 +124,7 @@ fun DiaryScreen(
         generationToken++
         currentDateIdx = 0
         currentDiaryId = null
-        pendingGeneratedContent = null
+        pendingGeneratedDiaryId = null
         currentDateLabel = ""
         diaryContent = null
         diaryEntries = emptyList()
@@ -137,8 +137,8 @@ fun DiaryScreen(
                     viewModel.markDiaryRead(opId, latest)
                     unreadIds = unreadIds - opId
                 }
-                val generatedIndex = pendingGeneratedContent?.let { content ->
-                    entries.indexOfFirst { it.content == content }
+                val generatedIndex = pendingGeneratedDiaryId?.let { id ->
+                    entries.indexOfFirst { it.id == id }
                 } ?: -1
                 val currentIndex = currentDiaryId?.let { id -> entries.indexOfFirst { it.id == id } } ?: -1
                 val cal = Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai"))
@@ -155,7 +155,7 @@ fun DiaryScreen(
                     currentDiaryId = entry.id
                     currentDateLabel = entry.date
                     diaryContent = entry.content
-                    if (generatedIndex >= 0) pendingGeneratedContent = null
+                    if (generatedIndex >= 0) pendingGeneratedDiaryId = null
                 } ?: run {
                     currentDateIdx = 0
                     currentDiaryId = null
@@ -172,16 +172,16 @@ fun DiaryScreen(
         }
     }
 
-    LaunchedEffect(pendingGeneratedContent, diaryEntries) {
-        val content = pendingGeneratedContent ?: return@LaunchedEffect
-        val index = diaryEntries.indexOfFirst { it.content == content }
+    LaunchedEffect(pendingGeneratedDiaryId, diaryEntries) {
+        val id = pendingGeneratedDiaryId ?: return@LaunchedEffect
+        val index = diaryEntries.indexOfFirst { it.id == id }
         if (index >= 0) {
             val entry = diaryEntries[index]
             currentDateIdx = index
             currentDiaryId = entry.id
             currentDateLabel = entry.date
             diaryContent = entry.content
-            pendingGeneratedContent = null
+            pendingGeneratedDiaryId = null
         }
     }
 
@@ -316,11 +316,11 @@ fun DiaryScreen(
                                 com.rhodes.privatechat.util.DebugLogger.log("Diary", "重新生成: opId=$opId, selectedName=$selectedName")
                                 val requestToken = ++generationToken
                                 isGenerating = true
-                                viewModel.generateDiary(opId) { text ->
+                                viewModel.generateDiary(opId) { text, diaryId ->
                                     com.rhodes.privatechat.util.DebugLogger.log("Diary", "重新生成回调触发: text=${text.take(30)}, isBlank=${text.isBlank()}")
                                     if (requestToken != generationToken || selectedOperatorId != opId) return@generateDiary
-                                    if (text.isNotBlank() && selectedOperatorId == opId) {
-                                        pendingGeneratedContent = text
+                                    if (text.isNotBlank() && diaryId > 0 && selectedOperatorId == opId) {
+                                        pendingGeneratedDiaryId = diaryId
                                     } else if (text.isBlank()) {
                                         android.widget.Toast.makeText(context, "AI生成失败，请检查网络和API Key后重试", android.widget.Toast.LENGTH_SHORT).show()
                                     }
@@ -348,11 +348,11 @@ fun DiaryScreen(
                                 com.rhodes.privatechat.util.DebugLogger.log("Diary", "偷看日记: opId=$opId, selectedName=$selectedName")
                                 val requestToken = ++generationToken
                                 isGenerating = true
-                                viewModel.generateDiary(opId) { text ->
+                                viewModel.generateDiary(opId) { text, diaryId ->
                                     com.rhodes.privatechat.util.DebugLogger.log("Diary", "偷看回调触发: text=${text.take(30)}, isBlank=${text.isBlank()}")
                                     if (requestToken != generationToken || selectedOperatorId != opId) return@generateDiary
-                                    if (text.isNotBlank() && selectedOperatorId == opId) {
-                                        pendingGeneratedContent = text
+                                    if (text.isNotBlank() && diaryId > 0 && selectedOperatorId == opId) {
+                                        pendingGeneratedDiaryId = diaryId
                                     } else if (text.isBlank()) {
                                         android.widget.Toast.makeText(context, "AI生成失败，请检查网络和API Key后重试", android.widget.Toast.LENGTH_SHORT).show()
                                     }

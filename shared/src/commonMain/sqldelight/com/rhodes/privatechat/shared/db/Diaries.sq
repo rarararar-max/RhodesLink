@@ -36,5 +36,10 @@ insertDiary:
 INSERT INTO diaries(operatorId, operatorName, content, date, version, createdAt)
 VALUES (?, ?, ?, ?, ?, ?);
 
+getInsertedDiaryId:
+SELECT id FROM diaries
+WHERE operatorId = ? AND date = ? AND version = ? AND createdAt = ? AND content = ?
+ORDER BY id DESC LIMIT 1;
+
 deleteOldDiaries:
 DELETE FROM diaries WHERE createdAt < ?;

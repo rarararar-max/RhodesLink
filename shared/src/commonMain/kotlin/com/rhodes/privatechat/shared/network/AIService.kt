@@ -295,7 +295,7 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         jsonMode: Boolean = false,
         maxOutputTokens: Int? = null
     ): ChatResult {
-        val config = providers[providerId] ?: providers["deepseek"]!!
+        val config = providers[providerId] ?: throw IllegalArgumentException("不支持的厂商: $providerId")
         val model = normalizeModelName(config.id, modelName)
 
         // 自填厂商 URL 校验

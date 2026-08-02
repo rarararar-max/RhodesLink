@@ -147,18 +147,17 @@ fun MessageList(
         val visible = messages.filter { message ->
             message.timestamp < legacyMessageCutoff || eventKey(message) in eventOrder
         }
-        // History keeps its persisted order; new bubbles follow the order in which the user saw them.
+        // Reveal order only resolves the shared timestamp of one AI reply; it never moves a reply across the wider history.
         visible.sortedWith(
-            compareBy<ChatUiMessage> { it.timestamp >= legacyMessageCutoff }
+            compareBy<ChatUiMessage> { it.timestamp }
                 .thenBy { message ->
-                    if (message.timestamp < legacyMessageCutoff) message.timestamp
-                    else eventOrder[eventKey(message)] ?: Long.MAX_VALUE
+                    eventOrder[eventKey(message)] ?: Long.MAX_VALUE
                 }
                 .thenBy { message ->
-                    if (message.timestamp < legacyMessageCutoff) message.originalMessageId else 0L
+                    message.originalMessageId
                 }
                 .thenBy { message ->
-                    if (message.timestamp < legacyMessageCutoff) message.segmentIndex else 0
+                    message.segmentIndex
                 }
         )
     }
@@ -263,8 +262,8 @@ fun MessageList(
                 onRecall = { onRecall(msg.originalMessageId, msg.segmentIndex) },
                 onRegenerate = if (onRegenerate != null && !msg.isMe) { { onRegenerate(msg.originalMessageId) } } else null,
                 onContinue = if (onContinue != null && !msg.isMe && !msg.isSystem && msg.originalMessageId == latestRoleReplyId) { { onContinue(msg.originalMessageId) } } else null,
-                onRetry = if (onRetry != null && msg.isSendFailed) { { onRetry(msg.originalMessageId) } } else null,
-                retryMayInterrupt = msg.isSendFailed && displayMessages.drop(i + 1).any { !it.isSendFailed && !it.isSystem },
+                onRetry = if (onRetry != null && (msg.isSendFailed || msg.giftReplyFailed)) { { onRetry(msg.originalMessageId) } } else null,
+                retryMayInterrupt = (msg.isSendFailed || msg.giftReplyFailed) && displayMessages.drop(i + 1).any { !it.isSendFailed && !it.giftReplyFailed && !it.isSystem },
                 onSenderClick = onSenderClick,
                 onPlay = onPlay,
                 isSpeaking = speakingMessageKey == "${msg.originalMessageId}:${msg.segmentIndex}:${msg.id}",
@@ -380,9 +379,10 @@ private fun MessageBubble(
                                     Spacer(Modifier.height(6.dp))
                                      Text(message.content, fontSize = if (onSenderClick != null) 15.sp else 16.sp, color = TextPrimary, fontWeight = FontWeight.Normal)
                                  }
-                                 if (message.imageStatus == "failed") {
-                                     Spacer(Modifier.height(6.dp))
-                                     Text("图片识别失败，请重新发送", fontSize = 12.sp, color = ErrorRed)
+                                if (message.imageStatus == "failed") {
+                                    Spacer(Modifier.height(6.dp))
+                                    Text("图片识别失败，点击重试", fontSize = 12.sp, color = ErrorRed,
+                                        modifier = Modifier.clickable { if (retryMayInterrupt) showRetryConfirm = true else onRetry?.invoke() })
                                  }
                             }
                         } else {

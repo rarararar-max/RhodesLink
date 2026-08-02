@@ -11,6 +11,9 @@ CREATE TABLE IF NOT EXISTS diaries (
 getDiariesByOperator:
 SELECT * FROM diaries WHERE operatorId = ? ORDER BY date DESC, version DESC, createdAt DESC, id DESC;
 
+getLatestDiaryCreatedAtByOperator:
+SELECT operatorId, COALESCE(MAX(createdAt), 0) AS createdAt FROM diaries GROUP BY operatorId;
+
 getDiary:
 SELECT * FROM diaries WHERE operatorId = ? AND date = ? ORDER BY version DESC, createdAt DESC, id DESC LIMIT 1;
 

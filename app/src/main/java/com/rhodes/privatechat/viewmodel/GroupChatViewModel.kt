@@ -48,9 +48,11 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import java.io.IOException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.put
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
@@ -127,6 +129,7 @@ class GroupChatViewModel(
     private val groupJobLock = Any()
     private val pendingUserMessageIds = ConcurrentHashMap<String, MutableSet<Long>>()
     private val groupGenerations = ConcurrentHashMap<String, Long>()
+    private val retryingMessageIds = ConcurrentHashMap.newKeySet<Long>()
     private val restartCleanupJobs = ConcurrentHashMap<String, Job>()
 
     private suspend fun planGroupTurn(
@@ -174,7 +177,7 @@ $modeRule
 - goal 不超过30个汉字，不能为空，不得写“不发言”。"""
         // The planner only needs a compact thread to stay within its 9-second budget.
         val history = recentGroupRounds(
-            repository.getMessagesSync(groupSessionId).filter { it.id !in excludedMessageIds && it.type != "system" },
+            repository.getMessagesSync(groupSessionId).filter { it.id !in excludedMessageIds && it.type != "system" && it.type != "send_failed" },
             2
         ).joinToString("\n") { formatGroupHistoryForPrompt(it).take(180) }
             .takeLast(2_000)
@@ -392,7 +395,7 @@ $requestText
         val session = repository.getSession(groupId) ?: return
         val restartAt = settings.getSessionRestartAt(groupId)
         val messages = repository.getMessagesSync(groupId)
-            .filter { it.type != "system" && (restartAt <= 0L || it.timestamp >= restartAt) }
+            .filter { it.type != "system" && it.type != "send_failed" && (restartAt <= 0L || it.timestamp >= restartAt) }
         if (messages.isEmpty()) return
         generateGroupShortTermSummary(groupId, session.operatorName)
         if (settings.memoryV2Enabled && settings.groupMemoryGenerationEnabled && ingestGroupMemoryV2(groupId, session.operatorName, messages.takeLast(30))) {
@@ -652,7 +655,7 @@ $requestText
             }
     }
 
-    fun sendGroupMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online", autoSpeak: Boolean = false, isAuto: Boolean = false, autoGeneration: Long? = null, userMessageAlreadyStored: Boolean = false, onMessageSent: () -> Unit = {}, onResponseComplete: () -> Unit = {}) {
+    fun sendGroupMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online", autoSpeak: Boolean = false, isAuto: Boolean = false, autoGeneration: Long? = null, userMessageAlreadyStored: Boolean = false, retryMessageId: Long? = null, onMessageSent: () -> Unit = {}, onResponseComplete: () -> Unit = {}) {
         if (isAuto && !settings.autoAiEnabled) { onResponseComplete(); return }
         if (isAuto && groupAiJobs[groupSessionId]?.isActive == true) { onResponseComplete(); return }
         if (!isAuto && !userMessageAlreadyStored && text.isNotBlank()) {
@@ -668,9 +671,11 @@ $requestText
             restartCleanupJobs[groupSessionId]?.join()
             // 步骤1: 用户消息立即插入（不持锁），消息即时显示
             var userMessageId: Long? = null
+            var failureMessageId: Long? = retryMessageId
             if (!isAuto && !userMessageAlreadyStored && text.isNotBlank()) {
                 val userMsgId = repository.getNextMessageId()
                 userMessageId = userMsgId
+                failureMessageId = userMsgId
                 repository.sendMessage(groupSessionId, ChatMessage(
                     id = userMsgId, sessionId = groupSessionId,
                     senderName = "我", content = text, type = "text", mode = mode, isMe = true
@@ -946,12 +951,12 @@ $requestText
                 val allHistory = repository.getMessagesSync(groupSessionId).let { msgs ->
                     val restartAt = settings.getSessionRestartAt(groupSessionId)
                     val currentConversation = if (restartAt > 0L) msgs.filter { it.timestamp >= restartAt } else msgs
-                    val dialogueHistory = recentGroupRounds(currentConversation, historyLimit)
+                    val dialogueHistory = recentGroupRounds(currentConversation.filter { it.type != "send_failed" }, historyLimit)
                     val recentSystemEvents = currentConversation.filter { it.type == "system" }.takeLast(3)
                     (dialogueHistory + recentSystemEvents)
                         .distinctBy { it.id }
                         .sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
-                        .filter { msg -> (msg.id !in batchIds) && (msg.isMe || msg.type == "system" || msg.type == "ai_json" || msg.senderName in activeNames) }
+                        .filter { msg -> (msg.id !in batchIds && msg.id != retryMessageId) && (msg.isMe || msg.type == "system" || msg.type == "ai_json" || msg.senderName in activeNames) }
                 }.toMutableList()
                 // Keep the pre-stored media row in history, but remove a non-batched trailing text row.
                 if (!isAuto && batchIds.isEmpty() && !userMessageAlreadyStored && allHistory.lastOrNull()?.isMe == true) {
@@ -968,7 +973,11 @@ $requestText
                     }
                 }
                 if (!isAuto) {
-                    val userMsg = if (autoSpeak) "（群聊已空闲一段时间，干员们自然地闲聊起来，无需等待用户发言。）" else requestText
+                    val userMsg = when {
+                        autoSpeak -> "（群聊已空闲一段时间，干员们自然地闲聊起来，无需等待用户发言。）"
+                        userMessageAlreadyStored || retryMessageId != null -> text
+                        else -> requestText
+                    }
                     apiMessages.add(AiMessage("user", "用户：$userMsg"))
                 }
                 DebugLogger.chatEvent("群聊", "请求模型", "开始", "群=$groupName，模式=$mode，成员=${activeMembers.size}，自动=$isAuto")
@@ -1061,11 +1070,13 @@ $requestText
                         "模型返回内容无法解析为有效群聊: ${rawBase.take(500)}"
                     )
                     DebugLogger.chatEvent("群聊", "返回解析", "失败", "无法得到可展示消息")
-                    repository.sendMessage(groupSessionId, ChatMessage(
-                        id = repository.getNextMessageId(), sessionId = groupSessionId,
-                        senderName = "系统", content = "AI 回复格式异常，请再发一遍吧",
-                        type = "system", mode = mode, isMe = false
-                    ))
+                    failureMessageId?.let { id ->
+                        repository.getMessagesSync(groupSessionId).firstOrNull { it.id == id }
+                            ?.let {
+                                if (it.type == "gift_hidden") DebugLogger.chatEvent("送礼", "群聊礼物", "回复失败", "group=$groupName，messageId=$id")
+                                repository.updateMessageType(id, if (it.type == "gift_hidden") "gift_reply_failed" else "send_failed")
+                            }
+                    }
                 } else {
                     val dialogueCount = filtered.count { it.type == "dialogue" }
                     val narrationCount = filtered.count { it.type == "narration" }
@@ -1122,7 +1133,13 @@ $requestText
                 Log.e("GroupChat", "Timeout: ${e.message}")
                 DebugLogger.log("GroupChat/Error", "AI 响应超时：${e.message ?: "超过90秒"}")
                 DebugLogger.chatEvent("群聊", "请求模型", "超时", "群=$groupName")
-                repository.sendMessage(groupSessionId, ChatMessage(id = repository.getNextMessageId(), sessionId = groupSessionId, senderName = "系统", content = "AI 响应超时，请稍后重试", type = "system", mode = mode, isMe = false))
+                failureMessageId?.let { id ->
+                    repository.getMessagesSync(groupSessionId).firstOrNull { it.id == id }
+                        ?.let {
+                            if (it.type == "gift_hidden") DebugLogger.chatEvent("送礼", "群聊礼物", "回复失败", "group=$groupName，messageId=$id")
+                            repository.updateMessageType(id, if (it.type == "gift_hidden") "gift_reply_failed" else "send_failed")
+                        }
+                }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // 被新消息取消，不做任何事
             } catch (e: Exception) {
@@ -1132,7 +1149,13 @@ $requestText
                 Log.e("GroupChat", "Error: ${e.message}", e)
                 DebugLogger.log("GroupChat/Error", "发送失败: $errMsg")
                 DebugLogger.chatEvent("群聊", "请求模型", "失败", errMsg)
-                repository.sendMessage(groupSessionId, ChatMessage(id = repository.getNextMessageId(), sessionId = groupSessionId, senderName = "系统", content = errMsg, type = "system", mode = mode, isMe = false))
+                failureMessageId?.let { id ->
+                    repository.getMessagesSync(groupSessionId).firstOrNull { it.id == id }
+                        ?.let {
+                            if (it.type == "gift_hidden") DebugLogger.chatEvent("送礼", "群聊礼物", "回复失败", "group=$groupName，messageId=$id")
+                            repository.updateMessageType(id, if (it.type == "gift_hidden") "gift_reply_failed" else "send_failed")
+                        }
+                }
                 _lastSendError.value = errMsg
             } finally {
                 setGroupLoading(groupSessionId, false)
@@ -1144,20 +1167,60 @@ $requestText
         }
     }
 
-    fun sendHiddenGiftMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online") {
+    fun sendHiddenGiftMessage(
+        groupSessionId: String,
+        groupName: String,
+        text: String,
+        mode: String = "online",
+        imageUri: String,
+        giftName: String,
+        recipientNames: List<String>
+    ) {
         scope.launch {
             val id = repository.getNextMessageId()
+            val giftPayload = buildJsonObject {
+                put("event", "gift")
+                put("prompt", text)
+                put("imageUri", imageUri)
+                put("giftName", giftName)
+                put("recipientNames", buildJsonArray { recipientNames.forEach { add(JsonPrimitive(it)) } })
+            }.toString()
             repository.sendMessage(groupSessionId, ChatMessage(
                 id = id,
                 sessionId = groupSessionId,
                 senderName = "我",
-                content = text,
+                content = giftPayload,
                 type = "gift_hidden",
                 mode = mode,
                 isMe = true
             ))
             unhideSession(groupSessionId)
-            sendGroupMessage(groupSessionId, groupName, text, mode, userMessageAlreadyStored = true)
+            DebugLogger.chatEvent("送礼", "群聊礼物", "开始", "群=$groupName，礼物=$giftName，收礼人=${recipientNames.joinToString("、")}")
+            sendGroupMessage(groupSessionId, groupName, text, mode, userMessageAlreadyStored = true, retryMessageId = id)
+        }
+    }
+
+    fun retryFailedMessage(groupSessionId: String, groupName: String, msgId: Long, mode: String) {
+        if (!retryingMessageIds.add(msgId)) return
+        scope.launch {
+            val message = repository.getMessagesSync(groupSessionId)
+                .firstOrNull { it.id == msgId && it.isMe && (it.type == "send_failed" || it.type == "gift_reply_failed") }
+            if (message == null) {
+                retryingMessageIds.remove(msgId)
+                return@launch
+            }
+            val isGift = message.type == "gift_reply_failed"
+            if (isGift) DebugLogger.chatEvent("送礼", "群聊礼物", "重试", "group=$groupName，messageId=$msgId")
+            repository.updateMessageType(msgId, if (isGift) "gift_hidden" else "text")
+            sendGroupMessage(
+                groupSessionId,
+                groupName,
+                if (isGift) giftPromptText(message.content) else message.content,
+                mode,
+                userMessageAlreadyStored = true,
+                retryMessageId = msgId,
+                onResponseComplete = { retryingMessageIds.remove(msgId) }
+            )
         }
     }
 
@@ -1193,7 +1256,7 @@ $requestText
 
     /** A group round starts with a user message; automatic AI batches remain individual rounds. */
     private fun recentGroupRounds(messages: List<ChatMessage>, roundLimit: Int): List<ChatMessage> {
-        val dialogueMessages = messages.filter { it.type != "system" }
+        val dialogueMessages = messages.filter { it.type != "system" && it.type != "send_failed" }
         if (roundLimit <= 0) return dialogueMessages
         val roundStarts = mutableListOf<Int>()
         dialogueMessages.forEachIndexed { index, message ->
@@ -1207,6 +1270,7 @@ $requestText
     }
 
     private fun formatGroupHistoryForPrompt(msg: ChatMessage): String {
+        if (msg.type == "gift_hidden") return giftPromptText(msg.content)
         if (msg.type == "image" && msg.isMe) return formatGroupImageForPrompt(msg)
         if (msg.isMe) return "用户：${msg.content}"
         if (msg.type == "system") return "系统：${msg.content}"
@@ -1236,8 +1300,14 @@ $requestText
         } == true
     }.getOrDefault(false)
 
+    private fun giftPromptText(content: String): String = runCatching {
+        val root = json.parseToJsonElement(content).jsonObject
+        root["prompt"]?.jsonPrimitive?.content.orEmpty()
+    }.getOrDefault("（用户送出了礼物）")
+
     private fun formatGroupMessageForMemory(msg: ChatMessage, limit: Int): String {
         if (msg.type == "system") return ""
+        if (msg.type == "gift_hidden") return giftPromptText(msg.content).take(limit)
         if (msg.type == "image" && msg.isMe) return formatGroupImageForPrompt(msg).take(limit)
         if (!msg.isMe && msg.type != "ai_json") return ""
         if (msg.isMe) return "用户：${msg.content.take(limit)}"
@@ -1740,7 +1810,7 @@ $text"""
         val cursor = settings.getMemoryExtractionCursor(groupSessionId)
         val restartAt = settings.getSessionRestartAt(groupSessionId)
         val pending = repository.getMessagesSync(groupSessionId)
-            .filter { it.id > cursor && it.type != "system" && (restartAt <= 0L || it.timestamp >= restartAt) }
+            .filter { it.id > cursor && it.type != "system" && it.type != "send_failed" && (restartAt <= 0L || it.timestamp >= restartAt) }
             .take(settings.groupMemoryExtractionThreshold.coerceAtMost(30))
         if (pending.size < settings.groupMemoryExtractionThreshold) return
         if (ingestGroupMemoryV2(groupSessionId, groupName, pending)) {

@@ -48,15 +48,20 @@ import com.rhodes.privatechat.shared.model.Diary
 import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.viewmodel.MainViewModel
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
 import java.util.TimeZone
 
-data class DiaryOp(val id: String, val name: String, val color: Color, val hasDiary: Boolean = false, val unread: Boolean = false)
+data class DiaryOp(
+    val id: String,
+    val name: String,
+    val color: Color,
+    val latestDiaryCreatedAt: Long? = null,
+    val unread: Boolean = false
+) {
+    val hasDiary: Boolean get() = latestDiaryCreatedAt != null
+}
 
 private val colorPalette = listOf(
     Color(0xFF5B8DEF), Color(0xFF4DB6AC), Color(0xFFFF7043), Color(0xFF607D8B),
@@ -72,12 +77,24 @@ fun DiaryScreen(
     modifier: Modifier = Modifier
 ) {
     val operators by viewModel.operators.collectAsState()
+    val latestDiaryCreatedAtFlow = remember(viewModel.repository) {
+        viewModel.repository.getLatestDiaryCreatedAtByOperator()
+    }
+    val latestDiaryCreatedAt by latestDiaryCreatedAtFlow
+        .collectAsState(initial = emptyMap())
     var unreadIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    LaunchedEffect(operators) { unreadIds = viewModel.getUnreadDiaryOperatorIds() }
-    val diaryOps: List<DiaryOp> = remember(operators, unreadIds) {
+    LaunchedEffect(operators, latestDiaryCreatedAt) {
+        unreadIds = viewModel.getUnreadDiaryOperatorIds(latestDiaryCreatedAt)
+    }
+    val diaryOps: List<DiaryOp> = remember(operators, unreadIds, latestDiaryCreatedAt) {
         operators.mapIndexed { i, op ->
-            DiaryOp(op.id, op.name, colorPalette[i % colorPalette.size], unread = op.id in unreadIds)
-        }.sortedWith(compareByDescending<DiaryOp> { it.unread }.thenBy { it.name })
+            DiaryOp(op.id, op.name, colorPalette[i % colorPalette.size], latestDiaryCreatedAt[op.id], op.id in unreadIds)
+        }.sortedWith(
+            compareByDescending<DiaryOp> { it.unread }
+                .thenByDescending { it.hasDiary }
+                .thenByDescending { it.latestDiaryCreatedAt ?: Long.MIN_VALUE }
+                .thenBy { it.name }
+        )
     }
     val context = LocalContext.current
     var searchText by remember { mutableStateOf("") }
@@ -90,48 +107,81 @@ fun DiaryScreen(
         }
     }
     val selectedName = diaryOps.find { it.id == selectedOperatorId }?.name.orEmpty()
-    val scope = rememberCoroutineScope()
     var showPanel by remember { mutableStateOf(true) }
     var diaryContent by rememberSaveable { mutableStateOf<String?>(null) }
     var isGenerating by remember { mutableStateOf(false) }
+    var generationToken by remember { mutableLongStateOf(0L) }
     var diaryEntries by remember { mutableStateOf<List<com.rhodes.privatechat.shared.model.Diary>>(emptyList()) }
     var currentDateIdx by remember { mutableIntStateOf(0) }
+    var currentDiaryId by remember { mutableStateOf<Long?>(null) }
+    var pendingGeneratedContent by remember { mutableStateOf<String?>(null) }
     var currentDateLabel by remember { mutableStateOf("") }
     var dataLoaded by remember { mutableStateOf(false) }
 
     LaunchedEffect(selectedOperatorId) {
         if (selectedOperatorId.isBlank()) return@LaunchedEffect
         isGenerating = false
+        generationToken++
         currentDateIdx = 0
+        currentDiaryId = null
+        pendingGeneratedContent = null
         currentDateLabel = ""
         diaryContent = null
         diaryEntries = emptyList()
         dataLoaded = false
         try {
             val opId = selectedOperatorId
-            val entries = withContext(Dispatchers.IO) { viewModel.repository.getAllDiaryEntries(opId) }
-            diaryEntries = entries
-            entries.maxOfOrNull { it.createdAt }?.let { latest ->
-                viewModel.markDiaryRead(opId, latest)
-                unreadIds = unreadIds - opId
-            }
-            val cal = Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai"))
-            cal.add(Calendar.DAY_OF_MONTH, -1)
-            val yesterday = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply {
-                timeZone = TimeZone.getTimeZone("Asia/Shanghai")
-            }.format(cal.time)
-            val initialIndex = entries.indexOfFirst { it.date == yesterday }.takeIf { it >= 0 } ?: 0
-            entries.getOrNull(initialIndex)?.let { entry ->
-                currentDateIdx = initialIndex
-                currentDateLabel = entry.date
-                diaryContent = entry.content
+            viewModel.repository.getDiariesByOperator(opId).collect { entries ->
+                diaryEntries = entries
+                entries.maxOfOrNull { it.createdAt }?.let { latest ->
+                    viewModel.markDiaryRead(opId, latest)
+                    unreadIds = unreadIds - opId
+                }
+                val generatedIndex = pendingGeneratedContent?.let { content ->
+                    entries.indexOfFirst { it.content == content }
+                } ?: -1
+                val currentIndex = currentDiaryId?.let { id -> entries.indexOfFirst { it.id == id } } ?: -1
+                val cal = Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai"))
+                cal.add(Calendar.DAY_OF_MONTH, -1)
+                val yesterday = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply {
+                    timeZone = TimeZone.getTimeZone("Asia/Shanghai")
+                }.format(cal.time)
+                val index = generatedIndex.takeIf { it >= 0 }
+                    ?: currentIndex.takeIf { it >= 0 }
+                    ?: entries.indexOfFirst { it.date == yesterday }.takeIf { it >= 0 }
+                    ?: 0
+                entries.getOrNull(index)?.let { entry ->
+                    currentDateIdx = index
+                    currentDiaryId = entry.id
+                    currentDateLabel = entry.date
+                    diaryContent = entry.content
+                    if (generatedIndex >= 0) pendingGeneratedContent = null
+                } ?: run {
+                    currentDateIdx = 0
+                    currentDiaryId = null
+                    currentDateLabel = ""
+                    diaryContent = null
+                }
+                dataLoaded = true
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
             com.rhodes.privatechat.util.DebugLogger.log("Diary/ERROR", "加载日记异常: ${e.message}")
-        } finally {
             dataLoaded = true
+        }
+    }
+
+    LaunchedEffect(pendingGeneratedContent, diaryEntries) {
+        val content = pendingGeneratedContent ?: return@LaunchedEffect
+        val index = diaryEntries.indexOfFirst { it.content == content }
+        if (index >= 0) {
+            val entry = diaryEntries[index]
+            currentDateIdx = index
+            currentDiaryId = entry.id
+            currentDateLabel = entry.date
+            diaryContent = entry.content
+            pendingGeneratedContent = null
         }
     }
 
@@ -210,6 +260,7 @@ fun DiaryScreen(
                                 val prev = diaryEntries.getOrNull(currentDateIdx - 1)
                                 if (prev != null) {
                                     currentDateIdx--
+                                    currentDiaryId = prev.id
                                     diaryContent = prev.content; currentDateLabel = prev.date
                                 }
                             }
@@ -238,6 +289,7 @@ fun DiaryScreen(
                                 val next = diaryEntries.getOrNull(currentDateIdx + 1)
                                 if (next != null) {
                                     currentDateIdx++
+                                    currentDiaryId = next.id
                                     diaryContent = next.content; currentDateLabel = next.date
                                 }
                             }
@@ -262,34 +314,17 @@ fun DiaryScreen(
                                 val opId = selectedOperatorId
                                 if (opId.isBlank()) { com.rhodes.privatechat.util.DebugLogger.log("Diary", "重新生成失败: 找不到opId"); return@OutlinedButton }
                                 com.rhodes.privatechat.util.DebugLogger.log("Diary", "重新生成: opId=$opId, selectedName=$selectedName")
+                                val requestToken = ++generationToken
                                 isGenerating = true
                                 viewModel.generateDiary(opId) { text ->
                                     com.rhodes.privatechat.util.DebugLogger.log("Diary", "重新生成回调触发: text=${text.take(30)}, isBlank=${text.isBlank()}")
-                                    scope.launch {
-                                        try {
-                                            if (text.isNotBlank()) {
-                                                if (selectedOperatorId != opId) return@launch
-                                                diaryContent = text
-                                                com.rhodes.privatechat.util.DebugLogger.log("Diary", "重生成后 DB reload 开始")
-                                                val newEntries = withContext(Dispatchers.IO) { viewModel.repository.getAllDiaryEntries(opId) }
-                                                com.rhodes.privatechat.util.DebugLogger.log("Diary", "重生成后 DB reload: count=${newEntries.size}, ids=${newEntries.map { it.id }}")
-                                                diaryEntries = newEntries
-                                                currentDateIdx = newEntries.indexOfFirst { it.content == text }.takeIf { it >= 0 } ?: 0
-                                                newEntries.getOrNull(currentDateIdx)?.let { latest ->
-                                                    diaryContent = latest.content
-                                                    currentDateLabel = latest.date
-                                                }
-                                            } else {
-                                                android.widget.Toast.makeText(context, "AI生成失败，请检查网络和API Key后重试", android.widget.Toast.LENGTH_SHORT).show()
-                                            }
-                                        } catch (e: kotlinx.coroutines.CancellationException) {
-                                            // scope 取消，忽略
-                                        } catch (e: Exception) {
-                                            com.rhodes.privatechat.util.DebugLogger.log("Diary/ERROR", "重生成刷新异常: ${e.message}")
-                                        } finally {
-                                            isGenerating = false
-                                        }
+                                    if (requestToken != generationToken || selectedOperatorId != opId) return@generateDiary
+                                    if (text.isNotBlank() && selectedOperatorId == opId) {
+                                        pendingGeneratedContent = text
+                                    } else if (text.isBlank()) {
+                                        android.widget.Toast.makeText(context, "AI生成失败，请检查网络和API Key后重试", android.widget.Toast.LENGTH_SHORT).show()
                                     }
+                                    isGenerating = false
                                 }
                             },
                             modifier = Modifier.fillMaxWidth(),
@@ -311,38 +346,17 @@ fun DiaryScreen(
                                 val opId = selectedOperatorId
                                 if (opId.isBlank()) { com.rhodes.privatechat.util.DebugLogger.log("Diary", "偷看失败: 找不到opId"); return@Button }
                                 com.rhodes.privatechat.util.DebugLogger.log("Diary", "偷看日记: opId=$opId, selectedName=$selectedName")
+                                val requestToken = ++generationToken
                                 isGenerating = true
                                 viewModel.generateDiary(opId) { text ->
                                     com.rhodes.privatechat.util.DebugLogger.log("Diary", "偷看回调触发: text=${text.take(30)}, isBlank=${text.isBlank()}")
-                                    if (text.isNotBlank()) {
-                                        if (selectedOperatorId == opId) {
-                                            diaryContent = text
-                                            com.rhodes.privatechat.util.DebugLogger.log("Diary", "偷看后立即显示 diaryContent")
-                                        }
+                                    if (requestToken != generationToken || selectedOperatorId != opId) return@generateDiary
+                                    if (text.isNotBlank() && selectedOperatorId == opId) {
+                                        pendingGeneratedContent = text
+                                    } else if (text.isBlank()) {
+                                        android.widget.Toast.makeText(context, "AI生成失败，请检查网络和API Key后重试", android.widget.Toast.LENGTH_SHORT).show()
                                     }
-                                    scope.launch {
-                                        try {
-                                            if (selectedOperatorId != opId) return@launch
-                                            com.rhodes.privatechat.util.DebugLogger.log("Diary", "偷看后 DB reload 开始")
-                                            val newEntries = withContext(Dispatchers.IO) { viewModel.repository.getAllDiaryEntries(opId) }
-                                            com.rhodes.privatechat.util.DebugLogger.log("Diary", "偷看后 DB reload: count=${newEntries.size}, ids=${newEntries.map { it.id }}")
-                                            diaryEntries = newEntries
-                                            currentDateIdx = newEntries.indexOfFirst { it.content == text }.takeIf { it >= 0 } ?: 0
-                                            newEntries.getOrNull(currentDateIdx)?.let { latest ->
-                                                diaryContent = latest.content
-                                                currentDateLabel = latest.date
-                                            }
-                                            if (text.isBlank()) {
-                                                android.widget.Toast.makeText(context, "AI生成失败，请检查网络和API Key后重试", android.widget.Toast.LENGTH_SHORT).show()
-                                            }
-                                        } catch (e: kotlinx.coroutines.CancellationException) {
-                                            // scope 取消，忽略
-                                        } catch (e: Exception) {
-                                            com.rhodes.privatechat.util.DebugLogger.log("Diary/ERROR", "偷看刷新异常: ${e.message}")
-                                        } finally {
-                                            isGenerating = false
-                                        }
-                                    }
+                                    isGenerating = false
                                 }
                             }, colors = ButtonDefaults.buttonColors(containerColor = Primary)) {
                                 Icon(Icons.AutoMirrored.Filled.MenuBook, null, modifier = Modifier.size(18.dp))

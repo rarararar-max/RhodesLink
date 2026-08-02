@@ -219,6 +219,7 @@ class MainViewModel(
     fun isDualModel(): Boolean = settings.dualModel
 
     fun getPrivateTurnStateForHeader(sessionId: String) = chatViewModel.getPrivateTurnStateForHeader(sessionId)
+    fun observePrivateTurnStateForHeader(sessionId: String) = chatViewModel.observePrivateTurnStateForHeader(sessionId)
 
     fun setDualModel(enabled: Boolean) { settings.dualModel = enabled }
 
@@ -768,22 +769,42 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
 
     fun sendPrivateGift(operatorId: String, imageUri: String, giftName: String) {
         val session = currentSession.value ?: return
+        if (session.operatorId != operatorId) return
+        sharedUtils.chatConfigurationError()?.let { error ->
+            DebugLogger.log("Gift", "私聊送礼取消：聊天模型不可用，operator=$operatorId，原因=$error")
+            return
+        }
+        val mode = chatViewModel.getCurrentMode()
         val sender = getUserProfile().nickname.ifBlank { "我" }
         viewModelScope.launch {
             if (settings.lmb < 100) return@launch
+            DebugLogger.log("Gift", "私聊送礼开始：operator=$operatorId，gift=$giftName")
             val gift = GiftRecord(repository.getNextMessageId(), operatorId, imageUri, giftName, sender, System.currentTimeMillis())
             repository.insertGift(gift)
             if (!settings.trySpendLmb(100)) { repository.deleteGift(gift.id); return@launch }
             operatorStateUpdater.updateOperatorIntimacy(operatorId, 2)
-            chatViewModel.sendHiddenGiftMessage("（用户给你送了一个礼物，是$giftName）")
+            DebugLogger.log("Gift", "私聊送礼已扣费并入库：operator=$operatorId，giftId=${gift.id}")
+            chatViewModel.sendHiddenGiftMessage(
+                session = session,
+                mode = mode,
+                content = "（用户给你送了一个礼物，是$giftName）",
+                imageUri = imageUri,
+                giftName = giftName,
+                recipientNames = listOf(session.operatorName)
+            )
         }
     }
 
     fun sendGroupGift(groupId: String, groupName: String, memberIds: List<String>, imageUri: String, giftName: String, mode: String) {
+        sharedUtils.chatConfigurationError()?.let { error ->
+            DebugLogger.log("Gift", "群聊送礼取消：聊天模型不可用，group=$groupId，原因=$error")
+            return
+        }
         val sender = getUserProfile().nickname.ifBlank { "我" }
         viewModelScope.launch {
             val total = memberIds.size * 100
             if (memberIds.isEmpty() || settings.lmb < total) return@launch
+            DebugLogger.log("Gift", "群聊送礼开始：group=$groupId，members=${memberIds.size}，gift=$giftName")
             val now = System.currentTimeMillis()
             val gifts = memberIds.map { operatorId -> GiftRecord(repository.getNextMessageId(), operatorId, imageUri, giftName, sender, now) }
             gifts.forEach { repository.insertGift(it) }
@@ -792,9 +813,10 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 return@launch
             }
             memberIds.forEach { operatorStateUpdater.updateOperatorIntimacy(it, 2) }
+            DebugLogger.log("Gift", "群聊送礼已扣费并入库：group=$groupId，giftCount=${gifts.size}")
             val names = memberIds.mapNotNull { id -> appState.operators.value.find { it.id == id }?.name }
             val target = names.joinToString("、")
-            groupChatViewModel.sendHiddenGiftMessage(groupId, groupName, "（用户给${target}都送了一个礼物，礼物是$giftName）", mode)
+            groupChatViewModel.sendHiddenGiftMessage(groupId, groupName, "（用户给${target}都送了一个礼物，礼物是$giftName）", mode, imageUri, giftName, names)
         }
     }
 
@@ -1062,6 +1084,9 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     fun updateInputText(text: String) = chatViewModel.updateInputText(text)
 
     fun sendMessage() = chatViewModel.sendMessage()
+    fun retryFailedMessage(messageId: Long) = chatViewModel.retryFailedMessage(messageId)
+    fun retryGroupFailedMessage(groupId: String, groupName: String, messageId: Long, mode: String) =
+        groupChatViewModel.retryFailedMessage(groupId, groupName, messageId, mode)
 
     suspend fun getDisplayEvents(sessionId: String) = repository.getDisplayEvents(sessionId)
 
@@ -2435,7 +2460,6 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         DebugLogger.log("Diary", "偷看日记: operatorId=$operatorId")
         viewModelScope.launch {
             val text = generateDiaryText(operatorId, auto)
-            if (!auto && text.isNotBlank()) settings.putDiaryReadAt(operatorId, System.currentTimeMillis())
             onResult(text)
         }
     }
@@ -2453,6 +2477,13 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             if (latest > settings.getDiaryReadAt(op.id)) op.id else null
         }.toSet()
     }
+
+    fun getUnreadDiaryOperatorIds(latestDiaryCreatedAt: Map<String, Long>): Set<String> =
+        _operators.value.mapNotNull { op ->
+            latestDiaryCreatedAt[op.id]
+                ?.takeIf { it > settings.getDiaryReadAt(op.id) }
+                ?.let { op.id }
+        }.toSet()
 
     fun markDiaryRead(operatorId: String, latestCreatedAt: Long = System.currentTimeMillis()) {
         settings.putDiaryReadAt(operatorId, latestCreatedAt)

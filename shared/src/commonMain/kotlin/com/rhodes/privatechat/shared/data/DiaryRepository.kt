@@ -7,6 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import app.cash.sqldelight.coroutines.asFlow
 import app.cash.sqldelight.coroutines.mapToList
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 
 class DiaryRepository(private val wrapper: DatabaseWrapper) {
@@ -29,6 +30,11 @@ class DiaryRepository(private val wrapper: DatabaseWrapper) {
         db.diariesQueries.getDiariesByOperator(operatorId) { id, opId, opName, content, date, version, createdAt ->
             Diary(id, opId, opName, content, date, version.toInt(), createdAt)
         }.asFlow().mapToList(Dispatchers.Default)
+
+    fun getLatestDiaryCreatedAtByOperator(): Flow<Map<String, Long>> =
+        db.diariesQueries.getLatestDiaryCreatedAtByOperator { operatorId, createdAt ->
+            operatorId to createdAt
+        }.asFlow().mapToList(Dispatchers.Default).map { it.toMap() }
 
     suspend fun getAllDiaryEntries(operatorId: String): List<Diary> = withContext(Dispatchers.Default) {
         db.diariesQueries.getAllDiaryEntries(operatorId) { id, opId, opName, content, date, version, createdAt ->

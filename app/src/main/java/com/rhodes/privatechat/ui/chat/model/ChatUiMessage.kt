@@ -23,6 +23,11 @@ data class ChatUiMessage(
     val isArchived: Boolean = false,
     val imageUri: String = "",
     val imageStatus: String = "",
+    val isGift: Boolean = false,
+    val giftName: String = "",
+    val giftRecipients: List<String> = emptyList(),
+    val giftReplyFailed: Boolean = false,
+    val isSendFailed: Boolean = false,
     /** 原始 ChatMessage 的 id，用于撤回等操作 */
     val originalMessageId: Long = id,
     /** 在原始 JSON segments 数组中的索引，用于单条撤回；-1 表示非多段消息 */

@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SkipNext
@@ -35,6 +36,8 @@ import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -87,6 +90,7 @@ fun MessageList(
     onRecall: (Long, Int) -> Unit,
     onRegenerate: ((Long) -> Unit)? = null,
     onContinue: ((Long) -> Unit)? = null,
+    onRetry: ((Long) -> Unit)? = null,
     onSenderClick: ((String) -> Unit)? = null,
     progressiveDisplay: Boolean = false,
     displayEvents: List<ChatDisplayEvent> = emptyList(),
@@ -103,23 +107,30 @@ fun MessageList(
 ) {
     fun eventKey(message: ChatUiMessage) = "${message.originalMessageId}:${message.segmentIndex}"
     var localEvents by remember(displaySessionKey) { mutableStateOf(emptyList<ChatDisplayEvent>()) }
-    LaunchedEffect(displayEvents) { localEvents = displayEvents }
+    LaunchedEffect(displayEvents) {
+        localEvents = (localEvents + displayEvents)
+            .distinctBy { "${it.messageId}:${it.segmentIndex}" }
+    }
 
     // User/system bubbles are immediate. Their persisted event puts them ahead of delayed AI segments.
     LaunchedEffect(messages, localEvents, displayEventsLoaded) {
         if (!progressiveDisplay || onReveal == null || !displayEventsLoaded) return@LaunchedEffect
-        messages.filter { it.timestamp > legacyMessageCutoff && !it.isAiSegment && localEvents.none { event -> event.messageId == it.originalMessageId && event.segmentIndex == it.segmentIndex } }
+        messages.filter { it.timestamp >= legacyMessageCutoff && !it.isAiSegment && localEvents.none { event -> event.messageId == it.originalMessageId && event.segmentIndex == it.segmentIndex } }
             .forEach { message ->
                 val order = onReveal(message)
                 localEvents = localEvents + ChatDisplayEvent(message.originalMessageId, message.segmentIndex, order)
             }
     }
-    val nextAi = messages.firstOrNull { message ->
-        message.timestamp > legacyMessageCutoff && message.isAiSegment && localEvents.none { event -> event.messageId == message.originalMessageId && event.segmentIndex == message.segmentIndex }
+    val hasPendingImmediateMessage = messages.any { message ->
+        message.timestamp >= legacyMessageCutoff && !message.isAiSegment &&
+            localEvents.none { event -> event.messageId == message.originalMessageId && event.segmentIndex == message.segmentIndex }
     }
-    LaunchedEffect(nextAi?.let(::eventKey), displayEventsLoaded) {
+    val nextAi = messages.firstOrNull { message ->
+        message.timestamp >= legacyMessageCutoff && message.isAiSegment && localEvents.none { event -> event.messageId == message.originalMessageId && event.segmentIndex == message.segmentIndex }
+    }
+    LaunchedEffect(nextAi?.let(::eventKey), hasPendingImmediateMessage, displayEventsLoaded) {
         val message = nextAi ?: return@LaunchedEffect
-        if (!progressiveDisplay || onReveal == null || !displayEventsLoaded) return@LaunchedEffect
+        if (!progressiveDisplay || onReveal == null || !displayEventsLoaded || hasPendingImmediateMessage) return@LaunchedEffect
         val priorAiSegmentIsVisible = messages.indexOf(message).takeIf { it > 0 }?.let { index ->
             val previous = messages[index - 1]
             previous.isAiSegment && previous.originalMessageId == message.originalMessageId &&
@@ -134,11 +145,24 @@ fun MessageList(
     val eventOrder = localEvents.associate { "${it.messageId}:${it.segmentIndex}" to it.revealOrder }
     val displayMessages = if (!progressiveDisplay) messages else {
         val visible = messages.filter { message ->
-            message.timestamp <= legacyMessageCutoff || eventKey(message) in eventOrder
+            message.timestamp < legacyMessageCutoff || eventKey(message) in eventOrder
         }
-        // Display events decide when a new segment appears, never where persisted history appears.
-        visible.sortedWith(compareBy<ChatUiMessage> { it.timestamp }.thenBy { it.originalMessageId }.thenBy { it.segmentIndex })
+        // History keeps its persisted order; new bubbles follow the order in which the user saw them.
+        visible.sortedWith(
+            compareBy<ChatUiMessage> { it.timestamp >= legacyMessageCutoff }
+                .thenBy { message ->
+                    if (message.timestamp < legacyMessageCutoff) message.timestamp
+                    else eventOrder[eventKey(message)] ?: Long.MAX_VALUE
+                }
+                .thenBy { message ->
+                    if (message.timestamp < legacyMessageCutoff) message.originalMessageId else 0L
+                }
+                .thenBy { message ->
+                    if (message.timestamp < legacyMessageCutoff) message.segmentIndex else 0
+                }
+        )
     }
+    val latestRoleReplyId = displayMessages.lastOrNull { !it.isMe && !it.isSystem }?.originalMessageId
 
     var lastBottomMessageId by remember(displaySessionKey) { mutableStateOf<Long?>(null) }
     var lastDisplayMessageCount by remember(displaySessionKey) { mutableStateOf(0) }
@@ -238,7 +262,9 @@ fun MessageList(
                 showTime = showTime,
                 onRecall = { onRecall(msg.originalMessageId, msg.segmentIndex) },
                 onRegenerate = if (onRegenerate != null && !msg.isMe) { { onRegenerate(msg.originalMessageId) } } else null,
-                onContinue = if (onContinue != null && !msg.isMe) { { onContinue(msg.originalMessageId) } } else null,
+                onContinue = if (onContinue != null && !msg.isMe && !msg.isSystem && msg.originalMessageId == latestRoleReplyId) { { onContinue(msg.originalMessageId) } } else null,
+                onRetry = if (onRetry != null && msg.isSendFailed) { { onRetry(msg.originalMessageId) } } else null,
+                retryMayInterrupt = msg.isSendFailed && displayMessages.drop(i + 1).any { !it.isSendFailed && !it.isSystem },
                 onSenderClick = onSenderClick,
                 onPlay = onPlay,
                 isSpeaking = speakingMessageKey == "${msg.originalMessageId}:${msg.segmentIndex}:${msg.id}",
@@ -259,11 +285,17 @@ private fun MessageBubble(
     onRecall: () -> Unit,
     onRegenerate: (() -> Unit)?,
     onContinue: (() -> Unit)?,
+    onRetry: (() -> Unit)?,
+    retryMayInterrupt: Boolean,
     onSenderClick: ((String) -> Unit)?,
     onPlay: ((ChatUiMessage) -> Unit)?,
     isSpeaking: Boolean,
 ) {
     val archivedAlpha = if (message.isArchived) 0.45f else 1f
+    if (message.isGift) {
+        GiftMessageCard(message, showTime, archivedAlpha, onRetry = if (message.giftReplyFailed) onRetry else null)
+        return
+    }
     if (message.isSystem) {
         if (message.isNarration) {
             // 旁白：屏幕居中，圆角矩形半透明气泡，文字左对齐，支持长按撤回
@@ -296,6 +328,7 @@ private fun MessageBubble(
 
     val context = LocalContext.current
     var showMenu by remember { mutableStateOf(false) }
+    var showRetryConfirm by remember { mutableStateOf(false) }
     val isMe = message.isMe
     val bubbleColor = if (isMe) BubbleMine else BubbleOther
     val bubbleShape = if (isMe) RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp) else RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp)
@@ -366,6 +399,12 @@ private fun MessageBubble(
                             Text("朗读中", fontSize = 10.sp, color = Primary)
                         }
                     }
+                    if (message.isSendFailed) {
+                        Text("未送达，点击重试", fontSize = 11.sp, color = ErrorRed,
+                            modifier = Modifier.padding(top = 4.dp).clickable {
+                                if (retryMayInterrupt) showRetryConfirm = true else onRetry?.invoke()
+                            })
+                    }
                 }
 
                 if (isMe) {
@@ -405,6 +444,61 @@ private fun MessageBubble(
                     DropdownMenuItem(text = { Row { Icon(Icons.Default.VolumeUp, null, tint = Primary, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text("播放", color = Primary) } },
                         onClick = { onPlay(message); showMenu = false })
                 }
+            }
+            if (showRetryConfirm) {
+                AlertDialog(
+                    onDismissRequest = { showRetryConfirm = false },
+                    title = { Text("重新发送这条消息？", color = TextPrimary) },
+                    text = { Text("这条消息此前未送达，对方没有看到。当前对话已继续，重新发送可能打断当前话题。", color = TextSecondary) },
+                    confirmButton = {
+                        TextButton(onClick = { showRetryConfirm = false; onRetry?.invoke() }) { Text("仍要发送", color = ErrorRed) }
+                    },
+                    dismissButton = { TextButton(onClick = { showRetryConfirm = false }) { Text("取消", color = TextSecondary) } }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GiftMessageCard(message: ChatUiMessage, showTime: Boolean, alpha: Float, onRetry: (() -> Unit)?) {
+    val recipients = when {
+        message.giftRecipients.size <= 4 -> message.giftRecipients.joinToString("、")
+        else -> message.giftRecipients.take(3).joinToString("、") + " 等 ${message.giftRecipients.size} 人"
+    }.ifBlank { "角色" }
+    Column(
+        modifier = Modifier.fillMaxWidth().alpha(alpha).padding(horizontal = 32.dp, vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        if (showTime) {
+            Text(formatChatTime(message.timestamp), fontSize = 11.sp, color = TextTertiary, modifier = Modifier.padding(bottom = 6.dp))
+        }
+        Column(
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
+                .background(AccentOrange.copy(alpha = 0.14f))
+                .border(1.dp, AccentOrange.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
+                .padding(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            if (message.imageUri.isNotBlank()) {
+                AsyncImage(
+                    model = message.imageUri,
+                    contentDescription = message.giftName,
+                    modifier = Modifier.size(116.dp).clip(RoundedCornerShape(12.dp)),
+                    contentScale = ContentScale.Crop
+                )
+                Spacer(Modifier.height(10.dp))
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Favorite, contentDescription = null, tint = AccentOrange, modifier = Modifier.size(15.dp))
+                Spacer(Modifier.width(5.dp))
+                Text("赠予 $recipients", fontSize = 13.sp, color = TextSecondary)
+            }
+            Spacer(Modifier.height(4.dp))
+            Text("「${message.giftName}」", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+            if (onRetry != null) {
+                Text("角色回复生成失败，点击重试", fontSize = 12.sp, color = ErrorRed,
+                    modifier = Modifier.padding(top = 8.dp).clickable { onRetry() })
             }
         }
     }

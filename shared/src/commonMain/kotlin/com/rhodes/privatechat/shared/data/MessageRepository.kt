@@ -59,6 +59,10 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
         db.chatMessagesQueries.updateContent(content, id)
     }
 
+    suspend fun updateMessageType(id: Long, type: String) = withContext(Dispatchers.Default) {
+        db.chatMessagesQueries.updateType(type, id)
+    }
+
     suspend fun updateMessageContentAndPreview(sessionId: String, id: Long, content: String, timestamp: Long) = withContext(Dispatchers.Default) {
         db.chatMessagesQueries.updateContent(content, id)
         // Regenerating an older reply must not replace a newer chat-list preview or move the session backward.
@@ -102,6 +106,7 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
             val preview = when (message.type) {
                 "ai_json" -> previewFromAiJson(message.content)
                 "image" -> "[图片]"
+                "gift_hidden", "gift_reply_failed" -> previewFromGiftPayload(message.content)
                 else -> message.content.take(50)
             }
             db.chatSessionsQueries.updateLastMessage(preview, ts, sessionId)
@@ -133,12 +138,12 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
                 is kotlinx.serialization.json.JsonObject -> {
                     val segArray = root["segments"] as? kotlinx.serialization.json.JsonArray
                     val segments = segArray?.mapNotNull { it as? kotlinx.serialization.json.JsonObject }.orEmpty()
-                    val lastText = segments
-                        ?.asReversed()
+                    val lastText = segments.asReversed()
                         ?.firstNotNullOfOrNull { obj ->
                             val type = (obj["type"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                            val recalled = (obj["recalled"] as? kotlinx.serialization.json.JsonPrimitive)?.content.equals("true", true)
                             (obj["content"] as? kotlinx.serialization.json.JsonPrimitive)?.content
-                                ?.takeIf { it.isNotBlank() && !type.equals("narration", true) }
+                                ?.takeIf { it.isNotBlank() && type.equals("dialogue", true) && !recalled }
                         }
                     val narrationFallback = segments.asReversed().firstNotNullOfOrNull { obj ->
                         val type = (obj["type"] as? kotlinx.serialization.json.JsonPrimitive)?.content
@@ -153,11 +158,14 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
                 }
                 else -> "AI 回复"
             }
-        } catch (_: Exception) {
-            Regex("\"(?:content|message)\"\\s*:\\s*\"([^\"]{1,80})").findAll(content).lastOrNull()?.groupValues?.getOrNull(1)?.take(50)
-                ?: "AI 回复"
-        }
+        } catch (_: Exception) { "AI 回复" }
     }
+
+    private fun previewFromGiftPayload(content: String): String = runCatching {
+        val root = json.parseToJsonElement(content) as? kotlinx.serialization.json.JsonObject
+        val giftName = (root?.get("giftName") as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
+        if (giftName.isBlank()) "[送出了礼物]" else "[送出了礼物：${giftName.take(30)}]"
+    }.getOrDefault("[送出了礼物]")
 
     suspend fun getNextMessageId(): Long = idMutex.withLock {
         withContext(Dispatchers.Default) {

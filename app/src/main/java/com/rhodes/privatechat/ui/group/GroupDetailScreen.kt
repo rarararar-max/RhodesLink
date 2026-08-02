@@ -254,10 +254,11 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
             Column(modifier = Modifier.weight(1f).imePadding().clipToBounds()) {
                 MessageList(
                     displaySessionKey = groupId,
-                    messages = uiMessages.filter { groupMessages.firstOrNull { raw -> raw.id == it.originalMessageId }?.type != "gift_hidden" },
+                    messages = uiMessages,
                     listState = listState,
                     onRecall = { msgId, segIdx -> viewModel.recallMessageSegment(msgId, segIdx) },
                     onSenderClick = onOperatorClick,
+                    onRetry = { viewModel.retryGroupFailedMessage(groupId, groupName, it, currentMode) },
                     onPlay = { message ->
                         val speaker = allOperators.find { it.name == message.senderName }
                         if (speaker?.voiceName.isNullOrBlank()) {

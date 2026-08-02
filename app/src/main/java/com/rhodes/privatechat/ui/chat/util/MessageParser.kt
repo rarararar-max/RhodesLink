@@ -46,6 +46,8 @@ object MessageParser {
                 val result = when {
                     msg.type == "ai_json" && isGroup -> parseGroupAiJson(msg, isOnline, senderColor, senderAvatar, restartAt)
                     msg.type == "ai_json" && !isGroup -> parsePrivateAiJson(msg, isOnline, aiName, aiAvatarUri, restartAt)
+                    msg.type == "gift_hidden" || msg.type == "gift_reply_failed" -> listOf(giftMsg(msg, userAvatarUri, restartAt))
+                    msg.type == "send_failed" -> listOf(userMsg(msg, userAvatarUri, restartAt).copy(isSendFailed = true))
                     msg.type == "image" -> listOf(imageMsg(msg, if (msg.isMe) userAvatarUri else if (isGroup) senderAvatar(msg.senderName) else aiAvatarUri, if (isGroup) senderColor(msg.senderName) else Primary, restartAt))
                     msg.type == "system" || msg.senderName == "系统" || msg.senderName == "" ->
                         listOf(systemMsg(msg, restartAt))
@@ -65,6 +67,32 @@ object MessageParser {
         }
         ChatTrace.d("Parser", "done isGroup=$isGroup resultCount=${parsed.size} ids=${ChatTrace.ids(parsed.map { it.id })}")
         return parsed
+    }
+
+    private fun giftMsg(msg: ChatMessageEntity, avatarUri: String, restartAt: Long): ChatUiMessage {
+        val root = runCatching { json.parseToJsonElement(msg.content).jsonObject }.getOrNull()
+        val imageUri = root?.get("imageUri")?.jsonPrimitive?.contentOrNull.orEmpty()
+        val giftName = root?.get("giftName")?.jsonPrimitive?.contentOrNull.orEmpty()
+        val replyFailed = msg.type == "gift_reply_failed" || root?.get("replyFailed")?.jsonPrimitive?.contentOrNull.equals("true", true)
+        val recipients = (root?.get("recipientNames") as? JsonArray).orEmpty()
+            .mapNotNull { it.jsonPrimitive.contentOrNull }
+        return ChatUiMessage(
+            id = msg.id,
+            senderName = msg.senderName,
+            senderColor = Primary,
+            content = giftName.ifBlank { "礼物" },
+            timestamp = msg.timestamp,
+            isMe = true,
+            avatarUri = avatarUri,
+            mode = msg.mode,
+            isArchived = isArchived(msg, restartAt),
+            imageUri = imageUri,
+            isGift = true,
+            giftName = giftName.ifBlank { "礼物" },
+            giftRecipients = recipients,
+            giftReplyFailed = replyFailed,
+            originalMessageId = msg.id
+        )
     }
 
     private fun imageMsg(msg: ChatMessageEntity, avatarUri: String, color: Color, restartAt: Long): ChatUiMessage {

@@ -54,7 +54,8 @@ fun GiftDialog(
     }
     val total = selectedIds.size * price
     val validName = giftName.trim().length in 1..10
-    val canConfirm = imageUri.isNotBlank() && validName && selectedIds.isNotEmpty() && balance >= total
+    val chatConfigError = viewModel.sharedUtils.chatConfigurationError()
+    val canConfirm = imageUri.isNotBlank() && validName && selectedIds.isNotEmpty() && balance >= total && chatConfigError == null
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -80,6 +81,7 @@ fun GiftDialog(
                 if (imageUri.isNotBlank()) AsyncImage(model = imageUri, contentDescription = null, modifier = Modifier.size(92.dp).clip(RoundedCornerShape(10.dp)).align(Alignment.CenterHorizontally), contentScale = ContentScale.Crop)
                 OutlinedTextField(value = giftName, onValueChange = { giftName = it.take(10) }, label = { Text("礼物名字（1-10个字符）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 if (balance < total) Text("余额不足", color = ErrorRed, fontSize = 12.sp)
+                chatConfigError?.let { Text("无法送礼：$it", color = ErrorRed, fontSize = 12.sp) }
             }
         },
         confirmButton = { TextButton(enabled = canConfirm, onClick = {

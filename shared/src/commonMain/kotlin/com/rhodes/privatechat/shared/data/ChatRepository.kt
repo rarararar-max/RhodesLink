@@ -91,6 +91,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun getRecentMessagesSync(sessionId: String, limit: Long = 200) = messages.getRecentMessagesSync(sessionId, limit)
     suspend fun getMessagesBefore(sessionId: String, beforeTimestamp: Long, beforeId: Long, limit: Long = 100) = messages.getMessagesBefore(sessionId, beforeTimestamp, beforeId, limit)
     suspend fun updateMessageContent(id: Long, content: String) = messages.updateMessageContent(id, content)
+    suspend fun updateMessageType(id: Long, type: String) = messages.updateMessageType(id, type)
     suspend fun updateMessageContentAndPreview(sessionId: String, id: Long, content: String, timestamp: Long) =
         messages.updateMessageContentAndPreview(sessionId, id, content, timestamp)
     suspend fun getDisplayEvents(sessionId: String) = messages.getDisplayEvents(sessionId)
@@ -333,6 +334,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun insertDiary(diary: Diary) = diaries.insertDiary(diary)
     suspend fun getDiary(operatorId: String, date: String) = diaries.getDiary(operatorId, date)
     fun getDiariesByOperator(operatorId: String) = diaries.getDiariesByOperator(operatorId)
+    fun getLatestDiaryCreatedAtByOperator() = diaries.getLatestDiaryCreatedAtByOperator()
     suspend fun getAllDiaryEntries(operatorId: String) = diaries.getAllDiaryEntries(operatorId)
     suspend fun getDiaryDates(operatorId: String) = diaries.getDiaryDates(operatorId)
     suspend fun getDiaryCount() = diaries.getDiaryCount()

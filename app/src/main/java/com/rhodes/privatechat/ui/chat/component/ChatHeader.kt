@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -46,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.ui.common.ThemedDropdownMenu
+import com.rhodes.privatechat.ui.common.TerminalPanelShape
 import com.rhodes.privatechat.ui.theme.*
 
 /** 供 ChatDropdownMenuItem 使用的菜单关闭回调 */
@@ -78,6 +80,72 @@ fun ChatHeader(
     menuContent: @Composable () -> Unit = {},
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    if (isRhodesTerminal) {
+        val modeCode = when (mode) { "online" -> "COMMS"; "director" -> "DIRECT"; else -> "FIELD" }
+        val modeHint = when (mode) { "online" -> "线上通讯"; "director" -> "导演模式"; else -> "线下互动" }
+        Column {
+            Row(
+                modifier = Modifier.fillMaxWidth().statusBarsPadding()
+                    .background(Brush.horizontalGradient(listOf(HeaderStart, HeaderEnd)))
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onBack, modifier = Modifier.size(36.dp).clip(TerminalPanelShape).background(Card).border(1.dp, Stroke, TerminalPanelShape)) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary, modifier = Modifier.size(19.dp))
+                }
+                Spacer(Modifier.width(9.dp))
+                if (showGroupIcon && avatarUri.isBlank()) {
+                    Box(
+                        modifier = Modifier.size(36.dp).clip(CircleShape).background(Primary),
+                        contentAlignment = Alignment.Center,
+                    ) { Icon(Icons.Default.Groups, "群聊", tint = Color.White, modifier = Modifier.size(19.dp)) }
+                } else if (showGroupIcon) {
+                    AsyncImage(
+                        model = avatarUri,
+                        contentDescription = title,
+                        modifier = Modifier.size(36.dp).clip(CircleShape).border(1.dp, Primary.copy(alpha = 0.55f), CircleShape),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    OperatorAvatarImage(avatarUri = avatarUri, name = title, modifier = Modifier.size(36.dp).border(1.dp, Primary.copy(alpha = 0.55f), CircleShape))
+                }
+                Spacer(Modifier.width(9.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(title, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(subtitleText.ifBlank { if (showGroupIcon) "群聊频道已连接" else "与${title}的专属通讯" }, fontSize = 10.sp, color = TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Column(horizontalAlignment = Alignment.End, modifier = Modifier.then(if (onModeClick != null) Modifier.clickable { onModeClick() } else Modifier)) {
+                    Text(modeCode, fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Primary, letterSpacing = 0.7.sp)
+                    Text(modeHint, fontSize = 9.sp, color = TextTertiary)
+                }
+                Box {
+                    if (voiceEnabled != null && onVoiceToggle != null) {
+                        IconButton(onClick = onVoiceToggle, modifier = Modifier.size(32.dp)) {
+                            Icon(
+                                if (voiceEnabled) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
+                                if (voiceEnabled) "关闭自动语音" else "开启自动语音",
+                                tint = if (voiceEnabled) Primary else TextTertiary,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+                    }
+                }
+                Box {
+                    IconButton(onClick = { showMenu = true }, modifier = Modifier.size(36.dp).clip(TerminalPanelShape).background(Card).border(1.dp, Stroke, TerminalPanelShape)) {
+                        Icon(Icons.Default.MoreVert, "菜单", tint = TextPrimary, modifier = Modifier.size(19.dp))
+                    }
+                    ThemedDropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                        CompositionLocalProvider(LocalDismissMenu provides { showMenu = false }) { menuContent() }
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth().height(2.dp)) {
+                Box(Modifier.weight(0.3f).fillMaxWidth().background(Primary))
+                Box(Modifier.weight(0.7f).fillMaxWidth().background(Stroke))
+            }
+        }
+        return
+    }
 
     Column {
         Row(

@@ -111,12 +111,14 @@ fun DiaryScreen(
     var diaryContent by rememberSaveable { mutableStateOf<String?>(null) }
     var isGenerating by remember { mutableStateOf(false) }
     var generationToken by remember { mutableLongStateOf(0L) }
-    var diaryEntries by remember { mutableStateOf<List<com.rhodes.privatechat.shared.model.Diary>>(emptyList()) }
+    val diaryEntries by remember(selectedOperatorId) {
+        if (selectedOperatorId.isBlank()) kotlinx.coroutines.flow.flowOf(emptyList())
+        else viewModel.repository.getDiariesByOperator(selectedOperatorId)
+    }.collectAsState(initial = emptyList())
     var currentDateIdx by remember { mutableIntStateOf(0) }
     var currentDiaryId by remember { mutableStateOf<Long?>(null) }
     var pendingGeneratedDiaryId by remember { mutableStateOf<Long?>(null) }
     var currentDateLabel by remember { mutableStateOf("") }
-    var dataLoaded by remember { mutableStateOf(false) }
 
     LaunchedEffect(selectedOperatorId) {
         if (selectedOperatorId.isBlank()) return@LaunchedEffect
@@ -127,48 +129,39 @@ fun DiaryScreen(
         pendingGeneratedDiaryId = null
         currentDateLabel = ""
         diaryContent = null
-        diaryEntries = emptyList()
-        dataLoaded = false
-        try {
-            val opId = selectedOperatorId
-            viewModel.repository.getDiariesByOperator(opId).collect { entries ->
-                diaryEntries = entries
-                entries.maxOfOrNull { it.createdAt }?.let { latest ->
-                    viewModel.markDiaryRead(opId, latest)
-                    unreadIds = unreadIds - opId
-                }
-                val generatedIndex = pendingGeneratedDiaryId?.let { id ->
-                    entries.indexOfFirst { it.id == id }
-                } ?: -1
-                val currentIndex = currentDiaryId?.let { id -> entries.indexOfFirst { it.id == id } } ?: -1
-                val cal = Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai"))
-                cal.add(Calendar.DAY_OF_MONTH, -1)
-                val yesterday = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply {
-                    timeZone = TimeZone.getTimeZone("Asia/Shanghai")
-                }.format(cal.time)
-                val index = generatedIndex.takeIf { it >= 0 }
-                    ?: currentIndex.takeIf { it >= 0 }
-                    ?: entries.indexOfFirst { it.date == yesterday }.takeIf { it >= 0 }
-                    ?: 0
-                entries.getOrNull(index)?.let { entry ->
-                    currentDateIdx = index
-                    currentDiaryId = entry.id
-                    currentDateLabel = entry.date
-                    diaryContent = entry.content
-                    if (generatedIndex >= 0) pendingGeneratedDiaryId = null
-                } ?: run {
-                    currentDateIdx = 0
-                    currentDiaryId = null
-                    currentDateLabel = ""
-                    diaryContent = null
-                }
-                dataLoaded = true
-            }
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            com.rhodes.privatechat.util.DebugLogger.log("Diary/ERROR", "加载日记异常: ${e.message}")
-            dataLoaded = true
+    }
+
+    LaunchedEffect(selectedOperatorId, diaryEntries, pendingGeneratedDiaryId) {
+        if (selectedOperatorId.isBlank()) return@LaunchedEffect
+        diaryEntries.maxOfOrNull { it.createdAt }?.let { latest ->
+            viewModel.markDiaryRead(selectedOperatorId, latest)
+            unreadIds = unreadIds - selectedOperatorId
+        }
+        val generatedIndex = pendingGeneratedDiaryId?.let { id ->
+            diaryEntries.indexOfFirst { it.id == id }
+        } ?: -1
+        val currentIndex = currentDiaryId?.let { id -> diaryEntries.indexOfFirst { it.id == id } } ?: -1
+        val yesterday = Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai")).run {
+            add(Calendar.DAY_OF_MONTH, -1)
+            SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply {
+                timeZone = TimeZone.getTimeZone("Asia/Shanghai")
+            }.format(time)
+        }
+        val index = generatedIndex.takeIf { it >= 0 }
+            ?: currentIndex.takeIf { it >= 0 }
+            ?: diaryEntries.indexOfFirst { it.date == yesterday }.takeIf { it >= 0 }
+            ?: 0
+        diaryEntries.getOrNull(index)?.let { entry ->
+            currentDateIdx = index
+            currentDiaryId = entry.id
+            currentDateLabel = entry.date
+            diaryContent = entry.content
+            if (generatedIndex >= 0) pendingGeneratedDiaryId = null
+        } ?: run {
+            currentDateIdx = 0
+            currentDiaryId = null
+            currentDateLabel = ""
+            diaryContent = null
         }
     }
 
@@ -233,7 +226,7 @@ fun DiaryScreen(
                                 }
                             }
                         } else {
-                            items(filteredOps) { op ->
+                            items(filteredOps, key = { it.id }) { op ->
                             val opEntity = operators.find { it.id == op.id || it.name == op.name }
                             Column(modifier = Modifier.fillMaxWidth().background(if (op.id == selectedOperatorId) Primary.copy(alpha = 0.1f) else Color.Transparent).clickable { selectedOperatorId = op.id }.padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                                 Box {

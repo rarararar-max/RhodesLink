@@ -17,6 +17,8 @@ import com.rhodes.privatechat.notification.RhodesAppVisibility
 import com.rhodes.privatechat.notification.RhodesNotificationCenter
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.ui.theme.isDarkMode
+import com.rhodes.privatechat.ui.theme.AppearanceSkin
+import com.rhodes.privatechat.ui.theme.currentAppearanceSkin
 import com.rhodes.privatechat.ui.theme.罗德岛终端Theme
 import java.io.File
 import android.graphics.Bitmap
@@ -60,7 +62,8 @@ class MainActivity : ComponentActivity() {
         if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
         }
-        isDarkMode = settings.darkMode
+        currentAppearanceSkin = AppearanceSkin.fromStorage(settings.appearanceSkin, settings.darkMode)
+        isDarkMode = currentAppearanceSkin.isDark
         window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
         enableEdgeToEdge(
             statusBarStyle = if (isDarkMode) SystemBarStyle.dark(Color.TRANSPARENT) else SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),

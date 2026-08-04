@@ -4,10 +4,15 @@ import android.content.Intent
 import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -41,12 +46,20 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.ui.Alignment
 import com.rhodes.privatechat.ui.theme.NavBarBg
 import com.rhodes.privatechat.ui.theme.Primary
 import com.rhodes.privatechat.ui.theme.PrimaryContainer
 import com.rhodes.privatechat.ui.theme.Stroke
 import com.rhodes.privatechat.ui.theme.ElevatedSurface
 import com.rhodes.privatechat.ui.theme.TextSecondary
+import com.rhodes.privatechat.ui.theme.TextPrimary
+import com.rhodes.privatechat.ui.theme.isRhodesTerminal
 import cafe.adriel.voyager.core.screen.Screen
 import cafe.adriel.voyager.navigator.CurrentScreen
 import cafe.adriel.voyager.navigator.LocalNavigator
@@ -78,7 +91,34 @@ class MainScreen : Screen {
         Scaffold(
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             bottomBar = {
-                NavigationBar(
+                if (isRhodesTerminal) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth()
+                            .background(NavBarBg)
+                            .border(1.dp, Stroke)
+                            .padding(horizontal = 6.dp, vertical = 7.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        tabs.forEachIndexed { i, tab ->
+                            val selected = activeTab == i
+                            Column(
+                                modifier = Modifier.weight(1f)
+                                    .defaultMinSize(minHeight = 48.dp)
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .background(if (selected) PrimaryContainer else androidx.compose.ui.graphics.Color.Transparent)
+                                    .clickable { activeTab = i }
+                                    .padding(vertical = 5.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                            ) {
+                                Icon(if (selected) tab.selectedIcon else tab.unselectedIcon, tab.label, tint = if (selected) Primary else TextSecondary, modifier = Modifier.size(19.dp))
+                                Spacer(Modifier.height(2.dp))
+                                Text(tab.label, fontSize = 10.sp, fontWeight = if (selected) androidx.compose.ui.text.font.FontWeight.Bold else androidx.compose.ui.text.font.FontWeight.Medium, color = if (selected) Primary else TextSecondary)
+                                if (selected) Box(Modifier.padding(top = 3.dp).width(14.dp).height(2.dp).background(Primary))
+                            }
+                        }
+                    }
+                } else NavigationBar(
                     modifier = Modifier.background(Brush.verticalGradient(listOf(ElevatedSurface.copy(alpha = 0.94f), NavBarBg.copy(alpha = 0.96f)))).border(1.dp, Stroke),
                     containerColor = NavBarBg.copy(alpha = 0.96f), tonalElevation = 0.dp
                 ) {

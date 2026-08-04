@@ -664,6 +664,11 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = getBoolean("dark_mode", true)
         set(value) = settings.putBoolean("dark_mode", value)
 
+    // Empty values come from installs created before selectable appearance skins.
+    var appearanceSkin: String
+        get() = settings.getString("appearance_skin", if (darkMode) "classic_dark" else "classic_light")
+        set(value) = settings.putString("appearance_skin", value)
+
     var vectorProviderMode: String
         get() = getString("vector_provider_mode", "local")
         set(value) = putString("vector_provider_mode", value)

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -51,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.ui.common.softTextFieldColors
+import com.rhodes.privatechat.ui.common.TerminalPanelShape
 
 /**
  * 私聊和群聊共用的输入栏。
@@ -96,7 +98,14 @@ fun ChatInputBar(
         }
     }
 
+    val terminal = isRhodesTerminal
     Column(modifier = modifier.fillMaxWidth().background(ElevatedSurface.copy(alpha = 0.96f)).border(1.dp, Stroke)) {
+        if (terminal) {
+            Row(Modifier.fillMaxWidth().height(2.dp)) {
+                Box(Modifier.weight(0.18f).fillMaxWidth().background(Primary))
+                Box(Modifier.weight(0.82f).fillMaxWidth().background(Stroke))
+            }
+        }
         // 顶部指示器（如催眠状态）
         indicatorBanner?.invoke()
 
@@ -158,7 +167,7 @@ fun ChatInputBar(
                     onTextChange(newValue.text)
                 }, modifier = Modifier.weight(1f),
                 placeholder = { Text(placeholder, fontSize = 14.sp, color = TextTertiary) },
-                shape = RoundedCornerShape(20.dp), singleLine = false, enabled = true,
+                shape = if (terminal) TerminalPanelShape else RoundedCornerShape(20.dp), singleLine = false, enabled = true,
                 minLines = 1, maxLines = 4,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
                 keyboardActions = KeyboardActions(onAny = { /* 不做任何事，防止键盘收起 */ }),
@@ -176,10 +185,10 @@ fun ChatInputBar(
             IconButton(
                 onClick = { onSend(tfValue.text) },
                 enabled = enabled && (text.isNotBlank() || forceSendEnabled),
-                modifier = Modifier.size(36.dp).clip(CircleShape)
+                modifier = Modifier.size(terminal.let { if (it) 42.dp else 36.dp }).clip(if (terminal) TerminalPanelShape else CircleShape)
                     .background(if ((text.isNotBlank() || forceSendEnabled) && enabled) Brush.linearGradient(listOf(Primary, Blue400)) else Brush.linearGradient(listOf(Color.Transparent, Color.Transparent)))
             ) {
-                Icon(Icons.AutoMirrored.Filled.Send, "发送",
+                Icon(Icons.AutoMirrored.Filled.Send, if (terminal) "发送通讯" else "发送",
                     tint = if ((text.isNotBlank() || forceSendEnabled) && enabled) OnPrimary else TextSecondary,
                     modifier = Modifier.size(18.dp))
             }

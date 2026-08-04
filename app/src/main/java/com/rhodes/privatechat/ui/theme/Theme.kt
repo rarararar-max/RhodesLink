@@ -56,7 +56,13 @@ private fun comfortLight() = lightColorScheme(
 
 @Composable
 fun 罗德岛终端Theme(content: @Composable () -> Unit) {
-    if (isDarkMode) applyDarkTheme() else applyLightTheme()
+    when (currentAppearanceSkin) {
+        AppearanceSkin.ClassicLight -> applyLightTheme()
+        AppearanceSkin.ClassicDark -> applyDarkTheme()
+        AppearanceSkin.RhodesDay -> applyRhodesDayTheme()
+        AppearanceSkin.RhodesNight -> applyRhodesNightTheme()
+    }
+    isDarkMode = currentAppearanceSkin.isDark
     val view = LocalView.current
     val context = LocalContext.current
     SideEffect {

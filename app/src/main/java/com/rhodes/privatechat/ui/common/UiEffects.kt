@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -35,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
@@ -48,6 +51,27 @@ import com.rhodes.privatechat.ui.theme.*
 val ScreenShape = RoundedCornerShape(24.dp)
 val CardShape = RoundedCornerShape(18.dp)
 val ControlShape = RoundedCornerShape(14.dp)
+val TerminalPanelShape = CutCornerShape(topStart = 10.dp, bottomEnd = 10.dp)
+
+private fun Modifier.terminalGrid() = drawBehind {
+    val grid = 28.dp.toPx()
+    val lineColor = TextTertiary.copy(alpha = 0.055f)
+    var x = 0f
+    while (x < size.width) {
+        drawLine(lineColor, androidx.compose.ui.geometry.Offset(x, 0f), androidx.compose.ui.geometry.Offset(x, size.height), 1f)
+        x += grid
+    }
+    var y = 0f
+    while (y < size.height) {
+        drawLine(lineColor, androidx.compose.ui.geometry.Offset(0f, y), androidx.compose.ui.geometry.Offset(size.width, y), 1f)
+        y += grid
+    }
+    var diagonal = -size.height
+    while (diagonal < size.width) {
+        drawLine(TextTertiary.copy(alpha = 0.035f), androidx.compose.ui.geometry.Offset(diagonal, size.height), androidx.compose.ui.geometry.Offset(diagonal + size.height, 0f), 1f)
+        diagonal += grid * 2
+    }
+}
 
 @Composable
 fun AppBackground(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
@@ -59,6 +83,7 @@ fun AppBackground(modifier: Modifier = Modifier, content: @Composable () -> Unit
                     listOf(HeaderEnd.copy(alpha = 0.75f), BG, BG)
                 )
             )
+            .then(if (isRhodesTerminal) Modifier.terminalGrid() else Modifier)
     ) { content() }
 }
 
@@ -71,12 +96,13 @@ fun SoftCard(
     shadow: Boolean = true,
     content: @Composable () -> Unit
 ) {
+    val actualShape = if (isRhodesTerminal && shape == CardShape) TerminalPanelShape else shape
     Box(
         modifier = modifier
-            .then(if (shadow) Modifier.shadow(8.dp, shape, clip = false, ambientColor = Glow, spotColor = Glow) else Modifier)
-            .clip(shape)
+            .then(if (shadow) Modifier.shadow(if (isRhodesTerminal) 3.dp else 8.dp, actualShape, clip = false, ambientColor = Glow, spotColor = Glow) else Modifier)
+            .clip(actualShape)
             .background(color)
-            .border(1.dp, borderColor, shape)
+            .border(1.dp, borderColor, actualShape)
     ) { content() }
 }
 
@@ -88,6 +114,33 @@ fun GradientHeader(
     icon: ImageVector? = null,
     actions: @Composable RowScope.() -> Unit = {}
 ) {
+    if (isRhodesTerminal) {
+        Column(modifier = modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth().statusBarsPadding()
+                    .background(Brush.horizontalGradient(listOf(HeaderStart, HeaderEnd)))
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (onBack != null) {
+                    IconButton(onClick = onBack, modifier = Modifier.size(36.dp).clip(TerminalPanelShape).background(Card).border(1.dp, Stroke, TerminalPanelShape)) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary, modifier = Modifier.size(19.dp))
+                    }
+                    Spacer(Modifier.width(10.dp))
+                }
+                Box(Modifier.width(3.dp).height(30.dp).background(Primary))
+                Spacer(Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(title, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                    Text("RHODES ISLAND // SYSTEM INTERFACE", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = TextTertiary, letterSpacing = 0.8.sp)
+                }
+                if (icon != null) Icon(icon, null, tint = Primary, modifier = Modifier.size(21.dp))
+                actions()
+            }
+            HorizontalDivider(color = Primary.copy(alpha = 0.72f), thickness = 1.dp)
+        }
+        return
+    }
     Column(modifier = modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
@@ -202,6 +255,29 @@ fun WechatTopBar(
     modifier: Modifier = Modifier,
     actions: @Composable RowScope.() -> Unit = {}
 ) {
+    if (isRhodesTerminal) {
+        Column(modifier = modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth().statusBarsPadding()
+                    .background(Brush.horizontalGradient(listOf(HeaderStart, HeaderEnd)))
+                    .padding(horizontal = 16.dp, vertical = 11.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(Modifier.width(3.dp).height(28.dp).background(Primary))
+                Spacer(Modifier.width(9.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(title, fontSize = 21.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                    Text("RHODES TERMINAL // ${title.uppercase()}", fontSize = 8.sp, fontWeight = FontWeight.Bold, color = TextTertiary, letterSpacing = 0.7.sp)
+                }
+                actions()
+            }
+            Row(Modifier.fillMaxWidth().height(3.dp)) {
+                Box(Modifier.weight(0.22f).fillMaxSize().background(Primary))
+                Box(Modifier.weight(0.78f).fillMaxSize().background(Stroke))
+            }
+        }
+        return
+    }
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -218,6 +294,14 @@ fun WechatTopBar(
 
 @Composable
 fun WechatListGroup(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    if (isRhodesTerminal) {
+        Column(
+            modifier = modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 5.dp)
+                .clip(TerminalPanelShape).background(Surface.copy(alpha = 0.88f))
+                .border(1.dp, Stroke, TerminalPanelShape)
+        ) { content() }
+        return
+    }
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -244,6 +328,14 @@ fun WechatListItem(
 
 @Composable
 fun WechatIconTile(icon: ImageVector, color: Color, modifier: Modifier = Modifier) {
+    if (isRhodesTerminal) {
+        Box(
+            modifier = modifier.size(38.dp).clip(TerminalPanelShape)
+                .background(color.copy(alpha = 0.16f)).border(1.dp, color.copy(alpha = 0.7f), TerminalPanelShape),
+            contentAlignment = Alignment.Center
+        ) { Icon(icon, null, tint = color, modifier = Modifier.size(20.dp)) }
+        return
+    }
     Box(
         modifier = modifier.size(38.dp).clip(RoundedCornerShape(8.dp)).background(color),
         contentAlignment = Alignment.Center

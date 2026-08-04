@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.rhodes.privatechat.ui.common.OperatorAvatarImage
 import com.rhodes.privatechat.ui.common.ThemedDropdownMenu
+import com.rhodes.privatechat.ui.common.TerminalPanelShape
 import com.rhodes.privatechat.ui.chat.formatChatTime
 import com.rhodes.privatechat.ui.chat.model.ChatUiMessage
 import com.rhodes.privatechat.ui.theme.*
@@ -297,12 +298,19 @@ private fun MessageBubble(
     }
     if (message.isSystem) {
         if (message.isNarration) {
-            // 旁白：屏幕居中，圆角矩形半透明气泡，文字左对齐，支持长按撤回
+            // 旁白 stays separate from dialogue so offline and director scenes retain their stage direction.
             val context = LocalContext.current
             var showNarrationMenu by remember { mutableStateOf(false) }
             Box(modifier = Modifier.fillMaxWidth().alpha(archivedAlpha).padding(horizontal = 12.dp, vertical = 6.dp).combinedClickable(onLongClick = { showNarrationMenu = true }, onClick = {}), contentAlignment = Alignment.Center) {
-                Box(modifier = Modifier.fillMaxWidth(0.9f).clip(RoundedCornerShape(16.dp)).background(Card.copy(alpha = 0.88f)).border(1.dp, Stroke, RoundedCornerShape(16.dp)).padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    Text(message.content, fontSize = 14.sp, color = TextPrimary, fontStyle = FontStyle.Italic, textAlign = TextAlign.Start, lineHeight = 20.sp)
+                Box(modifier = Modifier.fillMaxWidth(0.9f)
+                    .clip(if (isRhodesTerminal) TerminalPanelShape else RoundedCornerShape(16.dp))
+                    .background(Card.copy(alpha = 0.88f))
+                    .border(1.dp, if (isRhodesTerminal) AccentBlue.copy(alpha = 0.35f) else Stroke, if (isRhodesTerminal) TerminalPanelShape else RoundedCornerShape(16.dp))
+                    .padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    Column {
+                        if (isRhodesTerminal) Text("SCENE LOG // 旁白", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = AccentBlue, letterSpacing = 0.5.sp)
+                        Text(message.content, modifier = Modifier.padding(top = if (isRhodesTerminal) 3.dp else 0.dp), fontSize = 14.sp, color = TextPrimary, fontStyle = FontStyle.Italic, textAlign = TextAlign.Start, lineHeight = 20.sp)
+                    }
                 }
                 ThemedDropdownMenu(expanded = showNarrationMenu, onDismissRequest = { showNarrationMenu = false }) {
                     DropdownMenuItem(text = { Row { Icon(Icons.Default.ContentCopy, null, tint = TextPrimary, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text("复制", color = TextPrimary) } },
@@ -330,7 +338,7 @@ private fun MessageBubble(
     var showRetryConfirm by remember { mutableStateOf(false) }
     val isMe = message.isMe
     val bubbleColor = if (isMe) BubbleMine else BubbleOther
-    val bubbleShape = if (isMe) RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp) else RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp)
+    val bubbleShape = if (isRhodesTerminal) TerminalPanelShape else if (isMe) RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp) else RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp)
 
     Column(modifier = Modifier.fillMaxWidth().alpha(archivedAlpha).padding(horizontal = 12.dp, vertical = 2.dp)) {
         if (showTime) {
@@ -366,11 +374,15 @@ private fun MessageBubble(
                         }
                         Spacer(modifier = Modifier.height(2.dp))
                     }
-                    // 气泡
+                    if (isRhodesTerminal) {
+                        val direction = if (isMe) "OUTBOUND" else "INBOUND"
+                        Text("${message.senderName} // $direction", fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.35.sp, color = if (isMe) Primary else AccentBlue, modifier = Modifier.padding(bottom = 2.dp, start = 2.dp))
+                    }
+                    // Dialogue is kept compact but uses a hard-cut terminal panel for the Rhodes skins.
                     Box(modifier = Modifier.widthIn(max = if (onSenderClick != null) 240.dp else 260.dp)
                         .clip(bubbleShape)
                         .background(if (isMe) Brush.linearGradient(listOf(BubbleMine, BubbleMineEnd)) else Brush.linearGradient(listOf(bubbleColor, bubbleColor)))
-                        .border(1.dp, if (isMe) Primary.copy(alpha = 0.20f) else Stroke, bubbleShape)
+                        .border(1.dp, if (isRhodesTerminal) (if (isMe) Primary else AccentBlue).copy(alpha = 0.42f) else if (isMe) Primary.copy(alpha = 0.20f) else Stroke, bubbleShape)
                         .padding(horizontal = if (onSenderClick != null) 12.dp else 14.dp, vertical = if (onSenderClick != null) 8.dp else 10.dp)) {
                         if (message.imageUri.isNotBlank()) {
                             Column {

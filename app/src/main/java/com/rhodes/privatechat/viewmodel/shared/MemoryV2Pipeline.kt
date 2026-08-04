@@ -272,7 +272,7 @@ class MemoryV2Pipeline(
         if (l1Topic != null) {
             val selected = l1Topic.items
             val prompt = buildLevelPrompt(MemoryV2PromptTemplates.L2, selected)
-            val raw = withTimeout(15_000) {
+            val raw = withTimeout(50_000) {
                 aiService.chat(
                     settings.apiKey,
                     listOf(AiMessage("system", prompt)),
@@ -307,7 +307,7 @@ class MemoryV2Pipeline(
         if (l2Topic != null) {
             val selected = l2Topic.items
             val prompt = buildLevelPrompt(MemoryV2PromptTemplates.L3, selected)
-            val raw = withTimeout(15_000) {
+            val raw = withTimeout(50_000) {
                 aiService.chat(
                     settings.apiKey,
                     listOf(AiMessage("system", prompt)),
@@ -639,7 +639,7 @@ class MemoryV2Pipeline(
         operatorName: String
     ): List<MemoryItem> {
         val prompt = MemoryV2PromptTemplates.getL1(sourceKind.name) + "\n系统提供的当前昵称：${userNicknameProvider()}\n干员：$operatorName\n内容：\n$text\n"
-        val raw = withTimeout(15_000) {
+        val raw = withTimeout(50_000) {
             aiService.chat(
                 settings.apiKey,
                 listOf(AiMessage("system", prompt)),
@@ -654,7 +654,7 @@ class MemoryV2Pipeline(
 
     private suspend fun extractGroupL1(groupId: String, groupName: String, text: String, sourceRefId: String): List<MemoryItem> {
         val prompt = MemoryV2PromptTemplates.getL1("GROUP_CHAT") + "\n系统提供的当前昵称：${userNicknameProvider()}\n群聊：$groupName\n内容：\n$text\n"
-        val raw = withTimeout(15_000) {
+        val raw = withTimeout(50_000) {
             aiService.chat(
                 settings.apiKey,
                 listOf(AiMessage("system", prompt)),

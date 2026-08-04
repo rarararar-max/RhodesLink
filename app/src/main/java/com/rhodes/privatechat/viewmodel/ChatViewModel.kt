@@ -461,7 +461,7 @@ ${oldSummary}
 
 新增对话：
 ${text}"""
-            val rawResult = withTimeout(15_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Memory") }.trim()
+            val rawResult = withTimeout(50_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Memory") }.trim()
             DebugLogger.trace("AI/PrivateRollingSummary", "SUMMARY_REQUEST\n$prompt\n\nSUMMARY_RESPONSE\n$rawResult")
             sharedUtils.trackTokens("memory", prompt, rawResult)
             val unified = if (settings.unifiedMemoryEnabled) try {
@@ -2406,7 +2406,7 @@ $avoid
             if (text.isBlank()) return true
             val dateStr = sharedUtils.beijingSdf("yyyy年MM月dd日").format(dayBegin)
             val prompt = "请总结${dateStr}的聊天记录，生成50-150字的每日摘要。直接输出纯文本。\n${text}"
-            val content = withTimeout(15_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Memory") }.trim()
+            val content = withTimeout(50_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Memory") }.trim()
             sharedUtils.trackTokens("memory", prompt, content)
             if (content.isNotBlank()) {
                 repository.saveMemory(Memory(sessionId = "daily_${dateStr}", operatorId = "daily", type = MemoryType.DAILY, content = content, createdAt = System.currentTimeMillis(), expiresAt = MemoryPolicy.memoryExpiresAt(settings)))
@@ -2434,7 +2434,7 @@ $avoid
 【关系与情绪变化】
 【次日可自然继续的话题】
 不要记录普通寒暄；已完成事项不要保留为待办。\n${text}"""
-            val content = withTimeout(15_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Memory") }.trim()
+            val content = withTimeout(50_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Memory") }.trim()
             if (content.isNotBlank()) {
                 repository.replaceDailyBySessionAndDate(Memory(
                     sessionId = session.id, operatorId = operatorId,

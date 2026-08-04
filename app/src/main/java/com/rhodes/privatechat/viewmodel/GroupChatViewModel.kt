@@ -1723,7 +1723,7 @@ $members
             if (text.isBlank()) return
             val dateStr = sharedUtils.beijingSdf("yyyy年MM月dd日").format(dayBegin)
             val prompt = "请总结${dateStr}「${groupName}」的聊天记录，生成50-150字的每日摘要。直接输出纯文本。\n${text}"
-            val content = withTimeout(15_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Memory") }.trim()
+            val content = withTimeout(50_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Memory") }.trim()
             if (content.isNotBlank()) {
                 repository.saveMemory(com.rhodes.privatechat.shared.model.Memory(
                     sessionId = groupSessionId, operatorId = groupSessionId,
@@ -1768,7 +1768,7 @@ $oldSummary
 
 新增对话：
 $text"""
-            val content = withTimeout(20_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "GroupMemory") }.trim()
+            val content = withTimeout(50_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "GroupMemory") }.trim()
             DebugLogger.trace("AI/GroupRollingSummary", "SUMMARY_REQUEST\n$prompt\n\nSUMMARY_RESPONSE\n$content")
             if (content.isNotBlank()) {
                 repository.replaceShortTermMemory(com.rhodes.privatechat.shared.model.Memory(

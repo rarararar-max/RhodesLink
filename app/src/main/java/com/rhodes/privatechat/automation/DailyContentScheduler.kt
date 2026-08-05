@@ -40,7 +40,6 @@ object DailyContentScheduler {
         if (!settings.autoAiEnabled) return@runBlocking
         val cycle = cycleId()
         if (settings.getBoolean("daily_content_planned_$cycle", false)) return@runBlocking
-        settings.putBoolean("daily_content_planned_$cycle", true)
         val now = System.currentTimeMillis()
         val operators = repository.getAllOperatorsSync()
         val cycleStart = cycleStart(now)
@@ -65,6 +64,7 @@ object DailyContentScheduler {
             val base = scheduledTime(cycleStart, cycleEnd, "private:${op.id}:$index", now)
             schedule(context, TYPE_PRIVATE, op.id, "0", avoidQuietHours(base, cycleEnd, settings, now))
         }
+        settings.putBoolean("daily_content_planned_$cycle", true)
     }
 
     /** Replaces only today's pending deliveries after the user saves new automatic-content settings. */

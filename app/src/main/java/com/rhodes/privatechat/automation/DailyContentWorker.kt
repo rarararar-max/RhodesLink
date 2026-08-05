@@ -7,6 +7,7 @@ import android.app.Application
 import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.viewmodel.MainViewModel
+import com.rhodes.privatechat.viewmodel.ScheduledMomentDeliveryResult
 import com.rhodes.privatechat.viewmodel.shared.AppStateHolder
 import com.rhodes.privatechat.viewmodel.shared.OperatorStateUpdater
 import com.rhodes.privatechat.viewmodel.shared.SharedUtils
@@ -33,12 +34,12 @@ class DailyContentWorker(context: Context, params: WorkerParameters) : Coroutine
             // One-time work can be delayed by network constraints or backoff. Daily content must
             // never be delivered into a later Beijing calendar day.
             if (cycle != DailyContentScheduler.cycleId()) return Result.success()
-            when (inputData.getString("type")) {
+            val result = when (inputData.getString("type")) {
                 DailyContentScheduler.TYPE_MOMENT -> viewModel.deliverScheduledMoment(operatorId, cycle, deliveryId)
-                DailyContentScheduler.TYPE_PRIVATE -> viewModel.deliverScheduledPrivate(operatorId, cycle)
-                else -> false
+                DailyContentScheduler.TYPE_PRIVATE -> if (viewModel.deliverScheduledPrivate(operatorId, cycle)) ScheduledMomentDeliveryResult.SUCCEEDED else ScheduledMomentDeliveryResult.SKIPPED
+                else -> ScheduledMomentDeliveryResult.SKIPPED
             }
-            Result.success()
+            if (result == ScheduledMomentDeliveryResult.RETRYABLE_FAILURE) Result.retry() else Result.success()
         } catch (_: Exception) {
             Result.retry()
         }

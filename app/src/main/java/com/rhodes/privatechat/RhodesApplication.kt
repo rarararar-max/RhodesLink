@@ -2,6 +2,7 @@ package com.rhodes.privatechat
 
 import android.app.Application
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import com.rhodes.privatechat.di.appModule
 import com.rhodes.privatechat.settings.SettingsMigration
 import com.rhodes.privatechat.automation.DailyContentScheduler
@@ -15,12 +16,20 @@ import com.rhodes.privatechat.util.DebugLogger
 import org.koin.android.ext.koin.androidContext
 import org.koin.android.ext.koin.androidLogger
 import org.koin.core.context.startKoin
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class RhodesApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         AndroidSettingsFactory.init(this)
-        DebugLogger.enabled = getSharedPreferences("rhodes_settings", Context.MODE_PRIVATE).getBoolean("debug_log_enabled", false)
+        val debugRequested = getSharedPreferences("rhodes_settings", Context.MODE_PRIVATE)
+            .getBoolean("debug_log_enabled", false)
+        val isDebuggable = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+        DebugLogger.enabled = isDebuggable && debugRequested
+        DebugLogger.allowSensitiveTrace = isDebuggable
         SettingsMigration.migrateIfNeeded(this)
         
         // 版本升级后清除导航栈状态，防止旧版序列化数据导致新版崩溃
@@ -32,11 +41,15 @@ class RhodesApplication : Application() {
             modules(sharedModule(DatabaseWrapper(this@RhodesApplication)), appModule)
             DailyContentScheduler.schedulePlanner(this@RhodesApplication)
         }
+        val repository: ChatRepository = org.koin.java.KoinJavaComponent.get(ChatRepository::class.java)
         GroupAutoChatScheduler.reconcile(
             this,
-            org.koin.java.KoinJavaComponent.get(ChatRepository::class.java),
+            repository,
             org.koin.java.KoinJavaComponent.get(SettingsRepository::class.java)
         )
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            repository.repairAiSessionPreviews()
+        }
     }
     
     private fun clearNavigationStateIfNeeded() {

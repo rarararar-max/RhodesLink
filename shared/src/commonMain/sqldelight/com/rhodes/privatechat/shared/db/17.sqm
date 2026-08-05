@@ -1,0 +1,15 @@
+-- Remove rows whose parent moment was removed by older versions.
+DELETE FROM moment_likes WHERE momentId NOT IN (SELECT id FROM moments);
+DELETE FROM moment_comments WHERE momentId NOT IN (SELECT id FROM moments);
+
+-- Keep the oldest like when retries or concurrent jobs inserted duplicates.
+DELETE FROM moment_likes
+WHERE id NOT IN (
+    SELECT MIN(id) FROM moment_likes GROUP BY momentId, operatorId
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_moment_likes_moment_operator ON moment_likes(momentId, operatorId);
+
+UPDATE moments
+SET likeCount = (SELECT COUNT(*) FROM moment_likes WHERE moment_likes.momentId = moments.id),
+    commentCount = (SELECT COUNT(*) FROM moment_comments WHERE moment_comments.momentId = moments.id);

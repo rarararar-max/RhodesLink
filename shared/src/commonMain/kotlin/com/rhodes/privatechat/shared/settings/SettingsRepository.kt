@@ -10,6 +10,12 @@ import com.rhodes.privatechat.shared.model.PrivateTurnState
 import kotlinx.coroutines.flow.map
 import kotlin.math.max
 
+object PromptTemplateMigration {
+    /** Never overwrite a non-empty legacy template unless it was explicitly marked non-custom. */
+    fun preserveLegacyTemplate(saved: String, isCustom: Boolean, savedVersion: Int, defaultVersion: Int): Boolean =
+        saved.isNotBlank() && !isCustom && savedVersion < defaultVersion
+}
+
 @OptIn(com.russhwolf.settings.ExperimentalSettingsApi::class)
 class SettingsRepository(private val settings: ObservableSettings) {
 
@@ -118,11 +124,11 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     // === 聊天设置 ===
     var dualModel: Boolean
-        get() = getBoolean("dual_model", true)
+        get() = getBoolean("dual_model", false)
         set(value) = putBoolean("dual_model", value)
 
     var groupTurnPlannerEnabled: Boolean
-        get() = getBoolean("group_turn_planner_enabled", true)
+        get() = getBoolean("group_turn_planner_enabled", false)
         set(value) = putBoolean("group_turn_planner_enabled", value)
 
     var debugLogEnabled: Boolean
@@ -967,6 +973,18 @@ class SettingsRepository(private val settings: ObservableSettings) {
         putString(key, value)
     }
 
+    fun saveCustomPromptTemplate(type: String, mode: String, value: String, version: Int) {
+        val key = if (mode.isNotBlank()) "prompt_${type}_${mode}" else "prompt_$type"
+        putPromptTemplate(type, mode, value)
+        putBoolean("${key}_custom", true)
+        putPromptTemplateVersion(type, mode, version)
+    }
+
+    fun isPromptTemplateCustom(type: String, mode: String = ""): Boolean {
+        val key = if (mode.isNotBlank()) "prompt_${type}_${mode}" else "prompt_$type"
+        return getBoolean("${key}_custom", false)
+    }
+
     /**
      * Applies a new shipped template only to legacy saved defaults. Templates explicitly saved
      * from the editor are marked custom and are never replaced during an app upgrade.
@@ -976,11 +994,9 @@ class SettingsRepository(private val settings: ObservableSettings) {
         val saved = getString(key, "").orEmpty()
         if (saved.isBlank()) return defaultTemplate
         if (getBoolean("${key}_custom", false)) return saved
-        if (getPromptTemplateVersion(type, mode) < defaultVersion) {
-            putString(key, defaultTemplate)
-            putPromptTemplateVersion(type, mode, defaultVersion)
-            return defaultTemplate
-        }
+        // Old builds did not consistently record the custom flag. Preserve legacy content without
+        // falsely freezing it as custom; a later known-template migration can upgrade safely.
+        if (PromptTemplateMigration.preserveLegacyTemplate(saved, false, getPromptTemplateVersion(type, mode), defaultVersion)) return saved
         return saved
     }
 
@@ -998,6 +1014,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
         val key = if (mode.isNotBlank()) "prompt_${type}_${mode}" else "prompt_$type"
         remove(key)
         remove(if (mode.isNotBlank()) "prompt_${type}_${mode}_version" else "prompt_${type}_version")
+        remove("${key}_custom")
     }
 
     fun getMomentCount(operatorId: String, date: String): Int =

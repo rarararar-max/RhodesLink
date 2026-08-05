@@ -64,5 +64,8 @@ DELETE FROM moment_comments WHERE momentId = ?;
 getCommentById:
 SELECT * FROM moment_comments WHERE id = ?;
 
+getCommentIdsByMoment:
+SELECT id FROM moment_comments WHERE momentId = ?;
+
 getLastInsertRowId:
 SELECT last_insert_rowid();

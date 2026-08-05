@@ -1,7 +1,7 @@
 package com.rhodes.privatechat.viewmodel.shared
 
 object PromptTemplates {
-    const val VERSION = 18
+    const val VERSION = 19
 
     fun get(type: String, mode: String = ""): String = when {
         type == "private" && mode == "offline" -> PRIVATE_OFFLINE

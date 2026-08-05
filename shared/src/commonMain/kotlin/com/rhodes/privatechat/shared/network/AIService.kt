@@ -285,6 +285,43 @@ class AIService(private val client: HttpClient = createHttpClient()) {
 
     data class ChatResult(val content: String, val inputTokens: Int = 0, val outputTokens: Int = 0)
 
+    /**
+     * Emits request-shape diagnostics without logging prompts or generated content. The system
+     * fingerprint is only useful for comparing whether consecutive requests shared a prefix.
+     */
+    private fun logRequestMetrics(
+        providerId: String,
+        modelName: String,
+        messages: List<AiMessage>,
+        elapsedMs: Long,
+        inputTokens: Int,
+        outputTokens: Int,
+        cacheHitTokens: Int = 0,
+        cacheMissTokens: Int = 0,
+        requestType: String,
+        outcome: String
+    ) {
+        val system = messages.filter { it.role == "system" }.joinToString("\n\n") { it.content }
+        val cacheTotal = cacheHitTokens + cacheMissTokens
+        val cacheRate = if (cacheTotal > 0) cacheHitTokens * 100 / cacheTotal else -1
+        println(
+            "RHODES_AI_METRIC requestType=$requestType provider=$providerId model=$modelName outcome=$outcome " +
+                "messages=${messages.size} systemChars=${system.length} " +
+                "systemFingerprint=${systemFingerprint(system)} inputTokens=$inputTokens " +
+                "outputTokens=$outputTokens cacheHitTokens=$cacheHitTokens " +
+                "cacheMissTokens=$cacheMissTokens cacheHitRate=$cacheRate elapsedMs=$elapsedMs"
+        )
+    }
+
+    private fun systemFingerprint(system: String): String {
+        var hash = 0xcbf29ce484222325UL
+        system.encodeToByteArray().forEach { byte ->
+            hash = hash xor byte.toUByte().toULong()
+            hash *= 0x100000001b3UL
+        }
+        return hash.toString(16)
+    }
+
     suspend fun chat(
         apiKey: String,
         messages: List<AiMessage>,
@@ -293,10 +330,13 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         customUrl: String = "",
         temperature: Double = 0.95,
         jsonMode: Boolean = false,
-        maxOutputTokens: Int? = null
+        maxOutputTokens: Int? = null,
+        requestType: String = "Chat"
     ): ChatResult {
+        val requestStartedAt = kotlin.time.TimeSource.Monotonic.markNow()
         val config = providers[providerId] ?: throw IllegalArgumentException("不支持的厂商: $providerId")
         val model = normalizeModelName(config.id, modelName)
+        try {
 
         // 自填厂商 URL 校验
         if (config.id == "custom" && customUrl.isBlank()) {
@@ -336,11 +376,18 @@ class AIService(private val client: HttpClient = createHttpClient()) {
             val outputTokens = completion.usage?.completionTokens ?: 0
             val cacheHit = completion.usage?.promptCacheHitTokens ?: 0
             val cacheMiss = completion.usage?.promptCacheMissTokens ?: 0
-            if (cacheHit > 0 || cacheMiss > 0) {
-                val total = cacheHit + cacheMiss
-                val rate = if (total > 0) cacheHit * 100 / total else 0
-                println("RHODES_AI cache hit-rate=${rate}%")
-            }
+            logRequestMetrics(
+                providerId = config.id,
+                modelName = model,
+                messages = messages,
+                elapsedMs = requestStartedAt.elapsedNow().inWholeMilliseconds,
+                inputTokens = inputTokens,
+                outputTokens = outputTokens,
+                cacheHitTokens = cacheHit,
+                cacheMissTokens = cacheMiss,
+                requestType = requestType,
+                outcome = if (content.isBlank()) "empty" else "success"
+            )
             return ChatResult(content, inputTokens, outputTokens)
         }
 
@@ -388,10 +435,22 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                 .firstOrNull { it.jsonObject["type"]?.jsonPrimitive?.content == "text" }
                 ?.jsonObject?.get("text")?.jsonPrimitive?.content.orEmpty()
             val usage = root["usage"]?.jsonObject
+            val inputTokens = usage?.get("input_tokens")?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+            val outputTokens = usage?.get("output_tokens")?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+            logRequestMetrics(
+                providerId = config.id,
+                modelName = model,
+                messages = messages,
+                elapsedMs = requestStartedAt.elapsedNow().inWholeMilliseconds,
+                inputTokens = inputTokens,
+                outputTokens = outputTokens,
+                requestType = requestType,
+                outcome = if (content.isBlank()) "empty" else "success"
+            )
             return ChatResult(
                 content = content,
-                inputTokens = usage?.get("input_tokens")?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
-                outputTokens = usage?.get("output_tokens")?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
+                inputTokens = inputTokens,
+                outputTokens = outputTokens,
             )
         }
 
@@ -428,10 +487,50 @@ class AIService(private val client: HttpClient = createHttpClient()) {
             val content = googleResp.candidates?.firstOrNull()?.content?.parts?.joinToString("") { it.text } ?: ""
             val inputTokens = googleResp.usageMetadata?.promptTokenCount ?: 0
             val outputTokens = googleResp.usageMetadata?.candidatesTokenCount ?: 0
+            logRequestMetrics(
+                providerId = config.id,
+                modelName = model,
+                messages = messages,
+                elapsedMs = requestStartedAt.elapsedNow().inWholeMilliseconds,
+                inputTokens = inputTokens,
+                outputTokens = outputTokens,
+                requestType = requestType,
+                outcome = if (content.isBlank()) "empty" else "success"
+            )
             return ChatResult(content, inputTokens, outputTokens)
         }
 
         throw Exception("不支持的厂商: ${config.id}")
+        } catch (e: CancellationException) {
+            logRequestMetrics(
+                providerId = config.id,
+                modelName = model,
+                messages = messages,
+                elapsedMs = requestStartedAt.elapsedNow().inWholeMilliseconds,
+                inputTokens = 0,
+                outputTokens = 0,
+                requestType = requestType,
+                outcome = if (e is kotlinx.coroutines.TimeoutCancellationException) "timeout" else "cancelled"
+            )
+            throw e
+        } catch (e: Exception) {
+            val outcome = when {
+                e.message?.startsWith("API error") == true || e.message?.startsWith("Anthropic API error") == true || e.message?.startsWith("Google API error") == true -> "http_error"
+                e is kotlinx.serialization.SerializationException -> "parse_error"
+                else -> "request_error"
+            }
+            logRequestMetrics(
+                providerId = config.id,
+                modelName = model,
+                messages = messages,
+                elapsedMs = requestStartedAt.elapsedNow().inWholeMilliseconds,
+                inputTokens = 0,
+                outputTokens = 0,
+                requestType = requestType,
+                outcome = outcome
+            )
+            throw e
+        }
     }
 
     /** A content retry precedes one structure-only repair; neither path loops indefinitely. */
@@ -444,9 +543,10 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         temperature: Double = 0.95,
         jsonMode: Boolean = false,
         mode: String = "",
+        requestType: String = "Chat",
         trace: (String, String) -> Unit = { _, _ -> }
     ): OfflineModeResponse {
-        val original = chat(apiKey, messages, providerId, modelName, customUrl, temperature, jsonMode).content
+        val original = chat(apiKey, messages, providerId, modelName, customUrl, temperature, jsonMode, requestType = requestType).content
         val parsed = runCatching { normalizeOfflineResponse(original) }.getOrNull()
         if (parsed != null && isUsableResponse(parsed, mode)) return parsed
 
@@ -459,7 +559,7 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                 |- 必须至少包含一条非空角色台词，并严格遵守当前模式的 JSON 格式。
             """.trimMargin()) else message
         }
-        val retried = chat(apiKey, retryMessages, providerId, modelName, customUrl, temperature, jsonMode).content
+        val retried = chat(apiKey, retryMessages, providerId, modelName, customUrl, temperature, jsonMode, requestType = "${requestType}ContentRetry").content
         val retriedParsed = runCatching { normalizeOfflineResponse(retried) }.getOrNull()
         if (retriedParsed != null && isUsableResponse(retriedParsed, mode)) return retriedParsed
 
@@ -476,7 +576,8 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                 modelName = modelName,
                 customUrl = customUrl,
                 temperature = 0.0,
-                jsonMode = true
+                jsonMode = true,
+                requestType = "${requestType}FormatRepair"
             ).content
         } catch (e: CancellationException) {
             throw e

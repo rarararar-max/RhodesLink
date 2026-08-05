@@ -6,6 +6,7 @@ import java.util.Locale
 
 object DebugLogger {
     var enabled: Boolean = false
+    var allowSensitiveTrace: Boolean = false
     private const val MAX_ENTRIES = 500
     private val entries = mutableListOf<LogEntry>()
     private val lock = Any()
@@ -41,7 +42,7 @@ object DebugLogger {
 
     /** Full local-only prompt/response trace. Only call this after the user explicitly enables debug logging. */
     fun trace(tag: String, message: String) {
-        if (!enabled) return
+        if (!allowSensitiveTrace || !enabled) return
         val entry = LogEntry(idCounter.incrementAndGet(), System.currentTimeMillis(), tag, message)
         synchronized(lock) {
             entries.add(entry)

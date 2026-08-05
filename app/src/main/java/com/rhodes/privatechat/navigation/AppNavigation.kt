@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -96,7 +97,8 @@ class MainScreen : Screen {
                         modifier = Modifier.fillMaxWidth()
                             .background(NavBarBg)
                             .border(1.dp, Stroke)
-                            .padding(horizontal = 6.dp, vertical = 7.dp),
+                            .padding(horizontal = 6.dp, vertical = 7.dp)
+                            .navigationBarsPadding(),
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {

@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.shared.model.ChatArchive
 import com.rhodes.privatechat.shared.model.ChatMessage
+import com.rhodes.privatechat.shared.data.AiReplyPreview
 import com.rhodes.privatechat.shared.model.Operator
 import com.rhodes.privatechat.ui.theme.BG
 import com.rhodes.privatechat.ui.theme.Card
@@ -161,8 +162,7 @@ private fun modeName(mode: String): String = when (mode) { "offline" -> "线下"
 @Composable
 private fun ArchiveMessagePreview(message: ChatMessage) {
     val speaker = if (message.isMe) "我" else message.senderName.ifBlank { "系统" }
-    val text = if (message.type == "ai_json") Regex("\\\"(?:content|message|dialogue)\\\"\\s*:\\s*\\\"([^\\\"]{1,200})\\\"")
-        .findAll(message.content).lastOrNull()?.groupValues?.getOrNull(1)?.replace("\\n", " ") ?: "[角色回复]" else message.content
+    val text = if (message.type == "ai_json") AiReplyPreview.extract(message.content, 200) ?: "[角色回复]" else message.content
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Card).padding(10.dp)) {
         Text(speaker, color = if (message.isMe) Primary else TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
         Text(text, color = TextPrimary, fontSize = 13.sp, modifier = Modifier.padding(top = 3.dp))

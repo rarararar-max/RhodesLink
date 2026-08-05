@@ -19,9 +19,10 @@ fun createHttpClient(): HttpClient = HttpClient(createPlatformEngine()) {
         })
     }
     install(HttpTimeout) {
-        requestTimeoutMillis = 60_000
+        // Feature-level deadlines own chat timing; transport must not fail first with a generic error.
+        requestTimeoutMillis = 120_000
         connectTimeoutMillis = 15_000
-        socketTimeoutMillis = 60_000
+        socketTimeoutMillis = 120_000
     }
 }
 
@@ -34,9 +35,9 @@ fun createHttpClient(block: HttpClientConfig<*>.() -> Unit): HttpClient = HttpCl
         })
     }
     install(HttpTimeout) {
-        requestTimeoutMillis = 60_000
+        requestTimeoutMillis = 120_000
         connectTimeoutMillis = 15_000
-        socketTimeoutMillis = 60_000
+        socketTimeoutMillis = 120_000
     }
     block()
 }

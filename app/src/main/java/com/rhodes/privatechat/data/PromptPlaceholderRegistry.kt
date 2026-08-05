@@ -30,7 +30,7 @@ object PromptPlaceholderRegistry {
         "SOURCE_AWARE_MEMORIES", "SOURCE_AWARE_RULES", "KNOWN_FROM_CONTEXT", "RECENT_SOCIAL_CONTEXT",
         "GROUP_NAR_SEG_MIN", "GROUP_NAR_SEG_MAX",
         "GROUP_NAR_MIN", "GROUP_NAR_MAX", "GROUP_MSG_MIN", "GROUP_MSG_MAX",
-        "GROUP_SPEECH_MIN", "GROUP_SPEECH_MAX", "RECENT_SOCIAL_CONTEXT"
+        "GROUP_SPEECH_MIN", "GROUP_SPEECH_MAX"
     )
     private val moment = setOf(
         "OPERATOR_NAME", "OPERATOR_PERSONA", "OPERATOR_GENDER", "USER_NAME", "USER_GENDER", "USER_BIO",
@@ -75,5 +75,34 @@ object PromptPlaceholderRegistry {
             "GROUP_NAR_MIN", "GROUP_NAR_MAX", "GROUP_MSG_MIN", "GROUP_MSG_MAX", "GROUP_SPEECH_MIN", "GROUP_SPEECH_MAX"
         )
         else -> allowed(type, mode)
+    }
+
+    /** Values that can vary between requests and therefore belong outside a cacheable prompt prefix. */
+    fun runtimeKeys(type: String, mode: String = ""): Set<String> {
+        val stable = when (type) {
+            "private" -> setOf(
+                "OPERATOR_NAME", "OPERATOR_TITLE", "OPERATOR_PERSONA", "OPERATOR_GENDER",
+                "NAR_SEG_MIN", "NAR_SEG_MAX", "NAR_MIN", "NAR_MAX", "DIA_SEG_MIN", "DIA_SEG_MAX",
+                "DIA_MIN", "DIA_MAX", "SEG_MIN", "SEG_MAX", "PERSONAL_MEMORY_REFERENCE_STYLE",
+                "SOURCE_AWARE_RULES", "MODE_RULES", "OUTPUT_FORMAT"
+            )
+            "group" -> setOf(
+                "GROUP_NAME", "GROUP_MODE_FORMAT", "GROUP_NAR_SEG_MIN", "GROUP_NAR_SEG_MAX",
+                "GROUP_NAR_MIN", "GROUP_NAR_MAX", "GROUP_MSG_MIN", "GROUP_MSG_MAX",
+                "GROUP_SPEECH_MIN", "GROUP_SPEECH_MAX", "SOURCE_AWARE_RULES", "OUTPUT_FORMAT"
+            )
+            "moment" -> setOf(
+                "OPERATOR_NAME", "OPERATOR_PERSONA", "OPERATOR_GENDER", "MOMENT_MIN_CHARS", "MOMENT_MAX_CHARS"
+            )
+            "moment_comment" -> setOf(
+                "COMMENTER_NAME", "COMMENTER_PERSONA", "POST_AUTHOR_NAME", "POST_AUTHOR_PERSONA",
+                "COMMENT_MIN_CHARS", "COMMENT_MAX_CHARS"
+            )
+            "diary" -> setOf(
+                "OPERATOR_NAME", "OPERATOR_PERSONA", "OPERATOR_GENDER", "DIARY_MIN_CHARS", "DIARY_MAX_CHARS"
+            )
+            else -> emptySet()
+        }
+        return allowed(type, mode) - stable
     }
 }

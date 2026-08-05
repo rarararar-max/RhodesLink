@@ -19,10 +19,9 @@ object SettingsMigration {
     private fun initializeContinuityOptimizations(target: SharedPreferences) {
         if (safeBoolean(target, CONTINUITY_OPTIMIZATIONS_INITIALIZED_KEY, false)) return
         val editor = target.edit()
-        // This is the first release of these player-facing switches. Start everyone enabled once,
-        // then preserve every later user choice across updates.
-        editor.putBoolean("dual_model", true)
-        editor.putBoolean("group_turn_planner_enabled", true)
+        // New installs opt in to these player-facing switches; preserve every later user choice.
+        editor.putBoolean("dual_model", false)
+        editor.putBoolean("group_turn_planner_enabled", false)
         editor.putBoolean(CONTINUITY_OPTIMIZATIONS_INITIALIZED_KEY, true)
         editor.apply()
     }

@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.shared.model.ChatMessage
+import com.rhodes.privatechat.shared.data.AiReplyPreview
 import com.rhodes.privatechat.shared.model.ChatHistorySegment
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -226,11 +227,5 @@ private fun historyPreview(msg: ChatMessage): String {
         } catch (_: Exception) { "[图片]" }
     }
     if (msg.type != "ai_json") return msg.content
-    return Regex("\\\"(?:content|message|dialogue)\\\"\\s*:\\s*\\\"([^\\\"]{1,120})\\\"")
-        .findAll(msg.content)
-        .lastOrNull()
-        ?.groupValues
-        ?.getOrNull(1)
-        ?.replace("\\n", " ")
-        ?: "[AI回复]"
+    return AiReplyPreview.extract(msg.content, 120) ?: "[AI回复]"
 }

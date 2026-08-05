@@ -12,12 +12,39 @@ import com.rhodes.privatechat.shared.network.providers
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.util.DebugLogger
 
+internal object CachePromptLayering {
+    private val placeholderPattern = Regex("\\{\\{([A-Z0-9_]+)\\}\\}")
+
+    fun build(
+        template: String,
+        replacements: Map<String, String>,
+        dynamicKeys: Set<String>,
+        render: (Map<String, String>) -> String
+    ): SharedUtils.CachePromptLayers {
+        val stableReplacements = replacements.mapValues { (key, value) ->
+            when {
+                key in setOf("USER_CONTENT", "USER_MESSAGE") -> ""
+                key in dynamicKeys -> "见本轮运行时上下文"
+                else -> value
+            }
+        }
+        val referencedKeys = placeholderPattern.findAll(template).map { it.groupValues[1] }.toSet()
+        val runtime = dynamicKeys.intersect(referencedKeys).sorted().mapNotNull { key ->
+            replacements[key]?.takeIf { it.isNotBlank() && key !in setOf("USER_CONTENT", "USER_MESSAGE") }
+                ?.let { "【$key】\n$it" }
+        }.joinToString("\n")
+        return SharedUtils.CachePromptLayers(render(stableReplacements), runtime.ifBlank { "【本轮运行时上下文】\n无" })
+    }
+}
+
 class SharedUtils(
     private val repository: ChatRepository,
     private val settings: SettingsRepository,
     val aiService: AIService,
     private val operatorsProvider: () -> List<com.rhodes.privatechat.shared.model.Operator> = { emptyList() }
 ) {
+    data class CachePromptLayers(val system: String, val runtimeContext: String)
+
     companion object {
         const val DEBUG = false
         private const val RECENT_SOCIAL_WINDOW_MS = 3L * 86_400_000L
@@ -88,7 +115,7 @@ class SharedUtils(
         logAiCall("→$logTag", prompt, "请求已发送，正在等待模型响应。", messages)
         val result = aiService.chat(
             settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl,
-            temperature = temp, maxOutputTokens = maxOutputTokens
+            temperature = temp, maxOutputTokens = maxOutputTokens, requestType = logTag
         )
         logAiCall("←$logTag", prompt, result.content, messages)
         return result.content
@@ -103,6 +130,7 @@ class SharedUtils(
         val result = aiService.chatWithRetry(
             settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl,
             temperature = temp, jsonMode = true, mode = mode,
+            requestType = logTag,
             trace = { stage, detail -> DebugLogger.trace("AI/$stage", detail) }
         )
         logAiCall("←$logTag", prompt, result.toString(), messages)
@@ -235,8 +263,20 @@ class SharedUtils(
         for ((key, value) in withLegacyPromptPlaceholders(replacements)) {
             result = result.replace("{{${key}}}", value)
         }
-        // Keep unknown tokens visible so custom-template typos remain diagnosable.
+        // Unknown tokens stay visible for custom-template compatibility. Do not inspect them here:
+        // template diagnostics must never block a chat request.
         return result
+    }
+
+    /**
+     * Keeps shipped prompt rules cacheable while retaining all volatile values in a trusted
+     * runtime block. Custom templates intentionally do not use this path because their layout
+     * is user-authored and must remain byte-for-byte compatible.
+     */
+    fun buildCachePromptLayers(template: String, replacements: Map<String, String>, dynamicKeys: Set<String>): CachePromptLayers {
+        return CachePromptLayering.build(template, replacements, dynamicKeys) { stableReplacements ->
+            compactTemplate(applyTemplate(template, stableReplacements))
+        }
     }
 
     fun withLegacyPromptPlaceholders(replacements: Map<String, String>): Map<String, String> {

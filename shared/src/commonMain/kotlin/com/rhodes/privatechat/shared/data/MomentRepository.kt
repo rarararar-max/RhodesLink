@@ -7,16 +7,93 @@ import kotlinx.coroutines.Dispatchers
 import app.cash.sqldelight.coroutines.asFlow
 import app.cash.sqldelight.coroutines.mapToList
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 class MomentRepository(private val wrapper: DatabaseWrapper) {
+    companion object {
+        // last_insert_rowid() is connection-scoped; serialize its insert/read pair across repositories.
+        private val insertIdMutex = Mutex()
+    }
 
     private val db: RhodesDatabase get() = wrapper.database
 
     // --- Moments ---
-    suspend fun insertMoment(moment: Moment): Long = withContext(Dispatchers.Default) {
-        db.momentsQueries.insertMoment(moment.operatorId, moment.operatorName, moment.content, if (moment.isUserPost) 1L else 0L, moment.mentionedOperatorIds, moment.likeCount.toLong(), moment.commentCount.toLong(), moment.createdAt)
-        db.momentsQueries.getLastInsertRowId().executeAsOne()
+    suspend fun insertMoment(moment: Moment): Long = insertIdMutex.withLock { withContext(Dispatchers.Default) {
+        db.transactionWithResult {
+            db.momentsQueries.insertMoment(moment.operatorId, moment.operatorName, moment.content, if (moment.isUserPost) 1L else 0L, moment.mentionedOperatorIds, moment.likeCount.toLong(), moment.commentCount.toLong(), moment.createdAt)
+            db.momentsQueries.getLastInsertRowId().executeAsOne()
+        }
+    }
+    }
+
+    /** Restores social records with newly assigned local IDs while preserving their relationships. */
+    suspend fun restoreSocialBackup(
+        moments: List<Moment>,
+        likes: List<MomentLike>,
+        comments: List<MomentComment>
+    ) = insertIdMutex.withLock { withContext(Dispatchers.Default) {
+        db.transaction {
+            val momentIds = mutableMapOf<Long, Long>()
+            moments.forEach { moment ->
+                db.momentsQueries.insertMoment(
+                    moment.operatorId,
+                    moment.operatorName,
+                    moment.content,
+                    if (moment.isUserPost) 1L else 0L,
+                    moment.mentionedOperatorIds,
+                    moment.likeCount.toLong(),
+                    moment.commentCount.toLong(),
+                    moment.createdAt
+                )
+                momentIds[moment.id] = db.momentsQueries.getLastInsertRowId().executeAsOne()
+            }
+
+            val commentIds = mutableMapOf<Long, Long>()
+            val pending = comments.sortedWith(compareBy<MomentComment> { it.createdAt }.thenBy { it.id }).toMutableList()
+            while (pending.isNotEmpty()) {
+                val nextIndex = pending.indexOfFirst { it.parentCommentId == 0L || it.parentCommentId in commentIds }
+                if (nextIndex < 0) break
+                val comment = pending.removeAt(nextIndex)
+                val momentId = momentIds[comment.momentId] ?: continue
+                val parentId = if (comment.parentCommentId == 0L) 0L else commentIds.getValue(comment.parentCommentId)
+                db.momentCommentsQueries.insertComment(
+                    momentId,
+                    comment.operatorId,
+                    comment.operatorName,
+                    comment.content,
+                    parentId,
+                    comment.replyToName,
+                    comment.createdAt,
+                    if (comment.isRead) 1L else 0L
+                )
+                commentIds[comment.id] = db.momentCommentsQueries.getLastInsertRowId().executeAsOne()
+            }
+
+            // Preserve independently useful comments if a partial backup omitted their parent.
+            pending.forEach { comment ->
+                val momentId = momentIds[comment.momentId] ?: return@forEach
+                db.momentCommentsQueries.insertComment(
+                    momentId,
+                    comment.operatorId,
+                    comment.operatorName,
+                    comment.content,
+                    0L,
+                    comment.replyToName,
+                    comment.createdAt,
+                    if (comment.isRead) 1L else 0L
+                )
+            }
+
+            likes.forEach { like ->
+                val momentId = momentIds[like.momentId] ?: return@forEach
+                db.momentLikesQueries.insertLike(momentId, like.operatorId, like.operatorName, like.createdAt)
+            }
+            db.momentsQueries.backfillLikeCounts()
+            db.momentsQueries.backfillCommentCounts()
+        }
+    }
     }
 
     fun getAllMoments(): Flow<List<Moment>> =
@@ -56,9 +133,37 @@ class MomentRepository(private val wrapper: DatabaseWrapper) {
         db.momentLikesQueries.insertLike(like.momentId, like.operatorId, like.operatorName, like.createdAt)
     }
 
-    suspend fun insertComment(comment: MomentComment): Long = withContext(Dispatchers.Default) {
-        db.momentCommentsQueries.insertComment(comment.momentId, comment.operatorId, comment.operatorName, comment.content, comment.parentCommentId, comment.replyToName, comment.createdAt, if (comment.isRead) 1L else 0L)
-        db.momentCommentsQueries.getLastInsertRowId().executeAsOne()
+    /** Returns false when the moment disappeared before this asynchronous interaction could persist. */
+    suspend fun insertLikeIfMomentExists(like: MomentLike): Boolean = withContext(Dispatchers.Default) {
+        db.transactionWithResult {
+            if (db.momentsQueries.getMoment(like.momentId) { id, opId, opName, content, isUserPost, mentionedIds, likeCount, commentCount, createdAt -> id }.executeAsOneOrNull() == null) {
+                false
+            } else {
+                db.momentLikesQueries.insertLike(like.momentId, like.operatorId, like.operatorName, like.createdAt)
+                true
+            }
+        }
+    }
+
+    suspend fun insertComment(comment: MomentComment): Long = insertIdMutex.withLock { withContext(Dispatchers.Default) {
+        db.transactionWithResult {
+            db.momentCommentsQueries.insertComment(comment.momentId, comment.operatorId, comment.operatorName, comment.content, comment.parentCommentId, comment.replyToName, comment.createdAt, if (comment.isRead) 1L else 0L)
+            db.momentCommentsQueries.getLastInsertRowId().executeAsOne()
+        }
+    }
+    }
+
+    /** Atomically rejects delayed comments whose target moment has already expired or been deleted. */
+    suspend fun insertCommentIfMomentExists(comment: MomentComment): Long? = insertIdMutex.withLock { withContext(Dispatchers.Default) {
+        db.transactionWithResult {
+            if (db.momentsQueries.getMoment(comment.momentId) { id, opId, opName, content, isUserPost, mentionedIds, likeCount, commentCount, createdAt -> id }.executeAsOneOrNull() == null) {
+                null
+            } else {
+                db.momentCommentsQueries.insertComment(comment.momentId, comment.operatorId, comment.operatorName, comment.content, comment.parentCommentId, comment.replyToName, comment.createdAt, if (comment.isRead) 1L else 0L)
+                db.momentCommentsQueries.getLastInsertRowId().executeAsOne()
+            }
+        }
+    }
     }
 
     suspend fun getMaxCommentId(): Long? = withContext(Dispatchers.Default) {
@@ -80,6 +185,7 @@ class MomentRepository(private val wrapper: DatabaseWrapper) {
     suspend fun getCommentCount(momentId: Long): Int = withContext(Dispatchers.Default) { db.momentCommentsQueries.getCommentCount(momentId).executeAsOne().toInt() }
     suspend fun getLikeCount(momentId: Long): Int = withContext(Dispatchers.Default) { db.momentLikesQueries.getLikeCount(momentId).executeAsOne().toInt() }
     suspend fun backfillLikeCounts() = withContext(Dispatchers.Default) { db.momentsQueries.backfillLikeCounts() }
+    suspend fun backfillCommentCounts() = withContext(Dispatchers.Default) { db.momentsQueries.backfillCommentCounts() }
 
     suspend fun getLike(momentId: Long, operatorId: String): MomentLike? = withContext(Dispatchers.Default) {
         db.momentLikesQueries.getLike(momentId, operatorId) { id, mId, opId, opName, createdAt ->

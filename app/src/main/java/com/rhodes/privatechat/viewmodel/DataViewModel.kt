@@ -157,10 +157,11 @@ class DataViewModel(
             payload.messages.orEmpty().forEach { repository.restoreMessage(it.toEntity()) }
             payload.memories.orEmpty().forEach { repository.saveMemory(it) }
             payload.anchors.orEmpty().forEach { repository.saveAnchor(it) }
-            payload.moments.orEmpty().forEach { repository.insertMoment(it) }
-            payload.momentLikes.orEmpty().forEach { repository.insertLike(it) }
-            repository.backfillLikeCounts()
-            payload.momentComments.orEmpty().forEach { repository.insertComment(it) }
+            repository.restoreSocialBackup(
+                payload.moments.orEmpty(),
+                payload.momentLikes.orEmpty(),
+                payload.momentComments.orEmpty()
+            )
             payload.diaries.orEmpty().forEach { repository.insertDiary(it) }
             // V2 row IDs and vectors are local implementation details. Restore canonical items and rebuild vectors later.
             payload.memoryItems.orEmpty().forEach { repository.insertMemoryItem(it.copy(id = 0, vectorId = "")) }

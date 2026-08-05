@@ -105,6 +105,18 @@ fun PromptEditorScreen(
         else -> ""
     }
 
+    fun criticalPlaceholders(type: String, mode: String): Set<String> = when (type) {
+        "private" -> if (mode == "proactive") {
+            setOf("OPERATOR_PERSONA", "PROACTIVE_CONTEXT_MODE", "PROACTIVE_TRIGGER_CONTEXT")
+        } else {
+            setOf("USER_CONTENT", "OPERATOR_PERSONA")
+        }
+        "group" -> setOf("MEMBER_NAMES", "MEMBER_PROFILES")
+        "moment_comment" -> setOf("POST_CONTENT", "COMMENTER_PERSONA")
+        "diary" -> setOf("OPERATOR_PERSONA")
+        else -> emptySet()
+    }
+
     val key = currentKey()
     var textFieldValue by remember(key) {
         mutableStateOf(
@@ -247,6 +259,9 @@ fun PromptEditorScreen(
         "{{RECENT_DAILY_SUMMARY}}" to "动态可参考的近期每日摘要",
         "{{COMMENTER_NAME}}" to "评论者名称",
         "{{COMMENTER_PERSONA}}" to "评论者人设",
+        "{{COMMENTER_LOCATION}}" to "评论者当前地点（兼容字段，通常为空）",
+        "{{COMMENTER_STATE}}" to "评论者当前状态（兼容字段，通常为空）",
+        "{{COMMENTER_EMOTION}}" to "评论者当前情绪（兼容字段，通常为空）",
         "{{POST_AUTHOR_NAME}}" to "动态作者名称",
         "{{POST_AUTHOR_PERSONA}}" to "动态作者公开人设",
         "{{COMMENT_CONTEXT}}" to "当前评论区上下文",
@@ -379,6 +394,43 @@ fun PromptEditorScreen(
         Column(modifier = Modifier.weight(1f).imePadding()) {
         if (tabIndex < 6) {
             Column(modifier = Modifier.weight(1f).padding(12.dp)) {
+                val isCustom = viewModel.isPromptTemplateCustom(currentType(), currentMode())
+                val missingCritical = criticalPlaceholders(currentType(), currentMode())
+                    .filter { "{{$it}}" !in textFieldValue.text }
+                Card(colors = CardDefaults.cardColors(containerColor = Blue400.copy(alpha = 0.08f))) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(
+                            if (isCustom) "你正在使用自己的模板" else "你正在使用系统默认模板",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = TextPrimary
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            if (isCustom) {
+                                "你写的内容会按当前顺序直接发送给模型，不会被系统移动或重排。这样更符合你的调教预期；恢复默认后，才会重新使用系统的省流量优化模板。"
+                            } else {
+                                "系统默认模板已做连续聊天优化：固定规则会尽量复用，时间、记忆和本轮消息会按系统方式补充。想完全控制提示词顺序时，保存修改即可切换为自己的模板。"
+                            },
+                            fontSize = 11.sp,
+                            color = TextSecondary,
+                            lineHeight = 16.sp
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                if (missingCritical.isNotEmpty()) {
+                    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFFF9500).copy(alpha = 0.10f))) {
+                        Text(
+                            "提醒：当前模板没有 ${missingCritical.joinToString { "{{$it}}" }}。保存后相关信息可能不会传给模型，聊天效果可能变差。你仍可保存，但建议确认这是有意修改。",
+                            fontSize = 11.sp,
+                            color = TextSecondary,
+                            lineHeight = 16.sp,
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
                 if (tabIndex == 0) {
                     Card(colors = CardDefaults.cardColors(containerColor = Blue400.copy(alpha = 0.08f))) {
                         Column(Modifier.padding(12.dp)) {
@@ -535,7 +587,7 @@ fun PromptEditorScreen(
         AlertDialog(
             onDismissRequest = { showResetDialog = false },
             title = { Text("恢复默认模板", fontWeight = FontWeight.SemiBold, color = TextPrimary) },
-            text = { Text("确定要将「${resetLabel}」模板恢复为默认值吗？当前编辑的内容将会丢失。", fontSize = 14.sp, color = TextSecondary) },
+            text = { Text("确定要将「${resetLabel}」恢复为系统默认模板吗？你自己编辑过的内容会丢失。恢复后会重新使用系统的连续聊天优化模板。", fontSize = 14.sp, color = TextSecondary) },
             confirmButton = {
                 TextButton(onClick = {
                     viewModel.resetPromptTemplate(currentType(), currentMode())
@@ -559,7 +611,7 @@ fun PromptEditorScreen(
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     Text(
-                        "优先使用推荐占位符；标注“旧版兼容”的字段仅为旧模板保留，部分场景可能为空。私聊和群聊子标签页会根据所选模式独立加载和保存；未识别的占位符会原样保留在最终提示词中。",
+                        "每个模式都有独立模板。系统默认模板会优化连续聊天的流量和速度；一旦保存为自己的模板，系统会按你编辑的顺序完整使用，不会移动变量。{{USER_CONTENT}} 是私聊用户本轮消息，{{USER_MESSAGE}} 是群聊用户最新发言，建议保留。未识别的占位符会原样保留在最终提示词中。",
                         fontSize = 13.sp,
                         color = TextSecondary,
                         modifier = Modifier.padding(bottom = 8.dp)

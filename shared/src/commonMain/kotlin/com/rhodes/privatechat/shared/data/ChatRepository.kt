@@ -94,6 +94,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun updateMessageType(id: Long, type: String) = messages.updateMessageType(id, type)
     suspend fun updateMessageContentAndPreview(sessionId: String, id: Long, content: String, timestamp: Long) =
         messages.updateMessageContentAndPreview(sessionId, id, content, timestamp)
+    suspend fun repairAiSessionPreviews() = messages.repairAiSessionPreviews()
     suspend fun getDisplayEvents(sessionId: String) = messages.getDisplayEvents(sessionId)
     suspend fun addDisplayEventIfAbsent(sessionId: String, messageId: Long, segmentIndex: Int) =
         messages.addDisplayEventIfAbsent(sessionId, messageId, segmentIndex)
@@ -190,7 +191,17 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
         if (momentCutoff != null) {
             val momentIds = db.momentsQueries.getOldMomentIds(momentCutoff).executeAsList()
             momentIds.forEach { memoryV2.deleteBySource(MemorySourceKind.MOMENT, it.toString()) }
-            db.momentsQueries.deleteOldMoments(momentCutoff)
+            momentIds.forEach { momentId ->
+                db.momentCommentsQueries.getCommentIdsByMoment(momentId).executeAsList()
+                    .forEach { commentId -> memoryV2.deleteBySource(MemorySourceKind.MOMENT_COMMENT, commentId.toString()) }
+            }
+            db.transaction {
+                momentIds.forEach { momentId ->
+                    db.momentLikesQueries.deleteLikesByMoment(momentId)
+                    db.momentCommentsQueries.deleteCommentsByMoment(momentId)
+                }
+                db.momentsQueries.deleteOldMoments(momentCutoff)
+            }
         }
         if (commentCutoff != null) {
             val commentIds = db.momentCommentsQueries.getOldUserCommentIds(commentCutoff, userName).executeAsList()
@@ -299,6 +310,8 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun getSharedMemoriesForOperator(operatorId: String) = relationships.getSharedMemoriesForOperator(operatorId)
 
     suspend fun insertMoment(moment: Moment) = moments.insertMoment(moment)
+    suspend fun restoreSocialBackup(momentsToRestore: List<Moment>, likes: List<MomentLike>, comments: List<MomentComment>) =
+        moments.restoreSocialBackup(momentsToRestore, likes, comments)
     fun getAllMoments() = moments.getAllMoments()
     suspend fun getAllMomentsSync() = moments.getAllMomentsSync()
     suspend fun getAllLikesForBackup() = moments.getAllLikesForBackup()
@@ -306,7 +319,9 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     fun getLikesFlow(momentId: Long) = moments.getLikesFlow(momentId)
     fun getComments(momentId: Long) = moments.getComments(momentId)
     suspend fun insertLike(like: MomentLike) = moments.insertLike(like)
+    suspend fun insertLikeIfMomentExists(like: MomentLike) = moments.insertLikeIfMomentExists(like)
     suspend fun insertComment(comment: MomentComment) = moments.insertComment(comment)
+    suspend fun insertCommentIfMomentExists(comment: MomentComment) = moments.insertCommentIfMomentExists(comment)
     suspend fun getMaxCommentId() = moments.getMaxCommentId()
     suspend fun getCommentById(commentId: Long) = moments.getCommentById(commentId)
     suspend fun markCommentRead(id: Long) = moments.markCommentRead(id)
@@ -318,6 +333,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun getCommentCount(momentId: Long) = moments.getCommentCount(momentId)
     suspend fun getLikeCount(momentId: Long) = moments.getLikeCount(momentId)
     suspend fun backfillLikeCounts() = moments.backfillLikeCounts()
+    suspend fun backfillCommentCounts() = moments.backfillCommentCounts()
     suspend fun getLike(momentId: Long, operatorId: String) = moments.getLike(momentId, operatorId)
     suspend fun getMomentsPaged(limit: Int, offset: Int) = moments.getMomentsPaged(limit, offset)
     suspend fun getMomentsBefore(createdAt: Long, id: Long, limit: Int) = moments.getMomentsBefore(createdAt, id, limit)

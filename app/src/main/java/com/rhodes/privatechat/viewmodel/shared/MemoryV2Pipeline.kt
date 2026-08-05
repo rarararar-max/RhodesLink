@@ -82,7 +82,7 @@ class MemoryV2Pipeline(
                 outputCount = l1.size,
                 windowStart = messages.first().timestamp,
                 windowEnd = messages.last().timestamp,
-                promptVersion = "memory_v2_l1_v1",
+                promptVersion = "memory_v2_l1_v2",
                 createdAt = System.currentTimeMillis()
             ))
         }
@@ -129,7 +129,7 @@ class MemoryV2Pipeline(
                 outputCount = l1.size,
                 windowStart = messages.first().timestamp,
                 windowEnd = messages.last().timestamp,
-                promptVersion = "memory_v2_group_l1_v1",
+                promptVersion = "memory_v2_group_l1_v2",
                 createdAt = System.currentTimeMillis()
             ))
             // A message heard in the group becomes each present member's knowledge.  The group
@@ -194,7 +194,7 @@ class MemoryV2Pipeline(
                 outputCount = l1.size,
                 windowStart = moment.createdAt,
                 windowEnd = moment.createdAt,
-                promptVersion = "memory_v2_moment_l1_v1",
+                promptVersion = "memory_v2_moment_l1_v2",
                 createdAt = System.currentTimeMillis()
             ))
         }
@@ -231,7 +231,7 @@ class MemoryV2Pipeline(
                 outputCount = l1.size,
                 windowStart = comment.createdAt,
                 windowEnd = comment.createdAt,
-                promptVersion = "memory_v2_comment_l1_v1",
+                promptVersion = "memory_v2_comment_l1_v2",
                 createdAt = System.currentTimeMillis()
             ))
         }
@@ -271,15 +271,16 @@ class MemoryV2Pipeline(
         val l1Topic = pickPromotionTopic(l1Items, thresholdL1)
         if (l1Topic != null) {
             val selected = l1Topic.items
-            val prompt = buildLevelPrompt(MemoryV2PromptTemplates.L2, selected)
+            val messages = buildLevelMessages(MemoryV2PromptTemplates.L2, selected)
             val raw = withTimeout(50_000) {
                 aiService.chat(
                     settings.apiKey,
-                    listOf(AiMessage("system", prompt)),
+                    messages,
                     settings.provider,
                     settings.modelName,
                     settings.customUrl,
-                    temperature = settings.aiTemperature
+                    temperature = settings.aiTemperature,
+                    requestType = "MemoryL2"
                 ).content
             }
             val l2Items = parsePromotionItems(raw, ownerType, ownerId, MemoryLevel.L2, sourceKind, l1Topic.topicKey, selected)
@@ -295,7 +296,7 @@ class MemoryV2Pipeline(
                     outputCount = saved.size,
                     windowStart = selected.minOfOrNull { it.createdAt } ?: System.currentTimeMillis(),
                     windowEnd = selected.maxOfOrNull { it.createdAt } ?: System.currentTimeMillis(),
-                    promptVersion = "memory_v2_l2_v1",
+                    promptVersion = "memory_v2_l2_v2",
                     createdAt = System.currentTimeMillis()
                 ))
             }
@@ -306,15 +307,16 @@ class MemoryV2Pipeline(
         val l2Topic = pickPromotionTopic(l2Items, thresholdL2, requireStable = true)
         if (l2Topic != null) {
             val selected = l2Topic.items
-            val prompt = buildLevelPrompt(MemoryV2PromptTemplates.L3, selected)
+            val messages = buildLevelMessages(MemoryV2PromptTemplates.L3, selected)
             val raw = withTimeout(50_000) {
                 aiService.chat(
                     settings.apiKey,
-                    listOf(AiMessage("system", prompt)),
+                    messages,
                     settings.provider,
                     settings.modelName,
                     settings.customUrl,
-                    temperature = settings.aiTemperature
+                    temperature = settings.aiTemperature,
+                    requestType = "MemoryL3"
                 ).content
             }
             val l3Items = parsePromotionItems(raw, ownerType, ownerId, MemoryLevel.L3, sourceKind, l2Topic.topicKey, selected)
@@ -330,7 +332,7 @@ class MemoryV2Pipeline(
                     outputCount = saved.size,
                     windowStart = selected.minOfOrNull { it.createdAt } ?: System.currentTimeMillis(),
                     windowEnd = selected.maxOfOrNull { it.createdAt } ?: System.currentTimeMillis(),
-                    promptVersion = "memory_v2_l3_v1",
+                    promptVersion = "memory_v2_l3_v2",
                     createdAt = System.currentTimeMillis()
                 ))
             }
@@ -638,30 +640,38 @@ class MemoryV2Pipeline(
         sessionId: String,
         operatorName: String
     ): List<MemoryItem> {
-        val prompt = MemoryV2PromptTemplates.getL1(sourceKind.name) + "\n系统提供的当前昵称：${userNicknameProvider()}\n干员：$operatorName\n内容：\n$text\n"
+        val messages = listOf(
+            AiMessage("system", MemoryV2PromptTemplates.getL1(sourceKind.name)),
+            AiMessage("user", "【提取资料】\n系统提供的当前昵称：${userNicknameProvider()}\n干员：$operatorName\n内容：\n$text")
+        )
         val raw = withTimeout(50_000) {
             aiService.chat(
                 settings.apiKey,
-                listOf(AiMessage("system", prompt)),
+                messages,
                 settings.provider,
                 settings.modelName,
                 settings.customUrl,
-                temperature = settings.aiTemperature
+                temperature = settings.aiTemperature,
+                requestType = "MemoryL1_${sourceKind.name}"
             ).content
         }
         return parseMemoryItems(raw, ownerType, ownerId, MemoryLevel.L1, sourceKind, sourceRefId, sessionId)
     }
 
     private suspend fun extractGroupL1(groupId: String, groupName: String, text: String, sourceRefId: String): List<MemoryItem> {
-        val prompt = MemoryV2PromptTemplates.getL1("GROUP_CHAT") + "\n系统提供的当前昵称：${userNicknameProvider()}\n群聊：$groupName\n内容：\n$text\n"
+        val messages = listOf(
+            AiMessage("system", MemoryV2PromptTemplates.getL1("GROUP_CHAT")),
+            AiMessage("user", "【提取资料】\n系统提供的当前昵称：${userNicknameProvider()}\n群聊：$groupName\n内容：\n$text")
+        )
         val raw = withTimeout(50_000) {
             aiService.chat(
                 settings.apiKey,
-                listOf(AiMessage("system", prompt)),
+                messages,
                 settings.provider,
                 settings.modelName,
                 settings.customUrl,
-                temperature = settings.aiTemperature
+                temperature = settings.aiTemperature,
+                requestType = "MemoryL1_GROUP_CHAT"
             ).content
         }
         return parseMemoryItems(raw, "group", groupId, MemoryLevel.L1, MemorySourceKind.GROUP_CHAT, sourceRefId, groupId)
@@ -718,9 +728,10 @@ class MemoryV2Pipeline(
         return "[$time] ${comment.operatorName}评论动态#$momentId：${comment.content.take(240)}"
     }
 
-    private fun buildLevelPrompt(base: String, items: List<MemoryItem>): String {
-        return "$base\n输入内容：\n${json.encodeToString(ListSerializer(MemoryItem.serializer()), items)}"
-    }
+    private fun buildLevelMessages(base: String, items: List<MemoryItem>): List<AiMessage> = listOf(
+        AiMessage("system", base),
+        AiMessage("user", "【待合并记忆 JSON】\n${json.encodeToString(ListSerializer(MemoryItem.serializer()), items)}")
+    )
 
     private fun parseMemoryItems(raw: String, ownerType: String, ownerId: String, level: MemoryLevel, sourceKind: MemorySourceKind, sourceRefId: String = "", sessionId: String = ""): List<MemoryItem> {
         return try {

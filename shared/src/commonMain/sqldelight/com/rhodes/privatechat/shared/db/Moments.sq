@@ -33,7 +33,7 @@ countMomentsByOperatorSince:
 SELECT COUNT(*) FROM moments WHERE operatorId = ? AND createdAt >= ? AND isUserPost = 0;
 
 insertMoment:
-INSERT OR REPLACE INTO moments(operatorId, operatorName, content, isUserPost, mentionedOperatorIds, likeCount, commentCount, createdAt)
+INSERT INTO moments(operatorId, operatorName, content, isUserPost, mentionedOperatorIds, likeCount, commentCount, createdAt)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 
 updateLikeCount:
@@ -60,3 +60,7 @@ SELECT MAX(id) FROM moments;
 backfillLikeCounts:
 UPDATE moments
 SET likeCount = (SELECT COUNT(*) FROM moment_likes WHERE moment_likes.momentId = moments.id);
+
+backfillCommentCounts:
+UPDATE moments
+SET commentCount = (SELECT COUNT(*) FROM moment_comments WHERE moment_comments.momentId = moments.id);

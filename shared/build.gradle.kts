@@ -43,6 +43,7 @@ kotlin {
         androidMain.dependencies {
             implementation(libs.ktor.client.okhttp)
             implementation(libs.sqldelight.android)
+            implementation(libs.androidx.security.crypto)
         }
     }
 }

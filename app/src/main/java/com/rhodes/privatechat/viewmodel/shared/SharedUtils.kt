@@ -122,6 +122,7 @@ class SharedUtils(
                 temperature = temp, maxOutputTokens = maxOutputTokens, requestType = logTag
             )
             DebugLogger.log("AI/$logTag/响应", "模型请求成功\n耗时=${startedAt.elapsedNow().inWholeMilliseconds}ms\n输入Token=${result.inputTokens}\n输出Token=${result.outputTokens}\n输出字符=${result.content.length}")
+            logDeepSeekReasoning(logTag, result)
             logAiCall("←$logTag", prompt, result.content, messages)
             result.content
         } catch (e: Exception) {
@@ -283,6 +284,20 @@ class SharedUtils(
         // Unknown tokens stay visible for custom-template compatibility. Do not inspect them here:
         // template diagnostics must never block a chat request.
         return result
+    }
+
+    private fun logDeepSeekReasoning(logTag: String, result: AIService.ChatResult) {
+        if (settings.provider != "deepseek") return
+        val reasoning = result.reasoningContent.orEmpty()
+        DebugLogger.log(
+            "AI/$logTag/思维链状态",
+            "请求 thinking.type=${if (result.thinkingDisabled) "disabled" else "未显式设置"}\n" +
+                "响应 reasoning_content_present=${reasoning.isNotBlank()}\n" +
+                "reasoning_content_chars=${reasoning.length}",
+        )
+        if (reasoning.isNotBlank()) {
+            DebugLogger.trace("AI/$logTag/思维链", "【DeepSeek reasoning_content】\n$reasoning")
+        }
     }
 
     /**

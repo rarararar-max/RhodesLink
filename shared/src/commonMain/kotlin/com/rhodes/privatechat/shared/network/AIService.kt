@@ -283,7 +283,13 @@ class AIService(private val client: HttpClient = createHttpClient()) {
 
     // --- Non-streaming chat (primary) ---
 
-    data class ChatResult(val content: String, val inputTokens: Int = 0, val outputTokens: Int = 0)
+    data class ChatResult(
+        val content: String,
+        val inputTokens: Int = 0,
+        val outputTokens: Int = 0,
+        val reasoningContent: String? = null,
+        val thinkingDisabled: Boolean = false,
+    )
 
     /**
      * Emits request-shape diagnostics without logging prompts or generated content. The system
@@ -355,7 +361,9 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                 // DeepSeek V4 Flash can emit whitespace-only completions when API JSON mode is combined
                 // with a long structured roleplay prompt. The prompt and local parser already enforce JSON.
                 response_format = if (jsonMode && supportsJsonMode(config.id) && config.id != "deepseek") ResponseFormat("json_object") else null,
-                thinking = null
+                // DeepSeek enables thinking by default. Always opt out so response latency,
+                // temperature behavior, and cost remain consistent with normal chat.
+                thinking = if (config.id == "deepseek") ThinkingParam("disabled") else null
             )
             val response: HttpResponse = client.post(url) {
                 contentType(ContentType.Application.Json)
@@ -388,7 +396,13 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                 requestType = requestType,
                 outcome = if (content.isBlank()) "empty" else "success"
             )
-            return ChatResult(content, inputTokens, outputTokens)
+            return ChatResult(
+                content = content,
+                inputTokens = inputTokens,
+                outputTokens = outputTokens,
+                reasoningContent = msg?.reasoningContent,
+                thinkingDisabled = config.id == "deepseek",
+            )
         }
 
         if (config.id == "anthropic") {
@@ -638,7 +652,8 @@ class AIService(private val client: HttpClient = createHttpClient()) {
             model = model,
             messages = messages,
             stream = true,
-            temperature = temperature
+            temperature = temperature,
+            thinking = if (config.id == "deepseek") ThinkingParam("disabled") else null
         )
 
         var finalUrl = url

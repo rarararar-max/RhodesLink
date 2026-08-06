@@ -58,6 +58,16 @@ class MemoryV2Pipeline(
                 temperature = settings.aiTemperature, requestType = requestType
             )
             DebugLogger.log("AI/$requestType/响应", "记忆模型请求成功\n耗时=${startedAt.elapsedNow().inWholeMilliseconds}ms\n输入Token=${result.inputTokens}\n输出Token=${result.outputTokens}\n输出字符=${result.content.length}")
+            if (settings.provider == "deepseek") {
+                val reasoning = result.reasoningContent.orEmpty()
+                DebugLogger.log(
+                    "AI/$requestType/思维链状态",
+                    "请求 thinking.type=${if (result.thinkingDisabled) "disabled" else "未显式设置"}\n" +
+                        "响应 reasoning_content_present=${reasoning.isNotBlank()}\n" +
+                        "reasoning_content_chars=${reasoning.length}",
+                )
+                if (reasoning.isNotBlank()) DebugLogger.trace("AI/$requestType/思维链", "【DeepSeek reasoning_content】\n$reasoning")
+            }
             DebugLogger.trace("AI/←$requestType", result.content)
             result.content
         } catch (e: Exception) {

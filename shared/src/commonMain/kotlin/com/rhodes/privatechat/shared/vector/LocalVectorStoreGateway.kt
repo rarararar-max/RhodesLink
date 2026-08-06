@@ -93,10 +93,12 @@ class LocalVectorStoreGateway(
         return filtered
             .mapNotNull { row ->
                 val embedding = runCatching { json.decodeFromString<List<Double>>(row.embeddingJson) }.getOrDefault(emptyList())
-                val score = if (request.queryEmbedding.isNotEmpty() && embedding.isNotEmpty()) {
+                val score = if (request.queryEmbedding.isNotEmpty() && embedding.isNotEmpty() && request.queryEmbedding.size == embedding.size) {
                     cosineSimilarity(request.queryEmbedding, embedding)
-                } else {
+                } else if (request.queryEmbedding.isEmpty() || embedding.isEmpty()) {
                     keywordScore(request.query, row.content) + row.importance * 0.05
+                } else {
+                    return@mapNotNull null
                 }
                 if (score < request.minScore) return@mapNotNull null
                 VectorMemory(
@@ -165,7 +167,8 @@ class LocalVectorStoreGateway(
     }
 
     private fun cosineSimilarity(a: List<Double>, b: List<Double>): Double {
-        val size = minOf(a.size, b.size)
+        if (a.size != b.size) return 0.0
+        val size = a.size
         if (size == 0) return 0.0
         var dot = 0.0
         var normA = 0.0

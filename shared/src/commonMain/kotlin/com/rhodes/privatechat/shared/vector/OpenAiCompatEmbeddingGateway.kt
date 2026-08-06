@@ -22,7 +22,9 @@ class OpenAiCompatEmbeddingGateway(
             contentType(ContentType.Application.Json)
             setBody(EmbeddingRequest(input = text, model = modelName))
         }.body<OpenAiEmbeddingResponse>()
-        return response.data.firstOrNull()?.embedding ?: emptyList()
+        return response.data.firstOrNull()?.embedding
+            ?.takeIf { it.isNotEmpty() && it.all(Double::isFinite) }
+            ?: throw IllegalStateException("Embedding API 未返回有效向量")
     }
 }
 

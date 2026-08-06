@@ -135,6 +135,10 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = getBoolean("debug_log_enabled", false)
         set(value) = putBoolean("debug_log_enabled", value)
 
+    var debugLogPayloadsEnabled: Boolean
+        get() = getBoolean("debug_log_payloads_enabled", false)
+        set(value) = putBoolean("debug_log_payloads_enabled", value)
+
     var messageCounter: Int
         get() = getInt("msg_counter", 0)
         set(value) = putInt("msg_counter", value)
@@ -281,7 +285,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
             "PRIVATE_CHAT", "GROUP_CHAT", "MOMENT", "MOMENT_COMMENT", "DIARY", "MANUAL_MEMORY", "RELATIONSHIP" -> true
             else -> false
         }
-        "group_chat" -> source in setOf("GROUP_CHAT", "MOMENT", "MOMENT_COMMENT", "MANUAL_MEMORY")
+        "group_chat" -> source in setOf("GROUP_CHAT", "MOMENT", "MOMENT_COMMENT")
         "moment" -> source in setOf("GROUP_CHAT", "MOMENT", "MOMENT_COMMENT", "DIARY", "MANUAL_MEMORY")
         "comment" -> source in setOf("GROUP_CHAT", "MOMENT", "MOMENT_COMMENT", "MANUAL_MEMORY")
         "diary" -> source in setOf("PRIVATE_CHAT", "GROUP_CHAT", "MOMENT", "MOMENT_COMMENT", "DIARY", "MANUAL_MEMORY", "RELATIONSHIP")

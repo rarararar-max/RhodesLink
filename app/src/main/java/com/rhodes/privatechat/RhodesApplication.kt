@@ -2,7 +2,6 @@ package com.rhodes.privatechat
 
 import android.app.Application
 import android.content.Context
-import android.content.pm.ApplicationInfo
 import com.rhodes.privatechat.di.appModule
 import com.rhodes.privatechat.settings.SettingsMigration
 import com.rhodes.privatechat.automation.DailyContentScheduler
@@ -25,11 +24,6 @@ class RhodesApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         AndroidSettingsFactory.init(this)
-        val debugRequested = getSharedPreferences("rhodes_settings", Context.MODE_PRIVATE)
-            .getBoolean("debug_log_enabled", false)
-        val isDebuggable = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
-        DebugLogger.enabled = isDebuggable && debugRequested
-        DebugLogger.allowSensitiveTrace = isDebuggable
         SettingsMigration.migrateIfNeeded(this)
         
         // 版本升级后清除导航栈状态，防止旧版序列化数据导致新版崩溃
@@ -42,10 +36,14 @@ class RhodesApplication : Application() {
             DailyContentScheduler.schedulePlanner(this@RhodesApplication)
         }
         val repository: ChatRepository = org.koin.java.KoinJavaComponent.get(ChatRepository::class.java)
+        val settings: SettingsRepository = org.koin.java.KoinJavaComponent.get(SettingsRepository::class.java)
+        DebugLogger.enabled = settings.debugLogEnabled
+        DebugLogger.allowSensitiveTrace = settings.debugLogEnabled && settings.debugLogPayloadsEnabled
+        DebugLogger.log("Debug/Startup", "调试日志已启动 | 完整模型内容=${if (DebugLogger.allowSensitiveTrace) "开启" else "关闭"}")
         GroupAutoChatScheduler.reconcile(
             this,
             repository,
-            org.koin.java.KoinJavaComponent.get(SettingsRepository::class.java)
+            settings
         )
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             repository.repairAiSessionPreviews()

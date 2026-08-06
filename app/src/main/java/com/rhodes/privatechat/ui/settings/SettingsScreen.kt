@@ -122,7 +122,9 @@ fun SettingsScreen(
             WechatListGroup {
                 DebugLogItem(enabled = settings.debugLogEnabled, onEnabledChange = {
                     settings.debugLogEnabled = it
+                    if (it) settings.debugLogPayloadsEnabled = true
                     com.rhodes.privatechat.util.DebugLogger.enabled = it
+                    com.rhodes.privatechat.util.DebugLogger.allowSensitiveTrace = it && settings.debugLogPayloadsEnabled
                 }, onClick = onDebugLog)
             }
         }
@@ -137,7 +139,7 @@ private fun DebugLogItem(enabled: Boolean, onEnabledChange: (Boolean) -> Unit, o
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text("调试日志", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
-                Text(if (enabled) "已开启：记录完整模型请求与返回" else "关闭：不保留模型内容", fontSize = 12.sp, color = TextSecondary)
+                Text(if (enabled) "已开启：可在详情中查看模型请求、返回和错误" else "关闭：不保留调试信息", fontSize = 12.sp, color = TextSecondary)
             }
             Switch(checked = enabled, onCheckedChange = onEnabledChange, colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Primary))
         }

@@ -77,6 +77,13 @@ object DatabaseCompatibility {
         ensureMahjongSavesTable(db)
         ensureOperatorsCompatibility(db)
         db.execSQL("""
+            CREATE TABLE IF NOT EXISTS daily_deliveries (
+                deliveryId TEXT NOT NULL PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'pending',
+                updatedAt INTEGER NOT NULL DEFAULT 0
+            )
+        """.trimIndent())
+        db.execSQL("""
             CREATE TABLE IF NOT EXISTS chat_display_events (
                 messageId INTEGER NOT NULL,
                 segmentIndex INTEGER NOT NULL DEFAULT -1,
@@ -109,6 +116,44 @@ object DatabaseCompatibility {
             """.trimIndent(),
             columns = memoryAnchorCompatibilityColumns
         )
+        ensureColumns(
+            db = db,
+            table = "memory_source_queue",
+            createSql = """
+                CREATE TABLE IF NOT EXISTS memory_source_queue (
+                    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    sourceKind TEXT NOT NULL, ownerType TEXT NOT NULL, ownerId TEXT NOT NULL,
+                    sourceRefId TEXT NOT NULL, contentText TEXT NOT NULL, timestamp INTEGER NOT NULL DEFAULT 0,
+                    processedL1 INTEGER NOT NULL DEFAULT 0, processedVector INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'pending', retryCount INTEGER NOT NULL DEFAULT 0,
+                    nextRetryAt INTEGER NOT NULL DEFAULT 0, leaseUntil INTEGER NOT NULL DEFAULT 0,
+                    claimToken TEXT NOT NULL DEFAULT '', lastError TEXT NOT NULL DEFAULT '', createdAt INTEGER NOT NULL DEFAULT 0
+                )
+            """.trimIndent(),
+            columns = listOf(
+                "status" to "TEXT NOT NULL DEFAULT 'pending'", "retryCount" to "INTEGER NOT NULL DEFAULT 0",
+                "nextRetryAt" to "INTEGER NOT NULL DEFAULT 0", "leaseUntil" to "INTEGER NOT NULL DEFAULT 0",
+                "claimToken" to "TEXT NOT NULL DEFAULT ''", "lastError" to "TEXT NOT NULL DEFAULT ''"
+            )
+        )
+        db.execSQL("""
+            DELETE FROM memory_source_queue
+            AS duplicate
+            WHERE EXISTS (
+                SELECT 1 FROM memory_source_queue AS preferred
+                WHERE preferred.sourceKind = duplicate.sourceKind
+                  AND preferred.ownerType = duplicate.ownerType
+                  AND preferred.ownerId = duplicate.ownerId
+                  AND preferred.sourceRefId = duplicate.sourceRefId
+                  AND preferred.contentText = duplicate.contentText
+                  AND preferred.timestamp = duplicate.timestamp
+                  AND (
+                    preferred.processedL1 > duplicate.processedL1
+                    OR (preferred.processedL1 = duplicate.processedL1 AND preferred.id < duplicate.id)
+                  )
+            )
+        """.trimIndent())
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS memory_source_queue_identity ON memory_source_queue(sourceKind, ownerType, ownerId, sourceRefId, contentText, timestamp)")
         ensureColumns(
             db = db,
             table = "memory_items",

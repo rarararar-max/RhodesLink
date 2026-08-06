@@ -179,7 +179,12 @@ class MomentRepository(private val wrapper: DatabaseWrapper) {
     suspend fun markCommentRead(id: Long) = withContext(Dispatchers.Default) { db.momentCommentsQueries.markCommentRead(id) }
     suspend fun markMomentCommentsReadForUser(momentId: Long, userName: String) = withContext(Dispatchers.Default) { db.momentCommentsQueries.markMomentCommentsReadForUser(momentId, userName) }
     suspend fun markAllCommentsRead(userName: String) = withContext(Dispatchers.Default) { db.momentCommentsQueries.markAllCommentsRead(userName) }
-    suspend fun deleteOldUserComments(cutoff: Long, userName: String) = withContext(Dispatchers.Default) { db.momentCommentsQueries.deleteOldUserComments(cutoff, userName) }
+    suspend fun deleteOldUserComments(cutoff: Long, userName: String) = withContext(Dispatchers.Default) {
+        db.transaction {
+            db.momentCommentsQueries.deleteOldUserComments(cutoff, userName)
+            db.momentsQueries.backfillCommentCounts()
+        }
+    }
     suspend fun updateLikeCount(momentId: Long, count: Int) = withContext(Dispatchers.Default) { db.momentsQueries.updateLikeCount(count.toLong(), momentId) }
     suspend fun updateCommentCount(momentId: Long, count: Int) = withContext(Dispatchers.Default) { db.momentsQueries.updateCommentCount(count.toLong(), momentId) }
     suspend fun getCommentCount(momentId: Long): Int = withContext(Dispatchers.Default) { db.momentCommentsQueries.getCommentCount(momentId).executeAsOne().toInt() }

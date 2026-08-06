@@ -16,7 +16,11 @@ import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.shared.vector.MemoryVectorService
 import com.rhodes.privatechat.shared.vector.VectorMemory
 import com.rhodes.privatechat.shared.vector.VectorSearchRequest
+import com.rhodes.privatechat.util.DebugLogger
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -31,6 +35,7 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.jsonPrimitive
+import kotlin.time.TimeSource
 
 class MemoryV2Pipeline(
     private val repository: ChatRepository,
@@ -40,6 +45,26 @@ class MemoryV2Pipeline(
     private val userNicknameProvider: () -> String,
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+
+    private suspend fun requestMemoryModel(messages: List<AiMessage>, requestType: String): String {
+        val startedAt = TimeSource.Monotonic.markNow()
+        DebugLogger.log("AI/$requestType/请求", "记忆模型请求开始\n厂商=${settings.provider}\n模型=${settings.modelName}\n消息数=${messages.size}\n输入字符=${messages.sumOf { it.content.length }}")
+        if (DebugLogger.allowSensitiveTrace) {
+            DebugLogger.trace("AI/→$requestType", messages.joinToString("\n\n") { "【${it.role}】\n${it.content}" })
+        }
+        return try {
+            val result = aiService.chat(
+                settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl,
+                temperature = settings.aiTemperature, requestType = requestType
+            )
+            DebugLogger.log("AI/$requestType/响应", "记忆模型请求成功\n耗时=${startedAt.elapsedNow().inWholeMilliseconds}ms\n输入Token=${result.inputTokens}\n输出Token=${result.outputTokens}\n输出字符=${result.content.length}")
+            DebugLogger.trace("AI/←$requestType", result.content)
+            result.content
+        } catch (e: Exception) {
+            DebugLogger.log("AI/$requestType/错误", "记忆模型请求失败\n耗时=${startedAt.elapsedNow().inWholeMilliseconds}ms\n异常=${e::class.simpleName}\n原因=${e.message ?: "未知错误"}")
+            throw e
+        }
+    }
 
     suspend fun ingestPrivateChat(sessionId: String, operatorId: String, operatorName: String, messages: List<ChatMessage>, currentRound: Int): Boolean {
         if (!settings.memoryV2Enabled || !settings.privateMemoryGenerationEnabled) return false
@@ -55,6 +80,11 @@ class MemoryV2Pipeline(
             createdAt = System.currentTimeMillis()
         )
         val sourceId = repository.insertMemorySource(source)
+        if (repository.isMemorySourceFinished(sourceId)) return true
+        val claimToken = sourceId.takeIf { it > 0 }?.let { repository.claimMemorySource(it, System.currentTimeMillis()) }
+            ?: return false
+        val leaseRenewal = launchLeaseRenewal(sourceId, claimToken)
+        kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]?.invokeOnCompletion { leaseRenewal.cancel() }
 
         val l1 = try {
             extractL1(
@@ -67,8 +97,9 @@ class MemoryV2Pipeline(
                 operatorName = operatorName
             )
         } catch (e: Exception) {
-            com.rhodes.privatechat.util.DebugLogger.log("MemoryV2", "私聊L1提取失败，将在后续消息时重试: ${e.message?.take(80)}")
-            if (sourceId > 0) repository.deleteMemorySource(sourceId)
+            com.rhodes.privatechat.util.DebugLogger.log("MemoryV2", "私聊L1提取失败，已保留队列等待重试: ${e.message?.take(80)}")
+            leaseRenewal.cancel()
+            repository.retryMemorySource(sourceId, claimToken, System.currentTimeMillis() + 60_000L, e.message?.take(160) ?: "提取失败")
             return false
         }
         if (l1.isNotEmpty()) {
@@ -86,10 +117,11 @@ class MemoryV2Pipeline(
                 createdAt = System.currentTimeMillis()
             ))
         }
-        if (sourceId > 0) repository.markMemorySourceProcessedL1(sourceId)
+        repository.completeMemorySource(sourceId, claimToken)
         if (settings.privateMemoryPromotionEnabled) {
             maybePromotePrivateMemory(operatorId, thresholdL1 = settings.memoryV2PromoteL1Threshold, thresholdL2 = settings.memoryV2PromoteL2Threshold)
         }
+        leaseRenewal.cancel()
         return true
     }
 
@@ -111,11 +143,17 @@ class MemoryV2Pipeline(
                 createdAt = System.currentTimeMillis()
             )
         )
+        if (repository.isMemorySourceFinished(sourceId)) return true
+        val claimToken = sourceId.takeIf { it > 0 }?.let { repository.claimMemorySource(it, System.currentTimeMillis()) }
+            ?: return false
+        val leaseRenewal = launchLeaseRenewal(sourceId, claimToken)
+        kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]?.invokeOnCompletion { leaseRenewal.cancel() }
         val l1 = try {
             extractGroupL1(groupId, groupName, sourceText, sourceRefId)
         } catch (e: Exception) {
-            com.rhodes.privatechat.util.DebugLogger.log("MemoryV2", "群聊L1提取失败，将在后续消息时重试: ${e.message?.take(80)}")
-            if (sourceId > 0) repository.deleteMemorySource(sourceId)
+            com.rhodes.privatechat.util.DebugLogger.log("MemoryV2", "群聊L1提取失败，已保留队列等待重试: ${e.message?.take(80)}")
+            leaseRenewal.cancel()
+            repository.retryMemorySource(sourceId, claimToken, System.currentTimeMillis() + 60_000L, e.message?.take(160) ?: "提取失败")
             return false
         }
         if (l1.isNotEmpty()) {
@@ -132,36 +170,13 @@ class MemoryV2Pipeline(
                 promptVersion = "memory_v2_group_l1_v2",
                 createdAt = System.currentTimeMillis()
             ))
-            // A message heard in the group becomes each present member's knowledge.  The group
-            // keeps its own shared record while every character receives an independently
-            // addressable copy for later private chat, moments, and comments.
-            val longTermShared = savedGroupItems.filter {
-                it.importance >= 70 && it.memoryType in setOf(
-                    "agreement_commitment", "care_reminder", "preference_expression",
-                    "evaluation_opinion", "self_cognition_statement"
-                )
-            }
-            if (settings.groupMemoryCopyToMembersEnabled) {
-                memberIds.distinct().filter { it.isNotBlank() }.forEach { memberId ->
-                    val personalItems = longTermShared.map { item ->
-                        item.copy(
-                            id = 0,
-                            ownerType = "operator",
-                            ownerId = memberId,
-                            sourceTarget = memberId,
-                            vectorId = "",
-                            createdAt = System.currentTimeMillis(),
-                            updatedAt = System.currentTimeMillis(),
-                        )
-                    }
-                    saveMemoryItems(personalItems)
-                }
-            }
+            copyGroupMemoriesToMembers(savedGroupItems, memberIds)
         }
-        if (sourceId > 0) repository.markMemorySourceProcessedL1(sourceId)
+        repository.completeMemorySource(sourceId, claimToken)
         if (settings.groupMemoryPromotionEnabled) {
             maybePromoteOwnerMemory("group", groupId, MemorySourceKind.GROUP_CHAT, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
         }
+        leaseRenewal.cancel()
         return true
     }
 
@@ -272,17 +287,7 @@ class MemoryV2Pipeline(
         if (l1Topic != null) {
             val selected = l1Topic.items
             val messages = buildLevelMessages(MemoryV2PromptTemplates.L2, selected)
-            val raw = withTimeout(50_000) {
-                aiService.chat(
-                    settings.apiKey,
-                    messages,
-                    settings.provider,
-                    settings.modelName,
-                    settings.customUrl,
-                    temperature = settings.aiTemperature,
-                    requestType = "MemoryL2"
-                ).content
-            }
+            val raw = withTimeout(50_000) { requestMemoryModel(messages, "MemoryL2") }
             val l2Items = parsePromotionItems(raw, ownerType, ownerId, MemoryLevel.L2, sourceKind, l1Topic.topicKey, selected)
             if (l2Items.isNotEmpty()) {
                 val saved = saveMemoryItems(l2Items)
@@ -308,17 +313,7 @@ class MemoryV2Pipeline(
         if (l2Topic != null) {
             val selected = l2Topic.items
             val messages = buildLevelMessages(MemoryV2PromptTemplates.L3, selected)
-            val raw = withTimeout(50_000) {
-                aiService.chat(
-                    settings.apiKey,
-                    messages,
-                    settings.provider,
-                    settings.modelName,
-                    settings.customUrl,
-                    temperature = settings.aiTemperature,
-                    requestType = "MemoryL3"
-                ).content
-            }
+            val raw = withTimeout(50_000) { requestMemoryModel(messages, "MemoryL3") }
             val l3Items = parsePromotionItems(raw, ownerType, ownerId, MemoryLevel.L3, sourceKind, l2Topic.topicKey, selected)
             if (l3Items.isNotEmpty()) {
                 val saved = saveMemoryItems(l3Items)
@@ -358,6 +353,29 @@ class MemoryV2Pipeline(
         return listOf(
             personal.takeIf { it.isNotBlank() },
         ).filterNotNull().joinToString("\n")
+    }
+
+    /** Stores image recognition as a normal L1 item so it follows source permissions and cleanup. */
+    suspend fun ingestVision(
+        ownerType: String,
+        ownerId: String,
+        sourceKind: MemorySourceKind,
+        sourceRefId: String,
+        content: String,
+        isPrivate: Boolean,
+    ) {
+        if (!settings.memoryV2Enabled || content.isBlank()) return
+        val now = System.currentTimeMillis()
+        val item = MemoryItem(
+            ownerType = ownerType, ownerId = ownerId, memoryLevel = MemoryLevel.L1,
+            memoryType = "event", sourceKind = sourceKind, sourceRefId = sourceRefId,
+            sessionId = sourceRefId.substringBefore(':').takeIf { it.isNotBlank() }.orEmpty(),
+            content = content.take(500), importance = 55,
+            privacy = if (isPrivate) "private" else "public",
+            topicKey = topicKey("vision", content), sourceTarget = ownerId,
+            createdAt = now, updatedAt = now, expiresAt = now + 30L * 86_400_000L,
+        )
+        saveMemoryItems(listOf(item))
     }
 
     /** Private chat prioritizes recent facts without letting long-term memories fill the candidate pool. */
@@ -590,22 +608,25 @@ class MemoryV2Pipeline(
             "deep" -> 700
             else -> settings.memoryRecallCandidateLimit
         }
-        val semantic = runCatching {
-            vectorService.search(
-                VectorSearchRequest(
-                    ownerType = ownerType,
-                    ownerId = ownerId,
-                    query = query,
-                    limit = maxOf(limitL1, limitL2, limitL3).coerceIn(2, 8),
-                    sourceTypes = listOf("memory_v2_l1", "memory_v2_l2", "memory_v2_l3", "manual_memory"),
-                    sourceKinds = allowedSources?.toList().orEmpty(),
+        suspend fun recallLevel(limit: Int, sourceTypes: List<String>): List<VectorMemory> {
+            if (limit <= 0) return emptyList()
+            return runCatching {
+                vectorService.search(VectorSearchRequest(
+                    ownerType = ownerType, ownerId = ownerId, query = query, limit = limit,
+                    sourceTypes = sourceTypes, sourceKinds = allowedSources?.toList().orEmpty(),
+                    candidateSourceType = sourceTypes.singleOrNull().orEmpty(),
                     minScore = if (settings.memoryRecallMode == "fast") 0.24 else 0.16,
-                    now = now,
-                    candidateLimit = candidateLimit,
-                     minCreatedAt = maxOf(minCreatedAt, if (settings.memoryRecallMode == "fast") now - 30L * 86_400_000L else 0L),
-                )
-            )
-        }.getOrDefault(emptyList())
+                    now = now, candidateLimit = candidateLimit,
+                    minCreatedAt = maxOf(minCreatedAt, if (settings.memoryRecallMode == "fast") now - 30L * 86_400_000L else 0L),
+                ))
+            }.getOrDefault(emptyList())
+        }
+        val semantic = buildList {
+            addAll(recallLevel(limitL1, listOf("memory_v2_l1")))
+            // Manual entries are user-authored durable knowledge and belong with L2 recall.
+            addAll(recallLevel(limitL2, listOf("memory_v2_l2", "manual_memory")))
+            addAll(recallLevel(limitL3, listOf("memory_v2_l3")))
+        }
         val semanticLines = semantic
             .distinctBy { normalizeForDedup("semantic", it.content) }
             .joinToString("\n") { "- ${it.content.take(180)}" }
@@ -644,18 +665,8 @@ class MemoryV2Pipeline(
             AiMessage("system", MemoryV2PromptTemplates.getL1(sourceKind.name)),
             AiMessage("user", "【提取资料】\n系统提供的当前昵称：${userNicknameProvider()}\n干员：$operatorName\n内容：\n$text")
         )
-        val raw = withTimeout(50_000) {
-            aiService.chat(
-                settings.apiKey,
-                messages,
-                settings.provider,
-                settings.modelName,
-                settings.customUrl,
-                temperature = settings.aiTemperature,
-                requestType = "MemoryL1_${sourceKind.name}"
-            ).content
-        }
-        return parseMemoryItems(raw, ownerType, ownerId, MemoryLevel.L1, sourceKind, sourceRefId, sessionId)
+        val raw = withTimeout(50_000) { requestMemoryModel(messages, "MemoryL1_${sourceKind.name}") }
+        return parseExtractedL1(raw, ownerType, ownerId, sourceKind, sourceRefId, sessionId)
     }
 
     private suspend fun extractGroupL1(groupId: String, groupName: String, text: String, sourceRefId: String): List<MemoryItem> {
@@ -663,18 +674,8 @@ class MemoryV2Pipeline(
             AiMessage("system", MemoryV2PromptTemplates.getL1("GROUP_CHAT")),
             AiMessage("user", "【提取资料】\n系统提供的当前昵称：${userNicknameProvider()}\n群聊：$groupName\n内容：\n$text")
         )
-        val raw = withTimeout(50_000) {
-            aiService.chat(
-                settings.apiKey,
-                messages,
-                settings.provider,
-                settings.modelName,
-                settings.customUrl,
-                temperature = settings.aiTemperature,
-                requestType = "MemoryL1_GROUP_CHAT"
-            ).content
-        }
-        return parseMemoryItems(raw, "group", groupId, MemoryLevel.L1, MemorySourceKind.GROUP_CHAT, sourceRefId, groupId)
+        val raw = withTimeout(50_000) { requestMemoryModel(messages, "MemoryL1_GROUP_CHAT") }
+        return parseExtractedL1(raw, "group", groupId, MemorySourceKind.GROUP_CHAT, sourceRefId, groupId)
     }
 
     private fun formatGroupMessage(groupName: String, msg: ChatMessage): String {
@@ -791,6 +792,117 @@ class MemoryV2Pipeline(
             }.distinctBy { normalizeForDedup(it.memoryType, it.content) }
         } catch (_: Exception) {
             emptyList()
+        }
+    }
+
+    /** A legal empty array means no durable fact; malformed or unusable output must be retried. */
+    private fun parseExtractedL1(
+        raw: String,
+        ownerType: String,
+        ownerId: String,
+        sourceKind: MemorySourceKind,
+        sourceRefId: String,
+        sessionId: String,
+    ): List<MemoryItem> {
+        val clean = aiService.cleanJson(raw)
+        val objects = try {
+            json.decodeFromString(ListSerializer(JsonObject.serializer()), clean)
+        } catch (e: Exception) {
+            throw IllegalStateException("记忆模型返回的 JSON 不是数组", e)
+        }
+        val parsed = parseMemoryItems(clean, ownerType, ownerId, MemoryLevel.L1, sourceKind, sourceRefId, sessionId)
+        if (objects.isNotEmpty() && parsed.isEmpty()) {
+            throw IllegalStateException("记忆模型返回了内容，但没有可用记忆项")
+        }
+        val discardedCount = objects.size - parsed.size
+        if (discardedCount > 0) {
+            DebugLogger.log("MemoryV2", "L1提取部分降级：总项=${objects.size}，有效=${parsed.size}，丢弃=$discardedCount")
+        }
+        if (objects.size >= 2 && parsed.size * 2 <= objects.size) {
+            throw IllegalStateException("记忆模型有效项不足一半，等待重试（有效=${parsed.size}/${objects.size}）")
+        }
+        return parsed
+    }
+
+    /** Replays unprocessed private/group source windows after transient model or network failures. */
+    suspend fun retryPendingSources(limit: Int = 20): Int {
+        if (!settings.memoryV2Enabled) return 0
+        var succeeded = 0
+        val now = System.currentTimeMillis()
+        repository.claimPendingMemorySources(now, limit).forEach { (source, token) -> coroutineScope {
+            val leaseRenewal = launch {
+                while (true) {
+                    delay(60_000L)
+                    repository.renewMemorySourceLease(source.id, token, System.currentTimeMillis())
+                }
+            }
+            try {
+            val completed = runCatching {
+                when (source.sourceKind) {
+                    MemorySourceKind.PRIVATE_CHAT -> {
+                        val operator = repository.getOperator(source.ownerId) ?: return@runCatching false
+                        val l1 = extractL1(source.sourceKind, source.contentText, source.ownerType, source.ownerId, source.sourceRefId, source.sourceRefId, operator.name)
+                        if (l1.isNotEmpty()) saveMemoryItems(l1)
+                        if (settings.privateMemoryPromotionEnabled) maybePromotePrivateMemory(source.ownerId, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
+                        true
+                    }
+                    MemorySourceKind.GROUP_CHAT -> {
+                        val group = repository.getSession(source.ownerId) ?: return@runCatching false
+                        val l1 = extractGroupL1(source.ownerId, group.operatorName, source.contentText, source.sourceRefId)
+                        if (l1.isNotEmpty()) {
+                            val saved = saveMemoryItems(l1)
+                            val memberIds = group.members.split(',').map { it.trim() }.filter { it.isNotBlank() }
+                            copyGroupMemoriesToMembers(saved, memberIds)
+                        }
+                        if (settings.groupMemoryPromotionEnabled) maybePromoteOwnerMemory("group", source.ownerId, source.sourceKind, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
+                        true
+                    }
+                    else -> false
+                }
+            }.getOrElse { error ->
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                val reason = error.message?.take(160) ?: "未知错误"
+                val retryDelay = (60_000L * (1L shl source.retryCount.coerceAtMost(5))).coerceAtMost(60 * 60_000L)
+                repository.retryMemorySource(source.id, token, System.currentTimeMillis() + retryDelay, reason)
+                DebugLogger.log("MemoryV2", "记忆队列重试失败 id=${source.id}: $reason")
+                false
+            }
+            if (completed) {
+                repository.completeMemorySource(source.id, token)
+                succeeded++
+            } else {
+                repository.skipMemorySource(source.id, token, "来源已删除或类型不支持")
+            }
+            } finally {
+                leaseRenewal.cancel()
+            }
+        } }
+        return succeeded
+    }
+
+    private suspend fun copyGroupMemoriesToMembers(items: List<MemoryItem>, memberIds: List<String>) {
+        if (!settings.groupMemoryCopyToMembersEnabled) return
+        val longTermShared = items.filter {
+            it.importance >= 70 && it.memoryType in setOf(
+                "agreement_commitment", "care_reminder", "preference_expression",
+                "evaluation_opinion", "self_cognition_statement"
+            )
+        }
+        memberIds.distinct().filter { it.isNotBlank() }.forEach { memberId ->
+            saveMemoryItems(longTermShared.map { item ->
+                item.copy(
+                    id = 0, ownerType = "operator", ownerId = memberId,
+                    sourceTarget = memberId, vectorId = "",
+                    createdAt = System.currentTimeMillis(), updatedAt = System.currentTimeMillis(),
+                )
+            })
+        }
+    }
+
+    private fun launchLeaseRenewal(sourceId: Long, token: String): kotlinx.coroutines.Job = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).launch {
+        while (true) {
+            delay(60_000L)
+            repository.renewMemorySourceLease(sourceId, token, System.currentTimeMillis())
         }
     }
 
@@ -994,7 +1106,7 @@ class MemoryV2Pipeline(
 
     private fun topicThreshold(baseThreshold: Int, values: List<MemoryItem>): Int {
         val strong = values.any { it.importance >= 80 || it.unmetNeed || it.memoryType == "agreement_commitment" || it.memoryType == "care_reminder" }
-        return if (strong) settings.memoryV2ImportantPromotionThreshold else (baseThreshold / 3).coerceIn(3, baseThreshold)
+        return if (strong) settings.memoryV2ImportantPromotionThreshold else baseThreshold
     }
 
     private fun promotionItemScore(item: MemoryItem): Long {

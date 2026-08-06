@@ -135,7 +135,9 @@ class MainViewModel(
     private val memoryVectorService: MemoryVectorService? = try { org.koin.core.context.GlobalContext.get().get() } catch (_: Exception) { null }
     private val memoryV2Pipeline = MemoryV2Pipeline(repository, settings, sharedUtils.aiService, memoryVectorService) { getUserProfile().nickname }
     private val visionGateway: com.rhodes.privatechat.shared.modelgateway.VisionGateway? = try { org.koin.core.context.GlobalContext.get().get() } catch (_: Exception) { null }
-    val dataViewModel = DataViewModel(repository, settings, viewModelScope)
+    val dataViewModel = DataViewModel(repository, settings, viewModelScope) {
+        rebuildImportedMemoryIndexes()
+    }
     val mahjongViewModel = MahjongViewModel(repository, settings, sharedUtils, viewModelScope) { appState.operators.value }
     val sessionViewModel = SessionViewModel(repository, settings, appState, viewModelScope)
     val operatorViewModel = OperatorViewModel(
@@ -180,6 +182,14 @@ class MainViewModel(
         visionGateway,
         { title, content, sessionId -> com.rhodes.privatechat.notification.RhodesNotificationCenter.show(application, title, content, sessionId, isGroup = true) }
     )
+    data class MemoryIndexHealth(val eligible: Int, val indexed: Int, val pending: Int, val stale: Int)
+    private val memoryIndexMaintenanceMutex = Mutex()
+
+    fun resumePrivateReply(sessionId: String, messageId: Long, onComplete: (Boolean) -> Unit) =
+        chatViewModel.resumePersistedReply(sessionId, messageId, onComplete)
+
+    fun resumeGroupReply(groupId: String, messageId: Long, onComplete: (Boolean) -> Unit) =
+        groupChatViewModel.resumePersistedReply(groupId, messageId, onComplete)
 
     private val _momentGenerateStatus: MutableStateFlow<MomentGenerateStatus> get() = _globalMomentStatus
     val momentGenerateStatus: StateFlow<MomentGenerateStatus> = _momentGenerateStatus.asStateFlow()
@@ -276,18 +286,12 @@ class MainViewModel(
     fun applyTemplate(template: String, replacements: Map<String, String>): String =
         sharedUtils.applyTemplate(template, replacements)
 
-    /**
-     * Shipped social-content templates keep volatile context out of the cacheable system prefix.
-     * Custom templates retain their original system-only layout for byte-for-byte compatibility.
-     */
+    /** Keeps volatile content out of system for both shipped and user-authored templates. */
     private fun buildContentGenerationMessages(
         type: String,
         template: String,
         replacements: Map<String, String>
     ): List<AiMessage> {
-        if (isPromptTemplateCustom(type)) {
-            return listOf(AiMessage("system", applyTemplate(template, replacements)))
-        }
         val layers = sharedUtils.buildCachePromptLayers(
             template = template,
             replacements = replacements,
@@ -319,7 +323,8 @@ class MainViewModel(
     }
 
     override fun onCleared() {
-        groupChatViewModel.clear()
+        // Group sends own an application-level scope so a reply survives the group route being
+        // removed. Cancelling it here made returning to the chat home abort an in-flight reply.
         super.onCleared()
     }
 
@@ -375,18 +380,28 @@ class MainViewModel(
         viewModelScope.launch { recoverDispatches() }
         // 每日龙门币刷新（麻将干员保底）
         viewModelScope.launch { refreshDailyLmb() }
-        viewModelScope.launch { recoverMissingMemoryIndexes() }
+        viewModelScope.launch {
+            recoverMissingMemoryIndexes()
+            memoryV2Pipeline.retryPendingSources()
+        }
         // 每天执行一次自动保留期清理；启动时仍会先执行一次。
         viewModelScope.launch {
             while (true) {
                 dataViewModel.cleanupAllExpired()
                 try { repository.cleanupExpiredData() } catch (_: Exception) { }
                 recoverMissingMemoryIndexes(limit = 50)
+                memoryV2Pipeline.retryPendingSources(limit = 20)
                 // 每个干员保留最多 200 条锚点
                 for (op in _operators.value) {
                     try { repository.enforceAnchorRetain(op.id, 200) } catch (_: Exception) { }
                 }
                 delay(24 * 60 * 60 * 1000L)
+            }
+        }
+        viewModelScope.launch {
+            while (true) {
+                delay(60_000L)
+                memoryV2Pipeline.retryPendingSources(limit = 20)
             }
         }
         // 派遣后台监控（每分钟检查，推进段落或结算超时派遣）
@@ -704,13 +719,29 @@ ${promptLayers?.runtimeContext.orEmpty()}
         if (!settings.autoAiEnabled || !settings.dailyAutoMomentEnabled) return ScheduledMomentDeliveryResult.SKIPPED
         val key = "daily_content_moment_${cycle}_${operatorId}_$deliveryId"
         if (settings.getBoolean(key, false)) return ScheduledMomentDeliveryResult.SUCCEEDED
-        val op = repository.getOperator(operatorId) ?: return ScheduledMomentDeliveryResult.SKIPPED
-        if (!settings.getOperatorDynPermission(op.id)) return ScheduledMomentDeliveryResult.SKIPPED
+        val deliveryKey = "moment:$cycle:$operatorId:$deliveryId"
+        val now = System.currentTimeMillis()
+        if (!repository.claimDailyDelivery(deliveryKey, now)) return ScheduledMomentDeliveryResult.SUCCEEDED
+        val op = repository.getOperator(operatorId) ?: run {
+            repository.completeDailyDelivery(deliveryKey, now)
+            return ScheduledMomentDeliveryResult.SKIPPED
+        }
+        if (!settings.getOperatorDynPermission(op.id)) {
+            repository.completeDailyDelivery(deliveryKey, now)
+            return ScheduledMomentDeliveryResult.SKIPPED
+        }
         val countKey = "daily_content_moment_count_${cycle}_${op.id}"
-        if (settings.getInt(countKey, 0) >= settings.dailyMomentTarget) return ScheduledMomentDeliveryResult.SKIPPED
-        val momentId = generateOneForOpSync(op, MomentTriggerType.AUTO) ?: return ScheduledMomentDeliveryResult.RETRYABLE_FAILURE
+        if (settings.getInt(countKey, 0) >= settings.dailyMomentTarget) {
+            repository.completeDailyDelivery(deliveryKey, now)
+            return ScheduledMomentDeliveryResult.SKIPPED
+        }
+        val momentId = generateOneForOpSync(op, MomentTriggerType.AUTO) ?: run {
+            repository.releaseDailyDelivery(deliveryKey, System.currentTimeMillis())
+            return ScheduledMomentDeliveryResult.RETRYABLE_FAILURE
+        }
         settings.putInt(countKey, settings.getInt(countKey, 0) + 1)
         settings.putBoolean(key, true)
+        repository.completeDailyDelivery(deliveryKey, System.currentTimeMillis())
         generateLikesAndComments(momentId, op)
         refreshMomentsNow()
         return ScheduledMomentDeliveryResult.SUCCEEDED
@@ -984,12 +1015,14 @@ ${promptLayers?.runtimeContext.orEmpty()}
     }
 
     suspend fun rebuildOperatorMemoryIndexes(operatorId: String, onProgress: (Int, Int) -> Unit = { _, _ -> }): IndexRebuildResult {
+        return memoryIndexMaintenanceMutex.withLock {
         if (!settings.memoryV2Enabled) return IndexRebuildResult(0, 0, 0, 0, listOf("统一记忆系统已关闭"))
         val now = System.currentTimeMillis()
         val errors = mutableListOf<String>()
         memoryVectorService?.listMemories("operator", operatorId)
             ?.filter { it.sourceType.startsWith("memory_v2_") || it.sourceType == "manual_memory" }
             ?.forEach { memoryVectorService.deleteMemory(it.id) }
+        repository.clearMemoryItemVectorIdsByOwner("operator", operatorId)
         val items = repository.getMemoryItemsByOwner("operator", operatorId)
             .filter { it.status == "active" && it.expiresAt > now && it.content.isNotBlank() }
         if (memoryVectorService == null) return IndexRebuildResult(items.size, 0, 0, items.size)
@@ -997,6 +1030,7 @@ ${promptLayers?.runtimeContext.orEmpty()}
         var failed = 0
         items.forEach { item ->
             item.vectorId.takeIf { it.isNotBlank() }?.let { memoryVectorService?.deleteMemory(it) }
+            repository.updateMemoryItemVectorId(item.id, "", now)
             val vectorId = MemoryVectorFormatter.vectorId(item)
             val result = runCatching {
                 memoryVectorService?.saveMemory(VectorMemory(
@@ -1010,24 +1044,31 @@ ${promptLayers?.runtimeContext.orEmpty()}
                 if (memoryVectorService != null) repository.updateMemoryItemVectorId(item.id, vectorId, now)
             }
             if (result.isSuccess) succeeded++ else {
+                result.exceptionOrNull()?.let { if (it is CancellationException) throw it }
                 failed++
                 result.exceptionOrNull()?.message?.take(80)?.let { errors += it }
             }
             onProgress(succeeded + failed, items.size)
         }
-        return IndexRebuildResult(items.size, succeeded, failed, 0, errors.distinct().take(3))
+        IndexRebuildResult(items.size, succeeded, failed, 0, errors.distinct().take(3))
+        }
     }
 
     suspend fun rebuildAllMemoryIndexes(onProgress: (Int, Int) -> Unit = { _, _ -> }): IndexRebuildResult {
+        return memoryIndexMaintenanceMutex.withLock {
         if (!settings.memoryV2Enabled) return IndexRebuildResult(0, 0, 0, 0, listOf("统一记忆系统已关闭"))
         val now = System.currentTimeMillis()
-        val items = repository.getAllMemoryItems().filter { it.status == "active" && it.expiresAt > now && it.content.isNotBlank() }
+        val allItems = repository.getAllMemoryItems()
+        val items = allItems.filter { it.status == "active" && it.expiresAt > now && it.content.isNotBlank() }
         if (memoryVectorService == null) return IndexRebuildResult(items.size, 0, 0, items.size)
         val errors = mutableListOf<String>()
-        items.groupBy { it.ownerType to it.ownerId }.forEach { (owner, _) ->
+        // Clear every persisted ID before deleting/rebuilding vectors. This includes archived and
+        // expired records, which are not rebuilt but must not retain a dangling vector reference.
+        allItems.groupBy { it.ownerType to it.ownerId }.forEach { (owner, _) ->
             memoryVectorService?.listMemories(owner.first, owner.second)
                 ?.filter { it.sourceType.startsWith("memory_v2_") || it.sourceType == "manual_memory" }
                 ?.forEach { memoryVectorService.deleteMemory(it.id) }
+            repository.clearMemoryItemVectorIdsByOwner(owner.first, owner.second)
         }
         var succeeded = 0
         var failed = 0
@@ -1045,20 +1086,25 @@ ${promptLayers?.runtimeContext.orEmpty()}
                 if (memoryVectorService != null) repository.updateMemoryItemVectorId(item.id, vectorId, now)
             }
             if (result.isSuccess) succeeded++ else {
+                result.exceptionOrNull()?.let { if (it is CancellationException) throw it }
                 failed++
                 result.exceptionOrNull()?.message?.take(80)?.let { errors += it }
             }
             onProgress(succeeded + failed, items.size)
         }
-        return IndexRebuildResult(items.size, succeeded, failed, 0, errors.distinct().take(3))
+        IndexRebuildResult(items.size, succeeded, failed, 0, errors.distinct().take(3))
+        }
     }
 
     suspend fun invalidateAllMemoryIndexes() {
-        memoryVectorService?.clearAllMemories()
-        repository.clearAllMemoryItemVectorIds()
+        memoryIndexMaintenanceMutex.withLock {
+            memoryVectorService?.clearAllMemories()
+            repository.clearAllMemoryItemVectorIds()
+        }
     }
 
     private suspend fun recoverMissingMemoryIndexes(limit: Int = 200) {
+        memoryIndexMaintenanceMutex.withLock {
         if (!settings.memoryV2Enabled) return
         val service = memoryVectorService ?: return
         val now = System.currentTimeMillis()
@@ -1079,8 +1125,10 @@ ${promptLayers?.runtimeContext.orEmpty()}
                 ))
                 repository.updateMemoryItemVectorId(item.id, vectorId, now)
             }.onFailure { error ->
+                if (error is CancellationException) throw error
                 DebugLogger.log("Vector/Recover", "记忆索引补建失败 id=${item.id}: ${error.message?.take(80)}")
             }
+        }
         }
     }
 
@@ -1798,6 +1846,66 @@ ${promptLayers?.runtimeContext.orEmpty()}
             }
         }
         return ""
+    }
+
+    suspend fun getMemoryIndexHealth(): MemoryIndexHealth {
+        return memoryIndexMaintenanceMutex.withLock {
+        val now = System.currentTimeMillis()
+        val items = repository.getAllMemoryItems().filter { it.status == "active" && it.expiresAt > now && it.content.isNotBlank() }
+        val service = memoryVectorService
+        if (service == null) return@withLock MemoryIndexHealth(items.size, 0, items.size, 0)
+        val signature = service.currentEmbeddingSignature()
+        val existing = items.groupBy { it.ownerType to it.ownerId }.flatMap { (owner, _) ->
+            service.listMemories(owner.first, owner.second)
+        }.associateBy { it.id }
+        val indexed = items.count { item -> item.vectorId.isNotBlank() && existing[item.vectorId]?.embeddingSignature == signature }
+        val stale = items.count { item -> item.vectorId.isNotBlank() && existing[item.vectorId]?.embeddingSignature != signature }
+        MemoryIndexHealth(items.size, indexed, items.size - indexed, stale)
+        }
+    }
+
+    suspend fun rebuildPendingMemoryIndexes(): IndexRebuildResult {
+        return memoryIndexMaintenanceMutex.withLock {
+        if (!settings.memoryV2Enabled) return IndexRebuildResult(0, 0, 0, 0, listOf("统一记忆系统已关闭"))
+        val now = System.currentTimeMillis()
+        val eligible = repository.getAllMemoryItems().filter { it.status == "active" && it.expiresAt > now && it.content.isNotBlank() }
+        val vectorService = memoryVectorService ?: return IndexRebuildResult(eligible.size, 0, 0, eligible.size)
+        val signature = vectorService.currentEmbeddingSignature()
+        val existing = eligible.groupBy { it.ownerType to it.ownerId }.flatMap { (owner, _) ->
+            vectorService.listMemories(owner.first, owner.second)
+        }.associateBy { it.id }
+        val pending = eligible.filter { it.vectorId.isBlank() || existing[it.vectorId]?.embeddingSignature != signature }
+        pending.filter { it.vectorId.isNotBlank() }.forEach { repository.updateMemoryItemVectorId(it.id, "", now) }
+        var succeeded = 0
+        var failed = 0
+        val errors = mutableListOf<String>()
+        pending.forEach { item ->
+            val vectorId = MemoryVectorFormatter.vectorId(item)
+            runCatching {
+                vectorService.saveMemory(VectorMemory(
+                    id = vectorId, ownerType = item.ownerType, ownerId = item.ownerId,
+                    sourceType = MemoryVectorFormatter.sourceType(item), sourceId = item.sourceRefId.ifBlank { item.sessionId },
+                    content = MemoryVectorFormatter.content(item), importance = item.importance.coerceIn(0, 100) / 100.0,
+                    tags = MemoryVectorFormatter.tags(item), visibility = item.privacy ?: "private",
+                    createdAt = item.createdAt, expiresAt = item.expiresAt
+                ))
+                repository.updateMemoryItemVectorId(item.id, vectorId, now)
+            }.onSuccess { succeeded++ }.onFailure { error ->
+                if (error is CancellationException) throw error
+                failed++
+                errors += error.message?.take(80) ?: "未知错误"
+            }
+        }
+        IndexRebuildResult(pending.size, succeeded, failed, 0, errors.distinct().take(3))
+        }
+    }
+
+    /** Runs immediately after a backup restore so restored memories are usable without restart. */
+    private suspend fun rebuildImportedMemoryIndexes() {
+        if (!settings.memoryV2Enabled || memoryVectorService == null) return
+        DebugLogger.log("Vector/Import", "备份导入完成，开始重建记忆索引")
+        val result = rebuildAllMemoryIndexes { _, _ -> }
+        DebugLogger.log("Vector/Import", "记忆索引重建完成：成功=${result.succeeded}，失败=${result.failed}")
     }
 
     /** 为指定干员同步生成 1 条动态（不含点赞评论），返回 momentId */

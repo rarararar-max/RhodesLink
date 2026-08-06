@@ -8,15 +8,47 @@ CREATE TABLE IF NOT EXISTS memory_source_queue (
     timestamp INTEGER NOT NULL DEFAULT 0,
     processedL1 INTEGER NOT NULL DEFAULT 0,
     processedVector INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending',
+    retryCount INTEGER NOT NULL DEFAULT 0,
+    nextRetryAt INTEGER NOT NULL DEFAULT 0,
+    leaseUntil INTEGER NOT NULL DEFAULT 0,
+    claimToken TEXT NOT NULL DEFAULT '',
+    lastError TEXT NOT NULL DEFAULT '',
     createdAt INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS memory_source_queue_identity
+ON memory_source_queue(sourceKind, ownerType, ownerId, sourceRefId, contentText, timestamp);
+
 getPendingMemorySources:
-SELECT * FROM memory_source_queue WHERE processedL1 = 0 ORDER BY timestamp ASC, id ASC;
+SELECT * FROM memory_source_queue
+WHERE processedL1 = 0
+  AND status IN ('pending', 'retry_waiting', 'running')
+  AND nextRetryAt <= ?
+  AND (status != 'running' OR leaseUntil <= ?)
+ORDER BY timestamp ASC, id ASC
+LIMIT ?;
 
 insertMemorySource:
-INSERT OR REPLACE INTO memory_source_queue(sourceKind, ownerType, ownerId, sourceRefId, contentText, timestamp, processedL1, processedVector, createdAt)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR IGNORE INTO memory_source_queue(sourceKind, ownerType, ownerId, sourceRefId, contentText, timestamp, processedL1, processedVector, status, retryCount, nextRetryAt, leaseUntil, claimToken, lastError, createdAt)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+getMemorySourceId:
+SELECT id FROM memory_source_queue
+WHERE sourceKind = ? AND ownerType = ? AND ownerId = ? AND sourceRefId = ?
+  AND contentText = ? AND timestamp = ?
+LIMIT 1;
+
+getMemorySourceStatus:
+SELECT status, processedL1 FROM memory_source_queue WHERE id = ?;
+
+getUnfinishedMemorySourceId:
+SELECT id FROM memory_source_queue
+WHERE sourceKind = ? AND ownerType = ? AND ownerId = ? AND sourceRefId = ?
+  AND contentText = ? AND timestamp = ?
+  AND processedL1 = 0 AND status IN ('pending', 'retry_waiting', 'running')
+ORDER BY id ASC
+LIMIT 1;
 
 getLastInsertedMemorySourceId:
 SELECT last_insert_rowid();
@@ -26,6 +58,45 @@ UPDATE memory_source_queue SET processedL1 = 1 WHERE id = ?;
 
 markMemorySourceProcessedVector:
 UPDATE memory_source_queue SET processedVector = 1 WHERE id = ?;
+
+claimMemorySource:
+UPDATE memory_source_queue
+SET status = 'running', leaseUntil = ?, claimToken = ?
+WHERE id = ?
+  AND processedL1 = 0
+  AND status IN ('pending', 'retry_waiting', 'running')
+  AND nextRetryAt <= ?
+  AND (status != 'running' OR leaseUntil <= ?);
+
+claimMemorySourceById:
+UPDATE memory_source_queue
+SET status = 'running', leaseUntil = ?, claimToken = ?
+WHERE id = ?
+  AND processedL1 = 0
+  AND status IN ('pending', 'retry_waiting')
+  AND nextRetryAt <= ?;
+
+getMemorySourceClaimToken:
+SELECT claimToken FROM memory_source_queue WHERE id = ?;
+
+renewMemorySourceLease:
+UPDATE memory_source_queue SET leaseUntil = ?
+WHERE id = ? AND claimToken = ? AND status = 'running';
+
+completeMemorySource:
+UPDATE memory_source_queue
+SET processedL1 = 1, processedVector = 1, status = 'succeeded', leaseUntil = 0, claimToken = '', lastError = ''
+WHERE id = ? AND claimToken = ?;
+
+retryMemorySource:
+UPDATE memory_source_queue
+SET status = 'retry_waiting', retryCount = retryCount + 1, nextRetryAt = ?, leaseUntil = 0, claimToken = '', lastError = ?
+WHERE id = ? AND claimToken = ?;
+
+skipMemorySource:
+UPDATE memory_source_queue
+SET status = 'skipped', leaseUntil = 0, claimToken = '', lastError = ?
+WHERE id = ? AND claimToken = ?;
 
 deleteMemorySourcesByOwner:
 DELETE FROM memory_source_queue WHERE ownerType = ? AND ownerId = ?;

@@ -30,7 +30,7 @@ data class ExportPayload(
     val momentLikes: List<MomentLike>? = null,
     val momentComments: List<MomentComment>? = null,
     val diaries: List<Diary>? = null,
-    /** Canonical V2 memory. Embeddings and promotion audit records are rebuilt after restore. */
+    /** Canonical V2 memory. Embeddings and derived promotion audit are rebuilt after restore. */
     val memoryItems: List<MemoryItem>? = null,
     val settings: Map<String, String>? = null
 )

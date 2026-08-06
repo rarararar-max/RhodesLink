@@ -18,7 +18,8 @@ import kotlinx.coroutines.launch
 class DataViewModel(
     private val repository: ChatRepository,
     private val settings: SettingsRepository,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    private val onMemoryImportCompleted: suspend () -> Unit = {}
 ) {
     private var lastCleanupLogAt = 0L
 
@@ -163,9 +164,17 @@ class DataViewModel(
                 payload.momentComments.orEmpty()
             )
             payload.diaries.orEmpty().forEach { repository.insertDiary(it) }
-            // V2 row IDs and vectors are local implementation details. Restore canonical items and rebuild vectors later.
-            payload.memoryItems.orEmpty().forEach { repository.insertMemoryItem(it.copy(id = 0, vectorId = "")) }
+            // Imported row IDs cannot preserve memory_links. Keep only source-level memories active;
+            // derived L2/L3 conclusions are rebuilt later so deleted source material cannot survive.
+            payload.memoryItems.orEmpty().forEach { item ->
+                repository.insertMemoryItem(item.copy(
+                    id = 0,
+                    vectorId = "",
+                    status = if (item.memoryLevel == com.rhodes.privatechat.shared.model.MemoryLevel.L1) item.status else "archived"
+                ))
+            }
             importSettingsSnapshot(payload.settings.orEmpty())
+            onMemoryImportCompleted()
         }
     }
 

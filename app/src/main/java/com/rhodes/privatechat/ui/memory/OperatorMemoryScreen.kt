@@ -14,12 +14,15 @@ import com.rhodes.privatechat.data.db.entity.OperatorEntity
 import com.rhodes.privatechat.shared.model.MemoryItem
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.viewmodel.MainViewModel
+import com.rhodes.privatechat.shared.settings.SettingsRepository
+import org.koin.compose.koinInject
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OperatorMemoryScreen(viewModel: MainViewModel, operator: OperatorEntity, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
+    val settings: SettingsRepository = koinInject()
     var items by remember { mutableStateOf<List<MemoryItem>>(emptyList()) }
     var showAdd by remember { mutableStateOf(false) }
     var content by remember { mutableStateOf("") }
@@ -41,7 +44,7 @@ fun OperatorMemoryScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
         topBar = { TopAppBar(title = { Text("${operator.name}的记忆") }, navigationIcon = { TextButton(onClick = onBack) { Text("返回") } }, actions = {
             TextButton(enabled = !working, onClick = { scope.launch { items = viewModel.getOperatorMemoryItems(operator.id) } }) { Text("刷新") }
             TextButton(enabled = !working, onClick = { scope.launch { eligibleCount = viewModel.countEligibleMemoryIndexes(operator.id); pendingRebuild = true } }) { Text(if (working) "处理中" else "重建索引") }
-            TextButton(onClick = { showAdd = true }) { Text("新增") }
+            TextButton(enabled = settings.memoryV2Enabled, onClick = { showAdd = true }) { Text("新增") }
         }) }
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize().padding(16.dp)) {
@@ -81,13 +84,13 @@ fun OperatorMemoryScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
     }
     if (showAdd) AlertDialog(
         onDismissRequest = { showAdd = false },
-        title = { Text("新增角色记忆") },
+        title = { Text("新增角色私聊记忆") },
         text = { Column {
             OutlinedTextField(content, { content = it }, label = { Text("记忆内容") }, minLines = 3)
             OutlinedTextField(importance, { importance = it.filter(Char::isDigit) }, label = { Text("重要性 0-100") })
-            Text("这条记忆由当前角色拥有。角色可在私聊、群聊、动态和评论中自然引用；其他角色不会直接获得。", fontSize = 12.sp, color = TextSecondary)
+            Text("这条记忆由当前角色拥有，可在私聊、动态、评论和日记中按对应注入开关引用；当前不会注入群聊。其他角色不会直接获得。", fontSize = 12.sp, color = TextSecondary)
         } },
-        confirmButton = { TextButton(enabled = content.isNotBlank() && !working, onClick = { scope.launch { working = true; val saved = runCatching { viewModel.addManualOperatorMemory(operator.id, content, privacy, importance.toIntOrNull() ?: 80) }.getOrDefault(false); if (saved) { items = viewModel.getOperatorMemoryItems(operator.id); showAdd = false; content = ""; message = "记忆已保存" } else message = "记忆保存失败，请检查内容后重试"; working = false } }) { Text("保存") } },
+        confirmButton = { TextButton(enabled = settings.memoryV2Enabled && content.isNotBlank() && !working, onClick = { scope.launch { working = true; val saved = runCatching { viewModel.addManualOperatorMemory(operator.id, content, privacy, importance.toIntOrNull() ?: 80) }.getOrDefault(false); if (saved) { items = viewModel.getOperatorMemoryItems(operator.id); showAdd = false; content = ""; message = "记忆已保存" } else message = "记忆保存失败，请检查内容后重试"; working = false } }) { Text("保存") } },
         dismissButton = { TextButton(onClick = { showAdd = false }) { Text("取消") } }
     )
     pendingDelete?.let { item -> AlertDialog(

@@ -11,6 +11,7 @@ import com.rhodes.privatechat.shared.network.AIService
 import com.rhodes.privatechat.shared.network.providers
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.util.DebugLogger
+import kotlin.time.TimeSource
 
 internal object CachePromptLayering {
     private val placeholderPattern = Regex("\\{\\{([A-Z0-9_]+)\\}\\}")
@@ -112,13 +113,21 @@ class SharedUtils(
         validateChatConfiguration()
         val temp = temperature ?: settings.aiTemperature
         val prompt = messages.firstOrNull()?.content ?: ""
+        val startedAt = TimeSource.Monotonic.markNow()
+        DebugLogger.log("AI/$logTag/请求", "模型请求开始\n厂商=${settings.provider}\n模型=${settings.modelName}\n温度=$temp\n消息数=${messages.size}\n输入字符=${messages.sumOf { it.content.length }}\n最大输出=${maxOutputTokens ?: "默认"}")
         logAiCall("→$logTag", prompt, "请求已发送，正在等待模型响应。", messages)
-        val result = aiService.chat(
-            settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl,
-            temperature = temp, maxOutputTokens = maxOutputTokens, requestType = logTag
-        )
-        logAiCall("←$logTag", prompt, result.content, messages)
-        return result.content
+        return try {
+            val result = aiService.chat(
+                settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl,
+                temperature = temp, maxOutputTokens = maxOutputTokens, requestType = logTag
+            )
+            DebugLogger.log("AI/$logTag/响应", "模型请求成功\n耗时=${startedAt.elapsedNow().inWholeMilliseconds}ms\n输入Token=${result.inputTokens}\n输出Token=${result.outputTokens}\n输出字符=${result.content.length}")
+            logAiCall("←$logTag", prompt, result.content, messages)
+            result.content
+        } catch (e: Exception) {
+            DebugLogger.log("AI/$logTag/错误", "模型请求失败\n耗时=${startedAt.elapsedNow().inWholeMilliseconds}ms\n异常=${e::class.simpleName}\n原因=${e.message ?: "未知错误"}")
+            throw e
+        }
     }
 
     /** Non-streaming chat with one content regeneration and one format repair when needed. */
@@ -126,15 +135,23 @@ class SharedUtils(
         validateChatConfiguration()
         val temp = settings.aiTemperature
         val prompt = messages.firstOrNull()?.content ?: ""
+        val startedAt = TimeSource.Monotonic.markNow()
+        DebugLogger.log("AI/$logTag/请求", "模型请求开始（含内容重试和格式修复）\n厂商=${settings.provider}\n模型=${settings.modelName}\n温度=$temp\n消息数=${messages.size}\n输入字符=${messages.sumOf { it.content.length }}")
         logAiCall("→$logTag", prompt, "请求已发送。模型会在 JSON 无法解析时自动重试。", messages)
-        val result = aiService.chatWithRetry(
-            settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl,
-            temperature = temp, jsonMode = true, mode = mode,
-            requestType = logTag,
-            trace = { stage, detail -> DebugLogger.trace("AI/$stage", detail) }
-        )
-        logAiCall("←$logTag", prompt, result.toString(), messages)
-        return result
+        return try {
+            val result = aiService.chatWithRetry(
+                settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl,
+                temperature = temp, jsonMode = true, mode = mode,
+                requestType = logTag,
+                trace = { stage, detail -> DebugLogger.trace("AI/$stage", detail) }
+            )
+            DebugLogger.log("AI/$logTag/响应", "模型请求成功\n总耗时=${startedAt.elapsedNow().inWholeMilliseconds}ms\n响应段数=${result.segments.orEmpty().size}")
+            logAiCall("←$logTag", prompt, result.toString(), messages)
+            result
+        } catch (e: Exception) {
+            DebugLogger.log("AI/$logTag/错误", "模型请求失败\n总耗时=${startedAt.elapsedNow().inWholeMilliseconds}ms\n异常=${e::class.simpleName}\n原因=${e.message ?: "未知错误"}")
+            throw e
+        }
     }
 
     fun logAiCall(tag: String, prompt: String, response: String, allMessages: List<AiMessage>? = null) {
@@ -180,7 +197,7 @@ class SharedUtils(
         anchors: List<MemoryAnchor> = emptyList(),
         extra: Map<String, String> = emptyMap()
     ) {
-        if (!DEBUG) return
+        if (!DebugLogger.enabled) return
         val sb = StringBuilder()
         sb.append("surface=").append(surface).append(" title=").append(title).append('\n')
         if (extra.isNotEmpty()) {

@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS daily_deliveries (
+    deliveryId TEXT NOT NULL PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'pending',
+    updatedAt INTEGER NOT NULL DEFAULT 0
+);
+
+getDelivery:
+SELECT status, updatedAt FROM daily_deliveries WHERE deliveryId = ?;
+
+insertDeliveryIfAbsent:
+INSERT OR IGNORE INTO daily_deliveries(deliveryId, status, updatedAt) VALUES (?, 'pending', ?);
+
+markDeliveryRunning:
+UPDATE daily_deliveries SET status = 'running', updatedAt = ? WHERE deliveryId = ?;
+
+markDeliverySucceeded:
+UPDATE daily_deliveries SET status = 'succeeded', updatedAt = ? WHERE deliveryId = ?;
+
+markDeliveryPending:
+UPDATE daily_deliveries SET status = 'pending', updatedAt = ? WHERE deliveryId = ?;

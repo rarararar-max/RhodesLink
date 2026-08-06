@@ -31,7 +31,7 @@ class MemoryVectorService(
         return gateway!!
     }
 
-    private fun currentEmbeddingSignature(): String = listOf(
+    fun currentEmbeddingSignature(): String = listOf(
         settings.vectorProviderMode,
         settings.vectorBaseUrl.trim(),
         settings.vectorModelName.trim(),
@@ -39,10 +39,12 @@ class MemoryVectorService(
 
     suspend fun saveMemory(memory: VectorMemory) {
         val embedding = embedCached(memory.content)
+        require(embedding.isUsableEmbedding()) { "Embedding 服务没有返回有效向量" }
         vectorStoreGateway.upsert(memory.copy(embedding = embedding, embeddingSignature = currentEmbeddingSignature()))
     }
 
     suspend fun saveMemoryWithEmbedding(memory: VectorMemory) {
+        require(memory.embedding.isUsableEmbedding()) { "Embedding 服务没有返回有效向量" }
         vectorStoreGateway.upsert(memory.copy(embeddingSignature = memory.embeddingSignature.ifBlank { currentEmbeddingSignature() }))
     }
 
@@ -56,6 +58,7 @@ class MemoryVectorService(
         now: Long = 0L,
     ): List<VectorMemory> {
         val queryEmbedding = embedCached(query)
+        if (!queryEmbedding.isUsableEmbedding()) return emptyList()
         return vectorStoreGateway.search(
             VectorSearchRequest(
                 ownerType = ownerType,
@@ -73,6 +76,7 @@ class MemoryVectorService(
 
     suspend fun search(request: VectorSearchRequest): List<VectorMemory> {
         val queryEmbedding = embedCached(request.query)
+        if (!queryEmbedding.isUsableEmbedding()) return emptyList()
         return vectorStoreGateway.search(request.copy(queryEmbedding = queryEmbedding, embeddingSignature = currentEmbeddingSignature()))
     }
 
@@ -104,4 +108,6 @@ class MemoryVectorService(
             }
         }
     }
+
+    private fun List<Double>.isUsableEmbedding(): Boolean = isNotEmpty() && all { it.isFinite() }
 }

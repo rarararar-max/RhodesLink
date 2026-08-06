@@ -10,6 +10,7 @@ import com.rhodes.privatechat.shared.model.MemorySourceItem
 import com.rhodes.privatechat.shared.model.MemorySourceKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlin.random.Random
 
 class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
     private val db: RhodesDatabase get() = wrapper.database
@@ -128,22 +129,32 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
     }
 
     suspend fun insertSource(source: MemorySourceItem): Long = withContext(Dispatchers.Default) {
-        db.memorySourceQueueQueries.insertMemorySource(
-            source.sourceKind.name,
-            source.ownerType,
-            source.ownerId,
-            source.sourceRefId,
-            source.contentText,
-            source.timestamp,
-            if (source.processedL1) 1L else 0L,
-            if (source.processedVector) 1L else 0L,
-            source.createdAt,
-        )
-        db.memorySourceQueueQueries.getLastInsertedMemorySourceId().executeAsOne()
+        // Retries and duplicate UI events can submit the same extraction window more than once.
+        // Reuse its unfinished task so it keeps one lease and one retry history.
+        db.transactionWithResult {
+            fun existingId() = db.memorySourceQueueQueries.getUnfinishedMemorySourceId(
+                source.sourceKind.name, source.ownerType, source.ownerId, source.sourceRefId,
+                source.contentText, source.timestamp,
+            ).executeAsOneOrNull()
+            existingId()?.let { return@transactionWithResult it }
+            db.memorySourceQueueQueries.insertMemorySource(
+                source.sourceKind.name, source.ownerType, source.ownerId, source.sourceRefId,
+                source.contentText, source.timestamp, if (source.processedL1) 1L else 0L,
+                if (source.processedVector) 1L else 0L, source.status, source.retryCount.toLong(),
+                source.nextRetryAt, source.leaseUntil, source.claimToken, source.lastError, source.createdAt,
+            )
+            db.memorySourceQueueQueries.getMemorySourceId(
+                source.sourceKind.name, source.ownerType, source.ownerId, source.sourceRefId,
+                source.contentText, source.timestamp,
+            ).executeAsOne()
+        }
     }
 
-    suspend fun getPendingSources(): List<MemorySourceItem> = withContext(Dispatchers.Default) {
-        db.memorySourceQueueQueries.getPendingMemorySources().executeAsList().map {
+    suspend fun claimPendingSources(now: Long, limit: Int, leaseMs: Long = 10 * 60_000L): List<Pair<MemorySourceItem, String>> = withContext(Dispatchers.Default) {
+        db.memorySourceQueueQueries.getPendingMemorySources(now, now, limit.toLong()).executeAsList().mapNotNull {
+            val token = "memory-${now}-${Random.nextLong()}"
+            db.memorySourceQueueQueries.claimMemorySource(now + leaseMs, token, it.id, now, now)
+            if (db.memorySourceQueueQueries.getMemorySourceClaimToken(it.id).executeAsOneOrNull() != token) return@mapNotNull null
             MemorySourceItem(
                 id = it.id,
                 sourceKind = try { MemorySourceKind.valueOf(it.sourceKind) } catch (_: Exception) { MemorySourceKind.PRIVATE_CHAT },
@@ -154,14 +165,38 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
                 timestamp = it.timestamp,
                 processedL1 = it.processedL1 != 0L,
                 processedVector = it.processedVector != 0L,
+                status = "running",
+                retryCount = it.retryCount.toInt(),
+                nextRetryAt = it.nextRetryAt,
+                leaseUntil = now + leaseMs,
+                claimToken = token,
+                lastError = it.lastError,
                 createdAt = it.createdAt,
-            )
+            ) to token
         }
+    }
+
+    suspend fun claimSource(id: Long, now: Long, leaseMs: Long = 10 * 60_000L): String? = withContext(Dispatchers.Default) {
+        val token = "memory-${now}-${Random.nextLong()}"
+        db.memorySourceQueueQueries.claimMemorySourceById(now + leaseMs, token, id, now)
+        token.takeIf { db.memorySourceQueueQueries.getMemorySourceClaimToken(id).executeAsOneOrNull() == it }
+    }
+
+    suspend fun isMemorySourceFinished(id: Long): Boolean = withContext(Dispatchers.Default) {
+        db.memorySourceQueueQueries.getMemorySourceStatus(id).executeAsOneOrNull()?.let { state ->
+            state.processedL1 != 0L || state.status == "succeeded" || state.status == "skipped"
+        } == true
     }
 
     suspend fun markSourceProcessedL1(id: Long) = withContext(Dispatchers.Default) { db.memorySourceQueueQueries.markMemorySourceProcessedL1(id) }
     suspend fun markSourceProcessedVector(id: Long) = withContext(Dispatchers.Default) { db.memorySourceQueueQueries.markMemorySourceProcessedVector(id) }
     suspend fun deleteMemorySource(id: Long) = withContext(Dispatchers.Default) { db.memorySourceQueueQueries.deleteMemorySource(id) }
+    suspend fun completeSource(id: Long, token: String) = withContext(Dispatchers.Default) { db.memorySourceQueueQueries.completeMemorySource(id, token) }
+    suspend fun retrySource(id: Long, token: String, nextRetryAt: Long, error: String) = withContext(Dispatchers.Default) { db.memorySourceQueueQueries.retryMemorySource(nextRetryAt, error, id, token) }
+    suspend fun skipSource(id: Long, token: String, error: String) = withContext(Dispatchers.Default) { db.memorySourceQueueQueries.skipMemorySource(error, id, token) }
+    suspend fun renewSourceLease(id: Long, token: String, now: Long, leaseMs: Long = 10 * 60_000L) = withContext(Dispatchers.Default) {
+        db.memorySourceQueueQueries.renewMemorySourceLease(now + leaseMs, id, token)
+    }
 
     suspend fun updateMemoryItemVectorId(id: Long, vectorId: String, updatedAt: Long) = withContext(Dispatchers.Default) {
         db.memoryItemsQueries.updateMemoryItemVectorId(vectorId, updatedAt, id)
@@ -179,6 +214,10 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
 
     suspend fun clearAllMemoryItemVectorIds() = withContext(Dispatchers.Default) {
         db.memoryItemsQueries.clearAllMemoryItemVectorIds()
+    }
+
+    suspend fun clearMemoryItemVectorIdsByOwner(ownerType: String, ownerId: String) = withContext(Dispatchers.Default) {
+        db.memoryItemsQueries.clearMemoryItemVectorIdsByOwner(ownerType, ownerId)
     }
 
     suspend fun archiveMemoryItemsByLevel(ownerType: String, ownerId: String, level: MemoryLevel, updatedAt: Long) = withContext(Dispatchers.Default) {

@@ -46,7 +46,13 @@ getCommentCount:
 SELECT COUNT(*) FROM moment_comments WHERE momentId = ?;
 
 deleteOldUserComments:
-DELETE FROM moment_comments WHERE createdAt < ? AND (replyToName = ? OR momentId IN (SELECT id FROM moments WHERE operatorId = 'user'));
+WITH RECURSIVE targets(id) AS (
+    SELECT id FROM moment_comments
+    WHERE createdAt < ? AND (replyToName = ? OR momentId IN (SELECT id FROM moments WHERE operatorId = 'user'))
+    UNION ALL
+    SELECT child.id FROM moment_comments child JOIN targets parent ON child.parentCommentId = parent.id
+)
+DELETE FROM moment_comments WHERE id IN (SELECT id FROM targets);
 
 getOldUserCommentIds:
 SELECT id FROM moment_comments

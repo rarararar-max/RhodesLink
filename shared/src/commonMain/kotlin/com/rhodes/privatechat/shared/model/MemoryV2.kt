@@ -73,6 +73,12 @@ data class MemorySourceItem(
     val timestamp: Long,
     val processedL1: Boolean = false,
     val processedVector: Boolean = false,
+    val status: String = "pending",
+    val retryCount: Int = 0,
+    val nextRetryAt: Long = 0L,
+    val leaseUntil: Long = 0L,
+    val claimToken: String = "",
+    val lastError: String = "",
     val createdAt: Long = 0L
 )
 

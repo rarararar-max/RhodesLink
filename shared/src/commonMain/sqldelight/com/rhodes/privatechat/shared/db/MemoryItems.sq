@@ -104,6 +104,9 @@ UPDATE memory_items SET content = ?, updatedAt = ? WHERE id = ?;
 clearAllMemoryItemVectorIds:
 UPDATE memory_items SET vectorId = '';
 
+clearMemoryItemVectorIdsByOwner:
+UPDATE memory_items SET vectorId = '' WHERE ownerType = ? AND ownerId = ?;
+
 archiveMemoryItemsByLevel:
 UPDATE memory_items SET status = 'archived', updatedAt = ?
 WHERE ownerType = ? AND ownerId = ? AND memoryLevel = ? AND status = 'active';

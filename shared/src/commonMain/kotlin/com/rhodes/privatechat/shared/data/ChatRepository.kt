@@ -37,6 +37,32 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     val sharedExperiences = SharedExperienceRepository(wrapper)
     val archives = ChatArchiveRepository(wrapper)
 
+    /** Claims a daily task with a lease so WorkManager retries cannot produce duplicates. */
+    suspend fun claimDailyDelivery(deliveryId: String, now: Long, leaseMs: Long = 10 * 60_000L): Boolean = withContext(Dispatchers.Default) {
+        val db = wrapper.database
+        db.transactionWithResult {
+            db.dailyDeliveriesQueries.insertDeliveryIfAbsent(deliveryId, now)
+            db.dailyDeliveriesQueries.getDelivery(deliveryId).executeAsOneOrNull()?.let { delivery ->
+                when (delivery.status) {
+                    "succeeded" -> return@transactionWithResult false
+                    "running" -> if (delivery.updatedAt > now - leaseMs) return@transactionWithResult false
+                }
+            }
+            run {
+                    db.dailyDeliveriesQueries.markDeliveryRunning(now, deliveryId)
+                    true
+            }
+        }
+    }
+
+    suspend fun completeDailyDelivery(deliveryId: String, now: Long) = withContext(Dispatchers.Default) {
+        wrapper.database.dailyDeliveriesQueries.markDeliverySucceeded(now, deliveryId)
+    }
+
+    suspend fun releaseDailyDelivery(deliveryId: String, now: Long) = withContext(Dispatchers.Default) {
+        wrapper.database.dailyDeliveriesQueries.markDeliveryPending(now, deliveryId)
+    }
+
     suspend fun getGiftsByOperator(operatorId: String): List<GiftRecord> = withContext(Dispatchers.Default) {
         wrapper.database.giftRecordsQueries.getByOperator(operatorId) { id, opId, imageUri, giftName, senderName, createdAt ->
             GiftRecord(id, opId, imageUri, giftName, senderName, createdAt)
@@ -374,6 +400,10 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     // --- Memory v2 ---
     suspend fun insertMemoryItem(item: MemoryItem) = memoryV2.insertMemoryItem(item)
     suspend fun insertMemorySource(source: MemorySourceItem) = memoryV2.insertSource(source)
+    suspend fun claimPendingMemorySources(now: Long, limit: Int) = memoryV2.claimPendingSources(now, limit)
+    suspend fun claimMemorySource(id: Long, now: Long) = memoryV2.claimSource(id, now)
+    suspend fun isMemorySourceFinished(id: Long) = memoryV2.isMemorySourceFinished(id)
+    suspend fun renewMemorySourceLease(id: Long, token: String, now: Long) = memoryV2.renewSourceLease(id, token, now)
     suspend fun saveMemoryBatch(batch: MemoryBatch) = memoryV2.saveBatch(batch)
     suspend fun getMemoryItemsByLevel(ownerType: String, ownerId: String, level: MemoryLevel) = memoryV2.getMemoryItemsByLevel(ownerType, ownerId, level)
     suspend fun getActiveMemoryItemsByLevel(ownerType: String, ownerId: String, level: MemoryLevel, now: Long) = memoryV2.getActiveMemoryItemsByLevel(ownerType, ownerId, level, now)
@@ -383,9 +413,13 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun getActiveMemoryItemByContent(ownerType: String, ownerId: String, level: MemoryLevel, type: String, content: String) = memoryV2.getActiveMemoryItemByContent(ownerType, ownerId, level, type, content)
     suspend fun markMemorySourceProcessedL1(id: Long) = memoryV2.markSourceProcessedL1(id)
     suspend fun markMemorySourceProcessedVector(id: Long) = memoryV2.markSourceProcessedVector(id)
+    suspend fun completeMemorySource(id: Long, token: String) = memoryV2.completeSource(id, token)
+    suspend fun retryMemorySource(id: Long, token: String, nextRetryAt: Long, error: String) = memoryV2.retrySource(id, token, nextRetryAt, error)
+    suspend fun skipMemorySource(id: Long, token: String, error: String) = memoryV2.skipSource(id, token, error)
     suspend fun updateMemoryItemVectorId(id: Long, vectorId: String, updatedAt: Long) = memoryV2.updateMemoryItemVectorId(id, vectorId, updatedAt)
     suspend fun updateMemoryItemContent(id: Long, content: String, updatedAt: Long) = memoryV2.updateMemoryItemContent(id, content, updatedAt)
     suspend fun clearAllMemoryItemVectorIds() = memoryV2.clearAllMemoryItemVectorIds()
+    suspend fun clearMemoryItemVectorIdsByOwner(ownerType: String, ownerId: String) = memoryV2.clearMemoryItemVectorIdsByOwner(ownerType, ownerId)
     suspend fun archiveMemoryItemsByLevel(ownerType: String, ownerId: String, level: MemoryLevel, updatedAt: Long) = memoryV2.archiveMemoryItemsByLevel(ownerType, ownerId, level, updatedAt)
     suspend fun archiveMemoryItem(id: Long, updatedAt: Long) = memoryV2.archiveMemoryItem(id, updatedAt)
     suspend fun markMemoryItemUsed(id: Long, now: Long) = memoryV2.markMemoryItemUsed(id, now)

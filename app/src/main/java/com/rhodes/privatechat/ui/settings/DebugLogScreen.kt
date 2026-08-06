@@ -40,6 +40,10 @@ fun DebugLogScreen(onBack: () -> Unit) {
     val settings: SettingsRepository = koinInject()
     var logs by remember { mutableStateOf(DebugLogger.getLogs()) }
     var selectedEntry by remember { mutableStateOf<LogEntry?>(null) }
+    var loggingEnabled by remember { mutableStateOf(settings.debugLogEnabled) }
+    var payloadsEnabled by remember { mutableStateOf(settings.debugLogPayloadsEnabled) }
+    var onlyAi by remember { mutableStateOf(false) }
+    var onlyErrors by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
@@ -62,9 +66,12 @@ fun DebugLogScreen(onBack: () -> Unit) {
                 },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) } },
                 actions = {
-                    Switch(checked = settings.debugLogEnabled, onCheckedChange = {
+                    Switch(checked = loggingEnabled, onCheckedChange = {
+                        loggingEnabled = it
                         settings.debugLogEnabled = it
                         DebugLogger.enabled = it
+                        DebugLogger.allowSensitiveTrace = it && payloadsEnabled
+                        if (it) DebugLogger.log("Debug/Settings", "调试日志已手动开启 | 完整模型内容=${if (payloadsEnabled) "开启" else "关闭"}")
                     })
                     IconButton(onClick = { clipboardManager.setText(AnnotatedString(DebugLogger.getLogText())) }) {
                         Icon(Icons.Default.ContentCopy, "复制全部日志", tint = TextPrimary)
@@ -78,17 +85,38 @@ fun DebugLogScreen(onBack: () -> Unit) {
         },
         containerColor = BG
     ) { padding ->
-        if (logs.isEmpty()) {
+        val filteredLogs = logs.asReversed().filter { entry ->
+            (!onlyAi || entry.tag.startsWith("AI/")) &&
+                (!onlyErrors || entry.tag.contains("错误") || entry.tag.contains("ERROR", true) || entry.message.contains("失败"))
+        }
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            Column(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 12.dp, vertical = 8.dp)) {
+                Text("状态：${if (loggingEnabled) "正在记录" else "已关闭"}  |  当前缓存 ${logs.size}/500 条", fontSize = 12.sp, color = if (loggingEnabled) AccentGreen else ErrorRed)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("记录完整模型输入与输出", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.weight(1f))
+                    Switch(checked = payloadsEnabled, enabled = loggingEnabled, onCheckedChange = {
+                        payloadsEnabled = it
+                        settings.debugLogPayloadsEnabled = it
+                        DebugLogger.allowSensitiveTrace = loggingEnabled && it
+                        DebugLogger.log("Debug/Settings", "完整模型输入与输出=${if (it) "开启" else "关闭"}")
+                    })
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = onlyAi, onClick = { onlyAi = !onlyAi }, label = { Text("仅模型调用") })
+                    FilterChip(selected = onlyErrors, onClick = { onlyErrors = !onlyErrors }, label = { Text("仅失败/错误") })
+                }
+            }
+        if (filteredLogs.isEmpty()) {
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                Text("暂无日志", fontSize = 14.sp, color = TextTertiary)
+                Text(if (loggingEnabled) "暂无符合筛选条件的日志\n发送一条消息后可查看完整处理链路" else "调试日志已关闭", fontSize = 14.sp, color = TextTertiary)
             }
         } else {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 8.dp),
+                modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                items(logs.asReversed(), key = { it.id }) { entry ->
+                items(filteredLogs, key = { it.id }) { entry ->
                     val tagColor = when {
                         entry.tag.contains("ERROR") -> ErrorRed
                         entry.tag.contains("AI") -> AccentOrange
@@ -125,6 +153,7 @@ fun DebugLogScreen(onBack: () -> Unit) {
                 }
             }
         }
+        }
     }
 
     selectedEntry?.let { entry ->
@@ -160,6 +189,9 @@ private fun logPreview(message: String): String =
     if (message.length <= 800) message else "${message.take(800)}\n… 已省略列表预览，点击查看完整内容"
 
 private fun logDescription(tag: String): String = when {
+    tag.endsWith("/请求") -> "模型请求摘要：厂商、模型、参数和输入规模。完整输入请查看同名“传给大模型”记录。"
+    tag.endsWith("/响应") -> "模型响应摘要：耗时、Token 使用量和输出规模。完整输出请查看同名“大模型返回”记录。"
+    tag.endsWith("/错误") -> "模型调用失败：异常类型、耗时和服务端/网络原因。"
     tag.startsWith("ChatEvent/") -> "聊天流程事件：请求、模型返回、解析、重试、格式修复和最终写入结果。"
     tag == "AI/→GroupChat" -> "群聊实际请求：系统提示词、历史消息和本轮用户输入。"
     tag == "AI/←GroupChat" -> "群聊实际请求与模型原始返回。"

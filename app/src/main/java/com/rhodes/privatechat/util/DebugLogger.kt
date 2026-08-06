@@ -19,11 +19,7 @@ object DebugLogger {
 
     fun log(tag: String, message: String) {
         if (!enabled) return
-        // Never retain user text, prompts, model output or memories in the in-app production log buffer.
-        val safeMessage = if (tag.contains("Chat", true) || tag.contains("Memory", true) || tag.contains("Diary", true) || tag.contains("Moment", true) || tag.contains("Vision", true)) {
-            message.replace(Regex("(?i)(content|text|prompt|response|raw)=[^,\\n]+"), "$1=[redacted]")
-        } else message
-        val entry = LogEntry(idCounter.incrementAndGet(), System.currentTimeMillis(), tag, safeMessage)
+        val entry = LogEntry(idCounter.incrementAndGet(), System.currentTimeMillis(), tag, message)
         synchronized(lock) {
             entries.add(entry)
             if (entries.size > MAX_ENTRIES) {

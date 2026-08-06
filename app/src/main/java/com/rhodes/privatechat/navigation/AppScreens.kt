@@ -100,15 +100,19 @@ data class ChatOperator(val operatorId: String) : Screen {
         val operators by viewModel.operators.collectAsState()
         val operator = remember(operators, operatorId) { operators.find { it.id == operatorId } }
         var ready by remember { mutableStateOf(false) }
+        var sessionLoadFailed by remember { mutableStateOf(false) }
         // Operator fields such as intimacy update after an AI reply. Re-select only when this
         // route's stable operator ID changes, otherwise the temporary unready state disposes chat.
         LaunchedEffect(operatorId, operator?.id) {
             if (operator != null) {
                 ready = false
+                sessionLoadFailed = false
                 try {
                     viewModel.chatViewModel.selectOperatorSync(operator)
                     ready = viewModel.currentSession.value?.operatorId == operator.id
+                    sessionLoadFailed = !ready
                 } catch (_: Exception) {
+                    sessionLoadFailed = true
                 }
             }
         }
@@ -125,7 +129,13 @@ data class ChatOperator(val operatorId: String) : Screen {
             )
         } else {
             androidx.compose.foundation.layout.Box(Modifier.fillMaxSize(), contentAlignment = androidx.compose.ui.Alignment.Center) {
-                androidx.compose.material3.Text(if (operators.isEmpty()) "正在加载角色..." else "角色不存在或已删除")
+                val message = when {
+                    operators.isEmpty() -> "正在加载角色..."
+                    operator == null -> "角色不存在或已删除"
+                    sessionLoadFailed -> "私聊会话加载失败，请返回后重试"
+                    else -> "正在打开私聊..."
+                }
+                androidx.compose.material3.Text(message)
             }
         }
     }

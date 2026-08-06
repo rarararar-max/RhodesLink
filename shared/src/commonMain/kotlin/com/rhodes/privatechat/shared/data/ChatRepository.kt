@@ -86,6 +86,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun getAllOperatorsSync() = operators.getAllOperatorsSync()
     suspend fun getOperator(id: String) = operators.getOperator(id)
     suspend fun insertPresetOperators() = operators.insertPresetOperators()
+    suspend fun ensurePresetOperators() = operators.ensurePresetOperators()
     suspend fun deleteOperator(id: String) = operators.deleteOperator(id)
     suspend fun updateOperator(op: Operator) = operators.updateOperator(op)
     suspend fun updateIntimacy(id: String, intimacy: Int) = operators.updateIntimacy(id, intimacy)

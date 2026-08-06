@@ -4,6 +4,7 @@ import android.widget.Toast
 import com.rhodes.privatechat.data.PromptPlaceholderRegistry
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -47,18 +49,24 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.viewmodel.MainViewModel
+import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun PromptEditorScreen(
     viewModel: MainViewModel,
@@ -69,6 +77,8 @@ fun PromptEditorScreen(
     val tabKeys = listOf("private", "group", "moment", "moment_comment", "diary", "dispatch", "help")
     var tabIndex by remember { mutableIntStateOf(0) }
     val context = LocalContext.current
+    val editorBringIntoViewRequester = remember { BringIntoViewRequester() }
+    val editorScope = rememberCoroutineScope()
 
     val privModeLabels = listOf("线上模式", "线下模式", "导演模式", "主动消息")
     val privModes = listOf("online", "offline", "director", "proactive")
@@ -393,7 +403,12 @@ fun PromptEditorScreen(
 
         Column(modifier = Modifier.weight(1f).imePadding()) {
         if (tabIndex < 6) {
-            Column(modifier = Modifier.weight(1f).padding(12.dp)) {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(12.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
                 val isCustom = viewModel.isPromptTemplateCustom(currentType(), currentMode())
                 val missingCritical = criticalPlaceholders(currentType(), currentMode())
                     .filter { "{{$it}}" !in textFieldValue.text }
@@ -491,7 +506,15 @@ fun PromptEditorScreen(
                         textFieldValue = it
                         if (currentKey() !in dirtyKeys) dirtyKeys += currentKey()
                     },
-                    modifier = Modifier.fillMaxWidth().weight(1f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 360.dp)
+                        .bringIntoViewRequester(editorBringIntoViewRequester)
+                        .onFocusChanged { state ->
+                            if (state.isFocused) {
+                                editorScope.launch { editorBringIntoViewRequester.bringIntoView() }
+                            }
+                        },
                     shape = RoundedCornerShape(8.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = Blue400,

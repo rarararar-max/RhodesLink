@@ -157,15 +157,25 @@ private fun MemoryInjection(settings: SettingsRepository) {
 
 @Composable
 private fun MemoryIsolation(settings: SettingsRepository) {
+            var selectedMode by remember { mutableStateOf(settings.memoryRecallMode) }
             SettingsSectionTitle("检索策略")
             Text("快速减少各层候选数量，优先近期记忆；平衡使用下方候选上限；深度固定使用更大的候选池。", fontSize = 12.sp, color = TextSecondary)
             Spacer(Modifier.padding(2.dp))
             Row(Modifier.fillMaxWidth()) {
-                RecallModeButton("快速", "fast", settings)
+                RecallModeButton("快速", "fast", selectedMode) { mode ->
+                    settings.memoryRecallMode = mode
+                    selectedMode = mode
+                }
                 Spacer(Modifier.padding(2.dp))
-                RecallModeButton("平衡", "balanced", settings)
+                RecallModeButton("平衡", "balanced", selectedMode) { mode ->
+                    settings.memoryRecallMode = mode
+                    selectedMode = mode
+                }
                 Spacer(Modifier.padding(2.dp))
-                RecallModeButton("深度", "deep", settings)
+                RecallModeButton("深度", "deep", selectedMode) { mode ->
+                    settings.memoryRecallMode = mode
+                    selectedMode = mode
+                }
             }
             SettingsParamSlider(settings, "memory_recall_candidate_limit", "通用记忆候选上限", 300, 50f..1000f, "候选越多越容易找到旧记忆，但检索更慢。", step = 50f)
             SettingsSectionTitle("重新开始")
@@ -211,10 +221,9 @@ private fun MemoryManagement(settings: SettingsRepository, onManageMemories: () 
 }
 
 @Composable
-private fun RecallModeButton(label: String, mode: String, settings: SettingsRepository) {
-    var selectedMode by remember { mutableStateOf(settings.memoryRecallMode) }
+private fun RecallModeButton(label: String, mode: String, selectedMode: String, onSelect: (String) -> Unit) {
     Button(
-        onClick = { settings.memoryRecallMode = mode; selectedMode = mode },
+        onClick = { onSelect(mode) },
         enabled = selectedMode != mode,
     ) { Text(if (selectedMode == mode) "$label（当前）" else label, fontSize = 11.sp) }
 }

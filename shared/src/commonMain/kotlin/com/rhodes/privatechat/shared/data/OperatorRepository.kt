@@ -104,7 +104,16 @@ class OperatorRepository(private val wrapper: DatabaseWrapper) {
         }
     }
 
-    suspend fun getAllOperatorsSync(): List<Operator> = withContext(Dispatchers.Default) {
+    /** Adds presets introduced by newer app versions without overwriting existing user data. */
+    suspend fun ensurePresetOperators() = withContext(Dispatchers.Default) {
+        presetOperators.forEach { op ->
+            if (db.operatorsQueries.getOperator(op.id, ::mapOperator).executeAsOneOrNull() == null) {
+                db.operatorsQueries.insertOperator(op.id, op.name, op.title, op.description, op.gender, op.avatarUri, op.location, op.activity, op.emotion, op.intimacy.toLong(), op.privatePrompt, op.groupPrompt, op.memoryInjection, op.userRelation, op.lmb.toLong(), op.attack.toDouble(), op.defense.toDouble(), op.meldPref, op.activityLevel.toDouble(), op.voiceName, op.voiceSpeed, op.voicePitch)
+            }
+        }
+    }
+
+    suspend fun getAllOperatorsSync(): List<Operator> = withContext(Dispatchers.Default) {
         db.operatorsQueries.getAllOperators(::mapOperator).executeAsList()
     }
 

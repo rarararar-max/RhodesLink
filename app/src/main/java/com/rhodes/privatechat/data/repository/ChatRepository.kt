@@ -237,7 +237,7 @@ class ChatRepository(
     }
 
     suspend fun getSessionByOperator(operatorId: String): ChatSession? =
-        shared.getSession("session_$operatorId")
+        shared.getSessionByOperator(operatorId)
 
     suspend fun updateLastMessage(sessionId: String, lastMessage: String, lastTime: Long) {
         shared.updateLastMessage(sessionId, lastMessage, lastTime)

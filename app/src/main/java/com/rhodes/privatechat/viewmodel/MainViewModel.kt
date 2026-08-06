@@ -333,7 +333,16 @@ class MainViewModel(
         if (startBackgroundWork) {
         viewModelScope.launch {
             repository.insertPresetOperators()
+            repository.ensurePresetOperators()
             settings.getStringSet("deleted_preset_operator_ids").forEach { operatorId ->
+                // A persisted preset deletion must remove its session too; otherwise an upgrade
+                // leaves a session that points to a deliberately removed role.
+                repository.getSessionByOperator(operatorId)?.let { session ->
+                    chatViewModel.cancelSessionRequests(session.id)
+                    repository.purgeSessionData(session.id)
+                    repository.deleteSession(session.id)
+                }
+                repository.purgeOperatorData(operatorId)
                 repository.deleteOperator(operatorId)
             }
             // 只在首次安装时设置默认权限，不覆盖用户手动修改

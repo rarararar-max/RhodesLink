@@ -38,6 +38,7 @@ import com.rhodes.privatechat.shared.model.Operator
 import com.rhodes.privatechat.util.DebugLogger
 import com.rhodes.privatechat.automation.DailyContentScheduler
 import com.rhodes.privatechat.notification.RhodesNotificationCenter
+import com.rhodes.privatechat.notification.RhodesAppVisibility
 import com.rhodes.privatechat.shared.data.SenderCount
 import com.rhodes.privatechat.shared.data.BfsNode
 import com.rhodes.privatechat.viewmodel.shared.AppStateHolder
@@ -627,6 +628,9 @@ ${promptLayers?.runtimeContext.orEmpty()}
                     type = "ai_json", mode = "online", isMe = false
                 ))
                 unhideSession(session.id)
+                if (currentSession.value?.id != session.id) {
+                    repository.incrementUnread(session.id)
+                }
                 return true
             }
         } catch (e: CancellationException) {
@@ -767,10 +771,12 @@ ${promptLayers?.runtimeContext.orEmpty()}
             settings.putBoolean(key, true)
             settings.putInt(sentKey, settings.getInt(sentKey, 0) + 1)
             val latest = repository.getMessagesSync(session.id).lastOrNull()
-            RhodesNotificationCenter.show(
-                getApplication(), op.name, latest?.let { extractProactiveText(it.content) }?.take(120).orEmpty(),
-                session.id, avatarUri = op.avatarUri
-            )
+            if (!RhodesAppVisibility.isForeground) {
+                RhodesNotificationCenter.show(
+                    getApplication(), op.name, latest?.let { extractProactiveText(it.content) }?.take(120).orEmpty(),
+                    session.id, avatarUri = op.avatarUri
+                )
+            }
         }
         return sent
     }

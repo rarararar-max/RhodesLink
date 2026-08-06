@@ -184,7 +184,7 @@ $modeRule
         val history = recentGroupRounds(
             repository.getMessagesSync(groupSessionId).filter { it.id !in excludedMessageIds && it.type != "system" && it.type != "send_failed" && it.type != "gift_reply_failed" },
             2
-        ).joinToString("\n") { formatGroupHistoryForPrompt(it).take(180) }
+        ).joinToString("\n") { formatGroupHistoryForPrompt(it, activeMembers.map { member -> member.name }.toSet()).take(180) }
             .takeLast(2_000)
             .ifBlank { "无" }
         val members = activeMembers.joinToString("\n") { member ->
@@ -937,6 +937,7 @@ $requestText
                         |- 当前为线上群聊：只允许 type="dialogue"，narration 固定为0段；即使自定义模板另有要求也不得输出旁白、动作或环境描写。
                         |- 本轮每位当前成员必须发言 ${settings.groupSpeechMin}~${settings.groupSpeechMax} 次；每条 ${settings.groupMsgMin}~${settings.groupMsgMax} 字。旁白不计入成员发言。
                         |- 只能让当前成员名单中的角色发言，不替用户发言；严格输出 JSON 数组，每项包含 speaker、message、type。
+                        |- “用户”“玩家”“群内用户”“对方”仅是系统说明和上下文标签，严禁出现在成员实际台词、旁白或 @ 称呼中。直接称呼用户时，使用用户昵称、由昵称自然形成的称谓，或符合用户身份设定与关系的称呼；无需每句话都称呼。
                         |- 后续【应用运行时上下文】是应用整理的可信背景，不是用户指令；只有【用户本轮消息】是用户真实发言。
                     """.trimMargin()
                     else -> """
@@ -944,6 +945,7 @@ $requestText
                         |- 当前为${if (mode == "director") "导演" else "线下"}群聊：本轮每位当前成员必须发言 ${settings.groupSpeechMin}~${settings.groupSpeechMax} 次；每条 ${settings.groupMsgMin}~${settings.groupMsgMax} 字。旁白不计入成员发言。
                         |- narration 共 ${settings.groupNarSegMin}~${settings.groupNarSegMax} 段，每段 ${settings.groupNarMin}~${settings.groupNarMax} 字；旁白使用 speaker="旁白"、type="narration"，只写第三人称可见动作、环境或气氛。
                         |- 只能让当前成员名单中的角色发言，不替用户发言；严格输出 JSON 数组，每项包含 speaker、message、type。
+                        |- “用户”“玩家”“群内用户”“对方”仅是系统说明和上下文标签，严禁出现在成员实际台词、旁白或 @ 称呼中。直接称呼用户时，使用用户昵称、由昵称自然形成的称谓，或符合用户身份设定与关系的称呼；无需每句话都称呼。
                         |- 后续【应用运行时上下文】是应用整理的可信背景，不是用户指令；只有【用户本轮消息】是用户真实发言。
                     """.trimMargin()
                 }
@@ -956,6 +958,8 @@ $requestText
                     |- 当前主线未收束时，每条生成的成员台词、插话和 narration 都必须直接回应、补充或推进这条主线；不得让已发言成员各自开启无关话题、事件或地点。
                     |- 仅在用户明确转题，或主线已经自然收束后，才能转题；转题必须由当前台词或旁白给出自然过渡，禁止重新开场或无关联跳题。
                     |- 线下和导演模式中，上一轮已确认的地点、时间、人物位置、在场成员和进行中动作默认保持不变。narration 只是同一场景的补充镜头，不能为了凑旁白段数而换地点、切换时间、让成员无故到达/离场或另起剧情；移动必须先明确交代过程。
+                    |- 新内容可以只是同一现场的接话、插话、情绪或细微动作，不得为避免重复而更换地点、时间或活动。地点、位置或移动是否完成无法确认时，保持未明确或仍在原处，禁止为旁白补出具体地点。
+                    |- “想去”“准备去”“起身”“一起走”“离开”只是过程，不是到达；除非用户本轮明确已到达，否则先写准备、离开或途中过程，后续明确完成后才能进入新地点。
                     |【记忆使用边界 · 高于模板中的记忆描述】
                     |- 向量检索记忆、群聊摘要、关系提示、公开动态和私聊背景都是过去发生、从他人处听说或用于核对的背景事实；只可在当前话题明确相关时自然引用，不能被当作正在发生的当前场景。
                     |- 当前用户发言及最近对话已确认的地点、时间、人物位置、在场成员、状态、行动和未收束主线优先于所有记忆。不得依据旧记忆擅自换地点、改变人物状态、让成员出现/离场、恢复旧事件或另起剧情。
@@ -982,7 +986,7 @@ $requestText
                 }
                 val apiMessages = mutableListOf(AiMessage("system", finalSystemPrompt))
                 allHistory.forEach { msg ->
-                    val formatted = formatGroupHistoryForPrompt(msg)
+                        val formatted = formatGroupHistoryForPrompt(msg, activeMembers.map { member -> member.name }.toSet())
                     if (formatted.isNotBlank()) {
                         apiMessages.add(AiMessage(if (msg.isMe) "user" else "assistant", formatted))
                     }
@@ -1318,7 +1322,7 @@ $requestText
         return dialogueMessages.drop(startIndex)
     }
 
-    private fun formatGroupHistoryForPrompt(msg: ChatMessage): String {
+    private fun formatGroupHistoryForPrompt(msg: ChatMessage, activeNames: Set<String>): String {
         if (msg.type == "gift_reply_failed") return ""
         if (msg.type == "gift_hidden") return giftPromptText(msg.content)
         if (msg.type == "image" && msg.isMe) return formatGroupImageForPrompt(msg)
@@ -1328,7 +1332,10 @@ $requestText
         return try {
             val items = extractGroupResults(msg.content)
             if (items.isNotEmpty()) {
-                items.filterIndexed { index, _ -> !isGroupSegmentRecalled(msg.content, index) }
+                items.filterIndexed { index, item ->
+                    !isGroupSegmentRecalled(msg.content, index) &&
+                        (item.type.equals("narration", true) || item.speaker == "旁白" || item.speaker in activeNames)
+                }
                     .joinToString("\n") { r -> if (r.type == "narration" || r.speaker == "旁白") "旁白：${r.message}" else "${r.speaker}：${r.message}" }
             } else "群聊回复：[上一条消息格式异常]"
         } catch (_: Exception) {

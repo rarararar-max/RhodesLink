@@ -109,7 +109,7 @@ fun CreditsScreen(
             )
             Spacer(modifier = Modifier.height(24.dp))
             HorizontalDivider(color = Color(0xFF3A3A3E))
-            Text("版本 1.11", fontSize = 12.sp, color = Color(0xFF636366), modifier = Modifier.padding(bottom = 2.dp))
+            Text("版本 1.12", fontSize = 12.sp, color = Color(0xFF636366), modifier = Modifier.padding(bottom = 2.dp))
             Text("© 2026 Rhodes Terminal", fontSize = 12.sp, color = Color(0xFF636366), modifier = Modifier.padding(bottom = 16.dp))
             SponsorSection()
         }

@@ -119,7 +119,7 @@ fun PromptEditorScreen(
         "private" -> if (mode == "proactive") {
             setOf("OPERATOR_PERSONA", "PROACTIVE_CONTEXT_MODE", "PROACTIVE_TRIGGER_CONTEXT")
         } else {
-            setOf("USER_CONTENT", "OPERATOR_PERSONA")
+            setOf("OPERATOR_PERSONA")
         }
         "group" -> setOf("MEMBER_NAMES", "MEMBER_PROFILES")
         "moment_comment" -> setOf("POST_CONTENT", "COMMENTER_PERSONA")
@@ -434,7 +434,9 @@ fun PromptEditorScreen(
                     }
                 }
                 Spacer(Modifier.height(8.dp))
-                if (missingCritical.isNotEmpty()) {
+                // Shipped templates receive the current user message outside the template.
+                // Only warn when a user-authored template deliberately omits critical context.
+                if (isCustom && missingCritical.isNotEmpty()) {
                     Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFFF9500).copy(alpha = 0.10f))) {
                         Text(
                             "提醒：当前模板没有 ${missingCritical.joinToString { "{{$it}}" }}。保存后相关信息可能不会传给模型，聊天效果可能变差。你仍可保存，但建议确认这是有意修改。",
@@ -634,7 +636,7 @@ fun PromptEditorScreen(
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     Text(
-                        "每个模式都有独立模板。系统默认模板会优化连续聊天的流量和速度；一旦保存为自己的模板，系统会按你编辑的顺序完整使用，不会移动变量。{{USER_CONTENT}} 是私聊用户本轮消息，{{USER_MESSAGE}} 是群聊用户最新发言，建议保留。未识别的占位符会原样保留在最终提示词中。",
+                        "每个模式都有独立模板。系统默认模板会优化连续聊天的流量和速度；一旦保存为自己的模板，系统会按你编辑的顺序完整使用，不会移动变量。私聊用户本轮消息会由应用单独发送，无需在模板中保留 {{USER_CONTENT}}；{{USER_MESSAGE}} 是群聊用户最新发言，建议保留。未识别的占位符会原样保留在最终提示词中。",
                         fontSize = 13.sp,
                         color = TextSecondary,
                         modifier = Modifier.padding(bottom = 8.dp)

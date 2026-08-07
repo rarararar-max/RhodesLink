@@ -94,6 +94,11 @@ fun DispatchProgressScreen(
         startTime = finalRec.startTime
         interval = finalRec.segmentInterval
         totalSeg = finalRec.totalSegments
+        if (finalRec.startTime <= 0L || finalRec.segmentInterval <= 0L || finalRec.totalSegments <= 0 || finalRec.durationHours <= 0) {
+            done = true
+            errorMsg = "派遣数据异常，未进行结算"
+            return@LaunchedEffect
+        }
         // 解析 segments（支持分段追加）
         startTime = finalRec.startTime
         interval = finalRec.segmentInterval
@@ -158,6 +163,12 @@ fun DispatchProgressScreen(
                 break
             }
 
+            if (currentRec.startTime <= 0L || currentRec.segmentInterval <= 0L || currentRec.totalSegments <= 0 || currentRec.durationHours <= 0) {
+                done = true
+                errorMsg = "派遣数据异常，未进行结算"
+                break
+            }
+
             // 更新段落列表（后台可能已追加新段）
             val newSegments = parseSegmentsFromLog(currentRec.logChain)
             if (newSegments.size > segments.size) {
@@ -167,7 +178,7 @@ fun DispatchProgressScreen(
 
             // 按时间解锁段落
             val elapsed = System.currentTimeMillis() - currentRec.startTime
-            val unlockedCount = (elapsed / (currentRec.segmentInterval.coerceAtLeast(1L))).toInt().coerceIn(1, totalSeg.coerceAtLeast(1))
+            val unlockedCount = (elapsed / currentRec.segmentInterval).toInt().coerceIn(1, totalSeg)
             if (unlockedCount > visibleCount) {
                 visibleCount = unlockedCount
             }

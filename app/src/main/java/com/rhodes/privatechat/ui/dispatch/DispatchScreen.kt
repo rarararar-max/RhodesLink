@@ -122,7 +122,8 @@ fun DispatchScreen(
     val activeOperatorIds = activeDispatches.flatMap { it.operatorIds.split(",") }.map { it.trim() }.filter { it.isNotBlank() }.toSet()
     val teamAllExist = team.all { m -> operators.any { it.id == m.id } }
     val teamAvailable = team.none { it.id in activeOperatorIds || it.name in activeOperatorIds }
-    val canStart = taskReady && team.size == 5 && teamAllExist && teamAvailable && budget >= 100 && budget <= balance && activeDispatches.size < 2 && !viewModel.dispatchViewModel.isStarting
+    val aiConfigError = viewModel.sharedUtils.chatConfigurationError()
+    val canStart = taskReady && team.size == 5 && teamAllExist && teamAvailable && budget >= 100 && budget <= balance && activeDispatches.size < 2 && !viewModel.dispatchViewModel.isStarting && aiConfigError == null
     val startBlockReason = when {
         viewModel.dispatchViewModel.isStarting -> "正在创建派遣，请稍候"
         activeDispatches.size >= 2 -> "当前已有两支小队在派遣中"
@@ -132,6 +133,7 @@ fun DispatchScreen(
         !teamAvailable -> "小队中有干员正在派遣中"
         budget < 100 -> "预算至少为 100 龙门币"
         budget > balance -> "预算不足，还差 ${budget - balance} 龙门币"
+        aiConfigError != null -> aiConfigError
         else -> ""
     }
 

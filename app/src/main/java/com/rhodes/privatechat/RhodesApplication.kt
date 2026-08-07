@@ -23,6 +23,9 @@ import kotlinx.coroutines.launch
 class RhodesApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        DebugLogger.initialize(this)
+        DebugLogger.installCrashHandler()
+        DebugLogger.diagnostic("Startup/Application", "applicationCreated=true")
         AndroidSettingsFactory.init(this)
         SettingsMigration.migrateIfNeeded(this)
         

@@ -90,6 +90,7 @@ class ChatViewModel(
         private const val MAX_MERGED_USER_MESSAGES = 2
         private const val MAX_MERGED_USER_CHARS = 600
         private const val PRIVATE_REPLY_TIMEOUT_MS = 90_000L
+        private const val MESSAGE_WRITE_TIMEOUT_MS = 8_000L
     }
 
     // === Chat state ===
@@ -509,11 +510,14 @@ ${text}"""
         settings.hypnosisCmd = _hypnosisCommand.value
         settings.hypnosisRound = _hypnosisRounds.value
         viewModelScope.launch {
-            val session = repository.getOrCreateSession(operator.id, operator.name, operator.avatarUri)
+            DebugLogger.diagnostic("PrivateChat/SelectStep", "operatorId=${operator.id}, step=get_session_start")
+            val session = withTimeout(8_000L) { repository.getOrCreateSession(operator.id, operator.name, operator.avatarUri) }
+            DebugLogger.diagnostic("PrivateChat/SelectStep", "operatorId=${operator.id}, step=get_session_done, sessionId=${session.id}")
             if (selectionId != selectionSequence.get()) return@launch
             val sameSession = _currentSession.value?.id == session.id
             ChatTrace.d("ChatVM", "select op=${operator.id} session=${session.id} sameSession=$sameSession jobActive=${messagesJob?.isActive}")
             _currentSession.value = session
+            DebugLogger.diagnostic("PrivateChat/SelectStep", "operatorId=${operator.id}, step=current_session_assigned")
             _sessionRestartAt.value = settings.getSessionRestartAt(session.id)
             _currentMode.value = settings.getLastMode(operator.id)
             settings.getPendingPrivateModeTransition(session.id).takeIf { it.isNotBlank() }?.let { modeTransitionNotices[session.id] = it }
@@ -558,11 +562,14 @@ ${text}"""
             _hypnosisRounds.value = settings.getInt("hypnosis_round_${operator.id}", 0)
             settings.hypnosisCmd = _hypnosisCommand.value
             settings.hypnosisRound = _hypnosisRounds.value
-            val session = repository.getOrCreateSession(operator.id, operator.name, operator.avatarUri)
+            DebugLogger.diagnostic("PrivateChat/SelectStep", "operatorId=${operator.id}, step=sync_get_session_start")
+            val session = withTimeout(8_000L) { repository.getOrCreateSession(operator.id, operator.name, operator.avatarUri) }
+            DebugLogger.diagnostic("PrivateChat/SelectStep", "operatorId=${operator.id}, step=sync_get_session_done, sessionId=${session.id}")
             if (selectionId != selectionSequence.get()) return selectionId
             val sameSession = _currentSession.value?.id == session.id
             ChatTrace.d("ChatVM", "selectSync op=${operator.id} session=${session.id} sameSession=$sameSession jobActive=${messagesJob?.isActive}")
             _currentSession.value = session
+            DebugLogger.diagnostic("PrivateChat/SelectStep", "operatorId=${operator.id}, step=sync_current_session_assigned")
             _sessionRestartAt.value = settings.getSessionRestartAt(session.id)
             _currentMode.value = settings.getLastMode(operator.id)
             settings.getPendingPrivateModeTransition(session.id).takeIf { it.isNotBlank() }?.let { modeTransitionNotices[session.id] = it }
@@ -593,7 +600,9 @@ ${text}"""
             }
         } catch (e: Exception) {
             ChatTrace.e("ChatVM", "selectSync.ERROR op=${operator.id} err=${e.message}", e)
+            DebugLogger.diagnostic("PrivateChat/SelectFailed", "operatorId=${operator.id}, error=${e.javaClass.simpleName}:${e.message?.take(180)}")
             _selectedOperator.value = operator
+            throw e
         }
         return selectionId
     }
@@ -1062,11 +1071,13 @@ $userContent
         if (DEBUG) dumpDebugState()
         var text = (textOverride ?: _inputText.value).trim()
         val session = targetSession ?: _currentSession.value ?: run {
+            DebugLogger.diagnostic("PrivateChat/NoSession", "selectedOperator=${_selectedOperator.value?.id ?: "none"}, textLength=${text.length}")
             onShowToast("聊天正在恢复，请稍后再试")
             return
         }
         if (text.isEmpty()) return
         sharedUtils.chatConfigurationError()?.let { error ->
+            DebugLogger.diagnostic("ChatConfig/PrivateBlocked", "operatorId=${session.operatorId}, sessionId=${session.id}, provider=${sharedUtils.getProvider()}, apiKeyPresent=${sharedUtils.getApiKey().isNotBlank()}, modelPresent=${sharedUtils.getModelName().isNotBlank()}, customUrlPresent=${sharedUtils.getCustomUrl().isNotBlank()}, reason=$error")
             retryMessageId?.let { retryingMessageIds.remove(it) }
             onShowToast(error)
             return
@@ -1088,13 +1099,23 @@ $userContent
             var batchIds = emptySet<Long>()
             try {
                 val hiddenGift = messageTypeOverride == "gift_hidden"
+                val userMessage = ChatMessage(
+                    id = msgId, sessionId = session.id,
+                    senderName = "我", content = if (hiddenGift) persistedContentOverride ?: text else text,
+                    type = messageTypeOverride ?: "text", mode = mode, isMe = true
+                )
                 if (retryMessageId == null) {
-                    repository.sendMessage(session.id, ChatMessage(
-                        id = msgId, sessionId = session.id,
-                        senderName = "我", content = if (hiddenGift) persistedContentOverride ?: text else text, type = messageTypeOverride ?: "text", mode = mode, isMe = true
-                    ))
+                    // Show the user's message immediately. The database flow later replaces this
+                    // optimistic row with its persisted timestamped copy.
+                    _messages.value = (_messages.value + userMessage).distinctBy { it.id }
+                        .sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
+                    DebugLogger.diagnostic("PrivateChat/SendStep", "sessionId=${session.id}, messageId=$msgId, step=message_insert_start")
+                    withTimeout(MESSAGE_WRITE_TIMEOUT_MS) { repository.sendMessage(session.id, userMessage) }
+                    DebugLogger.diagnostic("PrivateChat/SendStep", "sessionId=${session.id}, messageId=$msgId, step=message_insert_done")
                 } else {
-                    repository.updateMessageType(msgId, messageTypeOverride ?: "text")
+                    DebugLogger.diagnostic("PrivateChat/SendStep", "sessionId=${session.id}, messageId=$msgId, step=retry_update_start")
+                    withTimeout(MESSAGE_WRITE_TIMEOUT_MS) { repository.updateMessageType(msgId, messageTypeOverride ?: "text") }
+                    DebugLogger.diagnostic("PrivateChat/SendStep", "sessionId=${session.id}, messageId=$msgId, step=retry_update_done")
                     _messages.value = _messages.value.map { message ->
                         if (message.id == msgId) message.copy(type = messageTypeOverride ?: "text") else message
                     }
@@ -1110,7 +1131,7 @@ $userContent
                 // Do not rely on unread state to restore a session removed from the home page.
                 onUnhideSession(session.id)
                 DebugLogger.log("Chat/DB", "用户消息已写入, session=${session.id}, id=$msgId, length=${text.length}")
-                aiMsgId = repository.getNextMessageId()
+                aiMsgId = withTimeout(MESSAGE_WRITE_TIMEOUT_MS) { repository.getNextMessageId() }
                 DebugLogger.log("Chat/DB", "AI消息ID已获取, aiMsgId=$aiMsgId")
                 aiMutexFor(session.id).lock()
                 mutexLocked = true
@@ -1167,7 +1188,11 @@ $userContent
                                 settings.putPrivateTurnState(session.id, it)
                                 privateTurnStateUpdates.value++
                             }
-                            repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = rawJson, type = "ai_json", mode = mode, isMe = false))
+                            DebugLogger.diagnostic("PrivateChat/SendStep", "sessionId=${session.id}, messageId=$aiMsgId, step=ai_insert_start")
+                            withTimeout(MESSAGE_WRITE_TIMEOUT_MS) {
+                                repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = rawJson, type = "ai_json", mode = mode, isMe = false))
+                            }
+                            DebugLogger.diagnostic("PrivateChat/SendStep", "sessionId=${session.id}, messageId=$aiMsgId, step=ai_insert_done")
                             responseStored = true
                             com.rhodes.privatechat.automation.ManualReplyScheduler.complete(getApplication(), msgId)
                             DebugLogger.chatEvent("私聊", "回复落库", "成功", "会话=${session.operatorName}，可见段=$aiResponseCount")
@@ -1237,6 +1262,15 @@ $userContent
                     DebugLogger.chatEvent("私聊", "请求模型", "失败", "${lastError.message?.take(80)}")
                     markPrivateMessagesUndelivered(session.id, batchIds.toSet())
                 }
+            } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                if (!userMessagePersisted) {
+                    _messages.value = _messages.value.filterNot { it.id == msgId }
+                    if (textOverride == null && _inputText.value.isBlank()) _inputText.value = originalText
+                    DebugLogger.diagnostic("PrivateChat/MessageWriteTimeout", "sessionId=${session.id}, messageId=$msgId")
+                    onShowToast("消息保存超时，请稍后重试")
+                } else {
+                    markPrivateMessagesUndelivered(session.id, batchIds.ifEmpty { setOf(msgId) })
+                }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 if (userMessagePersisted) {
                     markPrivateMessagesUndelivered(session.id, batchIds.ifEmpty { setOf(msgId) })
@@ -1244,8 +1278,11 @@ $userContent
                 throw e
             } catch (e: Exception) {
                 if (!userMessagePersisted) {
+                    _messages.value = _messages.value.filterNot { it.id == msgId }
                     if (textOverride == null && _inputText.value.isBlank()) _inputText.value = originalText
-                    onShowToast("消息保存失败，请重试")
+                    val timeout = e is kotlinx.coroutines.TimeoutCancellationException
+                    DebugLogger.diagnostic("PrivateChat/MessageWriteFailed", "sessionId=${session.id}, messageId=$msgId, timeout=$timeout, error=${e.javaClass.simpleName}:${e.message?.take(160)}")
+                    onShowToast(if (timeout) "消息保存超时，请稍后重试" else "消息保存失败，请重试")
                     DebugLogger.log("Chat/DB", "用户消息保存失败: ${e.message?.take(100)}")
                 } else {
                     DebugLogger.log("Chat/AI", "发送流程异常: ${e.message?.take(100)}")

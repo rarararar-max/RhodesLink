@@ -43,7 +43,7 @@ class OperatorRepository(private val wrapper: DatabaseWrapper) {
     val allOperators: Flow<List<Operator>> =
         db.operatorsQueries.getAllOperators(::mapOperator).asFlow().mapToList(Dispatchers.Default)
 
-    suspend fun getOperator(id: String): Operator? = withContext(Dispatchers.Default) {
+    suspend fun getOperator(id: String): Operator? = withContext(Dispatchers.IO) {
         db.operatorsQueries.getOperator(id, ::mapOperator).executeAsOneOrNull()
     }
 
@@ -113,7 +113,9 @@ class OperatorRepository(private val wrapper: DatabaseWrapper) {
         }
     }
 
-    suspend fun getAllOperatorsSync(): List<Operator> = withContext(Dispatchers.Default) {
+    fun isPresetOperatorId(id: String): Boolean = presetOperators.any { it.id == id }
+
+    suspend fun getAllOperatorsSync(): List<Operator> = withContext(Dispatchers.IO) {
         db.operatorsQueries.getAllOperators(::mapOperator).executeAsList()
     }
 
@@ -267,17 +269,17 @@ class OperatorRepository(private val wrapper: DatabaseWrapper) {
         Operator(id = "li_zhiyan", name = "李织烟", title = "终末地工业近战干员", description = "骑摩托车英姿飒爽，用剑加浮游炮战斗，重情重义的行动派。", gender = "女", location = "终末地工业", activity = "骑摩托车巡逻", emotion = "飒爽", privatePrompt = "你是李织烟，终末地工业的近战干员。你骑摩托很帅，打架的时候用剑还带浮游炮，一身装备科技感拉满。你重情重义，很护着同伴，哪怕自己受伤也不会退。你平时话不算多，但很可靠，属于行动派。你做事有点莽，胆子大，敢闯敢拼，但不是没脑子那种。", groupPrompt = "你是李织烟，终末地工业近战干员。骑摩托车英姿飒爽，战斗用剑加浮游炮，重情重义，行动派。", avatarUri = avatarRes("li_zhiyan").toString())
     )
 
-    suspend fun deleteOperator(id: String) = withContext(Dispatchers.Default) { db.operatorsQueries.deleteOperator(id) }
+    suspend fun deleteOperator(id: String) = withContext(Dispatchers.IO) { db.operatorsQueries.deleteOperator(id) }
 
-    suspend fun updateOperator(op: Operator) = withContext(Dispatchers.Default) {
+    suspend fun updateOperator(op: Operator) = withContext(Dispatchers.IO) {
         db.operatorsQueries.updateOperator(op.name, op.title, op.description, op.gender, op.avatarUri, op.location, op.activity, op.emotion, op.intimacy.toLong(), op.privatePrompt, op.groupPrompt, op.memoryInjection, op.userRelation, op.lmb.toLong(), op.attack.toDouble(), op.defense.toDouble(), op.meldPref, op.activityLevel.toDouble(), op.voiceName, op.voiceSpeed, op.voicePitch, op.id)
     }
 
-    suspend fun updateIntimacy(id: String, intimacy: Int) = withContext(Dispatchers.Default) {
+    suspend fun updateIntimacy(id: String, intimacy: Int) = withContext(Dispatchers.IO) {
         db.operatorsQueries.updateIntimacy(intimacy.toLong(), id)
     }
 
-    suspend fun insertOperator(op: Operator) = withContext(Dispatchers.Default) {
+    suspend fun insertOperator(op: Operator) = withContext(Dispatchers.IO) {
         db.operatorsQueries.insertOperator(op.id, op.name, op.title, op.description, op.gender, op.avatarUri, op.location, op.activity, op.emotion, op.intimacy.toLong(), op.privatePrompt, op.groupPrompt, op.memoryInjection, op.userRelation, op.lmb.toLong(), op.attack.toDouble(), op.defense.toDouble(), op.meldPref, op.activityLevel.toDouble(), op.voiceName, op.voiceSpeed, op.voicePitch)
     }
 }

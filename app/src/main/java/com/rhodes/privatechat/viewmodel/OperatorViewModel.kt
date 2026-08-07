@@ -6,8 +6,12 @@ import com.rhodes.privatechat.shared.data.BfsNode
 import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.viewmodel.shared.AppStateHolder
 import com.rhodes.privatechat.shared.settings.SettingsRepository
+import com.rhodes.privatechat.util.DebugLogger
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
 
 class OperatorViewModel(
     private val repository: ChatRepository,
@@ -31,25 +35,31 @@ class OperatorViewModel(
         voicePitch: String = "",
         onComplete: (String?) -> Unit = {}
     ) {
-        scope.launch {
+        DebugLogger.diagnostic("Operator/SaveEnqueued", "operatorId=$id, nameLength=${name.trim().length}")
+        scope.launch(Dispatchers.IO) {
             try {
                 val cleanName = name.trim()
                 if (id.isBlank()) {
-                    onComplete("干员内部编号无效，请重新进入新建页面")
+                    DebugLogger.diagnostic("Operator/SaveBlocked", "reason=blank_id, nameLength=${cleanName.length}, existingOperators=${appState.getOperatorsSnapshot().size}")
+                    finish(onComplete, "干员内部编号无效，请重新进入新建页面")
                     return@launch
                 }
                 if (cleanName.isBlank()) {
-                    onComplete("请输入干员名称")
+                    DebugLogger.diagnostic("Operator/SaveBlocked", "reason=blank_name, operatorId=$id")
+                    finish(onComplete, "请输入干员名称")
                     return@launch
                 }
                 val duplicate = appState.getOperatorsSnapshot().firstOrNull {
                     it.id != id && it.name.trim().equals(cleanName, ignoreCase = true)
                 }
                 if (duplicate != null && !existingNameMatches(id, cleanName)) {
-                    onComplete("已存在名为“$cleanName”的干员，请使用其他名称")
+                    DebugLogger.diagnostic("Operator/SaveBlocked", "reason=duplicate_name, operatorId=$id, duplicateId=${duplicate.id}")
+                    finish(onComplete, "已存在名为“$cleanName”的干员，请使用其他名称")
                     return@launch
                 }
-                val existing = repository.getOperator(id)
+                DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=get_existing_start")
+                val existing = withTimeout(8_000L) { repository.getOperator(id) }
+                DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=get_existing_done, exists=${existing != null}")
                 val op = Operator(
                     id = id, name = cleanName, title = title,
                     description = description, gender = gender,
@@ -70,21 +80,31 @@ class OperatorViewModel(
                     voiceSpeed = voiceSpeed.ifBlank { existing?.voiceSpeed ?: "" },
                     voicePitch = voicePitch.ifBlank { existing?.voicePitch ?: "" }
                 )
-                repository.insertOperator(op)
-                repository.syncOperatorAvatar(id, op.avatarUri)
-                repository.syncOperatorName(id, cleanName)
+                DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=insert_start")
+                withTimeout(8_000L) { repository.insertOperator(op) }
+                DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=insert_done")
+                withTimeout(8_000L) { repository.syncOperatorAvatar(id, op.avatarUri) }
+                withTimeout(8_000L) { repository.syncOperatorName(id, cleanName) }
                 settings.putOperatorDynPermission(id, autoPost)
                 settings.putOperatorMsgPermission(id, allowChat)
-                repository.deleteRelationshipByOperator(id)
+                DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=relationships_start, count=${relationships.size}")
+                withTimeout(8_000L) { repository.deleteRelationshipByOperator(id) }
                 for (rel in relationships) {
-                    repository.insertRelationship(rel.copy(operatorId = id))
+                    withTimeout(8_000L) { repository.insertRelationship(rel.copy(operatorId = id)) }
                 }
+                DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=relationships_done")
                 onSelectedOperatorUpdated?.invoke(repository.getOperator(id))
-                onComplete(null)
+                DebugLogger.log("Operator/Save", "saved operatorId=$id, isNew=${existing == null}, operatorCount=${appState.getOperatorsSnapshot().size}")
+                finish(onComplete, null)
             } catch (e: Exception) {
-                onComplete("保存失败：${e.message?.take(80) ?: "请稍后重试"}")
+                DebugLogger.diagnostic("Operator/SaveFailed", "operatorId=$id, nameLength=${name.trim().length}, error=${e.javaClass.simpleName}:${e.message?.take(120)}")
+                finish(onComplete, "保存失败：${e.message?.take(80) ?: "请稍后重试"}")
             }
         }
+    }
+
+    private suspend fun finish(onComplete: (String?) -> Unit, error: String?) {
+        withContext(Dispatchers.Main.immediate) { onComplete(error) }
     }
 
     private fun existingNameMatches(id: String, name: String): Boolean =

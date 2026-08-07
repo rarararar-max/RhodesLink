@@ -22,13 +22,13 @@ class SessionRepository(private val wrapper: DatabaseWrapper) {
             ChatSession(id, operatorId, operatorName, lastMessage, lastTime, mode, isPinned != 0L, unreadCount.toInt(), members, rules, avatarUri, mutedMembers)
         }.asFlow().mapToList(Dispatchers.Default)
 
-    suspend fun getAllSessionsSync(): List<ChatSession> = withContext(Dispatchers.Default) {
+    suspend fun getAllSessionsSync(): List<ChatSession> = withContext(Dispatchers.IO) {
         db.chatSessionsQueries.getAllSessions { id, operatorId, operatorName, lastMessage, lastTime, mode, isPinned, unreadCount, members, rules, avatarUri, mutedMembers ->
             ChatSession(id, operatorId, operatorName, lastMessage, lastTime, mode, isPinned != 0L, unreadCount.toInt(), members, rules, avatarUri, mutedMembers)
         }.executeAsList()
     }
 
-    suspend fun getOrCreateSession(operatorId: String, operatorName: String, avatarUri: String = ""): ChatSession = withContext(Dispatchers.Default) {
+    suspend fun getOrCreateSession(operatorId: String, operatorName: String, avatarUri: String = ""): ChatSession = withContext(Dispatchers.IO) {
         val existing = db.chatSessionsQueries.getSessionByOperator(operatorId) { id, opId, opName, lastMsg, lastTime, mode, isPinned, unreadCount, members, rules, avatar, muted ->
             ChatSession(id, opId, opName, lastMsg, lastTime, mode, isPinned != 0L, unreadCount.toInt(), members, rules, avatar, muted)
         }.executeAsOneOrNull()
@@ -54,13 +54,13 @@ class SessionRepository(private val wrapper: DatabaseWrapper) {
         }
     }
 
-    suspend fun getSession(id: String): ChatSession? = withContext(Dispatchers.Default) {
+    suspend fun getSession(id: String): ChatSession? = withContext(Dispatchers.IO) {
         db.chatSessionsQueries.getSession(id) { id_, opId, opName, lastMsg, lastTime, mode, isPinned, unreadCount, members, rules, avatar, muted ->
             ChatSession(id_, opId, opName, lastMsg, lastTime, mode, isPinned != 0L, unreadCount.toInt(), members, rules, avatar, muted)
         }.executeAsOneOrNull()
     }
 
-    suspend fun insertSession(session: ChatSession) = withContext(Dispatchers.Default) {
+    suspend fun insertSession(session: ChatSession) = withContext(Dispatchers.IO) {
         db.chatSessionsQueries.insertSession(session.id, session.operatorId, session.operatorName, session.lastMessage, session.lastTime, session.mode, if (session.isPinned) 1L else 0L, session.unreadCount.toLong(), session.members, session.rules, session.avatarUri, session.mutedMembers)
     }
 
@@ -84,7 +84,7 @@ class SessionRepository(private val wrapper: DatabaseWrapper) {
         db.chatSessionsQueries.updateLastMessage(lastMessage, lastTime, sessionId)
     }
 
-    suspend fun getSessionByOperator(operatorId: String): ChatSession? = withContext(Dispatchers.Default) {
+    suspend fun getSessionByOperator(operatorId: String): ChatSession? = withContext(Dispatchers.IO) {
         db.chatSessionsQueries.getSessionByOperator(operatorId) { id, opId, opName, lastMsg, lastTime, mode, isPinned, unreadCount, members, rules, avatar, muted ->
             ChatSession(id, opId, opName, lastMsg, lastTime, mode, isPinned != 0L, unreadCount.toInt(), members, rules, avatar, muted)
         }.executeAsOneOrNull()

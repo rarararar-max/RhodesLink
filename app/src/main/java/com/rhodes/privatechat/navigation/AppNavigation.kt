@@ -69,6 +69,7 @@ import cafe.adriel.voyager.navigator.currentOrThrow
 import cafe.adriel.voyager.transitions.SlideTransition
 import org.koin.compose.viewmodel.koinViewModel
 import com.rhodes.privatechat.viewmodel.MainViewModel
+import com.rhodes.privatechat.util.DebugLogger
 import com.rhodes.privatechat.MainActivity
 
 // ──────────────────────────────────────────────
@@ -185,9 +186,18 @@ private fun ContactsTabContent(navigator: Navigator) {
     val viewModel: MainViewModel = koinViewModel()
     com.rhodes.privatechat.ui.contacts.ContactsScreen(
         viewModel = viewModel,
-        onOperatorClick = { op -> navigator.push(ChatOperator(op.id)) },
-        onNewOperator = { navigator.push(NewOperatorScreen) },
-        onNewGroup = { navigator.push(NewGroupScreen) },
+        onOperatorClick = { op ->
+            DebugLogger.diagnostic("Navigation/PrivateChatRequested", "operatorId=${op.id}, operatorName=${op.name}")
+            navigator.push(ChatOperator(op.id))
+        },
+        onNewOperator = {
+            DebugLogger.diagnostic("Navigation/NewOperatorRequested", "source=contacts")
+            navigator.push(NewOperatorScreen)
+        },
+        onNewGroup = {
+            DebugLogger.diagnostic("Navigation/NewGroupRequested", "source=contacts")
+            navigator.push(NewGroupScreen)
+        },
         onGroupClick = { name, id -> navigator.push(GroupChatRoute(name, id)) }
     )
 }

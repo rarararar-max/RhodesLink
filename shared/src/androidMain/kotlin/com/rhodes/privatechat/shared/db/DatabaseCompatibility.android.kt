@@ -12,6 +12,8 @@ object DatabaseCompatibility {
     private const val SETTINGS_SP = "rhodes_settings"
     private const val DERIVED_CLEAN_KEY = "derived_data_cleaned_for_1_05"
     private const val MESSAGE_TIMESTAMPS_KEY = "chat_message_timestamps_normalized_v1"
+    private const val DIAGNOSTIC_PREFS = "rhodes_diagnostics"
+    private const val DIAGNOSTIC_KEY = "entries_v1"
 
     fun prepareBeforeOpen(context: Context) {
         val dbFile = context.getDatabasePath(DB_NAME)
@@ -40,13 +42,32 @@ object DatabaseCompatibility {
                 // Older databases must let SQLDelight run its numbered migrations first; adding
                 // their columns here would make those ALTER TABLE statements fail.
                 if (userVersion >= TARGET_VERSION) {
+                    // A prior interrupted upgrade can leave the database version advanced while
+                    // its core chat tables are absent or incomplete. Repair only additive schema
+                    // here; never delete rows or advance user_version.
+                    ensureCoreChatSchema(db)
                     ensureCompatibilitySchema(db)
                     advanceUserVersionIfSchemaComplete(db, userVersion)
                 }
                 normalizeLegacyMessageTimestamps(context, db)
+                recordDiagnostic(context, "Database/CoreSchemaReady", "userVersion=$userVersion, operators=${existingColumns(db, "operators").size}, sessions=${existingColumns(db, "chat_sessions").size}, messages=${existingColumns(db, "chat_messages").size}")
             }
         } catch (e: Exception) {
             Log.e(TAG, "数据库兼容准备失败: ${e.message}", e)
+            recordDiagnostic(context, "Database/CompatibilityFailed", "error=${e.javaClass.simpleName}:${e.message?.take(180)}")
+        }
+    }
+
+    private fun recordDiagnostic(context: Context, tag: String, message: String) {
+        try {
+            val prefs = context.getSharedPreferences(DIAGNOSTIC_PREFS, Context.MODE_PRIVATE)
+            val item = "${System.currentTimeMillis()}\tDiagnostic/$tag\t${message.replace('\n', ' ').replace('\t', ' ')}"
+            val entries = prefs.getString(DIAGNOSTIC_KEY, "").orEmpty().lineSequence()
+                .filter { it.isNotBlank() }.toMutableList()
+            entries.add(item)
+            prefs.edit().putString(DIAGNOSTIC_KEY, entries.takeLast(100).joinToString("\n")).commit()
+        } catch (_: Exception) {
+            // Diagnostics must never block opening the user's database.
         }
     }
 
@@ -304,6 +325,83 @@ object DatabaseCompatibility {
                 savedAt INTEGER NOT NULL DEFAULT 0
             )
         """.trimIndent())
+    }
+
+    private fun ensureCoreChatSchema(db: SQLiteDatabase) {
+        ensureColumns(
+            db = db,
+            table = "operators",
+            createSql = """
+                CREATE TABLE IF NOT EXISTS operators (
+                    id TEXT NOT NULL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    title TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
+                    gender TEXT NOT NULL DEFAULT '', avatarUri TEXT NOT NULL DEFAULT '',
+                    location TEXT NOT NULL DEFAULT '宿舍', activity TEXT NOT NULL DEFAULT '休息',
+                    emotion TEXT NOT NULL DEFAULT '平静', intimacy INTEGER NOT NULL DEFAULT 0,
+                    privatePrompt TEXT NOT NULL DEFAULT '', groupPrompt TEXT NOT NULL DEFAULT '',
+                    memoryInjection TEXT NOT NULL DEFAULT '', userRelation TEXT NOT NULL DEFAULT '',
+                    lmb INTEGER NOT NULL DEFAULT 10000, attack REAL NOT NULL DEFAULT 0.5,
+                    defense REAL NOT NULL DEFAULT 0.5, meldPref TEXT NOT NULL DEFAULT 'medium',
+                    activityLevel REAL NOT NULL DEFAULT 0.5, voiceName TEXT NOT NULL DEFAULT '',
+                    voiceSpeed TEXT NOT NULL DEFAULT '', voicePitch TEXT NOT NULL DEFAULT ''
+                )
+            """.trimIndent(),
+            columns = listOf(
+                "title" to "TEXT NOT NULL DEFAULT ''", "description" to "TEXT NOT NULL DEFAULT ''",
+                "gender" to "TEXT NOT NULL DEFAULT ''", "avatarUri" to "TEXT NOT NULL DEFAULT ''",
+                "location" to "TEXT NOT NULL DEFAULT '宿舍'", "activity" to "TEXT NOT NULL DEFAULT '休息'",
+                "emotion" to "TEXT NOT NULL DEFAULT '平静'", "intimacy" to "INTEGER NOT NULL DEFAULT 0",
+                "privatePrompt" to "TEXT NOT NULL DEFAULT ''", "groupPrompt" to "TEXT NOT NULL DEFAULT ''",
+                "memoryInjection" to "TEXT NOT NULL DEFAULT ''", "userRelation" to "TEXT NOT NULL DEFAULT ''",
+                "lmb" to "INTEGER NOT NULL DEFAULT 10000", "attack" to "REAL NOT NULL DEFAULT 0.5",
+                "defense" to "REAL NOT NULL DEFAULT 0.5", "meldPref" to "TEXT NOT NULL DEFAULT 'medium'",
+                "activityLevel" to "REAL NOT NULL DEFAULT 0.5", "voiceName" to "TEXT NOT NULL DEFAULT ''",
+                "voiceSpeed" to "TEXT NOT NULL DEFAULT ''", "voicePitch" to "TEXT NOT NULL DEFAULT ''"
+            )
+        )
+        ensureColumns(
+            db = db,
+            table = "chat_sessions",
+            createSql = """
+                CREATE TABLE IF NOT EXISTS chat_sessions (
+                    id TEXT NOT NULL PRIMARY KEY, operatorId TEXT NOT NULL, operatorName TEXT NOT NULL,
+                    lastMessage TEXT NOT NULL DEFAULT '', lastTime INTEGER NOT NULL DEFAULT 0,
+                    mode TEXT NOT NULL DEFAULT 'online', isPinned INTEGER NOT NULL DEFAULT 0,
+                    unreadCount INTEGER NOT NULL DEFAULT 0, members TEXT NOT NULL DEFAULT '',
+                    rules TEXT NOT NULL DEFAULT '', avatarUri TEXT NOT NULL DEFAULT '', mutedMembers TEXT NOT NULL DEFAULT ''
+                )
+            """.trimIndent(),
+            columns = listOf(
+                "operatorName" to "TEXT NOT NULL DEFAULT ''", "lastMessage" to "TEXT NOT NULL DEFAULT ''",
+                "lastTime" to "INTEGER NOT NULL DEFAULT 0", "mode" to "TEXT NOT NULL DEFAULT 'online'",
+                "isPinned" to "INTEGER NOT NULL DEFAULT 0", "unreadCount" to "INTEGER NOT NULL DEFAULT 0",
+                "members" to "TEXT NOT NULL DEFAULT ''", "rules" to "TEXT NOT NULL DEFAULT ''",
+                "avatarUri" to "TEXT NOT NULL DEFAULT ''", "mutedMembers" to "TEXT NOT NULL DEFAULT ''"
+            )
+        )
+        ensureColumns(
+            db = db,
+            table = "chat_messages",
+            createSql = """
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id INTEGER NOT NULL PRIMARY KEY, sessionId TEXT NOT NULL, senderId TEXT NOT NULL DEFAULT '',
+                    senderName TEXT NOT NULL, content TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'text',
+                    mode TEXT NOT NULL DEFAULT 'online', emotion TEXT NOT NULL DEFAULT '', activity TEXT NOT NULL DEFAULT '',
+                    location TEXT NOT NULL DEFAULT '', narration TEXT NOT NULL DEFAULT '', segmentGroup TEXT NOT NULL DEFAULT '',
+                    intimacyChange INTEGER NOT NULL DEFAULT 0, timestamp INTEGER NOT NULL DEFAULT 0, isMe INTEGER NOT NULL DEFAULT 0
+                )
+            """.trimIndent(),
+            columns = listOf(
+                "senderId" to "TEXT NOT NULL DEFAULT ''", "type" to "TEXT NOT NULL DEFAULT 'text'",
+                "mode" to "TEXT NOT NULL DEFAULT 'online'", "emotion" to "TEXT NOT NULL DEFAULT ''",
+                "activity" to "TEXT NOT NULL DEFAULT ''", "location" to "TEXT NOT NULL DEFAULT ''",
+                "narration" to "TEXT NOT NULL DEFAULT ''", "segmentGroup" to "TEXT NOT NULL DEFAULT ''",
+                "intimacyChange" to "INTEGER NOT NULL DEFAULT 0", "timestamp" to "INTEGER NOT NULL DEFAULT 0",
+                "isMe" to "INTEGER NOT NULL DEFAULT 0"
+            )
+        )
+        Log.i(TAG, "核心聊天表已检查: operators=${existingColumns(db, "operators").size}, sessions=${existingColumns(db, "chat_sessions").size}, messages=${existingColumns(db, "chat_messages").size}")
     }
 
     private fun ensureOperatorsCompatibility(db: SQLiteDatabase) {

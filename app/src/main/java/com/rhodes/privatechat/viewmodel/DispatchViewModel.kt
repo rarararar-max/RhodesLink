@@ -63,6 +63,20 @@ class DispatchViewModel(
         return "$head\n\n【日志已压缩，省略中间过长内容】\n\n$tail"
     }
 
+    /** Refund a startup record only while it is still in the one refundable state. */
+    private suspend fun cancelGeneratingWithRefund(dispatchId: String, reason: String) {
+        val record = repository.getDispatch(dispatchId) ?: return
+        if (record.status != "generating" || record.endTime > 0L) return
+        settings.addLmb(record.budget)
+        repository.insertDispatch(record.copy(
+            logChain = reason,
+            status = "cancelled",
+            endTime = System.currentTimeMillis(),
+            netProfit = 0
+        ))
+        refreshAllOperatorStatus()
+    }
+
     // 段落辅助函数（按固定标记分割，避免AI正文中的\n\n干扰）
     private fun parseSegmentCount(logChain: String): Int {
         if (logChain.isBlank()) return 0
@@ -133,12 +147,27 @@ class DispatchViewModel(
         val interval = (if (settings.dispatchFastMode) 30_000L
             else (duration.toLong() * 3_600_000 / totalSeg)).coerceAtLeast(30_000L)
         val dispatchStartTime = System.currentTimeMillis()
+        var budgetSpent = false
         Log.i(TAG, "[startDispatch] 启动派遣 id=$id task=$task duration=${duration}h budget=$budget segments=$totalSeg interval=${interval}ms ops=${operatorIds.size}")
         scope.launch {
             try {
+                if (task.isBlank() || duration !in setOf(1, 3, 5) || budget < 100 || operatorIds.size != 5 || operatorIds.toSet().size != 5) {
+                    Log.w(TAG, "[startDispatch] 派遣参数无效 task=$task duration=$duration budget=$budget ops=${operatorIds.size}")
+                    return@launch
+                }
+                // Validate before creating a record or charging the player. The UI check is
+                // only a convenience; this method is also callable from other entry points.
+                sharedUtils.chatConfigurationError()?.let {
+                    Log.w(TAG, "[startDispatch] AI配置无效: $it")
+                    return@launch
+                }
                 val activeDispatches = repository.getActiveDispatches()
                 if (activeDispatches.size >= 2) {
                     Log.w(TAG, "[startDispatch] 已有两个小队在派遣，取消")
+                    return@launch
+                }
+                if (repository.getDispatch(id) != null) {
+                    Log.w(TAG, "[startDispatch] 派遣ID已存在，拒绝覆盖 id=$id")
                     return@launch
                 }
                 val activeOperatorIds = activeDispatches.flatMap { it.operatorIds.split(",") }
@@ -162,11 +191,17 @@ class DispatchViewModel(
                 // 2. 再扣预算（记录已存在，即使后续崩溃也可以通过记录退款）
                 if (!settings.trySpendLmb(budget)) {
                     Log.w(TAG, "[startDispatch] 余额不足，取消并清除记录")
-                    repository.getDispatch(id)?.let { d ->
-                        repository.insertDispatch(d.copy(status = "cancelled", endTime = System.currentTimeMillis(), netProfit = 0))
+                    repository.getDispatch(id)?.let { record ->
+                        repository.insertDispatch(record.copy(
+                            logChain = "【余额不足，已取消】",
+                            status = "cancelled",
+                            endTime = System.currentTimeMillis(),
+                            netProfit = 0
+                        ))
                     }
                     return@launch
                 }
+                budgetSpent = true
                 DebugLogger.log("Dispatch", "已扣除预算: id=$id, budget=$budget, 余额=${settings.lmb}")
 
                 // 3. 导航到进度页
@@ -191,6 +226,26 @@ class DispatchViewModel(
                     repository.insertDispatch(currentRecord.copy(status = "active"))
                 }
                 Log.i(TAG, "[startDispatch] 开局段生成成功，后续段落由后台生成")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "[startDispatch] 启动异常: ${e.message}")
+                // The budget is charged before the first AI request. Roll it back exactly
+                // once when startup fails, and leave a visible terminal history record.
+                if (budgetSpent) {
+                    cancelGeneratingWithRefund(id, "【启动失败，预算已退还】")
+                } else {
+                    repository.getDispatch(id)?.let { record ->
+                        if (record.status == "generating" && record.endTime <= 0L) {
+                            repository.insertDispatch(record.copy(
+                                logChain = "【启动失败，未扣除预算】",
+                                status = "cancelled",
+                                endTime = System.currentTimeMillis(),
+                                netProfit = 0
+                            ))
+                        }
+                    }
+                }
             } finally {
                 startingLock.set(false)
                 generatingDispatchIds.remove(id)
@@ -205,14 +260,31 @@ class DispatchViewModel(
                 val d = repository.getDispatch(dispatchId) ?: run { Log.w(TAG, "[finishDispatch] 记录不存在 id=$dispatchId"); return@launch }
                 if (d.status != "active") { Log.w(TAG, "[finishDispatch] 状态非active: ${d.status}，跳过"); return@launch }
                 if (d.endTime > 0) { Log.w(TAG, "[finishDispatch] endTime已设置(${d.endTime})，跳过重复结算"); return@launch }
+                val totalDuration = d.durationHours.toLong() * 3_600_000L
+                if (d.startTime <= 0L || d.durationHours <= 0 || d.totalSegments <= 0 || d.segmentInterval <= 0L ||
+                    System.currentTimeMillis() - d.startTime < totalDuration) {
+                    Log.w(TAG, "[finishDispatch] 派遣尚未到期或记录参数无效，跳过 id=$dispatchId")
+                    return@launch
+                }
                 Log.i(TAG, "[finishDispatch] 完成派遣 id=$dispatchId task=${d.taskType}")
 
                 // 生成结局叙事（失败不影响结算）
                 var netProfit = d.netProfit
                 var reward = 0
                 if (d.logChain.isNotBlank()) {
-                    val result = generateDispatchEndSuspend(dispatchId, d.taskType, d.durationHours, d.budget, d.operatorIds.split(","))
-                    netProfit = result.first; reward = result.second
+                    // If the ending was persisted but the process died before the terminal
+                    // status write, settle from the saved result instead of calling the AI again.
+                    if (d.logChain.contains("【结局】")) {
+                        netProfit = d.netProfit
+                        reward = (d.netProfit + d.budget).coerceIn(0, d.budget * 10)
+                    } else {
+                        val result = generateDispatchEndSuspend(dispatchId, d.taskType, d.durationHours, d.budget, d.operatorIds.split(","))
+                            ?: run {
+                                Log.w(TAG, "[finishDispatch] 结局生成失败，保留active等待重试 id=$dispatchId")
+                                return@launch
+                            }
+                        netProfit = result.first; reward = result.second
+                    }
                 } else {
                     DebugLogger.log("Dispatch", "logChain为空，跳过结局生成: id=$dispatchId")
                 }
@@ -246,15 +318,15 @@ class DispatchViewModel(
         }
     }
 
-    private suspend fun generateDispatchEndSuspend(dispatchId: String, taskType: String, duration: Int, budget: Int, operatorIds: List<String>): Pair<Int, Int> {
+    private suspend fun generateDispatchEndSuspend(dispatchId: String, taskType: String, duration: Int, budget: Int, operatorIds: List<String>): Pair<Int, Int>? {
         val ops = operatorIds.mapNotNull { repository.getOperator(it) }
         val names = ops.joinToString("、") { it.name }
         val memberCount = ops.size
         val profiles = ops.joinToString("\n") { "${it.name}：${it.description}" }
         repeat(3) { attempt ->
             try {
-                val dispatch = repository.getDispatch(dispatchId) ?: return Pair(0, 0)
-                if (dispatch.status != "active" || dispatch.endTime > 0) return Pair(0, 0)
+                val dispatch = repository.getDispatch(dispatchId) ?: return null
+                if (dispatch.status != "active" || dispatch.endTime > 0) return null
                 val dMn = settings.dispatchMinChars; val dMx = settings.dispatchMaxChars
                 val prompt = dispatchPrompt("ending", mapOf(
                     "TASK_TYPE" to taskType, "DURATION_HOURS" to duration.toString(), "BUDGET" to budget.toString(),
@@ -276,8 +348,8 @@ class DispatchViewModel(
                 }
                 val reward = ending.currency_reward.coerceIn(0, budget * 10)
                 val netP = reward - budget
-                val latest = repository.getDispatch(dispatchId) ?: return Pair(0, 0)
-                if (latest.status != "active" || latest.endTime > 0) return Pair(0, 0)
+                val latest = repository.getDispatch(dispatchId) ?: return null
+                if (latest.status != "active" || latest.endTime > 0) return null
                 val newLog = compactLogChain(latest.logChain + "\n\n【结局】" + ending.ending_content)
                 val itemsJson = if (ending.items.isNotEmpty()) json.encodeToString(ending.items) else "[]"
                 repository.insertDispatch(latest.copy(logChain = newLog, netProfit = netP, items = itemsJson))
@@ -293,17 +365,21 @@ class DispatchViewModel(
             }
         }
         Log.e(TAG, "[generateDispatchEndSuspend] 3次尝试全部失败")
-        return Pair(0, 0)
+        return null
     }
 
     fun cancelDispatch(dispatchId: String) {
         scope.launch {
             val d = repository.getDispatch(dispatchId) ?: run { Log.w(TAG, "[cancelDispatch] 记录不存在 id=$dispatchId"); return@launch }
+            if (d.status != "active" && d.status != "generating") {
+                Log.w(TAG, "[cancelDispatch] 已是终态，跳过 id=$dispatchId status=${d.status}")
+                return@launch
+            }
             Log.i(TAG, "[cancelDispatch] 中断派遣 id=$dispatchId task=${d.taskType} status=${d.status}")
             // 如果AI尚未完成（generating状态），退还预算
             if (d.status == "generating" && d.logChain.isBlank()) {
-                settings.addLmb(d.budget)
-                Log.i(TAG, "[cancelDispatch] 生成未完成，退还预算 ${d.budget}")
+                cancelGeneratingWithRefund(dispatchId, "【已中断，预算已退还】")
+                return@launch
             }
             repository.insertDispatch(d.copy(logChain = compactLogChain(if (d.logChain.isNotBlank()) "${d.logChain}\n\n【已中断】" else "【已中断】"), status = "cancelled", endTime = System.currentTimeMillis(), netProfit = 0))
             refreshAllOperatorStatus()
@@ -320,6 +396,22 @@ class DispatchViewModel(
             val elapsed = System.currentTimeMillis() - d.startTime
             val totalDuration = d.durationHours * 3_600_000L
             Log.d(TAG, "[recoverDispatches] id=${d.id} elapsed=${elapsed}ms total=${totalDuration}ms segments=$segments")
+
+            if (d.startTime <= 0L || d.durationHours <= 0 || d.totalSegments <= 0 || d.segmentInterval <= 0L) {
+                Log.w(TAG, "[recoverDispatches] 参数无效，取消并退款 id=${d.id}")
+                if (d.status == "generating") {
+                    cancelGeneratingWithRefund(d.id, "【派遣数据异常，预算已退还】")
+                } else {
+                    repository.insertDispatch(d.copy(
+                        logChain = compactLogChain(if (d.logChain.isNotBlank()) "${d.logChain}\n\n【派遣数据异常，已取消】" else "【派遣数据异常，已取消】"),
+                        status = "cancelled",
+                        endTime = System.currentTimeMillis(),
+                        netProfit = 0
+                    ))
+                    refreshAllOperatorStatus()
+                }
+                continue
+            }
 
             // 情况 A：从未生成内容
             if (d.status == "generating" && d.logChain.isBlank()) {
@@ -341,14 +433,20 @@ class DispatchViewModel(
 
             // 情况 C：需要补充段落
             if (d.status == "active" && d.logChain.isNotBlank()) {
-                val expectedSegments = (elapsed / d.segmentInterval.coerceAtLeast(1L)).toInt().coerceIn(1, d.totalSegments)
+                val expectedSegments = (elapsed / d.segmentInterval).toInt().coerceIn(1, d.totalSegments)
                 if (segments < expectedSegments) {
                     Log.i(TAG, "[recoverDispatches] id=${d.id} 当前${segments}段，期望${expectedSegments}段，补充生成")
                     for (i in (segments + 1)..expectedSegments) {
+                        val segmentKey = "${d.id}_$i"
+                        if (!generatingSegments.add(segmentKey)) continue
                         val currentRec = repository.getDispatch(d.id)
                         val currentLog = currentRec?.logChain ?: d.logChain
                         val summary = currentLog.take(100)
-                        generateDispatchProgressSuspend(d.id, d.taskType, d.budget, d.operatorIds.split(","), i, summary, currentLog)
+                        try {
+                            generateDispatchProgressSuspend(d.id, d.taskType, d.budget, d.operatorIds.split(","), i, summary, currentLog)
+                        } finally {
+                            generatingSegments.remove(segmentKey)
+                        }
                     }
                 }
             }
@@ -362,6 +460,10 @@ class DispatchViewModel(
         Log.d(TAG, "[checkActiveDispatches] 检查 ${actives.size} 个活跃派遣")
         for (d in actives) {
             if (d.status != "active" || d.logChain.isBlank()) continue
+            if (d.startTime <= 0L || d.durationHours <= 0 || d.totalSegments <= 0 || d.segmentInterval <= 0L) {
+                Log.w(TAG, "[checkActiveDispatches] 跳过参数无效的派遣 id=${d.id}")
+                continue
+            }
             val elapsed = now - d.startTime
             val totalDuration = d.durationHours * 3_600_000L
             val segments = parseSegmentCount(d.logChain)
@@ -374,7 +476,7 @@ class DispatchViewModel(
             }
 
             // 需要补充下一段
-            val expectedSegments = (elapsed / d.segmentInterval.coerceAtLeast(1L)).toInt().coerceIn(1, d.totalSegments)
+            val expectedSegments = (elapsed / d.segmentInterval).toInt().coerceIn(1, d.totalSegments)
             if (segments < expectedSegments && segments < d.totalSegments && segments >= 0) {
                 val segKey = "${d.id}_${segments + 1}"
                 if (segKey !in generatingSegments) {
@@ -399,17 +501,16 @@ class DispatchViewModel(
             val interval = if (settings.dispatchFastMode) 30_000L
                 else (duration.toLong() * 3_600_000 / totalSeg)
             val startTime = existingRecord?.startTime ?: System.currentTimeMillis()
+            if (settings.dispatchFastMode.not() && interval <= 0L) {
+                Log.e(TAG, "[generateDispatchStart] 派遣时间参数无效 id=$dispatchId")
+                cancelGeneratingWithRefund(dispatchId, "【派遣数据异常，预算已退还】")
+                return@launch
+            }
             val ok = generateDispatchStartSuspend(dispatchId, taskType, budget, operatorIds, totalSeg, interval, startTime)
             if (!ok) {
                 Log.e(TAG, "[generateDispatchStart] 生成失败，退款并标记cancelled")
-                settings.addLmb(budget)
                 DebugLogger.log("Dispatch", "recovery开局失败退款: id=$dispatchId, budget=$budget")
-                repository.getDispatch(dispatchId)?.let { d ->
-                    if (d.status == "generating") {
-                        repository.updateDispatch(dispatchId, "\n\n【生成失败，已取消】", "cancelled", System.currentTimeMillis(), 0)
-                        refreshAllOperatorStatus()
-                    }
-                }
+                cancelGeneratingWithRefund(dispatchId, "【生成失败，预算已退还】")
             }
         }
     }
@@ -436,6 +537,11 @@ class DispatchViewModel(
                 val rawResult = withTimeout(20_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Dispatch") }
                 sharedUtils.trackTokens("dispatch", prompt, rawResult)
                 Log.d(TAG, "[generateDispatchStartSuspend] AI返回 ${rawResult.length}字")
+                val latest = repository.getDispatch(dispatchId)
+                if (latest == null || latest.status != "generating" || latest.endTime > 0L) {
+                    Log.w(TAG, "[generateDispatchStartSuspend] 记录已取消或结束，丢弃AI结果 id=$dispatchId")
+                    return false
+                }
                 repository.updateDispatchFull(dispatchId, compactLogChain(rawResult.trim()), "active", totalSegments = totalSeg, segmentInterval = interval)
                 Log.i(TAG, "[generateDispatchStartSuspend] 成功，已写入logChain")
                 return true

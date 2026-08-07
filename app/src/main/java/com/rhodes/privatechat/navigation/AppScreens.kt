@@ -26,6 +26,7 @@ import com.rhodes.privatechat.ui.gameroom.PokerOpponent
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import com.rhodes.privatechat.shared.voice.voiceCallSetupMessage
+import com.rhodes.privatechat.util.DebugLogger
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
@@ -111,9 +112,15 @@ data class ChatOperator(val operatorId: String) : Screen {
                     viewModel.chatViewModel.selectOperatorSync(operator)
                     ready = viewModel.currentSession.value?.operatorId == operator.id
                     sessionLoadFailed = !ready
-                } catch (_: Exception) {
+                    if (!ready) {
+                        DebugLogger.diagnostic("PrivateChat/SessionNotSelected", "operatorId=$operatorId, currentSession=${viewModel.currentSession.value?.id ?: "none"}, currentOperator=${viewModel.currentSession.value?.operatorId ?: "none"}")
+                    }
+                } catch (e: Exception) {
                     sessionLoadFailed = true
+                    DebugLogger.diagnostic("PrivateChat/OpenFailed", "operatorId=$operatorId, operatorCount=${operators.size}, error=${e.javaClass.simpleName}:${e.message?.take(120)}")
                 }
+            } else if (operators.isNotEmpty()) {
+                DebugLogger.diagnostic("PrivateChat/OperatorMissing", "operatorId=$operatorId, operatorCount=${operators.size}, loadedIds=${operators.take(8).joinToString(",") { it.id }}")
             }
         }
         if (ready && operator != null) {
@@ -299,7 +306,10 @@ data object NewOperatorScreen : Screen {
     @Composable
     override fun Content() {
         val navigator = LocalNavigator.currentOrThrow
-        com.rhodes.privatechat.ui.editor.OperatorEditScreen(viewModel = koinViewModel(), operator = null, onBack = { navigator.pop() })
+        LaunchedEffect(Unit) {
+            DebugLogger.diagnostic("Navigation/NewOperatorOpened", "screen=NewOperatorScreen")
+        }
+        com.rhodes.privatechat.ui.editor.NewOperatorScreen(viewModel = koinViewModel(), onBack = { navigator.pop() })
     }
 }
 

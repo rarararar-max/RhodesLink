@@ -91,7 +91,7 @@ fun DebugLogScreen(onBack: () -> Unit) {
         }
         Column(Modifier.fillMaxSize().padding(padding)) {
             Column(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 12.dp, vertical = 8.dp)) {
-                Text("状态：${if (loggingEnabled) "正在记录" else "已关闭"}  |  当前缓存 ${logs.size}/500 条", fontSize = 12.sp, color = if (loggingEnabled) AccentGreen else ErrorRed)
+                Text("状态：${if (loggingEnabled) "正在记录" else "常规日志关闭，关键诊断仍保留"}  |  当前缓存 ${logs.size}/500 条", fontSize = 12.sp, color = if (loggingEnabled) AccentGreen else AccentOrange)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("记录完整模型输入与输出", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.weight(1f))
                     Switch(checked = payloadsEnabled, enabled = loggingEnabled, onCheckedChange = {
@@ -108,7 +108,7 @@ fun DebugLogScreen(onBack: () -> Unit) {
             }
         if (filteredLogs.isEmpty()) {
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                Text(if (loggingEnabled) "暂无符合筛选条件的日志\n发送一条消息后可查看完整处理链路" else "调试日志已关闭", fontSize = 14.sp, color = TextTertiary)
+                Text(if (loggingEnabled) "暂无符合筛选条件的日志\n发送一条消息后可查看完整处理链路" else "暂无关键诊断记录\n复现问题后返回此页复制日志", fontSize = 14.sp, color = TextTertiary)
             }
         } else {
             LazyColumn(

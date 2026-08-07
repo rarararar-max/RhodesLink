@@ -80,6 +80,7 @@ import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.util.copyToCache
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.viewmodel.MainViewModel
+import com.rhodes.privatechat.util.DebugLogger
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
@@ -643,6 +644,103 @@ fun OperatorEditScreen(
             dismissButton = {},
             containerColor = Card
         )
+    }
+}
+
+/**
+ * A minimal creation path kept separate from the feature-rich editor. It remains usable when
+ * legacy settings or editor-only state cannot be initialized after an in-place upgrade.
+ */
+@Composable
+fun NewOperatorScreen(
+    viewModel: MainViewModel,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val operatorId = remember { "custom_${java.util.UUID.randomUUID()}" }
+    var name by remember { mutableStateOf("") }
+    var title by remember { mutableStateOf("") }
+    var description by remember { mutableStateOf("") }
+    var privatePrompt by remember { mutableStateOf("") }
+    var groupPrompt by remember { mutableStateOf("") }
+    var saving by remember { mutableStateOf(false) }
+
+    LaunchedEffect(saving) {
+        if (!saving) return@LaunchedEffect
+        kotlinx.coroutines.delay(12_000L)
+        if (saving) {
+            saving = false
+            DebugLogger.diagnostic("NewOperator/SaveTimeout", "operatorId=$operatorId")
+            android.widget.Toast.makeText(context, "保存超时，请在设置中复制调试日志", android.widget.Toast.LENGTH_LONG).show()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        DebugLogger.diagnostic("NewOperator/EditorReady", "operatorId=$operatorId")
+    }
+    fun save() {
+        val cleanName = name.trim()
+        if (cleanName.isBlank()) {
+            DebugLogger.diagnostic("NewOperator/SaveBlocked", "reason=blank_name, operatorId=$operatorId")
+            android.widget.Toast.makeText(context, "请输入干员名称", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        saving = true
+        DebugLogger.diagnostic("NewOperator/SaveRequested", "operatorId=$operatorId, nameLength=${cleanName.length}, promptLengths=${privatePrompt.length}/${groupPrompt.length}")
+        viewModel.saveOperator(
+            id = operatorId,
+            name = cleanName,
+            title = title.trim(),
+            description = description.trim().ifBlank { "${cleanName}，自定义干员" },
+            privatePrompt = privatePrompt.trim(),
+            groupPrompt = groupPrompt.trim(),
+            onComplete = { error ->
+                saving = false
+                if (error == null) {
+                    DebugLogger.diagnostic("NewOperator/SaveSucceeded", "operatorId=$operatorId")
+                    onBack()
+                } else {
+                    DebugLogger.diagnostic("NewOperator/SaveFailed", "operatorId=$operatorId, error=$error")
+                    android.widget.Toast.makeText(context, error, android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+        )
+    }
+
+    Column(modifier = modifier.fillMaxSize().background(BG).systemBarsPadding()) {
+        TopBar(title = "新建干员", onBack = onBack, onSave = { if (!saving) save() })
+        Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp)) {
+            SectionCard {
+                SectionTitle("基础信息")
+                LabeledField("干员名称") {
+                    OutlinedTextField(value = name, onValueChange = { name = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, colors = fieldColors(), placeholder = { Text("必填") })
+                }
+                Spacer(Modifier.height(10.dp))
+                LabeledField("身份（选填）") {
+                    OutlinedTextField(value = title, onValueChange = { title = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, colors = fieldColors())
+                }
+                Spacer(Modifier.height(10.dp))
+                LabeledField("简介（选填）") {
+                    OutlinedTextField(value = description, onValueChange = { description = it }, modifier = Modifier.fillMaxWidth(), minLines = 3, colors = fieldColors())
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            SectionCard {
+                SectionTitle("私聊人设（选填）")
+                OutlinedTextField(value = privatePrompt, onValueChange = { privatePrompt = it }, modifier = Modifier.fillMaxWidth(), minLines = 5, colors = fieldColors(), placeholder = { Text("可稍后在编辑页补充") })
+            }
+            Spacer(Modifier.height(12.dp))
+            SectionCard {
+                SectionTitle("群聊人设（选填）")
+                OutlinedTextField(value = groupPrompt, onValueChange = { groupPrompt = it }, modifier = Modifier.fillMaxWidth(), minLines = 5, colors = fieldColors(), placeholder = { Text("可稍后在编辑页补充") })
+            }
+            Spacer(Modifier.height(20.dp))
+            Button(onClick = { if (!saving) save() }, enabled = !saving, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Primary)) {
+                Text(if (saving) "正在保存..." else "创建干员")
+            }
+            Spacer(Modifier.height(32.dp))
+        }
     }
 }
 

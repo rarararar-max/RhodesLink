@@ -58,6 +58,7 @@ class SessionViewModel(
         scope.launch {
             val session = repository.getSession(groupId) ?: run {
                 DebugLogger.log("Group", "⚠️ 群数据加载失败: session not found, groupId=$groupId")
+                DebugLogger.diagnostic("Group/SessionMissing", "groupId=$groupId, knownSessions=${appState.allSessions.value.size}")
                 callback("", emptyList(), "", emptySet()); return@launch
             }
             val memberNames = session.members.split(",").map { it.trim() }.filter { it.isNotBlank() }
@@ -65,6 +66,11 @@ class SessionViewModel(
                 appState.operators.first { it.isNotEmpty() }
             } ?: appState.operators.value
             val memberOps = memberNames.mapNotNull { name -> allOps.find { it.id == name || it.name == name } }
+            if (memberOps.size != memberNames.size) {
+                val resolvedIds = memberOps.map { it.id }.toSet()
+                val missingIds = memberNames.filter { it !in resolvedIds && allOps.none { op -> op.name == it } }
+                DebugLogger.diagnostic("Group/MembersMissing", "groupId=$groupId, storedMembers=${memberNames.size}, resolvedMembers=${memberOps.size}, operatorCount=${allOps.size}, missingIds=${missingIds.joinToString(",")}")
+            }
             val mutedSet = session.mutedMembers.split(",").map { it.trim() }.filter { it.isNotBlank() }.toSet()
             DebugLogger.log("Group", "群数据加载完成: name=${session.operatorName}, members=${memberOps.size}, dbMembers=${memberNames.size}")
             callback(session.operatorName, memberOps, session.rules ?: "", mutedSet)
@@ -74,13 +80,14 @@ class SessionViewModel(
     fun saveGroup(groupId: String, name: String, memberNames: List<String>, rules: String, avatarUri: String = "", mutedMembers: List<String> = emptyList(), onComplete: () -> Unit = {}) {
         DebugLogger.log("Group", "保存群: groupId=$groupId, name=$name, members=${memberNames.size}")
         scope.launch {
-            val id = groupId.ifBlank { "group_${java.util.UUID.randomUUID()}" }
-            val existing = if (groupId.isNotBlank()) repository.getSession(groupId) else null
-            val oldMembers = existing?.members?.split(",")?.map { it.trim() }?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
-            val newMembers = memberNames.toSet()
-            val added = newMembers - oldMembers
-            val removed = oldMembers - newMembers
-            repository.insertSession(ChatSession(
+            try {
+                val id = groupId.ifBlank { "group_${java.util.UUID.randomUUID()}" }
+                val existing = if (groupId.isNotBlank()) repository.getSession(groupId) else null
+                val oldMembers = existing?.members?.split(",")?.map { it.trim() }?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
+                val newMembers = memberNames.toSet()
+                val added = newMembers - oldMembers
+                val removed = oldMembers - newMembers
+                repository.insertSession(ChatSession(
                 id = id, operatorId = id, operatorName = name,
                 lastMessage = existing?.lastMessage ?: "",
                 lastTime = System.currentTimeMillis(),
@@ -92,8 +99,8 @@ class SessionViewModel(
                 avatarUri = if (avatarUri.isNotBlank()) avatarUri else existing?.avatarUri ?: "",
                 mutedMembers = mutedMembers.joinToString(",")
             ))
-            DebugLogger.log("Group/DB", "群已保存到DB: id=$id, added=$added, removed=$removed")
-            if (added.isNotEmpty() || removed.isNotEmpty()) {
+                DebugLogger.log("Group/DB", "群已保存到DB: id=$id, added=$added, removed=$removed")
+                if (added.isNotEmpty() || removed.isNotEmpty()) {
                 val allOps = appState.operators.value
                 fun resolveName(id: String) = allOps.find { it.id == id || it.name == id }?.name ?: id
                 val parts = mutableListOf<String>()
@@ -105,10 +112,13 @@ class SessionViewModel(
                     senderName = "系统", content = parts.joinToString("\n"),
                     type = "system", mode = "online", isMe = false
                 ))
+                }
+                val allSessions = repository.getAllSessionsSync()
+                appState.refreshAllSessions(allSessions, settings.hiddenIds)
+                onComplete()
+            } catch (e: Exception) {
+                DebugLogger.diagnostic("Group/SaveFailed", "groupId=${groupId.ifBlank { "new" }}, memberCount=${memberNames.size}, error=${e.javaClass.simpleName}:${e.message?.take(120)}")
             }
-            val allSessions = repository.getAllSessionsSync()
-            appState.refreshAllSessions(allSessions, settings.hiddenIds)
-            onComplete()
         }
     }
 }

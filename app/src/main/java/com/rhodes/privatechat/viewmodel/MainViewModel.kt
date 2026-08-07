@@ -332,18 +332,25 @@ class MainViewModel(
     init {
         if (startBackgroundWork) {
         viewModelScope.launch {
-            repository.insertPresetOperators()
-            repository.ensurePresetOperators()
-            settings.getStringSet("deleted_preset_operator_ids").forEach { operatorId ->
-                // A persisted preset deletion must remove its session too; otherwise an upgrade
-                // leaves a session that points to a deliberately removed role.
-                repository.getSessionByOperator(operatorId)?.let { session ->
-                    chatViewModel.cancelSessionRequests(session.id)
-                    repository.purgeSessionData(session.id)
-                    repository.deleteSession(session.id)
+            try {
+                repository.insertPresetOperators()
+                repository.ensurePresetOperators()
+                settings.getStringSet("deleted_preset_operator_ids").forEach { operatorId ->
+                    if (!repository.isPresetOperatorId(operatorId)) return@forEach
+                    // A persisted preset deletion must remove its session too; otherwise an upgrade
+                    // leaves a session that points to a deliberately removed role.
+                    repository.getSessionByOperator(operatorId)?.let { session ->
+                        chatViewModel.cancelSessionRequests(session.id)
+                        repository.purgeSessionData(session.id)
+                        repository.deleteSession(session.id)
+                    }
+                    repository.purgeOperatorData(operatorId)
+                    repository.deleteOperator(operatorId)
                 }
-                repository.purgeOperatorData(operatorId)
-                repository.deleteOperator(operatorId)
+                val recovered = repository.recoverMissingOperatorsFromSessions()
+                DebugLogger.diagnostic("Startup/RoleRecovery", "recovered=$recovered, operatorCount=${repository.getAllOperatorsSync().size}, sessionCount=${repository.getAllSessionsSync().size}")
+            } catch (e: Exception) {
+                DebugLogger.diagnostic("Startup/RoleRecoveryFailed", "error=${e.javaClass.simpleName}:${e.message?.take(180)}")
             }
             // 只在首次安装时设置默认权限，不覆盖用户手动修改
             val permissionsDone = settings.getBoolean("permissions_initialized", false)

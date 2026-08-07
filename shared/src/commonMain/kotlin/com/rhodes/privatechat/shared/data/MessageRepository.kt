@@ -37,13 +37,13 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
             ChatMessage(id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange.toInt(), timestamp, isMe != 0L)
         }.asFlow().mapToList(Dispatchers.Default)
 
-    suspend fun getMessagesSync(sessionId: String): List<ChatMessage> = withContext(Dispatchers.Default) {
+    suspend fun getMessagesSync(sessionId: String): List<ChatMessage> = withContext(Dispatchers.IO) {
         db.chatMessagesQueries.getMessagesSync(sessionId) { id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe ->
             ChatMessage(id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange.toInt(), timestamp, isMe != 0L)
         }.executeAsList()
     }
 
-    suspend fun getRecentMessagesSync(sessionId: String, limit: Long): List<ChatMessage> = withContext(Dispatchers.Default) {
+    suspend fun getRecentMessagesSync(sessionId: String, limit: Long): List<ChatMessage> = withContext(Dispatchers.IO) {
         db.chatMessagesQueries.getRecentMessages(sessionId, limit) { id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe ->
             ChatMessage(id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange.toInt(), timestamp, isMe != 0L)
         }.executeAsList()
@@ -92,7 +92,7 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
         db.chatDisplayEventsQueries.deleteDisplayEvent(messageId, segmentIndex.toLong())
     }
 
-    suspend fun sendMessage(sessionId: String, message: ChatMessage) = idMutex.withLock { withContext(Dispatchers.Default) {
+    suspend fun sendMessage(sessionId: String, message: ChatMessage) = idMutex.withLock { withContext(Dispatchers.IO) {
         nextMessageId = maxOf(nextMessageId ?: 0L, message.id + 1)
         val ts = if (message.timestamp > 0) message.timestamp else Clock.System.now().toEpochMilliseconds()
         db.chatMessagesQueries.insertMessage(
@@ -153,7 +153,7 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
     }.getOrDefault("[送出了礼物]")
 
     suspend fun getNextMessageId(): Long = idMutex.withLock {
-        withContext(Dispatchers.Default) {
+        withContext(Dispatchers.IO) {
             val next = nextMessageId ?: ((db.chatMessagesQueries.getMaxId().executeAsOne().MAX ?: 0) + 1)
             nextMessageId = next + 1
             next

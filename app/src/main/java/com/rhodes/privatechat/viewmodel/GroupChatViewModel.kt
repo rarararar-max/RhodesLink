@@ -666,6 +666,7 @@ $requestText
         if (!isAuto && !userMessageAlreadyStored && text.isNotBlank()) {
             sharedUtils.chatConfigurationError()?.let { error ->
                 _lastSendError.value = error
+                DebugLogger.diagnostic("ChatConfig/GroupBlocked", "groupId=$groupSessionId, provider=${sharedUtils.getProvider()}, apiKeyPresent=${sharedUtils.getApiKey().isNotBlank()}, modelPresent=${sharedUtils.getModelName().isNotBlank()}, customUrlPresent=${sharedUtils.getCustomUrl().isNotBlank()}, reason=$error")
                 return
             }
         }

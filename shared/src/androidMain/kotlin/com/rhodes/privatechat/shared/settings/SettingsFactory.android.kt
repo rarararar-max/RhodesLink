@@ -23,9 +23,19 @@ object AndroidSettingsFactory {
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
         )
         val legacy = appContext.getSharedPreferences("rhodes_settings", Context.MODE_PRIVATE)
-        if (legacy.all.isNotEmpty() && encrypted.all.isEmpty()) {
-            encrypted.edit().also { editor ->
-                legacy.all.forEach { (key, value) ->
+        if (legacy.all.isNotEmpty()) {
+            // A partially created encrypted store must not make an upgrade lose its old settings.
+            // Preserve the legacy store as a recovery source and fill only keys missing from secure.
+            val encryptedValues = encrypted.all
+            val editor = encrypted.edit()
+            legacy.all.forEach { (key, value) ->
+                // Some interrupted upgrades create keys with empty values. Those are just as
+                // unusable as missing settings for API/model configuration, so restore the
+                // non-empty legacy value instead of permanently keeping the empty secure one.
+                val secureValue = encryptedValues[key]
+                val restoreValue = key !in encryptedValues ||
+                    (secureValue is String && secureValue.isBlank() && value is String && value.isNotBlank())
+                if (restoreValue) {
                     when (value) {
                         is String -> editor.putString(key, value)
                         is Int -> editor.putInt(key, value)
@@ -35,8 +45,9 @@ object AndroidSettingsFactory {
                         is Set<*> -> editor.putStringSet(key, value.filterIsInstance<String>().toSet())
                     }
                 }
-            }.apply()
-            legacy.edit().clear().apply()
+            }
+            // Commit before returning settings so a process death cannot expose an empty store.
+            editor.commit()
         }
         return SharedPreferencesSettings(encrypted)
     }

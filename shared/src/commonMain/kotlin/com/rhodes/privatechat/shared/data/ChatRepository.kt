@@ -87,6 +87,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun getOperator(id: String) = operators.getOperator(id)
     suspend fun insertPresetOperators() = operators.insertPresetOperators()
     suspend fun ensurePresetOperators() = operators.ensurePresetOperators()
+    fun isPresetOperatorId(id: String) = operators.isPresetOperatorId(id)
     suspend fun deleteOperator(id: String) = operators.deleteOperator(id)
     suspend fun updateOperator(op: Operator) = operators.updateOperator(op)
     suspend fun updateIntimacy(id: String, intimacy: Int) = operators.updateIntimacy(id, intimacy)
@@ -111,6 +112,44 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun initPresetGroups() = sessions.initPresetGroups()
     suspend fun getPrivateChatSummary(operatorId: String) = sessions.getPrivateChatSummary(operatorId)
     suspend fun getPrivateChatContext(operatorId: String) = sessions.getPrivateChatContext(operatorId)
+
+    /**
+     * Restores role rows that were lost while their chat/session references survived an upgrade.
+     * IDs are never rewritten: sessions, messages, groups, memories and settings all depend on them.
+     */
+    suspend fun recoverMissingOperatorsFromSessions(): Int = withContext(Dispatchers.Default) {
+        val sessions = sessions.getAllSessionsSync()
+        val existingIds = operators.getAllOperatorsSync().mapTo(mutableSetOf()) { it.id }
+        val recoveredNames = linkedMapOf<String, String>()
+
+        sessions.filterNot { it.operatorId.startsWith("group_") }.forEach { session ->
+            if (session.operatorId.isNotBlank() && session.operatorId !in existingIds) {
+                recoveredNames[session.operatorId] = session.operatorName.ifBlank { session.operatorId }
+            }
+        }
+        sessions.filter { it.operatorId.startsWith("group_") }.forEach { group ->
+            val messageNames = messages.getMessagesSync(group.id)
+                .filter { !it.isMe && it.senderId.isNotBlank() && it.senderName.isNotBlank() }
+                .associate { it.senderId to it.senderName }
+            group.members.split(',').map(String::trim).filter(String::isNotBlank).forEach { memberId ->
+                if (memberId !in existingIds && memberId !in recoveredNames) {
+                    recoveredNames[memberId] = messageNames[memberId].orEmpty().ifBlank { "已恢复角色" }
+                }
+            }
+        }
+
+        recoveredNames.forEach { (id, name) ->
+            operators.insertOperator(
+                Operator(
+                    id = id,
+                    name = name,
+                    title = "升级恢复的角色",
+                    description = "此角色由历史聊天数据恢复。请在角色编辑页补充人设。"
+                )
+            )
+        }
+        recoveredNames.size
+    }
 
     fun getMessages(sessionId: String) = messages.getMessages(sessionId)
     fun getRecentMessages(sessionId: String, limit: Long = 200) = messages.getRecentMessages(sessionId, limit)

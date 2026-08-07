@@ -1,5 +1,6 @@
 package com.rhodes.privatechat.ui.chat
 import com.rhodes.privatechat.shared.model.AiMessage
+import com.rhodes.privatechat.util.DebugLogger
 
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -384,6 +385,7 @@ fun ChatScreen(
                     text = inputText,
                     onTextChange = { viewModel.updateInputText(it) },
                     onSend = {
+                        DebugLogger.diagnostic("PrivateChat/SendRequested", "operatorId=${operator.id}, sessionId=${currentSession?.id ?: "none"}, canSend=$canSend, textLength=${inputText.length}")
                         if (pendingImageUri.isNotBlank()) {
                             val imageUri = pendingImageUri
                             imageSending = true

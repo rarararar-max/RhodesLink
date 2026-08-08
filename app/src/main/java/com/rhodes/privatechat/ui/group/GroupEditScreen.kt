@@ -143,7 +143,11 @@ fun GroupEditScreen(
                     return@TextButton
                 }
                 val resolvedId = if (groupId.isBlank()) "group_${java.util.UUID.randomUUID()}" else groupId
-                viewModel.saveGroup(resolvedId, trimmedName, members.map { it.op.id }, rules, avatarUri, members.filter { it.muted }.map { it.op.id }) {
+                viewModel.saveGroup(resolvedId, trimmedName, members.map { it.op.id }, rules, avatarUri, members.filter { it.muted }.map { it.op.id }) { error ->
+                    if (error != null) {
+                        android.widget.Toast.makeText(ctx, error, android.widget.Toast.LENGTH_LONG).show()
+                        return@saveGroup
+                    }
                     viewModel.setAutoGroupChatEnabled(resolvedId, idleAutoChat)
                     settings.putGroupEventAuto(resolvedId, eventAutoChat)
                     onBack()

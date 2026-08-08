@@ -145,6 +145,9 @@ DELETE FROM memory_items WHERE ownerType = ? AND ownerId = ? AND (sourceKind = '
 deleteMemoryItemsByOwner:
 DELETE FROM memory_items WHERE ownerType = ? AND ownerId = ?;
 
+deleteAllMemoryItems:
+DELETE FROM memory_items;
+
 deleteExpiredMemoryItems:
 UPDATE memory_items SET status = 'expired', updatedAt = ?
 WHERE status = 'active' AND expiresAt < ?;

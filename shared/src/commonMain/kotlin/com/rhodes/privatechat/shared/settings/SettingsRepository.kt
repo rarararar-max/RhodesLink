@@ -124,11 +124,11 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     // === 聊天设置 ===
     var dualModel: Boolean
-        get() = getBoolean("dual_model", false)
+        get() = getBoolean("dual_model", true)
         set(value) = putBoolean("dual_model", value)
 
     var groupTurnPlannerEnabled: Boolean
-        get() = getBoolean("group_turn_planner_enabled", false)
+        get() = getBoolean("group_turn_planner_enabled", true)
         set(value) = putBoolean("group_turn_planner_enabled", value)
 
     var debugLogEnabled: Boolean

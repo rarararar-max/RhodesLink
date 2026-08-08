@@ -63,3 +63,9 @@ VALUES (?, ?, ?, ?, ?, ?);
 
 deleteHistorySegmentsBySession:
 DELETE FROM chat_history_segments WHERE sessionId = ?;
+
+deleteAllArchives:
+DELETE FROM chat_archives;
+
+deleteAllHistorySegments:
+DELETE FROM chat_history_segments;

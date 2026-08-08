@@ -12,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 class OperatorViewModel(
     private val repository: ChatRepository,
@@ -83,11 +84,18 @@ class OperatorViewModel(
                 DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=insert_start")
                 withTimeout(8_000L) { repository.insertOperator(op) }
                 DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=insert_done")
+                DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=insert_readback_start")
                 val saved = withTimeout(8_000L) { repository.getOperator(id) }
                 if (saved?.id != id) throw IllegalStateException("角色写入后读取不到")
                 DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=insert_readback_done")
-                // A new operator has no session yet. These optional syncs must not turn a
-                // successful operator insert into a visible save failure on an upgraded DB.
+                // Database readback is the success boundary. The contacts state must be refreshed
+                // before the editor callback, but optional synchronization must not delay it.
+                appState.refreshOperators(repository.getAllOperatorsSync())
+                DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=ui_success_notified")
+                finish(onComplete, null)
+                scope.launch(Dispatchers.IO) {
+                    // A new operator has no session yet. These optional syncs must not turn a
+                    // successful operator insert into a visible save failure on an upgraded DB.
                 if (existing != null) {
                     runCatching { withTimeout(8_000L) { repository.syncOperatorAvatar(id, op.avatarUri) } }
                         .onFailure { DebugLogger.diagnostic("Special/OperatorAvatarSyncFailed", "operatorId=$id, error=${it.javaClass.simpleName}:${it.message?.take(120)}") }
@@ -108,11 +116,14 @@ class OperatorViewModel(
                 DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=relationships_done")
                 runCatching { onSelectedOperatorUpdated?.invoke(saved) }
                     .onFailure { DebugLogger.diagnostic("Special/OperatorSelectionRefreshFailed", "operatorId=$id, error=${it.javaClass.simpleName}:${it.message?.take(160)}") }
+                DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=state_refresh_start")
                 runCatching { appState.refreshOperators(repository.getAllOperatorsSync()) }
                     .onFailure { DebugLogger.diagnostic("Special/OperatorStateRefreshFailed", "operatorId=$id, error=${it.javaClass.simpleName}:${it.message?.take(160)}") }
+                DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=state_refresh_done")
                 DebugLogger.log("Operator/Save", "saved operatorId=$id, isNew=${existing == null}, operatorCount=${appState.getOperatorsSnapshot().size}")
                 DebugLogger.diagnostic("Special/OperatorCreateSucceeded", "operatorId=$id, isNew=${existing == null}, operatorCount=${appState.getOperatorsSnapshot().size}")
-                finish(onComplete, null)
+                }
+                return@launch
             } catch (e: Exception) {
                 DebugLogger.diagnostic("Operator/SaveFailed", "operatorId=$id, nameLength=${name.trim().length}, error=${e.javaClass.simpleName}:${e.message?.take(120)}")
                 DebugLogger.diagnostic("Special/OperatorCreateFailed", "operatorId=$id, error=${e.javaClass.simpleName}:${e.message?.take(160)}")
@@ -141,14 +152,10 @@ class OperatorViewModel(
         scope.launch {
             try {
                 ids.forEach { operatorId ->
-                    val session = repository.getSessionByOperator(operatorId)
-                    if (session != null) {
-                        onSessionDeleting(session.id)
-                        repository.purgeSessionData(session.id)
-                        repository.deleteSession(session.id)
-                    }
-                    repository.purgeOperatorData(operatorId)
-                    repository.deleteOperator(operatorId)
+                    repository.getAllSessionsSync()
+                        .filter { it.operatorId == operatorId && !it.operatorId.startsWith("group_") }
+                        .forEach { onSessionDeleting(it.id) }
+                    withTimeout(15_000L) { repository.deleteOperatorWithPrivateData(operatorId) }
                     settings.remove("dyn_$operatorId")
                     settings.remove("msg_$operatorId")
                     settings.putStringSet(
@@ -156,8 +163,11 @@ class OperatorViewModel(
                         settings.getStringSet("deleted_preset_operator_ids") + operatorId
                     )
                 }
+                appState.refreshOperators(repository.getAllOperatorsSync())
+                appState.refreshAllSessions(repository.getAllSessionsSync(), settings.hiddenIds)
                 onComplete(null)
             } catch (e: Exception) {
+                DebugLogger.diagnostic("Operator/DeleteFailed", "operatorIds=${ids.joinToString(",")}, error=${e.javaClass.simpleName}:${e.message?.take(160)}")
                 onComplete("删除失败：${e.message?.take(80) ?: "请稍后重试"}")
             }
         }

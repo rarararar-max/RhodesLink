@@ -30,6 +30,9 @@ DELETE FROM moment_likes WHERE operatorId = ?;
 deleteLikesByMoment:
 DELETE FROM moment_likes WHERE momentId = ?;
 
+deleteAllLikes:
+DELETE FROM moment_likes;
+
 getLikeCount:
 SELECT COUNT(*) FROM moment_likes WHERE momentId = ?;
 

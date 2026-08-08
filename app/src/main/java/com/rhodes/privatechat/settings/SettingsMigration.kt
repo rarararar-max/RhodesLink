@@ -23,13 +23,13 @@ object SettingsMigration {
         // Never overwrite a choice made by an existing 1.11/1.12 user.
         val legacy = context.getSharedPreferences("chat_prefs", Context.MODE_PRIVATE)
         if (!target.contains("dual_model") && !legacy.contains("dual_model")) {
-            editor.putBoolean("dual_model", false)
+            editor.putBoolean("dual_model", true)
         }
         if (!target.contains("group_turn_planner_enabled") && !legacy.contains("group_turn_planner_enabled")) {
-            editor.putBoolean("group_turn_planner_enabled", false)
+            editor.putBoolean("group_turn_planner_enabled", true)
         }
         editor.putBoolean(CONTINUITY_OPTIMIZATIONS_INITIALIZED_KEY, true)
-        editor.apply()
+        editor.commit()
     }
 
     private val intFixKeys = listOf(
@@ -144,7 +144,7 @@ object SettingsMigration {
         fixupCorruptedBooleans(context, editor, listOf("dual_model", "dispatch_fast_mode", "dark_mode", "permissions_initialized", "initial_hidden_done"))
         editor.putBoolean(MIGRATION_DONE_KEY, true)
         editor.putBoolean(MIGRATION_FIX_V2_KEY, true)
-        editor.apply()
+        editor.commit()
         initializeContinuityOptimizations(context, target)
     }
 
@@ -173,7 +173,7 @@ object SettingsMigration {
         fixupCorruptedBooleans(context, editor, listOf("dual_model", "dispatch_fast_mode", "dark_mode", "permissions_initialized", "initial_hidden_done"))
 
         editor.putBoolean(MIGRATION_FIX_V2_KEY, true)
-        editor.apply()
+        editor.commit()
     }
 
     private fun fixupCorruptedInts(context: Context, editor: SharedPreferences.Editor, keys: List<String>) {

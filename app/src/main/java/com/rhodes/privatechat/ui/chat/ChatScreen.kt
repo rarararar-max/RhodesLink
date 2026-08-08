@@ -90,6 +90,7 @@ import com.rhodes.privatechat.viewmodel.MainViewModel
 import org.koin.compose.koinInject
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -191,13 +192,13 @@ fun ChatScreen(
 
     LaunchedEffect(displaySessionId) {
         val sessionId = displaySessionId.ifBlank { return@LaunchedEffect }
-        displayEvents = viewModel.getDisplayEvents(sessionId)
+        displayEvents = withTimeoutOrNull(1_500L) { viewModel.getDisplayEvents(sessionId) }.orEmpty()
         displayEventsLoaded = true
     }
 
     LaunchedEffect(rawMessages, currentSession?.id) {
         currentSession?.id?.let { sessionId ->
-            displayEvents = viewModel.getDisplayEvents(sessionId)
+            displayEvents = withTimeoutOrNull(1_500L) { viewModel.getDisplayEvents(sessionId) }.orEmpty()
         }
     }
 
@@ -417,6 +418,9 @@ fun ChatScreen(
                     isLoadingOlder = isLoadingOlder,
                     hasMore = hasMoreMessages,
                     forceScrollToLatest = rawMessages.size <= forceScrollThroughMessageCount,
+                    onDisplayState = { parsedCount, displayCount ->
+                        DebugLogger.diagnostic("PrivateChat/UiRenderState", "sessionId=$displaySessionId, rawCount=${rawMessages.size}, parsedCount=$parsedCount, displayCount=$displayCount")
+                    },
                     modifier = Modifier.weight(1f)
                 )
 

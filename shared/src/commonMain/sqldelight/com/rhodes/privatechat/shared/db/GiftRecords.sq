@@ -19,3 +19,6 @@ DELETE FROM gift_records WHERE id = ?;
 
 deleteByOperator:
 DELETE FROM gift_records WHERE operatorId = ?;
+
+deleteAllGifts:
+DELETE FROM gift_records;

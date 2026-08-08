@@ -31,3 +31,6 @@ deleteOrphanedMemoryLinks:
 DELETE FROM memory_links
 WHERE parentMemoryId NOT IN (SELECT id FROM memory_items)
    OR childMemoryId NOT IN (SELECT id FROM memory_items);
+
+deleteAllMemoryLinks:
+DELETE FROM memory_links;

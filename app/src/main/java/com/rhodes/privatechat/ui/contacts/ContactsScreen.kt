@@ -32,6 +32,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -62,6 +63,11 @@ import com.rhodes.privatechat.viewmodel.MainViewModel
 fun ContactsScreen(viewModel: MainViewModel, onOperatorClick: (OperatorEntity) -> Unit, onNewOperator: () -> Unit = {}, onNewGroup: () -> Unit = {}, onGroupClick: (String, String) -> Unit = { _, _ -> }, modifier: Modifier = Modifier) {
     val operators by viewModel.operators.collectAsState()
     val allSessions by viewModel.allSessions.collectAsState()
+    LaunchedEffect(Unit) {
+        // This is a visible recovery point: do not leave the contacts screen empty while a
+        // background state flow is unavailable after an in-place upgrade.
+        if (operators.isEmpty() || allSessions.isEmpty()) viewModel.ensureAppStateLoaded("contacts_open")
+    }
     val groups = allSessions.filter { it.operatorId.startsWith("group_") }
     var searchText by remember { mutableStateOf("") }
     val filteredGroups = if (searchText.isBlank()) groups else groups.filter { it.operatorName.contains(searchText, ignoreCase = true) }

@@ -34,6 +34,12 @@ DELETE FROM chat_display_events WHERE messageId = ?;
 deleteSessionDisplayEvents:
 DELETE FROM chat_display_events WHERE sessionId = ?;
 
+moveSessionDisplayEvents:
+UPDATE chat_display_events SET sessionId = ? WHERE sessionId = ?;
+
+deleteAllDisplayEvents:
+DELETE FROM chat_display_events;
+
 deleteOldDisplayEvents:
 DELETE FROM chat_display_events WHERE messageId IN (
     SELECT id FROM chat_messages WHERE timestamp < ?

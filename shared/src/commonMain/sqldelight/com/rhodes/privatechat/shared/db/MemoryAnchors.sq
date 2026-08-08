@@ -46,6 +46,9 @@ DELETE FROM memory_anchors WHERE sessionId = ?;
 deleteAnchorsByOperator:
 DELETE FROM memory_anchors WHERE operatorId = ?;
 
+deleteAllAnchors:
+DELETE FROM memory_anchors;
+
 enforceAnchorRetain:
 DELETE FROM memory_anchors WHERE operatorId = ? AND id NOT IN (
     SELECT id FROM memory_anchors WHERE operatorId = ? ORDER BY createdAt DESC LIMIT ?

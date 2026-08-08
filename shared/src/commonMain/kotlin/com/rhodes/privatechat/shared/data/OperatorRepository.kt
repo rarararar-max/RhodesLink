@@ -105,9 +105,9 @@ class OperatorRepository(private val wrapper: DatabaseWrapper) {
     }
 
     /** Adds presets introduced by newer app versions without overwriting existing user data. */
-    suspend fun ensurePresetOperators() = withContext(Dispatchers.Default) {
+    suspend fun ensurePresetOperators(excludedIds: Set<String> = emptySet()) = withContext(Dispatchers.Default) {
         presetOperators.forEach { op ->
-            if (db.operatorsQueries.getOperator(op.id, ::mapOperator).executeAsOneOrNull() == null) {
+            if (op.id !in excludedIds && db.operatorsQueries.getOperator(op.id, ::mapOperator).executeAsOneOrNull() == null) {
                 db.operatorsQueries.insertOperator(op.id, op.name, op.title, op.description, op.gender, op.avatarUri, op.location, op.activity, op.emotion, op.intimacy.toLong(), op.privatePrompt, op.groupPrompt, op.memoryInjection, op.userRelation, op.lmb.toLong(), op.attack.toDouble(), op.defense.toDouble(), op.meldPref, op.activityLevel.toDouble(), op.voiceName, op.voiceSpeed, op.voicePitch)
             }
         }

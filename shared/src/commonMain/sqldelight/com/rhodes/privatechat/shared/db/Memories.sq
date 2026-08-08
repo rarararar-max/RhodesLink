@@ -69,3 +69,6 @@ DELETE FROM memories WHERE type = 'LONG_TERM';
 
 deleteLongTermByOperator:
 DELETE FROM memories WHERE operatorId = ? AND type = 'LONG_TERM';
+
+deleteAllMemories:
+DELETE FROM memories;

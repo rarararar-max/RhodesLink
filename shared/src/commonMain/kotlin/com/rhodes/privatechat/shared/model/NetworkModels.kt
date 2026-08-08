@@ -31,13 +31,19 @@ data class AiMessage(
 
 @Serializable
 data class GroupTurnPlan(
+    val main_thread: String = "",
+    val unresolved_thread: String = "",
+    val pending_action: String = "",
+    val scene_state: String = "",
     val user_intent: String = "",
+    val primary_operator_id: String = "",
     val goals: List<GroupTurnGoal> = emptyList()
 )
 
 @Serializable
 data class GroupTurnGoal(
     val operator_id: String = "",
+    val role: String = "support",
     val goal: String = ""
 )
 
@@ -177,11 +183,14 @@ data class GoogleGenerationRequest(
 
 @Serializable
 data class PrivateTurnAnalysis(
+    val current_topic: String = "",
+    val unresolved_thread: String = "",
+    val pending_action: String = "",
     val operator_emotion: String = "",
     val operator_location: String = "",
     val operator_activity: String = "",
     val user_intent: String = "",
-    val reply_goal: String = ""
+    val reply_strategy: String = ""
 )
 
 @Serializable
@@ -189,7 +198,10 @@ data class PrivateTurnState(
     val emotion: String = "平静",
     val location: String = "未确认",
     val activity: String = "未确认",
-    val updatedAt: Long = 0L
+    val updatedAt: Long = 0L,
+    val currentTopic: String = "当前话题未明确",
+    val unresolvedThread: String = "无",
+    val pendingAction: String = "无"
 )
 
 @Serializable

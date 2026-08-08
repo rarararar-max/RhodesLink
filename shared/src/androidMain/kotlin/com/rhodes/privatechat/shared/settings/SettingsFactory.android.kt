@@ -14,42 +14,42 @@ object AndroidSettingsFactory {
     }
 
     fun createSettings(): ObservableSettings {
-        val masterKey = MasterKey.Builder(appContext).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
-        val encrypted = EncryptedSharedPreferences.create(
-            appContext,
-            "rhodes_settings_secure",
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
         val legacy = appContext.getSharedPreferences("rhodes_settings", Context.MODE_PRIVATE)
-        if (legacy.all.isNotEmpty()) {
-            // A partially created encrypted store must not make an upgrade lose its old settings.
-            // Preserve the legacy store as a recovery source and fill only keys missing from secure.
-            val encryptedValues = encrypted.all
-            val editor = encrypted.edit()
-            legacy.all.forEach { (key, value) ->
-                // Some interrupted upgrades create keys with empty values. Those are just as
-                // unusable as missing settings for API/model configuration, so restore the
-                // non-empty legacy value instead of permanently keeping the empty secure one.
-                val secureValue = encryptedValues[key]
-                val restoreValue = key !in encryptedValues ||
-                    (secureValue is String && secureValue.isBlank() && value is String && value.isNotBlank())
-                if (restoreValue) {
-                    when (value) {
-                        is String -> editor.putString(key, value)
-                        is Int -> editor.putInt(key, value)
-                        is Long -> editor.putLong(key, value)
-                        is Float -> editor.putFloat(key, value)
-                        is Boolean -> editor.putBoolean(key, value)
-                        is Set<*> -> editor.putStringSet(key, value.filterIsInstance<String>().toSet())
+        return try {
+            val masterKey = MasterKey.Builder(appContext).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+            val encrypted = EncryptedSharedPreferences.create(
+                appContext,
+                "rhodes_settings_secure",
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+            if (legacy.all.isNotEmpty()) {
+                // Keep the legacy store intact until secure storage has a verified copy.
+                val encryptedValues = encrypted.all
+                val editor = encrypted.edit()
+                legacy.all.forEach { (key, value) ->
+                    val secureValue = encryptedValues[key]
+                    val restoreValue = key !in encryptedValues ||
+                        (secureValue is String && secureValue.isBlank() && value is String && value.isNotBlank())
+                    if (restoreValue) {
+                        when (value) {
+                            is String -> editor.putString(key, value)
+                            is Int -> editor.putInt(key, value)
+                            is Long -> editor.putLong(key, value)
+                            is Float -> editor.putFloat(key, value)
+                            is Boolean -> editor.putBoolean(key, value)
+                            is Set<*> -> editor.putStringSet(key, value.filterIsInstance<String>().toSet())
+                        }
                     }
                 }
+                if (!editor.commit()) throw IllegalStateException("无法提交加密设置迁移")
             }
-            // Commit before returning settings so a process death cannot expose an empty store.
-            editor.commit()
+            SharedPreferencesSettings(encrypted)
+        } catch (_: Exception) {
+            // Keystore failures must not make an upgraded user lose API configuration or UI state.
+            SharedPreferencesSettings(legacy)
         }
-        return SharedPreferencesSettings(encrypted)
     }
 }
 

@@ -43,3 +43,6 @@ ORDER BY id DESC LIMIT 1;
 
 deleteOldDiaries:
 DELETE FROM diaries WHERE createdAt < ?;
+
+deleteAllDiaries:
+DELETE FROM diaries;

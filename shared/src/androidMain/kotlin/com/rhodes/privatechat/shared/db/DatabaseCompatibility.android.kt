@@ -18,6 +18,8 @@ object DatabaseCompatibility {
     private const val DIAGNOSTIC_PREFS = "rhodes_diagnostics"
     private const val DIAGNOSTIC_KEY = "entries_v1"
     private const val PRE_113_BACKUP_KEY = "pre_113_database_backup_v1"
+    private const val BASELINE_KEY = "upgrade_data_baseline_v1"
+    private const val VERIFIED_KEY = "upgrade_data_verified_v1"
 
     fun prepareBeforeOpen(context: Context) {
         val dbFile = context.getDatabasePath(DB_NAME)
@@ -26,6 +28,7 @@ object DatabaseCompatibility {
             backupBefore113(context, dbFile)
             SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
                 ensureMahjongSavesTable(db)
+                captureUpgradeBaseline(context, db)
                 val memoryColumnsBefore = existingColumns(db, "memory_anchors")
                 val needsMemoryAnchorReset = memoryAnchorCompatibilityColumns.any { it.first !in memoryColumnsBefore }
                 val userVersion = db.rawQuery("PRAGMA user_version", null).use { cursor ->
@@ -58,6 +61,7 @@ object DatabaseCompatibility {
                 val operatorCount = tableCount(db, "operators")
                 val sessionCount = tableCount(db, "chat_sessions")
                 val messageCount = tableCount(db, "chat_messages")
+                verifyUpgradeData(context, db, operatorCount, sessionCount, messageCount)
                 recordDiagnostic(context, "Database/CoreSchemaReady", "userVersion=$userVersion, operators=${existingColumns(db, "operators").size}, sessions=${existingColumns(db, "chat_sessions").size}, messages=${existingColumns(db, "chat_messages").size}, operatorCount=$operatorCount, sessionCount=$sessionCount, messageCount=$messageCount")
                 recordDiagnostic(context, "Special/DatabaseReady", "dbExists=true, userVersion=$userVersion, operatorCount=$operatorCount, sessionCount=$sessionCount, messageCount=$messageCount")
             }
@@ -73,21 +77,25 @@ object DatabaseCompatibility {
         val prefs = context.getSharedPreferences(SETTINGS_SP, Context.MODE_PRIVATE)
         if (prefs.getBoolean(PRE_113_BACKUP_KEY, false)) return
         val backup = File(dbFile.parentFile, "$DB_NAME.pre_1_13")
-        if (backup.exists() && backup.length() > 0L) {
+        if (backup.exists() && backup.length() > 0L && isDatabaseHealthy(backup)) {
             prefs.edit().putBoolean(PRE_113_BACKUP_KEY, true).apply()
             return
         }
         val temp = File(dbFile.parentFile, "$DB_NAME.pre_1_13.tmp")
         try {
             // Flush WAL content before copying the file so the emergency backup is self-contained.
-            runCatching {
-                SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
-                    db.rawQuery("PRAGMA wal_checkpoint(FULL)", null).use { it.moveToFirst() }
+            SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+                db.rawQuery("PRAGMA wal_checkpoint(FULL)", null).use { checkpoint ->
+                    if (!checkpoint.moveToFirst() || checkpoint.getInt(0) != 0) {
+                        throw IllegalStateException("无法完成数据库 WAL 检查点")
+                    }
                 }
             }
             FileInputStream(dbFile).use { input ->
                 FileOutputStream(temp).use { output -> input.copyTo(output) }
             }
+            if (!isDatabaseHealthy(temp)) throw IllegalStateException("升级前数据库备份校验失败")
+            if (backup.exists()) backup.delete()
             if (!temp.renameTo(backup)) throw IllegalStateException("无法保存升级前数据库备份")
             prefs.edit().putBoolean(PRE_113_BACKUP_KEY, true).apply()
             recordDiagnostic(context, "Database/Pre113Backup", "path=${backup.name}, bytes=${backup.length()}")
@@ -108,6 +116,57 @@ object DatabaseCompatibility {
         } catch (_: Exception) {
             // Diagnostics must never block opening the user's database.
         }
+    }
+
+    private fun captureUpgradeBaseline(context: Context, db: SQLiteDatabase) {
+        val prefs = context.getSharedPreferences(SETTINGS_SP, Context.MODE_PRIVATE)
+        if (prefs.contains(BASELINE_KEY)) return
+        val baseline = listOf("operators", "chat_sessions", "chat_messages", "memories", "memory_items", "memory_anchors", "relationships", "chat_archives")
+            .joinToString(",") { "$it=${tableCount(db, it)}" }
+        prefs.edit().putString(BASELINE_KEY, baseline).commit()
+        recordDiagnostic(context, "Database/UpgradeBaseline", baseline)
+    }
+
+    private fun verifyUpgradeData(context: Context, db: SQLiteDatabase, operators: Long, sessions: Long, messages: Long) {
+        val prefs = context.getSharedPreferences(SETTINGS_SP, Context.MODE_PRIVATE)
+        val baseline = prefs.getString(BASELINE_KEY, "").orEmpty()
+        if (baseline.isBlank() || prefs.getBoolean(VERIFIED_KEY, false)) return
+        val orphanMessages = if (tableExists(db, "chat_messages") && tableExists(db, "chat_sessions")) {
+            db.rawQuery("SELECT COUNT(*) FROM chat_messages m LEFT JOIN chat_sessions s ON s.id = m.sessionId WHERE s.id IS NULL", null).use { if (it.moveToFirst()) it.getLong(0) else -1L }
+        } else -1L
+        val orphanPrivateSessions = if (tableExists(db, "chat_sessions") && tableExists(db, "operators")) {
+            db.rawQuery("SELECT COUNT(*) FROM chat_sessions s LEFT JOIN operators o ON o.id = s.operatorId WHERE s.operatorId NOT LIKE 'group_%' AND o.id IS NULL", null).use { if (it.moveToFirst()) it.getLong(0) else -1L }
+        } else -1L
+        val integrity = db.rawQuery("PRAGMA integrity_check", null).use { if (it.moveToFirst()) it.getString(0) else "unknown" }
+        val baselineCounts = baseline.split(',').associate { entry ->
+            val (name, count) = entry.split('=', limit = 2)
+            name to count.toLongOrNull().orEmptyCount()
+        }
+        val currentCounts = mapOf(
+            "operators" to operators,
+            "chat_sessions" to sessions,
+            "chat_messages" to messages,
+            "memories" to tableCount(db, "memories"),
+            "memory_items" to tableCount(db, "memory_items"),
+            "memory_anchors" to tableCount(db, "memory_anchors"),
+            "relationships" to tableCount(db, "relationships"),
+            "chat_archives" to tableCount(db, "chat_archives")
+        )
+        val reducedTables = baselineCounts.filter { (table, before) -> before >= 0 && (currentCounts[table] ?: -1L) < before }.keys
+        val report = "baseline=$baseline, after=${currentCounts.entries.joinToString(",") { "${it.key}=${it.value}" }}, reduced=${reducedTables.joinToString("|")}, orphanMessages=$orphanMessages, orphanPrivateSessions=$orphanPrivateSessions, integrity=$integrity"
+        val valid = integrity.equals("ok", true) && orphanMessages == 0L && orphanPrivateSessions == 0L && reducedTables.isEmpty()
+        recordDiagnostic(context, if (valid) "Database/UpgradeVerified" else "Database/UpgradeVerificationFailed", report)
+        if (valid) prefs.edit().putBoolean(VERIFIED_KEY, true).commit()
+    }
+
+    private fun Long?.orEmptyCount(): Long = this ?: -1L
+
+    private fun isDatabaseHealthy(file: File): Boolean = try {
+        SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+            db.rawQuery("PRAGMA integrity_check", null).use { it.moveToFirst() && it.getString(0).equals("ok", true) }
+        }
+    } catch (_: Exception) {
+        false
     }
 
     fun markDerivedDataCleaned(context: Context) {

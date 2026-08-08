@@ -92,3 +92,6 @@ UPDATE chat_messages SET content = ? WHERE id = ?;
 
 updateType:
 UPDATE chat_messages SET type = ? WHERE id = ?;
+
+moveMessagesToSession:
+UPDATE chat_messages SET sessionId = ? WHERE sessionId = ?;

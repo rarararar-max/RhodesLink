@@ -21,6 +21,13 @@ data class SenderCount(
     val cnt: Long
 )
 
+data class CoreDataRepairResult(
+    val removedProbeOperators: Int,
+    val removedProbeSessions: Int,
+    val mergedPrivateSessions: Int,
+    val removedOrphanSessions: Int
+)
+
 class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRepository? = null) {
     val operators = OperatorRepository(wrapper)
     val sessions = SessionRepository(wrapper)
@@ -86,7 +93,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun getAllOperatorsSync() = operators.getAllOperatorsSync()
     suspend fun getOperator(id: String) = operators.getOperator(id)
     suspend fun insertPresetOperators() = operators.insertPresetOperators()
-    suspend fun ensurePresetOperators() = operators.ensurePresetOperators()
+    suspend fun ensurePresetOperators(excludedIds: Set<String> = emptySet()) = operators.ensurePresetOperators(excludedIds)
     fun isPresetOperatorId(id: String) = operators.isPresetOperatorId(id)
     suspend fun deleteOperator(id: String) = operators.deleteOperator(id)
     suspend fun updateOperator(op: Operator) = operators.updateOperator(op)
@@ -113,6 +120,112 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun getPrivateChatSummary(operatorId: String) = sessions.getPrivateChatSummary(operatorId)
     suspend fun getPrivateChatContext(operatorId: String) = sessions.getPrivateChatContext(operatorId)
 
+    private fun isDiagnosticId(id: String): Boolean =
+        id.startsWith("__probe_") || id.startsWith("session___probe_") || id.startsWith("group___probe_")
+
+    /**
+     * One-time upgrade repair. Keep roles, groups and message history, but discard data derived
+     * from the old schemas so it cannot affect current prompt construction.
+     */
+    suspend fun repairLegacyCoreData(): CoreDataRepairResult = withContext(Dispatchers.Default) {
+        var removedProbeOperators = 0
+        var removedProbeSessions = 0
+        var mergedPrivateSessions = 0
+        var removedOrphanSessions = 0
+
+        val probeSessions = sessions.getAllSessionsSync().filter { isDiagnosticId(it.id) || isDiagnosticId(it.operatorId) }
+        probeSessions.forEach { session ->
+            purgeSessionData(session.id)
+            sessions.deleteSession(session.id)
+            removedProbeSessions++
+        }
+        operators.getAllOperatorsSync().filter { isDiagnosticId(it.id) }.forEach { operator ->
+            purgeOperatorData(operator.id)
+            operators.deleteOperator(operator.id)
+            removedProbeOperators++
+        }
+
+        val validOperatorIds = operators.getAllOperatorsSync().mapTo(mutableSetOf()) { it.id }
+        val allSessions = sessions.getAllSessionsSync()
+        val privateSessions = allSessions.filter { !it.operatorId.startsWith("group_") }
+        privateSessions.filter { it.operatorId !in validOperatorIds }.forEach { session ->
+            purgeSessionData(session.id)
+            sessions.deleteSession(session.id)
+            removedOrphanSessions++
+        }
+
+        privateSessions.filter { it.operatorId in validOperatorIds }
+            .groupBy { it.operatorId }
+            .values
+            .filter { it.size > 1 }
+            .forEach { duplicates ->
+                val messageCounts = duplicates.associate { it.id to messages.getMessagesSync(it.id).size }
+                val keeper = duplicates.sortedWith(
+                    compareBy<ChatSession> { if (it.id == "session_${it.operatorId}") 0 else 1 }
+                        .thenByDescending { messageCounts[it.id] ?: 0 }
+                        .thenByDescending { it.lastTime }
+                        .thenBy { it.id }
+                ).first()
+                duplicates.filterNot { it.id == keeper.id }.forEach { duplicate ->
+                    wrapper.database.transaction {
+                        wrapper.database.chatMessagesQueries.moveMessagesToSession(keeper.id, duplicate.id)
+                        wrapper.database.chatDisplayEventsQueries.moveSessionDisplayEvents(keeper.id, duplicate.id)
+                    }
+                    sessions.deleteSession(duplicate.id)
+                    mergedPrivateSessions++
+                }
+            }
+
+        // Keep groups and their message history, but remove members that no longer exist.
+        sessions.getAllSessionsSync().filter { it.operatorId.startsWith("group_") }.forEach { group ->
+            val members = group.members.split(',').map(String::trim)
+                .filter { it.isNotBlank() && it in validOperatorIds && !isDiagnosticId(it) }
+                .distinct()
+            if (members.joinToString(",") != group.members) sessions.insertSession(group.copy(members = members.joinToString(",")))
+        }
+
+        // These are caches, summaries, social data and memory derivations. Chat rows remain.
+        val db = wrapper.database
+        db.transaction {
+            db.chatDisplayEventsQueries.deleteAllDisplayEvents()
+            db.memoriesQueries.deleteAllMemories()
+            db.memoryAnchorsQueries.deleteAllAnchors()
+            db.memoryLinksQueries.deleteAllMemoryLinks()
+            db.memoryItemsQueries.deleteAllMemoryItems()
+            db.memoryBatchesQueries.deleteAllMemoryBatches()
+            db.memorySourceQueueQueries.deleteAllMemorySources()
+            db.vectorMemoriesQueries.deleteAllVectorMemories()
+            db.relationshipsQueries.deleteAllRelationships()
+            db.diariesQueries.deleteAllDiaries()
+            db.momentLikesQueries.deleteAllLikes()
+            db.momentCommentsQueries.deleteAllComments()
+            db.momentsQueries.deleteAllMoments()
+            db.giftRecordsQueries.deleteAllGifts()
+            db.chatArchivesQueries.deleteAllArchives()
+            db.chatArchivesQueries.deleteAllHistorySegments()
+        }
+        messages.repairAiSessionPreviews()
+        CoreDataRepairResult(removedProbeOperators, removedProbeSessions, mergedPrivateSessions, removedOrphanSessions)
+    }
+
+    /** Delete every private session for an operator so startup recovery cannot recreate it. */
+    suspend fun deleteOperatorWithPrivateData(operatorId: String): Int = withContext(Dispatchers.Default) {
+        val allSessions = sessions.getAllSessionsSync()
+        val privateSessions = allSessions.filter { it.operatorId == operatorId && !it.operatorId.startsWith("group_") }
+        privateSessions.forEach { session ->
+            purgeSessionData(session.id)
+            sessions.deleteSession(session.id)
+        }
+        allSessions.filter { it.operatorId.startsWith("group_") && it.members.split(',').any { member -> member.trim() == operatorId } }
+            .forEach { group ->
+                val members = group.members.split(',').map(String::trim).filter { it.isNotBlank() && it != operatorId }
+                sessions.insertSession(group.copy(members = members.joinToString(",")))
+            }
+        purgeOperatorData(operatorId)
+        operators.deleteOperator(operatorId)
+        privateSessions.size
+    }
+
     /**
      * Restores role rows that were lost while their chat/session references survived an upgrade.
      * IDs are never rewritten: sessions, messages, groups, memories and settings all depend on them.
@@ -122,7 +235,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
         val existingIds = operators.getAllOperatorsSync().mapTo(mutableSetOf()) { it.id }
         val recoveredNames = linkedMapOf<String, String>()
 
-        sessions.filterNot { it.operatorId.startsWith("group_") }.forEach { session ->
+        sessions.filterNot { it.operatorId.startsWith("group_") || isDiagnosticId(it.id) || isDiagnosticId(it.operatorId) }.forEach { session ->
             if (session.operatorId.isNotBlank() && session.operatorId !in existingIds) {
                 recoveredNames[session.operatorId] = session.operatorName.ifBlank { session.operatorId }
             }
@@ -132,7 +245,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
                 .filter { !it.isMe && it.senderId.isNotBlank() && it.senderName.isNotBlank() }
                 .associate { it.senderId to it.senderName }
             group.members.split(',').map(String::trim).filter(String::isNotBlank).forEach { memberId ->
-                if (memberId !in existingIds && memberId !in recoveredNames) {
+                if (!isDiagnosticId(memberId) && memberId !in existingIds && memberId !in recoveredNames) {
                     recoveredNames[memberId] = messageNames[memberId].orEmpty().ifBlank { "已恢复角色" }
                 }
             }

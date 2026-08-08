@@ -67,6 +67,9 @@ DELETE FROM moment_comments WHERE operatorId = ?;
 deleteCommentsByMoment:
 DELETE FROM moment_comments WHERE momentId = ?;
 
+deleteAllComments:
+DELETE FROM moment_comments;
+
 getCommentById:
 SELECT * FROM moment_comments WHERE id = ?;
 

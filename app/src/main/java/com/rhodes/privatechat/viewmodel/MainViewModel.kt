@@ -333,13 +333,25 @@ class MainViewModel(
         if (startBackgroundWork) {
         viewModelScope.launch {
             try {
+                val isExistingInstall = settings.getBoolean("initial_hidden_done", false)
+                if (isExistingInstall && !settings.getBoolean("core_data_repair_v1_completed", false)) {
+                    val repair = repository.repairLegacyCoreData()
+                    settings.putBoolean("core_data_repair_v1_completed", true)
+                    DebugLogger.diagnostic(
+                        "Startup/CoreDataRepair",
+                        "probeOperators=${repair.removedProbeOperators},probeSessions=${repair.removedProbeSessions},mergedPrivateSessions=${repair.mergedPrivateSessions},orphanSessions=${repair.removedOrphanSessions}"
+                    )
+                }
                 repository.insertPresetOperators()
-                repository.ensurePresetOperators()
+                repository.ensurePresetOperators(settings.getStringSet("deleted_preset_operator_ids"))
                 // 1.13 never deletes user data during an upgrade. 1.12 treated the historical
                 // deleted-role marker as an instruction to purge rows, which orphaned chats.
                 // Keep the marker for UI policy only and restore any role referenced by data.
                 val recovered = repository.recoverMissingOperatorsFromSessions()
                 runCatching { appState.refreshOperators(repository.getAllOperatorsSync()) }
+                if (recovered > 0) {
+                    DebugLogger.diagnostic("Startup/RoleRecoveryVerificationNeeded", "recovered=$recovered")
+                }
                 // Remove only stale UI hide markers. Never hide a session that still exists under
                 // another ID, and never remove a database row as part of this cleanup.
                 val currentSessions = repository.getAllSessionsSync()
@@ -1192,7 +1204,7 @@ ${promptLayers?.runtimeContext.orEmpty()}
     fun loadGroupData(groupId: String, callback: (String, List<Operator>, String, Set<String>) -> Unit) =
         sessionViewModel.loadGroupData(groupId, callback)
 
-    fun saveGroup(groupId: String, name: String, memberNames: List<String>, rules: String, avatarUri: String = "", mutedMembers: List<String> = emptyList(), onComplete: () -> Unit = {}) =
+    fun saveGroup(groupId: String, name: String, memberNames: List<String>, rules: String, avatarUri: String = "", mutedMembers: List<String> = emptyList(), onComplete: (String?) -> Unit = {}) =
         sessionViewModel.saveGroup(groupId, name, memberNames, rules, avatarUri, mutedMembers, onComplete)
 
     fun markSessionRead(sessionId: String) = sessionViewModel.markSessionRead(sessionId)
@@ -1521,6 +1533,9 @@ ${promptLayers?.runtimeContext.orEmpty()}
         sharedUtils.chat(messages, logTag)
 
     fun getUserProfile(): UserProfile = appState.userProfile.value
+
+    /** Reload the state object used by Compose from the authoritative local database. */
+    suspend fun ensureAppStateLoaded(source: String = "manual"): Boolean = appState.reloadFromDatabase(source)
 
     fun saveUserProfile(nickname: String, gender: String, bio: String, avatarUri: String = "") {
         settings.userName = nickname

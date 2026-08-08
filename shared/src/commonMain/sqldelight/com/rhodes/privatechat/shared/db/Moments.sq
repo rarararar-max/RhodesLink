@@ -51,6 +51,9 @@ SELECT id FROM moments WHERE createdAt < ?;
 deleteMomentsByOperator:
 DELETE FROM moments WHERE operatorId = ?;
 
+deleteAllMoments:
+DELETE FROM moments;
+
 getLastInsertRowId:
 SELECT last_insert_rowid();
 

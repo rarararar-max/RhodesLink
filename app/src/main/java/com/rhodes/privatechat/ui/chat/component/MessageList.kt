@@ -102,6 +102,7 @@ fun MessageList(
     isLoadingOlder: Boolean = false,
     hasMore: Boolean = false,
     forceScrollToLatest: Boolean = false,
+    onDisplayState: ((rawCount: Int, displayCount: Int) -> Unit)? = null,
     onPlay: ((ChatUiMessage) -> Unit)? = null,
     speakingMessageKey: String = "",
     modifier: Modifier = Modifier,
@@ -113,25 +114,14 @@ fun MessageList(
             .distinctBy { "${it.messageId}:${it.segmentIndex}" }
     }
 
-    // User/system bubbles are immediate. Their persisted event puts them ahead of delayed AI segments.
-    LaunchedEffect(messages, localEvents, displayEventsLoaded) {
-        if (!progressiveDisplay || onReveal == null || !displayEventsLoaded) return@LaunchedEffect
-        messages.filter { it.timestamp >= legacyMessageCutoff && !it.isAiSegment && localEvents.none { event -> event.messageId == it.originalMessageId && event.segmentIndex == it.segmentIndex } }
-            .forEach { message ->
-                val order = onReveal(message)
-                localEvents = localEvents + ChatDisplayEvent(message.originalMessageId, message.segmentIndex, order)
-            }
-    }
-    val hasPendingImmediateMessage = messages.any { message ->
-        message.timestamp >= legacyMessageCutoff && !message.isAiSegment &&
-            localEvents.none { event -> event.messageId == message.originalMessageId && event.segmentIndex == message.segmentIndex }
-    }
+    // Display events are an animation aid only. A missing/corrupt event row must never hide
+    // persisted history or a newly saved user message.
     val nextAi = messages.firstOrNull { message ->
         message.timestamp >= legacyMessageCutoff && message.isAiSegment && localEvents.none { event -> event.messageId == message.originalMessageId && event.segmentIndex == message.segmentIndex }
     }
-    LaunchedEffect(nextAi?.let(::eventKey), hasPendingImmediateMessage, displayEventsLoaded) {
+    LaunchedEffect(nextAi?.let(::eventKey), displayEventsLoaded) {
         val message = nextAi ?: return@LaunchedEffect
-        if (!progressiveDisplay || onReveal == null || !displayEventsLoaded || hasPendingImmediateMessage) return@LaunchedEffect
+        if (!progressiveDisplay || onReveal == null || !displayEventsLoaded) return@LaunchedEffect
         val priorAiSegmentIsVisible = messages.indexOf(message).takeIf { it > 0 }?.let { index ->
             val previous = messages[index - 1]
             previous.isAiSegment && previous.originalMessageId == message.originalMessageId &&
@@ -145,9 +135,10 @@ fun MessageList(
     }
     val eventOrder = localEvents.associate { "${it.messageId}:${it.segmentIndex}" to it.revealOrder }
     val displayMessages = if (!progressiveDisplay) messages else {
-        val visible = messages.filter { message ->
-            message.timestamp < legacyMessageCutoff || eventKey(message) in eventOrder
-        }
+        // Never gate rendering on the auxiliary chat_display_events table. Old installs can have
+        // repaired/future timestamps or unavailable event rows; hiding their messages is worse
+        // than skipping a reveal animation.
+        val visible = messages
         // Reveal order only resolves the shared timestamp of one AI reply; it never moves a reply across the wider history.
         visible.sortedWith(
             compareBy<ChatUiMessage> { it.timestamp }
@@ -163,6 +154,9 @@ fun MessageList(
         )
     }
     val latestRoleReplyId = displayMessages.lastOrNull { !it.isMe && !it.isSystem }?.originalMessageId
+    LaunchedEffect(messages.size, displayMessages.size) {
+        onDisplayState?.invoke(messages.size, displayMessages.size)
+    }
 
     var lastBottomMessageId by remember(displaySessionKey) { mutableStateOf<Long?>(null) }
     var lastDisplayMessageCount by remember(displaySessionKey) { mutableStateOf(0) }
@@ -246,7 +240,9 @@ fun MessageList(
         }
     }
 
-    LazyColumn(state = listState, modifier = modifier.fillMaxWidth().alpha(if (initialContentSettled || displayMessages.isEmpty()) 1f else 0f)) {
+    // Animation hydration must never make the conversation invisible. A delayed or failed
+    // display-event query only disables polish; persisted messages remain visible.
+    LazyColumn(state = listState, modifier = modifier.fillMaxWidth()) {
         item { Spacer(modifier = Modifier.height(8.dp)) }
         if (isLoadingOlder) {
             item {

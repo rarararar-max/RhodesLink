@@ -39,13 +39,33 @@ class AppStateHolder(
     val moments: StateFlow<List<Moment>> = _moments.asStateFlow()
 
     init {
+        // Do not wait for SQLDelight's invalidation flow to emit its first value. Some upgraded
+        // installations can read the database directly while their UI state remains empty.
+        scope.launch {
+            hydrateChatState("initial_sync", 1)
+            if (_operators.value.isEmpty() || _allSessions.value.isEmpty()) {
+                delay(750)
+                hydrateChatState("initial_retry", 2)
+            }
+        }
         scope.launch {
             while (true) {
                 try {
                     repository.allOperators.collect { operators ->
-                        _operators.value = operators
+                        DebugLogger.diagnostic("AppState/OperatorsUpdated", "source=flow, operators=${operators.size}")
                         if (operators.isEmpty()) {
                             DebugLogger.diagnostic("Special/OperatorsEmpty", "source=flow")
+                            // A stale SQLDelight invalidation flow must not erase contacts that
+                            // are still readable from the same database connection.
+                            val direct = repository.getAllOperatorsSync()
+                            if (direct.isNotEmpty()) {
+                                _operators.value = direct
+                                DebugLogger.diagnostic("AppState/OperatorsEmptyIgnored", "flow=0, database=${direct.size}")
+                            } else {
+                                _operators.value = operators
+                            }
+                        } else {
+                            _operators.value = operators
                         }
                     }
                 } catch (e: Exception) {
@@ -60,9 +80,19 @@ class AppStateHolder(
                 try {
                     repository.allSessions.collect { all ->
                         val hidden = settings.hiddenIds
-                        _allSessions.value = all
-                        _sessions.value = all.filter { it.id !in hidden }
-                        if (all.isEmpty()) DebugLogger.diagnostic("Special/SessionsEmpty", "source=flow")
+                        DebugLogger.diagnostic("AppState/SessionsUpdated", "source=flow, allSessions=${all.size}, visibleSessions=${_sessions.value.size}, hiddenSessions=${hidden.size}")
+                        if (all.isEmpty()) {
+                            DebugLogger.diagnostic("Special/SessionsEmpty", "source=flow")
+                            val direct = repository.getAllSessionsSync()
+                            if (direct.isNotEmpty()) {
+                                refreshAllSessions(direct, hidden)
+                                DebugLogger.diagnostic("AppState/SessionsEmptyIgnored", "flow=0, database=${direct.size}")
+                            } else {
+                                refreshAllSessions(all, hidden)
+                            }
+                        } else {
+                            refreshAllSessions(all, hidden)
+                        }
                     }
                 } catch (e: Exception) {
                     DebugLogger.diagnostic("Special/SessionsFlowFailed", "error=${e.javaClass.simpleName}:${e.message?.take(160)}")
@@ -74,6 +104,23 @@ class AppStateHolder(
         _userProfile.value = loadUserProfile()
     }
 
+    private suspend fun hydrateChatState(source: String, attempt: Int) {
+        try {
+            DebugLogger.diagnostic("AppState/HydrationStart", "source=$source, attempt=$attempt")
+            val operators = repository.getAllOperatorsSync()
+            val allSessions = repository.getAllSessionsSync()
+            val hidden = settings.hiddenIds
+            refreshOperators(operators)
+            refreshAllSessions(allSessions, hidden)
+            DebugLogger.diagnostic(
+                "AppState/HydrationDone",
+                "source=$source, attempt=$attempt, operators=${operators.size}, allSessions=${allSessions.size}, visibleSessions=${_sessions.value.size}, hiddenSessions=${hidden.size}"
+            )
+        } catch (e: Exception) {
+            DebugLogger.diagnostic("AppState/HydrationFailed", "source=$source, attempt=$attempt, error=${e.javaClass.simpleName}:${e.message?.take(160)}")
+        }
+    }
+
     fun refreshUserProfile() {
         _userProfile.value = loadUserProfile()
     }
@@ -82,6 +129,20 @@ class AppStateHolder(
 
     fun refreshOperators(operators: List<Operator>) {
         _operators.value = operators
+    }
+
+    suspend fun reloadFromDatabase(source: String): Boolean {
+        return try {
+            val operators = repository.getAllOperatorsSync()
+            val sessions = repository.getAllSessionsSync()
+            refreshOperators(operators)
+            refreshAllSessions(sessions, settings.hiddenIds)
+            DebugLogger.diagnostic("AppState/ReloadDone", "source=$source, operators=${operators.size}, allSessions=${sessions.size}, visibleSessions=${_sessions.value.size}")
+            true
+        } catch (e: Exception) {
+            DebugLogger.diagnostic("AppState/ReloadFailed", "source=$source, error=${e.javaClass.simpleName}:${e.message?.take(160)}")
+            false
+        }
     }
 
     fun findOperatorByName(name: String): Operator? =

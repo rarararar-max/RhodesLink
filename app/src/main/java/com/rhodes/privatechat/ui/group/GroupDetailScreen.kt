@@ -113,7 +113,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
         }
     }
     LaunchedEffect(groupId) {
-        if (groupId.isNotBlank()) displayEvents = viewModel.getDisplayEvents(groupId)
+        if (groupId.isNotBlank()) displayEvents = kotlinx.coroutines.withTimeoutOrNull(1_500L) { viewModel.getDisplayEvents(groupId) }.orEmpty()
         displayEventsLoaded = true
     }
 
@@ -159,7 +159,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
     }
 
     LaunchedEffect(groupMessages, groupId) {
-        if (groupId.isNotBlank()) displayEvents = viewModel.getDisplayEvents(groupId)
+        if (groupId.isNotBlank()) displayEvents = kotlinx.coroutines.withTimeoutOrNull(1_500L) { viewModel.getDisplayEvents(groupId) }.orEmpty()
     }
 
     LaunchedEffect(uiMessages, voiceEnabled, allOperators) {
@@ -283,6 +283,9 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                     isLoadingOlder = isLoadingOlder,
                     hasMore = hasMoreMessages,
                     forceScrollToLatest = groupMessages.size <= forceScrollThroughMessageCount,
+                    onDisplayState = { parsedCount, displayCount ->
+                        com.rhodes.privatechat.util.DebugLogger.diagnostic("GroupChat/UiRenderState", "groupId=$groupId, rawCount=${groupMessages.size}, parsedCount=$parsedCount, displayCount=$displayCount")
+                    },
                     modifier = Modifier.weight(1f)
                 )
 

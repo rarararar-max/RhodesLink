@@ -77,7 +77,7 @@ class SessionViewModel(
         }
     }
 
-    fun saveGroup(groupId: String, name: String, memberNames: List<String>, rules: String, avatarUri: String = "", mutedMembers: List<String> = emptyList(), onComplete: () -> Unit = {}) {
+    fun saveGroup(groupId: String, name: String, memberNames: List<String>, rules: String, avatarUri: String = "", mutedMembers: List<String> = emptyList(), onComplete: (String?) -> Unit = {}) {
         DebugLogger.log("Group", "保存群: groupId=$groupId, name=$name, members=${memberNames.size}")
         scope.launch {
             try {
@@ -115,9 +115,10 @@ class SessionViewModel(
                 }
                 val allSessions = repository.getAllSessionsSync()
                 appState.refreshAllSessions(allSessions, settings.hiddenIds)
-                onComplete()
+                onComplete(null)
             } catch (e: Exception) {
                 DebugLogger.diagnostic("Group/SaveFailed", "groupId=${groupId.ifBlank { "new" }}, memberCount=${memberNames.size}, error=${e.javaClass.simpleName}:${e.message?.take(120)}")
+                onComplete("保存失败：${e.message?.take(80) ?: "请稍后重试"}")
             }
         }
     }

@@ -10,6 +10,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.catch
+import com.rhodes.privatechat.util.DebugLogger
 
 data class UserProfile(
     val nickname: String = "博士", val gender: String = "", val bio: String = "", val avatarUri: String = ""
@@ -36,12 +39,36 @@ class AppStateHolder(
     val moments: StateFlow<List<Moment>> = _moments.asStateFlow()
 
     init {
-        scope.launch { repository.allOperators.collect { _operators.value = it } }
         scope.launch {
-            repository.allSessions.collect { all ->
-                val hidden = settings.hiddenIds
-                _allSessions.value = all
-                _sessions.value = all.filter { it.id !in hidden }
+            while (true) {
+                try {
+                    repository.allOperators.collect { operators ->
+                        _operators.value = operators
+                        if (operators.isEmpty()) {
+                            DebugLogger.diagnostic("Special/OperatorsEmpty", "source=flow")
+                        }
+                    }
+                } catch (e: Exception) {
+                    DebugLogger.diagnostic("Special/OperatorsFlowFailed", "error=${e.javaClass.simpleName}:${e.message?.take(160)}")
+                    runCatching { _operators.value = repository.getAllOperatorsSync() }
+                    delay(500)
+                }
+            }
+        }
+        scope.launch {
+            while (true) {
+                try {
+                    repository.allSessions.collect { all ->
+                        val hidden = settings.hiddenIds
+                        _allSessions.value = all
+                        _sessions.value = all.filter { it.id !in hidden }
+                        if (all.isEmpty()) DebugLogger.diagnostic("Special/SessionsEmpty", "source=flow")
+                    }
+                } catch (e: Exception) {
+                    DebugLogger.diagnostic("Special/SessionsFlowFailed", "error=${e.javaClass.simpleName}:${e.message?.take(160)}")
+                    runCatching { refreshAllSessions(repository.getAllSessionsSync(), settings.hiddenIds) }
+                    delay(500)
+                }
             }
         }
         _userProfile.value = loadUserProfile()
@@ -52,6 +79,10 @@ class AppStateHolder(
     }
 
     fun getOperatorsSnapshot(): List<Operator> = _operators.value
+
+    fun refreshOperators(operators: List<Operator>) {
+        _operators.value = operators
+    }
 
     fun findOperatorByName(name: String): Operator? =
         _operators.value.find { it.name == name }

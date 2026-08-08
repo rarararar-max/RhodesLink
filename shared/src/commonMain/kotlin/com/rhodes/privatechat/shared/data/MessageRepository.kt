@@ -96,7 +96,7 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
         nextMessageId = maxOf(nextMessageId ?: 0L, message.id + 1)
         val ts = if (message.timestamp > 0) message.timestamp else Clock.System.now().toEpochMilliseconds()
         db.chatMessagesQueries.insertMessage(
-            message.id, message.sessionId, message.senderId, message.senderName, message.content,
+            message.id, sessionId, message.senderId, message.senderName, message.content,
             message.type, message.mode, message.emotion, message.activity, message.location,
             message.narration, message.segmentGroup, message.intimacyChange.toLong(), ts,
             if (message.isMe) 1L else 0L
@@ -109,7 +109,8 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
                 "gift_hidden", "gift_reply_failed" -> previewFromGiftPayload(message.content)
                 else -> message.content.take(50)
             }
-            db.chatSessionsQueries.updateLastMessage(preview, ts, sessionId)
+            // A delayed reply or retry must never move a newer home preview backwards.
+            db.chatSessionsQueries.updateLastMessageIfNotNewer(preview, ts, sessionId, ts)
         }
     } }
 
@@ -130,15 +131,19 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
         val sessions = db.chatSessionsQueries.getAllSessions { id, operatorId, operatorName, lastMessage, lastTime, mode, isPinned, unreadCount, members, rules, avatarUri, mutedMembers ->
             ChatSession(id, operatorId, operatorName, lastMessage, lastTime, mode, isPinned != 0L, unreadCount.toInt(), members, rules, avatarUri, mutedMembers)
         }.executeAsList()
-        sessions.filter { it.lastMessage in setOf("AI 回复", "AI回复", "[AI回复]") }.forEach { session ->
+        sessions.forEach { session ->
             val latest = db.chatMessagesQueries.getRecentMessages(session.id, 1) { id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe ->
                 ChatMessage(id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange.toInt(), timestamp, isMe != 0L)
             }.executeAsOneOrNull()
-            if (latest?.type == "ai_json") {
-                AiReplyPreview.extract(latest.content)?.let { preview ->
-                    db.chatSessionsQueries.updateLastMessageIfNotNewer(preview, latest.timestamp, session.id, latest.timestamp)
-                }
-            }
+            if (latest == null || latest.timestamp <= 0L) return@forEach
+            val preview = when (latest.type) {
+                "ai_json" -> AiReplyPreview.extract(latest.content)
+                "image" -> "[图片]"
+                "gift_hidden", "gift_reply_failed" -> previewFromGiftPayload(latest.content)
+                "system" -> null
+                else -> latest.content.take(50)
+            } ?: return@forEach
+            db.chatSessionsQueries.updateLastMessageIfNotNewer(preview, latest.timestamp, session.id, latest.timestamp)
         }
     }
 

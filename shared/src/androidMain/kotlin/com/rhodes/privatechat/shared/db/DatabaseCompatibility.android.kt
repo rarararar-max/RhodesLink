@@ -3,6 +3,9 @@ package com.rhodes.privatechat.shared.db
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.util.Log
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 
 object DatabaseCompatibility {
     private const val DB_NAME = "rhodes_terminal.db"
@@ -14,11 +17,13 @@ object DatabaseCompatibility {
     private const val MESSAGE_TIMESTAMPS_KEY = "chat_message_timestamps_normalized_v1"
     private const val DIAGNOSTIC_PREFS = "rhodes_diagnostics"
     private const val DIAGNOSTIC_KEY = "entries_v1"
+    private const val PRE_113_BACKUP_KEY = "pre_113_database_backup_v1"
 
     fun prepareBeforeOpen(context: Context) {
         val dbFile = context.getDatabasePath(DB_NAME)
         if (!dbFile.exists()) return
         try {
+            backupBefore113(context, dbFile)
             SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
                 ensureMahjongSavesTable(db)
                 val memoryColumnsBefore = existingColumns(db, "memory_anchors")
@@ -50,11 +55,45 @@ object DatabaseCompatibility {
                     advanceUserVersionIfSchemaComplete(db, userVersion)
                 }
                 normalizeLegacyMessageTimestamps(context, db)
-                recordDiagnostic(context, "Database/CoreSchemaReady", "userVersion=$userVersion, operators=${existingColumns(db, "operators").size}, sessions=${existingColumns(db, "chat_sessions").size}, messages=${existingColumns(db, "chat_messages").size}")
+                val operatorCount = tableCount(db, "operators")
+                val sessionCount = tableCount(db, "chat_sessions")
+                val messageCount = tableCount(db, "chat_messages")
+                recordDiagnostic(context, "Database/CoreSchemaReady", "userVersion=$userVersion, operators=${existingColumns(db, "operators").size}, sessions=${existingColumns(db, "chat_sessions").size}, messages=${existingColumns(db, "chat_messages").size}, operatorCount=$operatorCount, sessionCount=$sessionCount, messageCount=$messageCount")
+                recordDiagnostic(context, "Special/DatabaseReady", "dbExists=true, userVersion=$userVersion, operatorCount=$operatorCount, sessionCount=$sessionCount, messageCount=$messageCount")
             }
         } catch (e: Exception) {
             Log.e(TAG, "数据库兼容准备失败: ${e.message}", e)
             recordDiagnostic(context, "Database/CompatibilityFailed", "error=${e.javaClass.simpleName}:${e.message?.take(180)}")
+            recordDiagnostic(context, "Special/DatabaseFailed", "stage=prepareBeforeOpen, error=${e.javaClass.simpleName}:${e.message?.take(180)}")
+        }
+    }
+
+    /** Preserve the last database before the first 1.13 compatibility pass. */
+    private fun backupBefore113(context: Context, dbFile: File) {
+        val prefs = context.getSharedPreferences(SETTINGS_SP, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(PRE_113_BACKUP_KEY, false)) return
+        val backup = File(dbFile.parentFile, "$DB_NAME.pre_1_13")
+        if (backup.exists() && backup.length() > 0L) {
+            prefs.edit().putBoolean(PRE_113_BACKUP_KEY, true).apply()
+            return
+        }
+        val temp = File(dbFile.parentFile, "$DB_NAME.pre_1_13.tmp")
+        try {
+            // Flush WAL content before copying the file so the emergency backup is self-contained.
+            runCatching {
+                SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+                    db.rawQuery("PRAGMA wal_checkpoint(FULL)", null).use { it.moveToFirst() }
+                }
+            }
+            FileInputStream(dbFile).use { input ->
+                FileOutputStream(temp).use { output -> input.copyTo(output) }
+            }
+            if (!temp.renameTo(backup)) throw IllegalStateException("无法保存升级前数据库备份")
+            prefs.edit().putBoolean(PRE_113_BACKUP_KEY, true).apply()
+            recordDiagnostic(context, "Database/Pre113Backup", "path=${backup.name}, bytes=${backup.length()}")
+        } catch (e: Exception) {
+            temp.delete()
+            recordDiagnostic(context, "Database/Pre113BackupFailed", "error=${e.javaClass.simpleName}:${e.message?.take(120)}")
         }
     }
 
@@ -492,6 +531,11 @@ object DatabaseCompatibility {
     private fun tableExists(db: SQLiteDatabase, table: String): Boolean =
         db.rawQuery("SELECT name FROM sqlite_master WHERE type='table' AND name=?", arrayOf(table)).use { cursor ->
             cursor.moveToFirst()
+        }
+
+    private fun tableCount(db: SQLiteDatabase, table: String): Long =
+        if (!tableExists(db, table)) -1L else db.rawQuery("SELECT COUNT(*) FROM $table", null).use { cursor ->
+            if (cursor.moveToFirst()) cursor.getLong(0) else -1L
         }
 
     private fun existingColumns(db: SQLiteDatabase, table: String): Set<String> {

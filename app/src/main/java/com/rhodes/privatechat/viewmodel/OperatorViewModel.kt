@@ -83,21 +83,39 @@ class OperatorViewModel(
                 DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=insert_start")
                 withTimeout(8_000L) { repository.insertOperator(op) }
                 DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=insert_done")
-                withTimeout(8_000L) { repository.syncOperatorAvatar(id, op.avatarUri) }
-                withTimeout(8_000L) { repository.syncOperatorName(id, cleanName) }
+                val saved = withTimeout(8_000L) { repository.getOperator(id) }
+                if (saved?.id != id) throw IllegalStateException("角色写入后读取不到")
+                DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=insert_readback_done")
+                // A new operator has no session yet. These optional syncs must not turn a
+                // successful operator insert into a visible save failure on an upgraded DB.
+                if (existing != null) {
+                    runCatching { withTimeout(8_000L) { repository.syncOperatorAvatar(id, op.avatarUri) } }
+                        .onFailure { DebugLogger.diagnostic("Special/OperatorAvatarSyncFailed", "operatorId=$id, error=${it.javaClass.simpleName}:${it.message?.take(120)}") }
+                    runCatching { withTimeout(8_000L) { repository.syncOperatorName(id, cleanName) } }
+                        .onFailure { DebugLogger.diagnostic("Special/OperatorNameSyncFailed", "operatorId=$id, error=${it.javaClass.simpleName}:${it.message?.take(120)}") }
+                }
                 settings.putOperatorDynPermission(id, autoPost)
                 settings.putOperatorMsgPermission(id, allowChat)
                 DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=relationships_start, count=${relationships.size}")
-                withTimeout(8_000L) { repository.deleteRelationshipByOperator(id) }
-                for (rel in relationships) {
-                    withTimeout(8_000L) { repository.insertRelationship(rel.copy(operatorId = id)) }
+                runCatching {
+                    withTimeout(8_000L) { repository.deleteRelationshipByOperator(id) }
+                    for (rel in relationships) {
+                        withTimeout(8_000L) { repository.insertRelationship(rel.copy(operatorId = id)) }
+                    }
+                }.onFailure {
+                    DebugLogger.diagnostic("Special/OperatorRelationshipsFailed", "operatorId=$id, error=${it.javaClass.simpleName}:${it.message?.take(160)}")
                 }
                 DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=relationships_done")
-                onSelectedOperatorUpdated?.invoke(repository.getOperator(id))
+                runCatching { onSelectedOperatorUpdated?.invoke(saved) }
+                    .onFailure { DebugLogger.diagnostic("Special/OperatorSelectionRefreshFailed", "operatorId=$id, error=${it.javaClass.simpleName}:${it.message?.take(160)}") }
+                runCatching { appState.refreshOperators(repository.getAllOperatorsSync()) }
+                    .onFailure { DebugLogger.diagnostic("Special/OperatorStateRefreshFailed", "operatorId=$id, error=${it.javaClass.simpleName}:${it.message?.take(160)}") }
                 DebugLogger.log("Operator/Save", "saved operatorId=$id, isNew=${existing == null}, operatorCount=${appState.getOperatorsSnapshot().size}")
+                DebugLogger.diagnostic("Special/OperatorCreateSucceeded", "operatorId=$id, isNew=${existing == null}, operatorCount=${appState.getOperatorsSnapshot().size}")
                 finish(onComplete, null)
             } catch (e: Exception) {
                 DebugLogger.diagnostic("Operator/SaveFailed", "operatorId=$id, nameLength=${name.trim().length}, error=${e.javaClass.simpleName}:${e.message?.take(120)}")
+                DebugLogger.diagnostic("Special/OperatorCreateFailed", "operatorId=$id, error=${e.javaClass.simpleName}:${e.message?.take(160)}")
                 finish(onComplete, "保存失败：${e.message?.take(80) ?: "请稍后重试"}")
             }
         }

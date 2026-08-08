@@ -17,10 +17,11 @@ getAllSessions:
 SELECT * FROM chat_sessions ORDER BY isPinned DESC, lastTime DESC;
 
 getSessionByOperator:
--- Historical upgrades can leave a new empty row beside the original conversation.
--- Prefer the row that still owns messages, then use its latest activity as a tie-breaker.
+-- Prefer the stable session_<operatorId> row. Historical upgrades can leave duplicate rows,
+-- but selecting by message count first can open an unrelated legacy conversation.
 SELECT * FROM chat_sessions WHERE operatorId = ?
-ORDER BY (SELECT COUNT(*) FROM chat_messages WHERE chat_messages.sessionId = chat_sessions.id) DESC,
+ORDER BY CASE WHEN id = 'session_' || ? THEN 0 ELSE 1 END ASC,
+         (SELECT COUNT(*) FROM chat_messages WHERE chat_messages.sessionId = chat_sessions.id) DESC,
          lastTime DESC,
          id DESC
 LIMIT 1;

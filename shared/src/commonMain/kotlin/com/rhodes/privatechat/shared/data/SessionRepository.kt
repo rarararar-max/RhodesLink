@@ -29,7 +29,7 @@ class SessionRepository(private val wrapper: DatabaseWrapper) {
     }
 
     suspend fun getOrCreateSession(operatorId: String, operatorName: String, avatarUri: String = ""): ChatSession = withContext(Dispatchers.IO) {
-        val existing = db.chatSessionsQueries.getSessionByOperator(operatorId) { id, opId, opName, lastMsg, lastTime, mode, isPinned, unreadCount, members, rules, avatar, muted ->
+        val existing = db.chatSessionsQueries.getSessionByOperator(operatorId, operatorId) { id, opId, opName, lastMsg, lastTime, mode, isPinned, unreadCount, members, rules, avatar, muted ->
             ChatSession(id, opId, opName, lastMsg, lastTime, mode, isPinned != 0L, unreadCount.toInt(), members, rules, avatar, muted)
         }.executeAsOneOrNull()
         if (existing != null) {
@@ -46,7 +46,7 @@ class SessionRepository(private val wrapper: DatabaseWrapper) {
     }
 
     suspend fun syncOperatorName(operatorId: String, newName: String) = withContext(Dispatchers.Default) {
-        val session = db.chatSessionsQueries.getSessionByOperator(operatorId) { id, opId, opName, lastMsg, lastTime, mode, isPinned, unreadCount, members, rules, avatar, muted ->
+        val session = db.chatSessionsQueries.getSessionByOperator(operatorId, operatorId) { id, opId, opName, lastMsg, lastTime, mode, isPinned, unreadCount, members, rules, avatar, muted ->
             ChatSession(id, opId, opName, lastMsg, lastTime, mode, isPinned != 0L, unreadCount.toInt(), members, rules, avatar, muted)
         }.executeAsOneOrNull() ?: return@withContext
         if (session.operatorName != newName) {
@@ -85,7 +85,7 @@ class SessionRepository(private val wrapper: DatabaseWrapper) {
     }
 
     suspend fun getSessionByOperator(operatorId: String): ChatSession? = withContext(Dispatchers.IO) {
-        db.chatSessionsQueries.getSessionByOperator(operatorId) { id, opId, opName, lastMsg, lastTime, mode, isPinned, unreadCount, members, rules, avatar, muted ->
+        db.chatSessionsQueries.getSessionByOperator(operatorId, operatorId) { id, opId, opName, lastMsg, lastTime, mode, isPinned, unreadCount, members, rules, avatar, muted ->
             ChatSession(id, opId, opName, lastMsg, lastTime, mode, isPinned != 0L, unreadCount.toInt(), members, rules, avatar, muted)
         }.executeAsOneOrNull()
     }
@@ -116,7 +116,7 @@ class SessionRepository(private val wrapper: DatabaseWrapper) {
 
     // --- Private chat context helpers ---
     suspend fun getPrivateChatSummary(operatorId: String): String? = withContext(Dispatchers.Default) {
-        val session = db.chatSessionsQueries.getSessionByOperator(operatorId) { id, opId, opName, lastMsg, lastTime, mode, isPinned, unreadCount, members, rules, avatar, muted ->
+        val session = db.chatSessionsQueries.getSessionByOperator(operatorId, operatorId) { id, opId, opName, lastMsg, lastTime, mode, isPinned, unreadCount, members, rules, avatar, muted ->
             ChatSession(id, opId, opName, lastMsg, lastTime, mode, isPinned != 0L, unreadCount.toInt(), members, rules, avatar, muted)
         }.executeAsOneOrNull() ?: return@withContext null
         val recentMsgs = db.chatMessagesQueries.getMessagesSync(session.id) { id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe ->
@@ -127,7 +127,7 @@ class SessionRepository(private val wrapper: DatabaseWrapper) {
     }
 
     suspend fun getPrivateChatContext(operatorId: String): String? = withContext(Dispatchers.Default) {
-        val session = db.chatSessionsQueries.getSessionByOperator(operatorId) { id, opId, opName, lastMsg, lastTime, mode, isPinned, unreadCount, members, rules, avatar, muted ->
+        val session = db.chatSessionsQueries.getSessionByOperator(operatorId, operatorId) { id, opId, opName, lastMsg, lastTime, mode, isPinned, unreadCount, members, rules, avatar, muted ->
             ChatSession(id, opId, opName, lastMsg, lastTime, mode, isPinned != 0L, unreadCount.toInt(), members, rules, avatar, muted)
         }.executeAsOneOrNull() ?: return@withContext null
         val impression = db.memoriesQueries.getLatestLongTermImpression(operatorId) { id, sid, opId, type, content, keywords, preferences, taboos, createdAt, expiresAt ->

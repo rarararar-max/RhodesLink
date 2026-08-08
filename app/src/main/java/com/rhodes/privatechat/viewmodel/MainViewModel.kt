@@ -335,22 +335,22 @@ class MainViewModel(
             try {
                 repository.insertPresetOperators()
                 repository.ensurePresetOperators()
-                settings.getStringSet("deleted_preset_operator_ids").forEach { operatorId ->
-                    if (!repository.isPresetOperatorId(operatorId)) return@forEach
-                    // A persisted preset deletion must remove its session too; otherwise an upgrade
-                    // leaves a session that points to a deliberately removed role.
-                    repository.getSessionByOperator(operatorId)?.let { session ->
-                        chatViewModel.cancelSessionRequests(session.id)
-                        repository.purgeSessionData(session.id)
-                        repository.deleteSession(session.id)
-                    }
-                    repository.purgeOperatorData(operatorId)
-                    repository.deleteOperator(operatorId)
-                }
+                // 1.13 never deletes user data during an upgrade. 1.12 treated the historical
+                // deleted-role marker as an instruction to purge rows, which orphaned chats.
+                // Keep the marker for UI policy only and restore any role referenced by data.
                 val recovered = repository.recoverMissingOperatorsFromSessions()
+                runCatching { appState.refreshOperators(repository.getAllOperatorsSync()) }
+                // Remove only stale UI hide markers. Never hide a session that still exists under
+                // another ID, and never remove a database row as part of this cleanup.
+                val currentSessions = repository.getAllSessionsSync()
+                val existingSessionIds = currentSessions.mapTo(mutableSetOf()) { it.id }
+                val validHiddenIds = settings.hiddenIds.filterTo(mutableSetOf()) { it in existingSessionIds }
+                if (validHiddenIds.size != settings.hiddenIds.size) settings.hiddenIds = validHiddenIds
+                appState.refreshAllSessions(currentSessions, validHiddenIds)
                 DebugLogger.diagnostic("Startup/RoleRecovery", "recovered=$recovered, operatorCount=${repository.getAllOperatorsSync().size}, sessionCount=${repository.getAllSessionsSync().size}")
             } catch (e: Exception) {
                 DebugLogger.diagnostic("Startup/RoleRecoveryFailed", "error=${e.javaClass.simpleName}:${e.message?.take(180)}")
+                DebugLogger.diagnostic("Special/StartupRecoveryFailed", "error=${e.javaClass.simpleName}:${e.message?.take(180)}")
             }
             // 只在首次安装时设置默认权限，不覆盖用户手动修改
             val permissionsDone = settings.getBoolean("permissions_initialized", false)

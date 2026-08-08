@@ -31,19 +31,32 @@ import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.util.DebugLogger
 import com.rhodes.privatechat.util.DebugLogger.LogEntry
 import com.rhodes.privatechat.shared.settings.SettingsRepository
+import com.rhodes.privatechat.shared.data.ChatRepository
+import com.rhodes.privatechat.viewmodel.shared.AppStateHolder
+import com.rhodes.privatechat.viewmodel.shared.SharedUtils
+import com.rhodes.privatechat.util.ProblemChecker
 import org.koin.compose.koinInject
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import android.os.SystemClock
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun DebugLogScreen(onBack: () -> Unit) {
     val settings: SettingsRepository = koinInject()
+    val repository: ChatRepository = koinInject()
+    val appState: AppStateHolder = koinInject()
+    val sharedUtils: SharedUtils = koinInject()
     var logs by remember { mutableStateOf(DebugLogger.getLogs()) }
     var selectedEntry by remember { mutableStateOf<LogEntry?>(null) }
     var loggingEnabled by remember { mutableStateOf(settings.debugLogEnabled) }
     var payloadsEnabled by remember { mutableStateOf(settings.debugLogPayloadsEnabled) }
     var onlyAi by remember { mutableStateOf(false) }
     var onlyErrors by remember { mutableStateOf(false) }
+    var onlySpecial by remember { mutableStateOf(false) }
+    var checking by remember { mutableStateOf(false) }
+    var problemReport by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
@@ -66,6 +79,44 @@ fun DebugLogScreen(onBack: () -> Unit) {
                 },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) } },
                 actions = {
+                    TextButton(enabled = !checking, onClick = {
+                        checking = true
+                        problemReport = "RHODES_PROBLEM_CHECK\nreportVersion=7\nstatus=running\nmessage=检查已启动，界面看门狗不会等待后台探针"
+                        scope.launch {
+                            val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+                            val checkId = ProblemChecker.start(
+                                context = context,
+                                repository = repository,
+                                sharedUtils = sharedUtils,
+                                appState = appState,
+                                versionName = packageInfo.versionName ?: "unknown",
+                                versionCode = packageInfo.longVersionCode.toInt()
+                            )
+                            val deadline = SystemClock.elapsedRealtime() + 120_000L
+                            while (checking && SystemClock.elapsedRealtime() < deadline) {
+                                problemReport = ProblemChecker.report(
+                                    packageInfo.versionName ?: "unknown",
+                                    packageInfo.longVersionCode.toInt()
+                                ).report
+                                val snapshot = ProblemChecker.progress()
+                                if (snapshot.checkId == checkId && snapshot.finishedAt != 0L) break
+                                delay(250L)
+                            }
+                            ProblemChecker.abandon(checkId)
+                            problemReport = ProblemChecker.report(
+                                packageInfo.versionName ?: "unknown",
+                                packageInfo.longVersionCode.toInt()
+                            ).report
+                            checking = false
+                            logs = DebugLogger.getLogs()
+                        }
+                    }) { Text(if (checking) "检测中" else "问题检查", color = Primary, fontSize = 12.sp) }
+                    if (problemReport.isNotBlank()) {
+                        IconButton(onClick = {
+                            clipboardManager.setText(AnnotatedString(problemReport))
+                            Toast.makeText(context, "检查报告已复制", Toast.LENGTH_SHORT).show()
+                        }) { Icon(Icons.Default.ContentCopy, "复制检查报告", tint = Primary) }
+                    }
                     Switch(checked = loggingEnabled, onCheckedChange = {
                         loggingEnabled = it
                         settings.debugLogEnabled = it
@@ -87,11 +138,18 @@ fun DebugLogScreen(onBack: () -> Unit) {
     ) { padding ->
         val filteredLogs = logs.asReversed().filter { entry ->
             (!onlyAi || entry.tag.startsWith("AI/")) &&
-                (!onlyErrors || entry.tag.contains("错误") || entry.tag.contains("ERROR", true) || entry.message.contains("失败"))
+                (!onlyErrors || entry.tag.contains("错误") || entry.tag.contains("ERROR", true) || entry.message.contains("失败")) &&
+                (!onlySpecial || entry.tag.startsWith("Diagnostic/Special/"))
         }
         Column(Modifier.fillMaxSize().padding(padding)) {
             Column(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 12.dp, vertical = 8.dp)) {
                 Text("状态：${if (loggingEnabled) "正在记录" else "常规日志关闭，关键诊断仍保留"}  |  当前缓存 ${logs.size}/500 条", fontSize = 12.sp, color = if (loggingEnabled) AccentGreen else AccentOrange)
+                if (problemReport.isNotBlank()) {
+                    Text("最近一次问题检查报告", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Primary)
+                    SelectionContainer {
+                        Text(problemReport, fontSize = 10.sp, color = TextSecondary, fontFamily = FontFamily.Monospace, modifier = Modifier.heightIn(max = 180.dp).verticalScroll(rememberScrollState()))
+                    }
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("记录完整模型输入与输出", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.weight(1f))
                     Switch(checked = payloadsEnabled, enabled = loggingEnabled, onCheckedChange = {
@@ -104,6 +162,7 @@ fun DebugLogScreen(onBack: () -> Unit) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(selected = onlyAi, onClick = { onlyAi = !onlyAi }, label = { Text("仅模型调用") })
                     FilterChip(selected = onlyErrors, onClick = { onlyErrors = !onlyErrors }, label = { Text("仅失败/错误") })
+                    FilterChip(selected = onlySpecial, onClick = { onlySpecial = !onlySpecial }, label = { Text("特殊问题") })
                 }
             }
         if (filteredLogs.isEmpty()) {

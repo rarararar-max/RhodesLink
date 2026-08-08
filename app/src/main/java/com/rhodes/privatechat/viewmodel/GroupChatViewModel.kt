@@ -682,9 +682,11 @@ $requestText
                 val userMsgId = repository.getNextMessageId()
                 userMessageId = userMsgId
                 failureMessageId = userMsgId
+                val userMessageTimestamp = System.currentTimeMillis()
                 repository.sendMessage(groupSessionId, ChatMessage(
                     id = userMsgId, sessionId = groupSessionId,
-                    senderName = "我", content = text, type = "text", mode = mode, isMe = true
+                    senderName = "我", content = text, type = "text", mode = mode,
+                    timestamp = userMessageTimestamp, isMe = true
                 ))
                 com.rhodes.privatechat.automation.ManualReplyScheduler.schedule(context, groupSessionId, userMsgId, isGroup = true)
                 DebugLogger.chatEvent("群聊", "发送消息", "已保存", "群=$groupName，模式=$mode")
@@ -1212,6 +1214,7 @@ $requestText
     ) {
         scope.launch {
             val id = repository.getNextMessageId()
+            val giftTimestamp = System.currentTimeMillis()
             val giftPayload = buildJsonObject {
                 put("event", "gift")
                 put("prompt", text)
@@ -1226,6 +1229,7 @@ $requestText
                 content = giftPayload,
                 type = "gift_hidden",
                 mode = mode,
+                timestamp = giftTimestamp,
                 isMe = true
             ))
             unhideSession(groupSessionId)
@@ -1575,6 +1579,7 @@ $members
                     "visionSummary" to kotlinx.serialization.json.JsonPrimitive("")
                 )))
                 if (existingMessageId == null) {
+                    val imageTimestamp = System.currentTimeMillis()
                     repository.sendMessage(groupSessionId, ChatMessage(
                         id = id,
                         sessionId = groupSessionId,
@@ -1582,6 +1587,7 @@ $members
                         content = placeholderJson,
                         type = "image",
                         mode = mode,
+                        timestamp = imageTimestamp,
                         isMe = true
                     ))
                 } else {

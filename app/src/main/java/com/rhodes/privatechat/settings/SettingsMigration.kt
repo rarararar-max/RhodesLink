@@ -16,12 +16,18 @@ object SettingsMigration {
     private const val MIGRATION_FIX_V2_KEY = "prefs_migration_fix_v2"
     private const val CONTINUITY_OPTIMIZATIONS_INITIALIZED_KEY = "continuity_optimizations_initialized_v1"
 
-    private fun initializeContinuityOptimizations(target: SharedPreferences) {
+    private fun initializeContinuityOptimizations(context: Context, target: SharedPreferences) {
         if (safeBoolean(target, CONTINUITY_OPTIMIZATIONS_INITIALIZED_KEY, false)) return
         val editor = target.edit()
-        // New installs opt in to these player-facing switches; preserve every later user choice.
-        editor.putBoolean("dual_model", false)
-        editor.putBoolean("group_turn_planner_enabled", false)
+        // Defaults apply only when neither the unified store nor the legacy store has a value.
+        // Never overwrite a choice made by an existing 1.11/1.12 user.
+        val legacy = context.getSharedPreferences("chat_prefs", Context.MODE_PRIVATE)
+        if (!target.contains("dual_model") && !legacy.contains("dual_model")) {
+            editor.putBoolean("dual_model", false)
+        }
+        if (!target.contains("group_turn_planner_enabled") && !legacy.contains("group_turn_planner_enabled")) {
+            editor.putBoolean("group_turn_planner_enabled", false)
+        }
         editor.putBoolean(CONTINUITY_OPTIMIZATIONS_INITIALIZED_KEY, true)
         editor.apply()
     }
@@ -53,7 +59,7 @@ object SettingsMigration {
         val target = context.getSharedPreferences(TARGET_SP, Context.MODE_PRIVATE)
         if (safeBoolean(target, MIGRATION_DONE_KEY, false)) {
             runFixV2IfNeeded(context, target)
-            initializeContinuityOptimizations(target)
+            initializeContinuityOptimizations(context, target)
             return
         }
 
@@ -139,7 +145,7 @@ object SettingsMigration {
         editor.putBoolean(MIGRATION_DONE_KEY, true)
         editor.putBoolean(MIGRATION_FIX_V2_KEY, true)
         editor.apply()
-        initializeContinuityOptimizations(target)
+        initializeContinuityOptimizations(context, target)
     }
 
     private fun runFixV2IfNeeded(context: Context, target: SharedPreferences) {

@@ -1099,10 +1099,12 @@ $userContent
             var batchIds = emptySet<Long>()
             try {
                 val hiddenGift = messageTypeOverride == "gift_hidden"
+                val userMessageTimestamp = System.currentTimeMillis()
                 val userMessage = ChatMessage(
                     id = msgId, sessionId = session.id,
                     senderName = "我", content = if (hiddenGift) persistedContentOverride ?: text else text,
-                    type = messageTypeOverride ?: "text", mode = mode, isMe = true
+                    type = messageTypeOverride ?: "text", mode = mode,
+                    timestamp = userMessageTimestamp, isMe = true
                 )
                 if (retryMessageId == null) {
                     // Show the user's message immediately. The database flow later replaces this
@@ -1360,7 +1362,7 @@ $userContent
                 "caption" to kotlinx.serialization.json.JsonPrimitive(caption.trim()),
                 "visionSummary" to kotlinx.serialization.json.JsonPrimitive("")
             )))
-            repository.sendMessage(session.id, ChatMessage(id = imageMsgId, sessionId = session.id, senderName = "我", content = placeholderJson, type = "image", mode = mode, isMe = true))
+            repository.sendMessage(session.id, ChatMessage(id = imageMsgId, sessionId = session.id, senderName = "我", content = placeholderJson, type = "image", mode = mode, timestamp = System.currentTimeMillis(), isMe = true))
             onUnhideSession(session.id)
             Log.d("RHODES_VISION", "图片占位消息已保存 id=$imageMsgId")
             // Persisting the image is enough to restore the composer. Vision/role reply continues in background.

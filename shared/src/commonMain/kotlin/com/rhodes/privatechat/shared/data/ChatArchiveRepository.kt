@@ -16,6 +16,12 @@ class ChatArchiveRepository(private val wrapper: DatabaseWrapper) {
         }.executeAsList()
     }
 
+    suspend fun getAllArchives(): List<ChatArchive> = withContext(Dispatchers.Default) {
+        db.chatArchivesQueries.getAllArchives { id, sid, operatorId, title, note, mode, messagesJson, summary, stateJson, status, createdAt, updatedAt ->
+            ChatArchive(id, sid, operatorId, title, note, mode, messagesJson, summary, stateJson, status, createdAt, updatedAt)
+        }.executeAsList()
+    }
+
     suspend fun getArchive(id: String): ChatArchive? = withContext(Dispatchers.Default) {
         db.chatArchivesQueries.getArchive(id) { archiveId, sid, operatorId, title, note, mode, messagesJson, summary, stateJson, status, createdAt, updatedAt ->
             ChatArchive(archiveId, sid, operatorId, title, note, mode, messagesJson, summary, stateJson, status, createdAt, updatedAt)
@@ -49,6 +55,12 @@ class ChatArchiveRepository(private val wrapper: DatabaseWrapper) {
 
     suspend fun getHistorySegments(sessionId: String): List<ChatHistorySegment> = withContext(Dispatchers.Default) {
         db.chatArchivesQueries.getHistorySegmentsBySession(sessionId) { id, sid, title, reason, messagesJson, createdAt ->
+            ChatHistorySegment(id, sid, title, reason, messagesJson, createdAt)
+        }.executeAsList()
+    }
+
+    suspend fun getAllHistorySegments(): List<ChatHistorySegment> = withContext(Dispatchers.Default) {
+        db.chatArchivesQueries.getAllHistorySegments { id, sid, title, reason, messagesJson, createdAt ->
             ChatHistorySegment(id, sid, title, reason, messagesJson, createdAt)
         }.executeAsList()
     }

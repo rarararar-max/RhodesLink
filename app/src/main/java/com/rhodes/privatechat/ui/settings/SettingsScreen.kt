@@ -41,6 +41,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -51,6 +52,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import coil3.compose.AsyncImage
 import com.rhodes.privatechat.shared.settings.SettingsRepository
@@ -67,12 +69,13 @@ fun SettingsScreen(
     onProfile: () -> Unit = {}, onModel: () -> Unit = {},
     onChatParams: () -> Unit = {}, onMemory: () -> Unit = {}, onDataManage: () -> Unit = {},
     onPermissions: () -> Unit = {}, onCredits: () -> Unit = {},
-    onAppearance: () -> Unit = {}, onStory: () -> Unit = {}, onDailyContent: () -> Unit = {},
+    onAppearance: () -> Unit = {}, onStory: () -> Unit = {}, onDailyContent: () -> Unit = {}, onKnowledgeBases: () -> Unit = {},
     onDebugLog: () -> Unit = {},
     userNickname: String = "博士", userGender: String = "", userAvatarUri: String = "", modifier: Modifier = Modifier
 ) {
     val settings: SettingsRepository = koinInject()
     val balance by settings.lmbFlow.collectAsState(initial = settings.lmb)
+    var debugLogEnabled by remember { mutableStateOf(settings.debugLogEnabled) }
     Column(modifier = modifier.fillMaxSize().background(BG)) {
         WechatTopBar("我")
         Row(modifier = Modifier.fillMaxWidth().background(Surface).clickable(onClick = onProfile).padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -108,6 +111,7 @@ fun SettingsScreen(
             WechatListGroup {
                 SettingItem(SettingEntry(Icons.Default.Tune, "聊天表现", "回复长度、聊天模式和角色说话风格", iconColor = Color(0xFF00BCD4)), onClick = onChatParams)
                 SettingItem(SettingEntry(Icons.Default.Hub, "记忆", "记忆生成、注入来源、会话隔离和管理", iconColor = Color(0xFF7C3AED)), onClick = onMemory)
+                SettingItem(SettingEntry(Icons.AutoMirrored.Filled.MenuBook, "知识库", "导入设定资料并关联到角色", iconColor = Color(0xFF0F766E)), onClick = onKnowledgeBases)
                 SettingItem(SettingEntry(Icons.AutoMirrored.Filled.MenuBook, "动态、日记与派遣", "每日动态、日记文本、派遣故事长度", iconColor = Color(0xFF795548)), onClick = onStory)
                 SettingItem(SettingEntry(Icons.Default.AutoAwesome, "每日自动内容", "计划动态、主动私聊和免打扰时段", iconColor = Color(0xFF7C3AED)), onClick = onDailyContent)
                 SettingItem(SettingEntry(Icons.Default.Build, "权限管理", "干员主动消息、动态和群聊权限", iconColor = Color(0xFFFF9800)), onClick = onPermissions)
@@ -120,9 +124,9 @@ fun SettingsScreen(
             }
             Spacer(Modifier.height(8.dp))
             WechatListGroup {
-                DebugLogItem(enabled = settings.debugLogEnabled, onEnabledChange = {
+                DebugLogItem(enabled = debugLogEnabled, onEnabledChange = {
+                    debugLogEnabled = it
                     settings.debugLogEnabled = it
-                    if (it) settings.debugLogPayloadsEnabled = true
                     com.rhodes.privatechat.util.DebugLogger.enabled = it
                     com.rhodes.privatechat.util.DebugLogger.allowSensitiveTrace = it && settings.debugLogPayloadsEnabled
                 }, onClick = onDebugLog)

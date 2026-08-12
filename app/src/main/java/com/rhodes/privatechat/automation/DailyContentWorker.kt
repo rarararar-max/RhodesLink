@@ -11,11 +11,13 @@ import com.rhodes.privatechat.viewmodel.ScheduledMomentDeliveryResult
 import com.rhodes.privatechat.viewmodel.shared.AppStateHolder
 import com.rhodes.privatechat.viewmodel.shared.OperatorStateUpdater
 import com.rhodes.privatechat.viewmodel.shared.SharedUtils
+import com.rhodes.privatechat.data.backup.BackupRestoreMaintenance
 import org.koin.java.KoinJavaComponent.get
 
 class DailyContentWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         return try {
+            if (BackupRestoreMaintenance.active) return Result.success()
             val repository = get<ChatRepository>(ChatRepository::class.java)
             val settings = get<SettingsRepository>(SettingsRepository::class.java)
             if (inputData.getString("type") == DailyContentScheduler.TYPE_PLAN) {
@@ -36,9 +38,10 @@ class DailyContentWorker(context: Context, params: WorkerParameters) : Coroutine
             if (cycle != DailyContentScheduler.cycleId()) return Result.success()
             val result = when (inputData.getString("type")) {
                 DailyContentScheduler.TYPE_MOMENT -> viewModel.deliverScheduledMoment(operatorId, cycle, deliveryId)
-                DailyContentScheduler.TYPE_PRIVATE -> if (viewModel.deliverScheduledPrivate(operatorId, cycle)) ScheduledMomentDeliveryResult.SUCCEEDED else ScheduledMomentDeliveryResult.SKIPPED
+                DailyContentScheduler.TYPE_PRIVATE -> viewModel.deliverScheduledPrivate(operatorId, cycle)
                 else -> ScheduledMomentDeliveryResult.SKIPPED
             }
+            if (BackupRestoreMaintenance.active) return Result.success()
             if (result == ScheduledMomentDeliveryResult.RETRYABLE_FAILURE) Result.retry() else Result.success()
         } catch (_: Exception) {
             Result.retry()

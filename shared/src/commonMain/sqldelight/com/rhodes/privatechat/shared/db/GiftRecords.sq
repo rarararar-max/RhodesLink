@@ -10,6 +10,9 @@ CREATE TABLE IF NOT EXISTS gift_records (
 getByOperator:
 SELECT * FROM gift_records WHERE operatorId = ? ORDER BY createdAt DESC, id DESC;
 
+getAllGifts:
+SELECT * FROM gift_records ORDER BY createdAt DESC, id DESC;
+
 insert:
 INSERT INTO gift_records(id, operatorId, imageUri, giftName, senderName, createdAt)
 VALUES (?, ?, ?, ?, ?, ?);

@@ -1,6 +1,7 @@
 package com.rhodes.privatechat.shared.data
 
 import com.rhodes.privatechat.shared.db.DatabaseWrapper
+import com.rhodes.privatechat.shared.db.RhodesDatabase
 import com.rhodes.privatechat.shared.model.*
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import kotlinx.coroutines.flow.Flow
@@ -43,6 +44,12 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     val memoryV2 = MemoryV2Repository(wrapper)
     val sharedExperiences = SharedExperienceRepository(wrapper)
     val archives = ChatArchiveRepository(wrapper)
+    val knowledgeBases = KnowledgeBaseRepository(wrapper)
+
+    /** Reserved for destructive restore only. Callers must validate the backup before entering it. */
+    suspend fun runRestoreTransaction(block: RhodesDatabase.() -> Unit) = withContext(Dispatchers.Default) {
+        wrapper.database.transaction { block(wrapper.database) }
+    }
 
     /** Claims a daily task with a lease so WorkManager retries cannot produce duplicates. */
     suspend fun claimDailyDelivery(deliveryId: String, now: Long, leaseMs: Long = 10 * 60_000L): Boolean = withContext(Dispatchers.Default) {
@@ -80,6 +87,12 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
         wrapper.database.giftRecordsQueries.insert(gift.id, gift.operatorId, gift.imageUri, gift.giftName, gift.senderName, gift.createdAt)
     }
 
+    suspend fun getAllGifts(): List<GiftRecord> = withContext(Dispatchers.Default) {
+        wrapper.database.giftRecordsQueries.getAllGifts { id, opId, imageUri, giftName, senderName, createdAt ->
+            GiftRecord(id, opId, imageUri, giftName, senderName, createdAt)
+        }.executeAsList()
+    }
+
     suspend fun deleteGift(id: Long) = withContext(Dispatchers.Default) {
         wrapper.database.giftRecordsQueries.delete(id)
     }
@@ -95,7 +108,10 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun insertPresetOperators() = operators.insertPresetOperators()
     suspend fun ensurePresetOperators(excludedIds: Set<String> = emptySet()) = operators.ensurePresetOperators(excludedIds)
     fun isPresetOperatorId(id: String) = operators.isPresetOperatorId(id)
-    suspend fun deleteOperator(id: String) = operators.deleteOperator(id)
+    suspend fun deleteOperator(id: String) = withContext(Dispatchers.Default) {
+        knowledgeBases.deleteAssignmentsForOperator(id)
+        operators.deleteOperator(id)
+    }
     suspend fun updateOperator(op: Operator) = operators.updateOperator(op)
     suspend fun updateIntimacy(id: String, intimacy: Int) = operators.updateIntimacy(id, intimacy)
     suspend fun insertOperator(op: Operator) = operators.insertOperator(op)
@@ -222,6 +238,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
                 sessions.insertSession(group.copy(members = members.joinToString(",")))
             }
         purgeOperatorData(operatorId)
+        knowledgeBases.deleteAssignmentsForOperator(operatorId)
         operators.deleteOperator(operatorId)
         privateSessions.size
     }
@@ -389,6 +406,8 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
         }
     }
     suspend fun saveSharedExperience(experience: SharedExperience, participants: List<String>) = sharedExperiences.saveIfAbsent(experience, participants)
+    suspend fun getAllSharedExperiences() = sharedExperiences.getAll()
+    suspend fun getAllSharedExperienceParticipants() = sharedExperiences.getAllParticipants()
     suspend fun deleteSharedExperiencesBySource(sourceKind: String, sourceRefId: String) = sharedExperiences.deleteBySource(sourceKind, sourceRefId)
 
     /** Removes a session and every derived record that can make its content reappear in recall. */
@@ -444,7 +463,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     }
 
     /** Erases one operator's entire private relationship while preserving public content. */
-    suspend fun erasePrivateRelationship(operatorId: String, sessionId: String, systemMessageId: Long, mode: String, now: Long): List<String> = withContext(Dispatchers.Default) {
+    suspend fun erasePrivateRelationship(operatorId: String, sessionId: String, systemMessageId: Long, mode: String, now: Long) = withContext(Dispatchers.Default) {
         val db = wrapper.database
         val vectorIds = memoryV2.getMemoryItemsByOwner("operator", operatorId)
             .filter { it.sourceKind == MemorySourceKind.PRIVATE_CHAT || it.sourceKind == MemorySourceKind.MANUAL_MEMORY && it.privacy == "private" }
@@ -460,11 +479,11 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
             db.memoryItemsQueries.deletePrivateRelationshipMemoryItems("operator", operatorId)
             db.memorySourceQueueQueries.deletePrivateRelationshipSources("operator", operatorId)
             db.vectorMemoriesQueries.deleteVectorMemoriesBySourceId(sessionId)
+            vectorIds.forEach { vectorId -> db.vectorMemoriesQueries.deleteVectorMemory(vectorId) }
             db.chatArchivesQueries.deleteArchivesBySession(sessionId)
             db.chatArchivesQueries.deleteHistorySegmentsBySession(sessionId)
             db.chatMessagesQueries.insertMessage(systemMessageId, sessionId, "", "系统", "已清空与该角色的私聊关系记录和私密记忆，现在开始新的会话。", "system", mode, "", "", "", "", "", 0L, now, 0L)
         }
-        vectorIds
     }
 
     suspend fun saveAnchor(anchor: MemoryAnchor): Boolean = anchors.saveAnchor(anchor)

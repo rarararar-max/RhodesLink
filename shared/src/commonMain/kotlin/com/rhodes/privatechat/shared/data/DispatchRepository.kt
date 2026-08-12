@@ -23,6 +23,12 @@ class DispatchRepository(private val wrapper: DatabaseWrapper) {
         }.executeAsList()
     }
 
+    suspend fun getAllDispatches(): List<DispatchRecord> = withContext(Dispatchers.Default) {
+        db.dispatchRecordsQueries.getAllDispatches() { id, taskType, durationHours, budget, netProfit, opIds, logChain, status, startTime, endTime, totalSegments, segmentInterval, items ->
+            DispatchRecord(id, taskType, durationHours.toInt(), budget.toInt(), netProfit.toInt(), opIds, logChain, status, startTime, endTime, totalSegments.toInt(), segmentInterval, items)
+        }.executeAsList()
+    }
+
     suspend fun getDispatch(id: String): DispatchRecord? = withContext(Dispatchers.Default) {
         db.dispatchRecordsQueries.getDispatch(id) { id_, taskType, durationHours, budget, netProfit, opIds, logChain, status, startTime, endTime, totalSegments, segmentInterval, items ->
             DispatchRecord(id_, taskType, durationHours.toInt(), budget.toInt(), netProfit.toInt(), opIds, logChain, status, startTime, endTime, totalSegments.toInt(), segmentInterval, items)

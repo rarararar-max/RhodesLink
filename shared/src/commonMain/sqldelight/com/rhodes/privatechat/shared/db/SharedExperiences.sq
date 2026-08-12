@@ -33,8 +33,20 @@ INSERT OR REPLACE INTO shared_experience_participants(experienceId, operatorId, 
 getSharedExperienceParticipantIds:
 SELECT operatorId FROM shared_experience_participants WHERE experienceId = ?;
 
+getAllSharedExperiences:
+SELECT * FROM shared_experiences ORDER BY createdAt ASC, id ASC;
+
+getSharedExperienceParticipants:
+SELECT experienceId, operatorId, role FROM shared_experience_participants ORDER BY experienceId ASC, operatorId ASC;
+
 deleteSharedExperiencesBySource:
 DELETE FROM shared_experiences WHERE sourceKind = ? AND sourceRefId = ?;
 
 deleteSharedExperienceParticipantsBySource:
 DELETE FROM shared_experience_participants WHERE experienceId IN (SELECT id FROM shared_experiences WHERE sourceKind = ? AND sourceRefId = ?);
+
+deleteAllSharedExperienceParticipants:
+DELETE FROM shared_experience_participants;
+
+deleteAllSharedExperiences:
+DELETE FROM shared_experiences;

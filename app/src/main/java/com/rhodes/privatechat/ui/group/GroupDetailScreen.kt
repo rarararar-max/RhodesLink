@@ -306,7 +306,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                             val imageUri = pendingImageUri
                             imageSending = true
                             pendingImageUri = ""
-                            forceScrollThroughMessageCount = groupMessages.size + 1
+                            forceScrollThroughMessageCount = groupMessages.size + 2
                             viewModel.groupChatViewModel.sendGroupImageMessage(groupId, groupName, imageUri, MainActivity.imageForModel(imageUri), inputText, currentMode, onMessageSent = {
                                 inputText = ""
                             }, onResult = { success ->
@@ -314,6 +314,8 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                                 if (success) forceScrollThroughMessageCount = groupMessages.size
                             })
                         } else if (text.isNotBlank() && groupId.isNotBlank()) {
+                            // Keep the local user bubble and the following AI segments in view.
+                            forceScrollThroughMessageCount = groupMessages.size + 2
                             viewModel.sendGroupMessage(groupId, groupName, text, currentMode) {
                                 inputText = ""
                             }

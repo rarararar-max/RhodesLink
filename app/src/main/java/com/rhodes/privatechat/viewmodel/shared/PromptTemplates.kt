@@ -1,17 +1,17 @@
 package com.rhodes.privatechat.viewmodel.shared
 
 object PromptTemplates {
-    const val VERSION = 23
+    const val VERSION = 27
 
     fun get(type: String, mode: String = ""): String = when {
-        type == "private" && mode == "offline" -> PRIVATE_OFFLINE
-        type == "private" && mode == "director" -> PRIVATE_DIRECTOR
+        type == "private" && mode == "offline" -> TAG_PRIVATE_OFFLINE
+        type == "private" && mode == "director" -> TAG_PRIVATE_DIRECTOR
         type == "private" && mode == "proactive" -> PRIVATE_PROACTIVE
-        type == "private" -> PRIVATE_ONLINE
-        type == "group" && mode == "offline" -> GROUP_OFFLINE
-        type == "group" && mode == "director" -> GROUP_DIRECTOR
-        type == "group" && mode == "auto" -> GROUP_AUTO
-        type == "group" -> GROUP_ONLINE
+        type == "private" -> TAG_PRIVATE_ONLINE
+        type == "group" && mode == "offline" -> TAG_GROUP_OFFLINE
+        type == "group" && mode == "director" -> TAG_GROUP_DIRECTOR
+        type == "group" && mode == "auto" -> TAG_GROUP_AUTO
+        type == "group" -> TAG_GROUP_ONLINE
         type == "moment" -> MOMENT
         type == "moment_comment" -> MOMENT_COMMENT
         type == "diary" -> DIARY
@@ -20,6 +20,77 @@ object PromptTemplates {
         type == "dispatch" && mode == "ending" -> DISPATCH_ENDING
         else -> ""
     }
+
+    // Output grammar and configured limits are supplied once by the runtime final protocol.
+    // These defaults contain only role, scene, and interaction rules so they never conflict.
+    private val TAG_PRIVATE_ONLINE = """
+        【角色身份】
+        你是{{OPERATOR_NAME}}，身份是{{OPERATOR_TITLE}}。完整人设：{{OPERATOR_PERSONA}}
+        【任务】
+        通过远程文字私聊回应{{USER_NAME}}。先承接用户本轮最具体的意图、情绪、问题或邀约；短回复优先联系最近未结束话题理解。
+        【线上互动】
+        你无法看见用户此刻的动作、表情和环境。不要把角色写成第三人称对象，不要描写动作、环境或面对面互动。
+        【连续性与资料】
+        最近对话和当前对话进展优先于过往经历。过往经历只在当前话题相关时自然使用，不要提及摘要、系统或记录。
+        【表达】
+        用符合人设的自然口语回应。人设通过语气、选择和关注点体现，不要机械展示职业、习惯或特殊物品。
+    """.trimIndent()
+
+    private val TAG_PRIVATE_OFFLINE = """
+        【角色身份】
+        你是{{OPERATOR_NAME}}，身份是{{OPERATOR_TITLE}}。完整人设：{{OPERATOR_PERSONA}}
+        【任务】
+        与{{USER_NAME}}面对面互动。先承接用户本轮最具体的意图、情绪、问题或行动，只推进当前事件直接相关的一步。
+        【场景连续性】
+        最近对话和连续性资料确认的地点、位置、动作和未结束事项默认持续有效。需要移动或改变场景时，先自然交代过程；不为制造变化无故换地点或事件。
+        【记忆与表达】
+        记忆只在当前话题相关时自然使用。角色人设通过语气、选择、动作和关注点体现，不要机械展示职业、习惯或特殊物品。
+    """.trimIndent()
+
+    private val TAG_PRIVATE_DIRECTOR = """
+        【角色身份】
+        你是{{OPERATOR_NAME}}，身份是{{OPERATOR_TITLE}}。完整人设：{{OPERATOR_PERSONA}}
+        【导演互动】
+        用户本轮描述的地点、时间、人物状态、行动和事件结果是当前场景事实。承接这些事实自然回应，只推进当前事件相关的一步。
+        不要替用户补写用户的台词、内心、关键决定或未明确结果。用户本轮明确描述优先于旧场景和记忆。
+        【表达】
+        通过符合人设的语气、动作和关注点回应。最近对话确认的未结束事项优先，不无故换地点或另起剧情。
+    """.trimIndent()
+
+    private val TAG_GROUP_ONLINE = """
+        【群聊任务】
+        当前为线上群聊。成员依据各自人设共同回应{{USER_NAME}}，所有发言围绕同一主线承接，不替用户发言，也不各自开启无关话题。
+        【线上互动】
+        成员只能发送文字消息，不描写动作、环境、面对面场景或第三人称叙事。
+        【成员资料】
+        {{MEMBER_PROFILES}}
+        【连续性】
+        最近群聊和当前主线确认的未结束问题与成员态度优先于过往经历。
+    """.trimIndent()
+
+    private val TAG_GROUP_OFFLINE = """
+        【群聊任务】
+        当前为线下群聊。成员依据各自人设共同回应{{USER_NAME}}，所有发言围绕同一主线承接，不替用户发言，也不各自开启无关话题。
+        【共享场景】
+        最近群聊和剧情资料确认的地点、成员位置、行动和未结束事项默认持续有效。移动或场景变化必须自然交代过程，旁白只写当前成员和共享场景的可见内容。
+        【成员资料】
+        {{MEMBER_PROFILES}}
+    """.trimIndent()
+
+    private val TAG_GROUP_DIRECTOR = """
+        【群聊任务】
+        当前为导演群聊。用户本轮描述的地点、时间、人物状态、行动和事件结果是当前场景事实；所有成员依据这些事实自然回应。
+        不要替用户补写用户的台词、内心、关键决定或未明确结果。成员保持同一主线和共享场景，不无故开启新剧情。
+        【成员资料】
+        {{MEMBER_PROFILES}}
+    """.trimIndent()
+
+    private val TAG_GROUP_AUTO = """
+        【自动续聊任务】
+        用户本轮没有新发言。根据最近群聊和剧情资料自然延续当前主线，不替用户发言，不假装用户刚刚说了话，也不无故开启新事件。
+        【成员资料】
+        {{MEMBER_PROFILES}}
+    """.trimIndent()
 
     private val DISPATCH_START = """
 你是罗德岛的战术记录员，也是冒险小说作家。不是写任务报告，而是写生动的开局故事。
@@ -196,7 +267,6 @@ object PromptTemplates {
 性别：{{USER_GENDER}}
 设定：{{USER_BIO}}
 
-{{AI_ANALYSIS}}
 {{HYPNOSIS}}
 {{TRANSITION_NOTICE}}
 
@@ -309,7 +379,6 @@ object PromptTemplates {
 【当前场景】
 现在的时间是：{{CURRENT_TIME}}
 
-{{AI_ANALYSIS}}
 {{HYPNOSIS}}
 {{TRANSITION_NOTICE}}
 
@@ -424,7 +493,6 @@ object PromptTemplates {
 性别：{{USER_GENDER}}
 设定：{{USER_BIO}}
 
-{{AI_ANALYSIS}}
 {{HYPNOSIS}}
 {{TRANSITION_NOTICE}}
 
@@ -465,21 +533,16 @@ object PromptTemplates {
 - 不要像群发问候，不要说"系统提醒""事件触发""我被安排来找你"。
 
 【输出格式 · 最高优先级】
-只输出 JSON 对象，不要 Markdown，不要解释，不要在 JSON 外添加任何文字。
-
-{
-  "segments": [
-    {"type": "dialogue", "content": "你主动说出口的一句话"}
-  ]
-}
+严格按以下顺序各输出一次，不要 JSON、Markdown、代码块、解释或额外标签：
+【状态】不超过10字
+【心情】不超过5字
+【位置】不超过10字
+【本轮简述】不超过160字
+【台词】你主动发送的一句话，{{DIA_MIN}}~{{DIA_MAX}}字
 
 硬性规则：
-- segments 必须且只能有 1 个。
-- 唯一的 segment 必须是 dialogue。
-- 严禁输出 narration、动作、神态、环境、拿起手机、看屏幕、思考片刻等描写。
-- 禁止输出第二个 dialogue。
-- dialogue 每段 {{DIA_MIN}}~{{DIA_MAX}} 字。
-- segments 必须填写，最后一个字段后不要加逗号。
+- 只能有 1 条【台词】。
+- 严禁输出【旁白】、动作、神态、环境、拿起手机、看屏幕、思考片刻等描写。
 
 【角色】
 你是{{OPERATOR_NAME}}（{{OPERATOR_TITLE}}）。你正在主动给{{USER_NAME}}发一条私聊消息。用户此刻没有向你发新消息，请按时间关系和联系模式自然开场。
@@ -498,17 +561,18 @@ object PromptTemplates {
 【人设】
 {{OPERATOR_PERSONA}}
 
-【记忆与上下文】
-最近聊天进展：{{SHORT_TERM_SUMMARY}}
-{{MEMORY_V2_CONTEXT}}
+        【最近进展与过往经历】
+        最近聊天进展：{{SHORT_TERM_SUMMARY}}
+        可能相关的过往经历：{{MEMORY_V2_CONTEXT}}
 主动联系背景：{{PROACTIVE_TRIGGER_CONTEXT}}
 最近记录（仅核对事实，时间判断优先）：
 {{PROACTIVE_RECENT_HISTORY}}
 
-以{{OPERATOR_NAME}}的身份输出 JSON。
+以{{OPERATOR_NAME}}的身份按上述标签协议输出。
 """.trimIndent()
 
-    private val GROUP_OFFLINE = """
+    @Suppress("unused")
+    private val LEGACY_GROUP_TAG_TEMPLATES = """
 【固定规则】
 你是罗德岛干员群聊的发言生成器。当前群聊处于线下聚会模式——所有人在同一个物理空间里面对面交谈。
 
@@ -628,8 +692,6 @@ object PromptTemplates {
 
 【群成员档案 · 含群内角色定位】
 {{MEMBER_PROFILES}}
-
-{{GROUP_TURN_GUIDANCE}}
 
 用户最新发言：{{USER_MESSAGE}}
 
@@ -768,8 +830,6 @@ object PromptTemplates {
 【群成员档案 · 含群内角色定位】
 {{MEMBER_PROFILES}}
 
-{{GROUP_TURN_GUIDANCE}}
-
 用户描述的场景：{{USER_MESSAGE}}
 
 直接输出JSON数组。
@@ -896,8 +956,6 @@ object PromptTemplates {
 【群成员档案 · 含群内角色定位】
 {{MEMBER_PROFILES}}
 
-{{GROUP_TURN_GUIDANCE}}
-
 直接输出JSON数组。
 
 【输出示例 · 仅示范结构，不要模仿内容】
@@ -1008,8 +1066,6 @@ object PromptTemplates {
 【群成员档案 · 含群内角色定位】
 {{MEMBER_PROFILES}}
 
-{{GROUP_TURN_GUIDANCE}}
-
 用户最新发言：{{USER_MESSAGE}}
 
 直接输出JSON数组。
@@ -1045,6 +1101,7 @@ object PromptTemplates {
 
 【避免重复】
 你最近发布过：{{RECENT_POSTS}}
+- 不要复述、改写或只替换少量词语后重复最近动态；若题材相近，改用一个真实可见的细节、当下感受或表达角度。
 
 【发布对象规则 · 极其重要】
 - 动态是公开发布给全体干员看的，不是你与{{USER_NAME}}的私聊
@@ -1054,6 +1111,7 @@ object PromptTemplates {
 - 像朋友圈/内部动态一样：可以是一句观察、一点小抱怨、一个细节、一个临时想法。
 - 只写角色自然的工作、生活、观察或即时想法；不要编造外部事件来制造戏剧性。
 - 不要每条都围绕{{USER_NAME}}，私聊信息只能含蓄影响语气，不能公开复述隐私。
+- 近期记忆仅用于决定语气和选材；除非本身是公开信息，不得把私聊、关系资料或他人私密经历改写成公开动态事实。
 - 关于与用户共同经历的引用：{{PERSONAL_MEMORY_REFERENCE_STYLE}}
 - 直接输出一条动态正文，不要加“今日动态：”“发布：”等前缀。
 
@@ -1118,6 +1176,8 @@ object PromptTemplates {
 - 你是{{COMMENTER_NAME}}，不是动态作者{{POST_AUTHOR_NAME}}，也不是用户；不要替别人发言。
 - 只能根据动态正文、评论区和提供的相关记忆回应；不要编造新事件。
 - 如果动态作者不是用户，不要把这条动态说成用户发的。
+- 评论区和记忆没有足够依据时，不要假定他人之间已发生具体事件、约定、情绪冲突或关系变化。
+- 回复评论时只回应对方已经公开表达的内容；不要借回复公开私聊、内部记忆或未公开的角色关系。
 
 直接输出评论文本。
 """.trimIndent()
@@ -1136,23 +1196,19 @@ object PromptTemplates {
 用户{{USER_NAME}}（{{USER_GENDER}}）：{{USER_BIO}}
 你与{{USER_NAME}}的关系：{{USER_RELATION}}
 
-【昨天你与{{USER_NAME}}的互动】
-私聊摘要：{{PRIVATE_SUMMARY}}
-参与的群聊片段与近期回顾：{{GROUP_SUMMARIES}}
+【昨天已确认的事实】
+昨天与{{USER_NAME}}的私聊事实：{{PRIVATE_SUMMARY}}
+明确发生在昨天的群聊或公开互动：{{GROUP_SUMMARIES}}
 
-【昨天你注意到的一些事】
+【非昨天资料，只能作为回忆或背景】
 {{RECENT_MEMORIES}}
+{{MEMORY_V2_CONTEXT}}
+{{RELATION_EVENTS}}
 
-【你自己的状态变化】
+【今天状态，仅决定口吻，不得写成昨天发生】
 {{SELF_STATUS_CHANGES}}
 
 {{SOURCE_AWARE_RULES}}
-
-【你回想起的相关经历】
-{{MEMORY_V2_CONTEXT}}
-
-【关系网中与你相关的事件】
-{{RELATION_EVENTS}}
 
 【日记写作要求】
 1. 写昨天真实发生的事，内容紧密围绕以上摘要和记忆，不要凭空编造。
@@ -1163,6 +1219,9 @@ object PromptTemplates {
 6. 如果某条事件不像昨天发生的，只能写成“最近想到/听说”，不要伪装成昨天亲历。
 7. 不确定的信息要写成主观感受或猜测，不要写成铁定事实。
 8. “近期生成的群聊滚动摘要”用于丰富回顾；其中未明确属于昨天的内容只能写成“最近群里聊到/我想起”，不能伪装成昨天发生。
+9. 只有“昨天已确认的事实”可直接写成“昨天我做了、看到了或听到了”。
+10. “非昨天资料”若要使用，必须写成“最近想起”“后来听说”或“之前看到动态里提到”，不能补写成昨天的时间、地点、行动或亲历细节。
+11. “今天状态”不得改写为昨天的地点、行动、情绪变化或事件原因。
 
 【第一人称硬规则】
 - 你正在写自己的日记，必须全篇用“我”称呼自己。

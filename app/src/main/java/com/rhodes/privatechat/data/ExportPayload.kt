@@ -32,8 +32,15 @@ data class ExportPayload(
     val diaries: List<Diary>? = null,
     /** Canonical V2 memory. Embeddings and derived promotion audit are rebuilt after restore. */
     val memoryItems: List<MemoryItem>? = null,
+    val knowledgeBases: List<KnowledgeBaseExport>? = null,
+    val knowledgeBaseChunks: List<KnowledgeBaseChunkExport>? = null,
+    val operatorKnowledgeBaseAssignments: List<OperatorKnowledgeBaseAssignmentExport>? = null,
     val settings: Map<String, String>? = null
 )
+
+@Serializable data class KnowledgeBaseExport(val id: String, val name: String, val rawContent: String, val sourceFileName: String = "", val sourceFormat: String = "", val chunkingMode: String = "smart", val createdAt: Long, val updatedAt: Long)
+@Serializable data class KnowledgeBaseChunkExport(val id: String, val knowledgeBaseId: String, val ordinal: Int, val sourceHeading: String = "", val content: String, val userKeywords: String = "", val enabled: Boolean = true, val createdAt: Long, val updatedAt: Long)
+@Serializable data class OperatorKnowledgeBaseAssignmentExport(val operatorId: String, val knowledgeBaseId: String, val enabled: Boolean = true, val sortOrder: Int = 0)
 
 @Serializable
 data class OperatorExport(
@@ -47,14 +54,16 @@ data class OperatorExport(
     val userRelation: String = "",
     val lmb: Int = 10000, val attack: Float = 0.5f,
     val defense: Float = 0.5f, val meldPref: String = "medium",
-    val activityLevel: Float = 0.5f
+    val activityLevel: Float = 0.5f,
+    val voiceName: String = "", val voiceSpeed: String = "", val voicePitch: String = ""
 ) {
     fun toEntity() = Operator(id, name, title, description, gender, avatarUri, location, activity, emotion, intimacy,
-        privatePrompt, groupPrompt, memoryInjection, userRelation, lmb, attack, defense, meldPref, activityLevel)
+        privatePrompt, groupPrompt, memoryInjection, userRelation, lmb, attack, defense, meldPref, activityLevel, voiceName, voiceSpeed, voicePitch)
     companion object {
         fun fromEntity(e: Operator) = OperatorExport(e.id, e.name, e.title, e.description, e.gender, e.avatarUri,
             e.location, e.activity, e.emotion, e.intimacy,
-            e.privatePrompt, e.groupPrompt, e.memoryInjection, e.userRelation, e.lmb, e.attack, e.defense, e.meldPref, e.activityLevel)
+            e.privatePrompt, e.groupPrompt, e.memoryInjection, e.userRelation, e.lmb, e.attack, e.defense, e.meldPref, e.activityLevel,
+            e.voiceName, e.voiceSpeed, e.voicePitch)
     }
 }
 

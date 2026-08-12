@@ -132,8 +132,11 @@ object DailyContentScheduler {
         if (!settings.quietHoursEnabled) return at
         val cal = Calendar.getInstance(zone).apply { timeInMillis = at }
         val hour = cal.get(Calendar.HOUR_OF_DAY)
-        val quiet = if (settings.quietHoursStart < settings.quietHoursEnd) hour in settings.quietHoursStart until settings.quietHoursEnd
-        else hour >= settings.quietHoursStart || hour < settings.quietHoursEnd
+        val quiet = when {
+            settings.quietHoursStart == settings.quietHoursEnd -> false
+            settings.quietHoursStart < settings.quietHoursEnd -> hour in settings.quietHoursStart until settings.quietHoursEnd
+            else -> hour >= settings.quietHoursStart || hour < settings.quietHoursEnd
+        }
         if (!quiet) return at
         cal.set(Calendar.HOUR_OF_DAY, settings.quietHoursEnd); cal.set(Calendar.MINUTE, 10 + (at % 40).toInt()); cal.set(Calendar.SECOND, 0)
         return cal.timeInMillis.coerceAtMost(cycleEnd - TimeUnit.MINUTES.toMillis(10)).coerceAtLeast(now + TimeUnit.MINUTES.toMillis(2))

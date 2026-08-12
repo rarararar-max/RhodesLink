@@ -127,10 +127,6 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = getBoolean("dual_model", true)
         set(value) = putBoolean("dual_model", value)
 
-    var groupTurnPlannerEnabled: Boolean
-        get() = getBoolean("group_turn_planner_enabled", true)
-        set(value) = putBoolean("group_turn_planner_enabled", value)
-
     var debugLogEnabled: Boolean
         get() = getBoolean("debug_log_enabled", false)
         set(value) = putBoolean("debug_log_enabled", value)
@@ -286,7 +282,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
             else -> false
         }
         "group_chat" -> source in setOf("GROUP_CHAT", "MOMENT", "MOMENT_COMMENT")
-        "moment" -> source in setOf("GROUP_CHAT", "MOMENT", "MOMENT_COMMENT", "DIARY", "MANUAL_MEMORY")
+        "moment" -> source in setOf("GROUP_CHAT", "MOMENT", "MOMENT_COMMENT", "MANUAL_MEMORY")
         "comment" -> source in setOf("GROUP_CHAT", "MOMENT", "MOMENT_COMMENT", "MANUAL_MEMORY")
         "diary" -> source in setOf("PRIVATE_CHAT", "GROUP_CHAT", "MOMENT", "MOMENT_COMMENT", "DIARY", "MANUAL_MEMORY", "RELATIONSHIP")
         else -> false
@@ -703,6 +699,14 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = getString("vector_index_signature", "")
         set(value) = putString("vector_index_signature", value)
 
+    /** Prevent paid remote embedding jobs from starting on cellular data when enabled. */
+    var knowledgeBaseRemoteIndexWifiOnly: Boolean
+        get() = getBoolean("knowledge_base_remote_index_wifi_only", false)
+        set(value) = putBoolean("knowledge_base_remote_index_wifi_only", value)
+
+    fun isKnowledgeBaseEnabled(surface: String): Boolean = getBoolean("knowledge_base_$surface", surface in setOf("private_chat", "group_chat"))
+    fun setKnowledgeBaseEnabled(surface: String, enabled: Boolean) = putBoolean("knowledge_base_$surface", enabled)
+
     var visionProvider: String
         get() = getString("vision_provider", "ali")
         set(value) = putString("vision_provider", value)
@@ -782,24 +786,24 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     // === 清理设置 ===
     var cleanDaysMessages: Int
-        get() = settings.getInt("clean_days_messages", 30).coerceIn(0, 3650)
-        set(value) = settings.putInt("clean_days_messages", value.coerceIn(0, 3650))
+        get() = settings.getInt("clean_days_messages", 30).coerceIn(-1, 3650)
+        set(value) = settings.putInt("clean_days_messages", value.coerceIn(-1, 3650))
 
     var cleanDaysAnchors: Int
-        get() = settings.getInt("clean_days_anchors", 7).coerceIn(0, 3650)
-        set(value) = settings.putInt("clean_days_anchors", value.coerceIn(0, 3650))
+        get() = settings.getInt("clean_days_anchors", 7).coerceIn(-1, 3650)
+        set(value) = settings.putInt("clean_days_anchors", value.coerceIn(-1, 3650))
 
     var cleanDaysDiaries: Int
-        get() = settings.getInt("clean_days_diaries", 30).coerceIn(0, 3650)
-        set(value) = settings.putInt("clean_days_diaries", value.coerceIn(0, 3650))
+        get() = settings.getInt("clean_days_diaries", 30).coerceIn(-1, 3650)
+        set(value) = settings.putInt("clean_days_diaries", value.coerceIn(-1, 3650))
 
     var cleanDaysMoments: Int
-        get() = settings.getInt("clean_days_moments", 7).coerceIn(0, 3650)
-        set(value) = settings.putInt("clean_days_moments", value.coerceIn(0, 3650))
+        get() = settings.getInt("clean_days_moments", 7).coerceIn(-1, 3650)
+        set(value) = settings.putInt("clean_days_moments", value.coerceIn(-1, 3650))
 
     var cleanDaysDispatches: Int
-        get() = settings.getInt("clean_days_dispatches", 30).coerceIn(0, 3650)
-        set(value) = settings.putInt("clean_days_dispatches", value.coerceIn(0, 3650))
+        get() = settings.getInt("clean_days_dispatches", 30).coerceIn(-1, 3650)
+        set(value) = settings.putInt("clean_days_dispatches", value.coerceIn(-1, 3650))
 
     // === 催眠设置 ===
     var hypnosisCmd: String
@@ -906,6 +910,16 @@ class SettingsRepository(private val settings: ObservableSettings) {
     fun putGroupAuto(groupId: String, value: Boolean) =
         putBoolean("group_auto_$groupId", value)
 
+    /** Invalidates background memory work from a discarded conversation timeline. */
+    fun getMemoryTimelineEpoch(timelineId: String): Long =
+        getLong("memory_timeline_epoch_$timelineId", 0L)
+
+    fun advanceMemoryTimelineEpoch(timelineId: String): Long {
+        val next = maxOf(System.currentTimeMillis(), getMemoryTimelineEpoch(timelineId) + 1L)
+        putLong("memory_timeline_epoch_$timelineId", next)
+        return next
+    }
+
     /** Durable one-turn plan used by the foreground timer and WorkManager fallback. */
     data class GroupAutoChatPlan(val token: String, val dueAt: Long, val round: Int)
 
@@ -998,10 +1012,9 @@ class SettingsRepository(private val settings: ObservableSettings) {
         val saved = getString(key, "").orEmpty()
         if (saved.isBlank()) return defaultTemplate
         if (getBoolean("${key}_custom", false)) return saved
-        // Old builds did not consistently record the custom flag. Preserve legacy content without
-        // falsely freezing it as custom; a later known-template migration can upgrade safely.
-        if (PromptTemplateMigration.preserveLegacyTemplate(saved, false, getPromptTemplateVersion(type, mode), defaultVersion)) return saved
-        return saved
+        // A saved template without the custom marker is an old shipped default. Upgrade it so
+        // protocol fixes reach users, while explicitly custom templates remain untouched.
+        return if (getPromptTemplateVersion(type, mode) < defaultVersion) defaultTemplate else saved
     }
 
     fun getPromptTemplateVersion(type: String, mode: String = ""): Int {
@@ -1152,6 +1165,12 @@ class SettingsRepository(private val settings: ObservableSettings) {
         putString("private_turn_state_$sessionId", Json.encodeToString(value))
 
     fun clearPrivateTurnState(sessionId: String) = remove("private_turn_state_$sessionId")
+
+    fun getGroupPlotSummary(groupId: String): String = getString("group_plot_summary_$groupId", "")
+
+    fun putGroupPlotSummary(groupId: String, value: String) = putString("group_plot_summary_$groupId", value.take(220))
+
+    fun clearGroupPlotSummary(groupId: String) = remove("group_plot_summary_$groupId")
 
     fun getSummaryCursor(sessionId: String): Long = getLong("summary_cursor_session_$sessionId", 0L)
 

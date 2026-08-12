@@ -29,6 +29,9 @@ CREATE INDEX IF NOT EXISTS idx_chat_history_segments_session_created ON chat_his
 getArchivesBySession:
 SELECT * FROM chat_archives WHERE sessionId = ? ORDER BY createdAt DESC;
 
+getAllArchives:
+SELECT * FROM chat_archives ORDER BY createdAt DESC;
+
 getArchive:
 SELECT * FROM chat_archives WHERE id = ?;
 
@@ -56,6 +59,9 @@ DELETE FROM chat_archives WHERE sessionId = ?;
 
 getHistorySegmentsBySession:
 SELECT * FROM chat_history_segments WHERE sessionId = ? ORDER BY createdAt DESC;
+
+getAllHistorySegments:
+SELECT * FROM chat_history_segments ORDER BY createdAt DESC;
 
 insertHistorySegment:
 INSERT OR REPLACE INTO chat_history_segments(id, sessionId, title, reason, messagesJson, createdAt)

@@ -30,24 +30,6 @@ data class AiMessage(
 )
 
 @Serializable
-data class GroupTurnPlan(
-    val main_thread: String = "",
-    val unresolved_thread: String = "",
-    val pending_action: String = "",
-    val scene_state: String = "",
-    val user_intent: String = "",
-    val primary_operator_id: String = "",
-    val goals: List<GroupTurnGoal> = emptyList()
-)
-
-@Serializable
-data class GroupTurnGoal(
-    val operator_id: String = "",
-    val role: String = "support",
-    val goal: String = ""
-)
-
-@Serializable
 data class StreamChunk(
     val choices: List<StreamChoice>? = null
 )
@@ -97,6 +79,7 @@ data class OfflineModeResponse(
     val emotion: String = "",
     val state: String = "",
     val location: String = "",
+    val continuity: String = "",
     val narration: String = "",
     val dialogue: String = "",
     val affection_mod: Int = 0,

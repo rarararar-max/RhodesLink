@@ -11,6 +11,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PromptCacheLayerTest {
+
+    @Test
+    fun proactiveTemplateUsesTheActiveTagProtocolInsteadOfJson() {
+        val template = PromptTemplates.get("private", "proactive")
+
+        assertTrue(template.contains("【状态】"))
+        assertTrue(template.contains("【台词】"))
+        assertTrue(template.contains("不要 JSON"))
+        assertTrue(!template.contains("\"segments\""))
+    }
     private fun layers(replacements: Map<String, String>): SharedUtils.CachePromptLayers {
         val template = """
             【规则】你是{{OPERATOR_NAME}}。
@@ -68,8 +78,8 @@ class PromptCacheLayerTest {
         ))
 
         assertEquals(empty.system, populated.system)
-        assertTrue(empty.system.contains("见本轮运行时上下文"))
-        assertEquals("【本轮运行时上下文】\n无", empty.runtimeContext)
+        assertTrue(empty.system.contains("见本轮资料"))
+        assertEquals("【本轮资料】\n暂无与本轮相关的补充资料。", empty.runtimeContext)
     }
 
     @Test
@@ -82,7 +92,7 @@ class PromptCacheLayerTest {
         ))
 
         assertTrue(result.system.contains("阿米娅"))
-        assertTrue(result.system.contains("见本轮运行时上下文"))
+        assertTrue(result.system.contains("见本轮资料"))
     }
 
     @Test
@@ -130,11 +140,38 @@ class PromptCacheLayerTest {
         }
 
         assertEquals(
-            "【CURRENT_TIME】\n09:30\n【MEMORY_V2_CONTEXT】\n相关记忆",
+            "【当前时间】\n09:30\n【可能相关的过往经历】\n相关记忆",
             layer.runtimeContext
         )
         assertFalse(layer.runtimeContext.contains("不能进入运行时资料的本轮输入"))
         assertFalse(layer.system.contains("不能进入运行时资料的本轮输入"))
+    }
+
+    @Test
+    fun runtimeContextUsesNaturalLabelsInsteadOfInternalPlaceholderNames() {
+        val template = """
+            进展：{{SHORT_TERM_SUMMARY}}
+            群聊：{{GROUP_CONTEXT}}
+            动态：{{RECENT_SOCIAL_CONTEXT}}
+        """.trimIndent()
+        val layer = CachePromptLayering.build(
+            template = template,
+            replacements = mapOf(
+                "SHORT_TERM_SUMMARY" to "刚刚约好晚些再聊",
+                "GROUP_CONTEXT" to "群里在讨论晚餐",
+                "RECENT_SOCIAL_CONTEXT" to "阿米娅发了一条动态"
+            ),
+            dynamicKeys = setOf("SHORT_TERM_SUMMARY", "GROUP_CONTEXT", "RECENT_SOCIAL_CONTEXT")
+        ) { values ->
+            values.entries.fold(template) { rendered, (key, value) -> rendered.replace("{{$key}}", value) }.trim()
+        }
+
+        assertTrue(layer.runtimeContext.contains("【最近聊天进展】"))
+        assertTrue(layer.runtimeContext.contains("【从群聊得知的近况】"))
+        assertTrue(layer.runtimeContext.contains("【近期公开动态与评论】"))
+        assertFalse(layer.runtimeContext.contains("SHORT_TERM_SUMMARY"))
+        assertFalse(layer.runtimeContext.contains("GROUP_CONTEXT"))
+        assertFalse(layer.runtimeContext.contains("RECENT_SOCIAL_CONTEXT"))
     }
 
     @Test
@@ -156,7 +193,7 @@ class PromptCacheLayerTest {
             values.entries.fold(template) { rendered, (key, value) -> rendered.replace("{{$key}}", value) }.trim()
         }
 
-        assertEquals("【CURRENT_TIME】\n09:30", layer.runtimeContext)
+        assertEquals("【当前时间】\n09:30", layer.runtimeContext)
         assertFalse(layer.runtimeContext.contains("无关记忆"))
         assertFalse(layer.runtimeContext.contains("无关动态"))
     }
@@ -196,6 +233,38 @@ class PromptCacheLayerTest {
     }
 
     @Test
+    fun shippedPrivateTemplatesDoNotContainRetiredAnalysisPlaceholder() {
+        listOf("online", "offline", "director", "proactive").forEach { mode ->
+            assertFalse("private/$mode", PromptTemplates.get("private", mode).contains("{{AI_ANALYSIS}}"))
+        }
+    }
+
+    @Test
+    fun promptTemplateVersionAdvancesForTheCurrentPromptRevision() {
+        assertEquals(27, PromptTemplates.VERSION)
+    }
+
+    @Test
+    fun shippedGroupTemplatesUseTheRuntimeTagProtocolInsteadOfJson() {
+        listOf("online", "offline", "director", "auto").forEach { mode ->
+            val template = PromptTemplates.get("group", mode)
+            assertFalse("group/$mode must not prescribe JSON", template.contains("JSON", ignoreCase = true))
+            assertFalse("group/$mode must not prescribe a JSON schema", template.contains("speaker="))
+            assertFalse("group/$mode must not include retired planner guidance", template.contains("{{GROUP_TURN_GUIDANCE}}"))
+        }
+    }
+
+    @Test
+    fun privateIdentityStaysInTheCacheablePromptPrefix() {
+        val runtime = PromptPlaceholderRegistry.runtimeKeys("private", "online")
+
+        assertFalse("operator name must stay cacheable", "OPERATOR_NAME" in runtime)
+        assertFalse("operator title must stay cacheable", "OPERATOR_TITLE" in runtime)
+        assertFalse("operator persona must stay cacheable", "OPERATOR_PERSONA" in runtime)
+        assertFalse("operator gender must stay cacheable", "OPERATOR_GENDER" in runtime)
+    }
+
+    @Test
     fun nonChatRuntimeKeysKeepVolatileContentOutOfTheSystemPrefix() {
         val expectedRuntimeKeys = mapOf(
             "moment" to setOf("CURRENT_TIME", "RECENT_MEMORIES", "RECENT_POSTS", "USER_NAME"),
@@ -211,11 +280,12 @@ class PromptCacheLayerTest {
     }
 
     @Test
-    fun unknownPlaceholderRemainsVisibleInRenderedTemplate() {
+    fun unknownPlaceholderIsDetectedBeforeTemplateDispatch() {
         val template = "角色：{{OPERATOR_NAME}}，保留：{{FUTURE_COMPATIBILITY_TOKEN}}"
         val rendered = template.replace("{{OPERATOR_NAME}}", "阿米娅")
 
         assertEquals("角色：阿米娅，保留：{{FUTURE_COMPATIBILITY_TOKEN}}", rendered)
+        assertTrue(Regex("\\{\\{([A-Z0-9_]+)\\}\\}").containsMatchIn(rendered))
     }
 
     @Test
@@ -225,4 +295,5 @@ class PromptCacheLayerTest {
         assertFalse(PromptTemplateMigration.preserveLegacyTemplate("用户模板", true, 18, 19))
         assertFalse(PromptTemplateMigration.preserveLegacyTemplate("当前模板", false, 19, 19))
     }
+
 }

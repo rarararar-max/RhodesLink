@@ -119,7 +119,7 @@ private fun HelpButton(message: String) {
 @Composable
 private fun PrivateTab(settings: SettingsRepository) {
     SectionTitle("台词（共用：线上/线下/导演）")
-    ParamSlider(settings, "dia_seg_min", "最少台词段数", 1, 1f..10f, "角色每次回复最少说几段话。建议1。太低（0）可能不出声，太高（超过3）角色为了凑段数会说一堆车轱辘话。", pairKey = "dia_seg_max", pairDefaultVal = 3, isMinSide = true)
+    ParamSlider(settings, "dia_seg_min", "最少台词段数", 1, 0f..10f, "角色每次回复最少说几段话。建议1。设为0时可能不出声，太高（超过3）角色为了凑段数会说一堆车轱辘话。", pairKey = "dia_seg_max", pairDefaultVal = 3, isMinSide = true)
     ParamSlider(settings, "dia_seg_max", "最多台词段数", 3, 1f..10f, "角色每次回复最多说几段话。建议2-3。太高（超过5）角色容易啰嗦，每个回复都像在写作文。", pairKey = "dia_seg_min", pairDefaultVal = 1, isMinSide = false)
     ParamSlider(settings, "dia_min", "台词最少字数", 10, 1f..1000f, "每段话最少写几个字。建议10-20。太低（低于5）角色答得很敷衍，太高（超过50）每句话都像在写小作文。", step = 5f, pairKey = "dia_max", pairDefaultVal = 300, isMinSide = true)
     ParamSlider(settings, "dia_max", "台词最多字数", 300, 1f..1000f, "每段话最多写几个字。建议200-300。太低（低于50）角色只能一问一答没法好好说话，太高（超过500）角色会变得非常啰嗦。", step = 5f, pairKey = "dia_min", pairDefaultVal = 10, isMinSide = false)
@@ -128,7 +128,7 @@ private fun PrivateTab(settings: SettingsRepository) {
     SectionTitle("旁白（线下/导演模式）")
     ParamSlider(settings, "nar_seg_min", "最少旁白段数", 1, 1f..10f, "线下和导演模式每轮至少保留一段旁白；此设置用于增加旁白数量。线上模式用不到这个。", pairKey = "nar_seg_max", pairDefaultVal = 3, isMinSide = true)
     ParamSlider(settings, "nar_seg_max", "最多旁白段数", 3, 1f..10f, "每次回复最多带几段环境描写。建议2-3。太高（超过5）旁白比台词还多，像在读剧本不像在聊天。", pairKey = "nar_seg_min", pairDefaultVal = 1, isMinSide = false)
-    ParamSlider(settings, "nar_min", "旁白最少字数", 20, 0f..1000f, "每段环境描写最少写几个字。建议20-50。太低写不出画面感，太高（超过100）一段动作描写就占了大半篇幅。", step = 5f, pairKey = "nar_max", pairDefaultVal = 300, isMinSide = true)
+    ParamSlider(settings, "nar_min", "旁白最少字数", 50, 0f..1000f, "每段环境描写最少写几个字。建议20-50。太低写不出画面感，太高（超过100）一段动作描写就占了大半篇幅。", step = 5f, pairKey = "nar_max", pairDefaultVal = 300, isMinSide = true)
     ParamSlider(settings, "nar_max", "旁白最多字数", 300, 1f..1000f, "每段环境描写最多写几个字。建议200-300。太高（超过400）旁白抢了台词的风头，而且每次回复花的钱也更多。", step = 5f, pairKey = "nar_min", pairDefaultVal = 20, isMinSide = false)
 }
 
@@ -226,47 +226,6 @@ private fun GeneralTab(settings: SettingsRepository, onPromptEditor: () -> Unit 
     SectionTitle("生成风格")
     ParamSlider(settings, "ai_temperature", "创意程度", 80, 0f..200f, step = 5f, tip = "角色说话风格。建议60-90。太低（低于30）说话非常死板重复，像机器人；太高（超过120）容易跑偏，说话前言不搭后语。当前值÷100就是实际使用的数值。")
     Spacer(modifier = Modifier.height(12.dp))
-    var dualModel by remember { mutableStateOf(settings.dualModel) }
-    Row(
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Card).padding(12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("私聊连续性优化", fontSize = 13.sp, color = TextPrimary)
-                HelpButton("回复前会先整理角色当前情绪、场景和你的表达意图，再生成正式回复。能让私聊更自然地承接上下文；会略微增加等待时间和模型消耗。")
-            }
-            Text("关闭后直接根据当前对话生成回复，响应更快", fontSize = 11.sp, color = TextSecondary)
-        }
-        Switch(checked = dualModel, onCheckedChange = {
-            dualModel = it
-            settings.dualModel = it
-        }, colors = SwitchDefaults.colors(checkedThumbColor = Blue400, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
-    }
-    Spacer(modifier = Modifier.height(6.dp))
-
-    var groupTurnPlannerEnabled by remember { mutableStateOf(settings.groupTurnPlannerEnabled) }
-    Row(
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Card).padding(12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("群聊连续性优化", fontSize = 13.sp, color = TextPrimary)
-                HelpButton("回复前会先规划群成员各自适合如何回应，再生成正式群聊内容。能减少成员重复附和和话题跑偏；会略微增加等待时间和模型消耗。")
-            }
-            Text("关闭后直接生成群成员回复，响应更快", fontSize = 11.sp, color = TextSecondary)
-        }
-        Switch(checked = groupTurnPlannerEnabled, onCheckedChange = {
-            groupTurnPlannerEnabled = it
-            settings.groupTurnPlannerEnabled = it
-        }, colors = SwitchDefaults.colors(checkedThumbColor = Blue400, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
-    }
-    Spacer(modifier = Modifier.height(6.dp))
-
-
     Text("高级功能：修改各场景的角色说话规则。不了解的话建议保持默认。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
     Button(
         onClick = onPromptEditor,

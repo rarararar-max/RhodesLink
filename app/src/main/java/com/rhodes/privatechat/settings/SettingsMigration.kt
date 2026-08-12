@@ -15,6 +15,11 @@ object SettingsMigration {
     private const val MIGRATION_DONE_KEY = "prefs_migration_done_v1"
     private const val MIGRATION_FIX_V2_KEY = "prefs_migration_fix_v2"
     private const val CONTINUITY_OPTIMIZATIONS_INITIALIZED_KEY = "continuity_optimizations_initialized_v1"
+    private const val FRESH_INSTALL_KEY = "fresh_install_v1"
+    private val legacyPreferenceFiles = listOf(
+        "chat_prefs", "model_prefs", "user_prefs", "session_hidden", "token_stats", "op_perms",
+        "dispatch", "op_lmb", "moment_prefs", "mahjong_history", "prompt_templates"
+    )
 
     private fun initializeContinuityOptimizations(context: Context, target: SharedPreferences) {
         if (safeBoolean(target, CONTINUITY_OPTIMIZATIONS_INITIALIZED_KEY, false)) return
@@ -24,9 +29,6 @@ object SettingsMigration {
         val legacy = context.getSharedPreferences("chat_prefs", Context.MODE_PRIVATE)
         if (!target.contains("dual_model") && !legacy.contains("dual_model")) {
             editor.putBoolean("dual_model", true)
-        }
-        if (!target.contains("group_turn_planner_enabled") && !legacy.contains("group_turn_planner_enabled")) {
-            editor.putBoolean("group_turn_planner_enabled", true)
         }
         editor.putBoolean(CONTINUITY_OPTIMIZATIONS_INITIALIZED_KEY, true)
         editor.commit()
@@ -59,6 +61,22 @@ object SettingsMigration {
         val target = context.getSharedPreferences(TARGET_SP, Context.MODE_PRIVATE)
         if (safeBoolean(target, MIGRATION_DONE_KEY, false)) {
             runFixV2IfNeeded(context, target)
+            initializeContinuityOptimizations(context, target)
+            return
+        }
+
+        // A clean install has neither a database nor any legacy preference values. Mark it once
+        // so future launches never treat its newly created database as an upgrade candidate.
+        val hasExistingDatabase = context.getDatabasePath("rhodes_terminal.db").exists()
+        val hasLegacyPreferences = legacyPreferenceFiles.any { name ->
+            context.getSharedPreferences(name, Context.MODE_PRIVATE).all.isNotEmpty()
+        }
+        if (target.all.isEmpty() && !hasExistingDatabase && !hasLegacyPreferences) {
+            target.edit()
+                .putBoolean(FRESH_INSTALL_KEY, true)
+                .putBoolean(MIGRATION_DONE_KEY, true)
+                .putBoolean(MIGRATION_FIX_V2_KEY, true)
+                .commit()
             initializeContinuityOptimizations(context, target)
             return
         }

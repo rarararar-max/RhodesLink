@@ -807,7 +807,43 @@ data object DataManagementRoute : Screen {
     @Composable
     override fun Content() {
         val navigator = LocalNavigator.currentOrThrow
-        com.rhodes.privatechat.ui.settings.DataManagementScreen(viewModel = koinViewModel(), onBack = { navigator.pop() })
+        com.rhodes.privatechat.ui.settings.DataManagementScreen(
+            viewModel = koinViewModel(),
+            onBack = { navigator.pop() },
+            onBackupRestore = { navigator.push(BackupRestoreRoute) },
+        )
+    }
+}
+
+data object KnowledgeBasesRoute : Screen {
+    @Composable
+    override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        com.rhodes.privatechat.ui.settings.KnowledgeBasesScreen(onBack = { navigator.pop() }, onOpen = { navigator.push(KnowledgeBaseDetailRoute(it)) })
+    }
+}
+
+data class KnowledgeBaseDetailRoute(val id: String) : Screen {
+    @Composable override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        com.rhodes.privatechat.ui.settings.KnowledgeBaseDetailScreen(id, { navigator.pop() }, { navigator.push(KnowledgeBaseEditorRoute(id)) }, { navigator.push(KnowledgeBaseRolesRoute(id)) }, { navigator.push(KnowledgeBaseChunksRoute(id)) })
+    }
+}
+data class KnowledgeBaseEditorRoute(val id: String) : Screen {
+    @Composable override fun Content() { val navigator = LocalNavigator.currentOrThrow; com.rhodes.privatechat.ui.settings.KnowledgeBaseEditorScreen(id) { navigator.pop() } }
+}
+data class KnowledgeBaseRolesRoute(val id: String) : Screen {
+    @Composable override fun Content() { val navigator = LocalNavigator.currentOrThrow; com.rhodes.privatechat.ui.settings.KnowledgeBaseRolesScreen(id) { navigator.pop() } }
+}
+data class KnowledgeBaseChunksRoute(val id: String) : Screen {
+    @Composable override fun Content() { val navigator = LocalNavigator.currentOrThrow; com.rhodes.privatechat.ui.settings.KnowledgeBaseChunksScreen(id) { navigator.pop() } }
+}
+
+data object BackupRestoreRoute : Screen {
+    @Composable
+    override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        com.rhodes.privatechat.ui.settings.BackupRestoreScreen(onBack = { navigator.pop() })
     }
 }
 

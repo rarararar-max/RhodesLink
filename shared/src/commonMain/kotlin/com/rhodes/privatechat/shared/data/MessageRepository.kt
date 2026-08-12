@@ -12,10 +12,19 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.Serializable
 
 data class ChatDisplayEvent(
     val messageId: Long,
     val segmentIndex: Int,
+    val revealOrder: Long,
+)
+
+@Serializable
+data class BackupChatDisplayEvent(
+    val messageId: Long,
+    val segmentIndex: Int,
+    val sessionId: String,
     val revealOrder: Long,
 )
 
@@ -72,6 +81,12 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
     suspend fun getDisplayEvents(sessionId: String): List<ChatDisplayEvent> = withContext(Dispatchers.Default) {
         db.chatDisplayEventsQueries.getDisplayEvents(sessionId) { messageId, segmentIndex, revealOrder ->
             ChatDisplayEvent(messageId, segmentIndex.toInt(), revealOrder)
+        }.executeAsList()
+    }
+
+    suspend fun getAllDisplayEvents(): List<BackupChatDisplayEvent> = withContext(Dispatchers.Default) {
+        db.chatDisplayEventsQueries.getAllDisplayEvents { messageId, segmentIndex, sessionId, revealOrder ->
+            BackupChatDisplayEvent(messageId, segmentIndex.toInt(), sessionId, revealOrder)
         }.executeAsList()
     }
 

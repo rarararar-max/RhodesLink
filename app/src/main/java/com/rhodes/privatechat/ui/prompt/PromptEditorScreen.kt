@@ -93,6 +93,7 @@ fun PromptEditorScreen(
 
     val textMap = remember { mutableStateMapOf<String, TextFieldValue>() }
     val dirtyKeys = remember { mutableStateListOf<String>() }
+    var showExitDialog by remember { mutableStateOf(false) }
 
     fun loadTemplate(type: String, mode: String) = viewModel.getPromptTemplate(type, mode)
 
@@ -156,8 +157,16 @@ fun PromptEditorScreen(
     }
     val saveAllEdited: () -> Boolean = saveAllEdited@{
         if (tabIndex < 6) textMap[currentKey()] = textFieldValue
-        val warnings = mutableListOf<String>()
         val editedTemplates = textMap.filterKeys { it in dirtyKeys }.toMap()
+        val validationErrors = editedTemplates.flatMap { (templateKey, value) ->
+            viewModel.validatePromptTemplate(templateKey.substringBefore(":"), templateKey.substringAfter(":", ""), value.text)
+                .map { "$templateKey：$it" }
+        }
+        if (validationErrors.isNotEmpty()) {
+            Toast.makeText(context, validationErrors.joinToString("\n"), Toast.LENGTH_LONG).show()
+            return@saveAllEdited false
+        }
+        val warnings = mutableListOf<String>()
         for ((templateKey, value) in editedTemplates) {
             val type = templateKey.substringBefore(":")
             val mode = templateKey.substringAfter(":", "")
@@ -175,7 +184,11 @@ fun PromptEditorScreen(
         true
     }
 
-    BackHandler(onBack = { if (saveAllEdited()) onBack() })
+    fun requestBack() {
+        if (dirtyKeys.isEmpty()) onBack() else showExitDialog = true
+    }
+
+    BackHandler(onBack = ::requestBack)
 
     var showResetDialog by remember { mutableStateOf(false) }
     var showHelpDialog by remember { mutableStateOf(false) }
@@ -189,7 +202,7 @@ fun PromptEditorScreen(
         "{{USER_BIO}}" to "用户简介",
         "{{USER_GENDER_BIO}}" to "用户性别+简介拼接",
         "{{CURRENT_TIME}}" to "当前北京时间",
-        "{{AI_ANALYSIS}}" to "双模型本轮状态卡：角色当前情绪、位置、动作、用户意图与回复重点；关闭双模型、超时或分析失败时不注入",
+        "{{PRIVATE_CONTINUITY_STATE}}" to "上一轮私聊的状态、心情、位置和本轮简述，用于自然承接当前对话",
         "{{HYPNOSIS}}" to "催眠指令（为空则不注入）",
         "{{TRANSITION_NOTICE}}" to "模式切换、继续说、重说等临时系统指令",
         "{{PROACTIVE_TRIGGER_TYPE}}" to "主动触发类型（idle）",
@@ -207,6 +220,9 @@ fun PromptEditorScreen(
         "{{PROACTIVE_RECENT_HISTORY}}" to "最近带时间戳的聊天记录，仅用于核对事实",
         "{{OPERATOR_GENDER}}" to "干员性别设定",
         "{{MEMORY_INJECTION}}" to "系统自动注入的记忆上下文（每日摘要/对话摘要/长期印象/锚点/共享记忆）",
+        "{{MEMORY_V2_CONTEXT}}" to "当前角色可用的记忆与共同经历；无相关记忆时为空",
+        "{{USER_CONTENT}}" to "用户本轮内容；私聊通常由应用单独附加",
+        "{{MIND_READ}}" to "读心功能上下文；未启用时为空",
         "{{LONG_TERM_IMPRESSION}}" to "长期印象",
         "{{USER_PREFS}}" to "用户偏好与禁忌",
         "{{MEMORY_ANCHORS}}" to "当前场景挑选出的关键记忆锚点",
@@ -237,9 +253,9 @@ fun PromptEditorScreen(
         "{{AUTO_REASON}}" to "自动触发原因",
         "{{AUTO_REASON_TEXT}}" to "自动触发说明",
         "{{GROUP_MODE_FORMAT}}" to "自动群聊格式提示",
-        "{{GROUP_TURN_GUIDANCE}}" to "群聊模型1生成的成员本轮回应方向；关闭、超时或失败时为通用兜底方向",
+        "{{GROUP_PLOT_SUMMARY}}" to "上一轮群聊剧情简述，用于承接当前主线、场景和未结束事项",
         "{{USER_MESSAGE}}" to "用户最新发言内容",
-        "{{OUTPUT_FORMAT}}" to "输出JSON格式规范",
+        "{{OUTPUT_FORMAT}}" to "当前运行时标签格式规范",
         "{{GROUP_NAR_SEG_MIN}}" to "群聊旁白段数下限",
         "{{GROUP_NAR_SEG_MAX}}" to "群聊旁白段数上限",
         "{{GROUP_NAR_MIN}}" to "群聊旁白单段字数下限",
@@ -264,6 +280,8 @@ fun PromptEditorScreen(
         "{{TIME_OF_DAY}}" to "当前时段",
         "{{RECENT_CHAT_SUMMARY}}" to "近期聊天摘要",
         "{{RECENT_MEMORIES}}" to "近期记忆",
+        "{{MOMENT_TRIGGER_TYPE}}" to "动态生成触发方式",
+        "{{WORLD_TODAY_STATE}}" to "当日公开世界状态",
         "{{RECENT_POSTS}}" to "近期动态",
         "{{RECENT_SOCIAL_CONTEXT}}" to "指定角色和用户最近三天的相关公开动态、评论",
         "{{RECENT_DAILY_SUMMARY}}" to "动态可参考的近期每日摘要",
@@ -299,8 +317,6 @@ fun PromptEditorScreen(
         "{{DISPATCH_ROUND}}" to "当前过程轮数",
         "{{DISPATCH_SUMMARY}}" to "派遣完整日志摘要",
         "{{RECENT_PLOT}}" to "派遣最近剧情",
-        "{{MEMBER_PROFILES}}" to "派遣成员档案",
-        "{{MEMBER_NAMES}}" to "派遣成员名称",
         "{{MEMBER_COUNT}}" to "派遣成员数量",
         "{{DURATION_HOURS}}" to "派遣时长（小时）",
         "{{DISPATCH_MIN_CHARS}}" to "派遣叙事字数下限",
@@ -315,7 +331,7 @@ fun PromptEditorScreen(
             modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = { if (saveAllEdited()) onBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
+            IconButton(onClick = ::requestBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Spacer(modifier = Modifier.weight(1f))
             Text("提示词模板编辑", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
             Spacer(modifier = Modifier.weight(1f))
@@ -423,9 +439,9 @@ fun PromptEditorScreen(
                         Spacer(Modifier.height(4.dp))
                         Text(
                             if (isCustom) {
-                                "你写的内容会按当前顺序直接发送给模型，不会被系统移动或重排。这样更符合你的调教预期；恢复默认后，才会重新使用系统的省流量优化模板。"
+                "你可以自由编写角色、语气、剧情和互动偏好。系统仍会加入安全基础规则、当前上下文与固定回复协议；JSON、XML、Markdown或自定义标签允许保存，但可能与固定协议冲突并触发修复或重试。"
                             } else {
-                                "系统默认模板已做连续聊天优化：固定规则会尽量复用，时间、记忆和本轮消息会按系统方式补充。想完全控制提示词顺序时，保存修改即可切换为自己的模板。"
+                "系统默认模板已做连续聊天优化：固定规则会尽量复用，时间、记忆和本轮消息会按系统方式补充。自定义模板用于补充角色规则，固定回复协议仍由系统处理。"
                             },
                             fontSize = 11.sp,
                             color = TextSecondary,
@@ -454,7 +470,7 @@ fun PromptEditorScreen(
                             Text("基础回复规则始终生效", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                "系统会优先理解并回应用户当前真正想表达的内容，结合上文理解简短回复，避免重复已说过的回答、动作和场景。线下和导演模式还会保持地点、人物位置和事件连续；线上模式不生成旁白。\n\n你可以编辑角色性格、语气、世界观和互动风格。用户本轮明确的要求或场景描述优先执行。",
+                                "系统会优先理解并回应用户当前真正想表达的内容。固定协议：线上为【状态】【心情】【位置】【本轮简述】【台词】；线下/导演额外包含【旁白】。\n\n你可以编辑角色性格、语气、世界观和互动风格。JSON、XML、Markdown和自定义标签允许使用，但可能与固定协议冲突。",
                                 fontSize = 11.sp,
                                 color = TextSecondary,
                                 lineHeight = 16.sp
@@ -466,39 +482,15 @@ fun PromptEditorScreen(
                 if (tabIndex == 1) {
                     Card(colors = CardDefaults.cardColors(containerColor = Blue400.copy(alpha = 0.08f))) {
                         Column(Modifier.padding(12.dp)) {
-                            Text("群聊模式与参数规则始终生效", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                            Text("群聊回复规则始终生效", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                "系统会限制当前模式的旁白规则、当前成员的发言次数和消息字数，并要求只输出当前群成员的 JSON 发言。你可以编辑群聊氛围、成员关系和世界观，但不要用自定义规则绕过聊天表现设置。",
+                                "系统会限制当前模式的旁白规则、成员发言次数和消息字数。固定协议使用【本轮剧情简述】、【旁白】和【发言人: operator_id】。你可以编辑群聊氛围、成员关系和世界观；自定义格式允许保存，但可能触发结构修复。",
                                 fontSize = 11.sp,
                                 color = TextSecondary,
                                 lineHeight = 16.sp
                             )
                         }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                }
-                if (tabIndex == 0 && currentMode() != "proactive" && !textFieldValue.text.contains("{{AI_ANALYSIS}}")) {
-                    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFFF9500).copy(alpha = 0.10f))) {
-                        Text(
-                            "当前模板未包含 {{AI_ANALYSIS}}。开启双模型深度分析后，本轮角色状态卡不会进入最终回复提示词。",
-                            fontSize = 11.sp,
-                            color = TextSecondary,
-                            lineHeight = 16.sp,
-                            modifier = Modifier.padding(12.dp)
-                        )
-                    }
-                    Spacer(Modifier.height(8.dp))
-                }
-                if (tabIndex == 1 && currentMode() != "auto" && !textFieldValue.text.contains("{{GROUP_TURN_GUIDANCE}}")) {
-                    Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFFF9500).copy(alpha = 0.10f))) {
-                        Text(
-                            "当前模板未包含 {{GROUP_TURN_GUIDANCE}}。开启群聊本轮规划后，模型1生成的成员回应方向不会进入最终群聊提示词。",
-                            fontSize = 11.sp,
-                            color = TextSecondary,
-                            lineHeight = 16.sp,
-                            modifier = Modifier.padding(12.dp)
-                        )
                     }
                     Spacer(Modifier.height(8.dp))
                 }
@@ -575,7 +567,7 @@ fun PromptEditorScreen(
             ) {
                 val allowed = PromptPlaceholderRegistry.allowed(currentType(), currentMode())
                 val recommended = PromptPlaceholderRegistry.recommended(currentType(), currentMode())
-                allPlaceholders.filter { (key, _) -> key.removePrefix("{{").removeSuffix("}}") in allowed }
+                allPlaceholders.distinctBy { it.first }.filter { (key, _) -> key.removePrefix("{{").removeSuffix("}}") in allowed }
                     .sortedBy { (key, _) -> if (key.removePrefix("{{").removeSuffix("}}") in recommended) 0 else 1 }
                     .forEach { (key, desc) ->
                     Row(
@@ -590,7 +582,7 @@ fun PromptEditorScreen(
                             modifier = Modifier.width(200.dp)
                         )
                         Text(
-                            if (key.removePrefix("{{").removeSuffix("}}") in recommended) desc else "$desc（旧版兼容，可能为空）",
+                            if (key.removePrefix("{{").removeSuffix("}}") in recommended) "$desc（推荐使用）" else "$desc（当前可用；部分场景可能为空）",
                             fontSize = 13.sp,
                             color = TextSecondary
                         )
@@ -615,16 +607,35 @@ fun PromptEditorScreen(
             text = { Text("确定要将「${resetLabel}」恢复为系统默认模板吗？你自己编辑过的内容会丢失。恢复后会重新使用系统的连续聊天优化模板。", fontSize = 14.sp, color = TextSecondary) },
             confirmButton = {
                 TextButton(onClick = {
-                    viewModel.resetPromptTemplate(currentType(), currentMode())
-                    val fresh = TextFieldValue(viewModel.getPromptTemplate(currentType(), currentMode()))
+                    val fresh = TextFieldValue(viewModel.getDefaultPromptTemplate(currentType(), currentMode()))
                     textMap[currentKey()] = fresh
                     textFieldValue = fresh
-                    dirtyKeys.remove(currentKey())
+                    if (currentKey() !in dirtyKeys) dirtyKeys += currentKey()
                     showResetDialog = false
                 }) { Text("确定", color = Color(0xFFFF9500), fontWeight = FontWeight.SemiBold) }
             },
             dismissButton = {
                 TextButton(onClick = { showResetDialog = false }) { Text("取消", color = TextSecondary) }
+            }
+        )
+    }
+
+    if (showExitDialog) {
+        AlertDialog(
+            onDismissRequest = { showExitDialog = false },
+            title = { Text("有未保存修改", fontWeight = FontWeight.SemiBold, color = TextPrimary) },
+            text = { Text("当前还有未保存的模板修改。请选择如何离开。", color = TextSecondary) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showExitDialog = false
+                    if (saveAllEdited()) onBack()
+                }) { Text("保存并离开", color = Primary) }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = { showExitDialog = false; onBack() }) { Text("放弃修改", color = Color(0xFFFF9500)) }
+                    TextButton(onClick = { showExitDialog = false }) { Text("继续编辑", color = TextSecondary) }
+                }
             }
         )
     }
@@ -636,14 +647,14 @@ fun PromptEditorScreen(
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     Text(
-                        "每个模式都有独立模板。系统默认模板会优化连续聊天的流量和速度；一旦保存为自己的模板，系统会按你编辑的顺序完整使用，不会移动变量。私聊用户本轮消息会由应用单独发送，无需在模板中保留 {{USER_CONTENT}}；{{USER_MESSAGE}} 是群聊用户最新发言，建议保留。未识别的占位符会原样保留在最终提示词中。",
+                        "每个模式都有独立模板。模板用于补充角色与剧情规则；系统仍会追加安全规则、动态上下文和固定输出协议。JSON、XML、Markdown和自定义标签允许保存，但可能导致回复被修复或重试。私聊用户本轮消息由应用单独发送；{{USER_MESSAGE}} 是群聊用户最新发言。占位符必须使用 {{大写英文_数字}} 格式，错误或不适用的占位符不能保存。",
                         fontSize = 13.sp,
                         color = TextSecondary,
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
                     val allowed = PromptPlaceholderRegistry.allowed(currentType(), currentMode())
                     val recommended = PromptPlaceholderRegistry.recommended(currentType(), currentMode())
-                    allPlaceholders.filter { (key, _) -> key.removePrefix("{{").removeSuffix("}}") in allowed }
+                    allPlaceholders.distinctBy { it.first }.filter { (key, _) -> key.removePrefix("{{").removeSuffix("}}") in allowed }
                         .sortedBy { (key, _) -> if (key.removePrefix("{{").removeSuffix("}}") in recommended) 0 else 1 }
                         .forEach { (key, desc) ->
                         Row(
@@ -658,7 +669,7 @@ fun PromptEditorScreen(
                                 modifier = Modifier.width(170.dp)
                             )
                             Text(
-                                if (key.removePrefix("{{").removeSuffix("}}") in recommended) desc else "$desc（旧版兼容，可能为空）",
+                                if (key.removePrefix("{{").removeSuffix("}}") in recommended) "$desc（推荐使用）" else "$desc（当前可用；部分场景可能为空）",
                                 fontSize = 13.sp,
                                 color = TextSecondary
                             )

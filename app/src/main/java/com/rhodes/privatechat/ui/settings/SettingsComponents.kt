@@ -53,6 +53,7 @@ fun SaveableSettingsScaffold(
     modifier: Modifier = Modifier,
     icon: (@Composable () -> Unit)? = null,
     onSaveRequest: ((completeSave: () -> Unit) -> Unit)? = null,
+    showSave: Boolean = true,
     content: @Composable () -> Unit
 ) {
     val settings: SettingsRepository = org.koin.compose.koinInject()
@@ -77,7 +78,7 @@ fun SaveableSettingsScaffold(
 
     Column(modifier = modifier.fillMaxWidth()) {
         GradientHeader(title = title, onBack = { requestBack() }, actions = {
-            Button(onClick = { requestSave() }, colors = ButtonDefaults.buttonColors(containerColor = Blue400), shape = RoundedCornerShape(999.dp)) { Text("保存", color = androidx.compose.ui.graphics.Color.White, fontSize = 13.sp) }
+            if (showSave) Button(onClick = { requestSave() }, colors = ButtonDefaults.buttonColors(containerColor = Blue400), shape = RoundedCornerShape(999.dp)) { Text("保存", color = androidx.compose.ui.graphics.Color.White, fontSize = 13.sp) }
         })
         content()
     }

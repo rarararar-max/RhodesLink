@@ -18,12 +18,15 @@ object DatabaseCompatibility {
     private const val DIAGNOSTIC_PREFS = "rhodes_diagnostics"
     private const val DIAGNOSTIC_KEY = "entries_v1"
     private const val PRE_113_BACKUP_KEY = "pre_113_database_backup_v1"
+    private const val PRE_113_RECOVERY_KEY = "pre_113_core_data_recovery_v1"
+    private const val FRESH_INSTALL_KEY = "fresh_install_v1"
     private const val BASELINE_KEY = "upgrade_data_baseline_v1"
     private const val VERIFIED_KEY = "upgrade_data_verified_v1"
 
     fun prepareBeforeOpen(context: Context) {
         val dbFile = context.getDatabasePath(DB_NAME)
         if (!dbFile.exists()) return
+        if (isFreshInstall(context)) return
         try {
             backupBefore113(context, dbFile)
             SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
@@ -175,6 +178,109 @@ object DatabaseCompatibility {
             .putBoolean(DERIVED_CLEAN_KEY, true)
             .apply()
     }
+
+    /**
+     * Restores only rows missing from the live database after SQLDelight has completed its
+     * migrations. The upgrade backup is the source of truth for data removed by an earlier
+     * 1.13 build; current rows are never replaced.
+     */
+    fun restoreMissingCoreDataFromPre113Backup(context: Context) {
+        if (isFreshInstall(context)) return
+        val prefs = context.getSharedPreferences(SETTINGS_SP, Context.MODE_PRIVATE)
+        if (prefs.getBoolean(PRE_113_RECOVERY_KEY, false)) return
+
+        val dbFile = context.getDatabasePath(DB_NAME)
+        val backup = File(dbFile.parentFile, "$DB_NAME.pre_1_13")
+        if (!dbFile.exists() || !backup.exists() || backup.length() == 0L || !isDatabaseHealthy(backup)) return
+
+        var restoredOperators = 0L
+        var restoredSessions = 0L
+        var restoredMessages = 0L
+        var restoredGroupMembers = 0
+        try {
+            SQLiteDatabase.openDatabase(dbFile.path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+                db.execSQL("ATTACH DATABASE ? AS pre113", arrayOf(backup.path))
+                try {
+                    if (!hasCoreBackupTables(db)) return
+                    db.beginTransaction()
+                    try {
+                        restoredOperators = insertMissingRows(db, "operators", operatorColumns)
+                        restoredSessions = insertMissingRows(db, "chat_sessions", sessionColumns)
+                        restoredMessages = insertMissingRows(db, "chat_messages", messageColumns)
+                        restoredGroupMembers = mergeMissingGroupMembers(db)
+                        db.setTransactionSuccessful()
+                    } finally {
+                        db.endTransaction()
+                    }
+                } finally {
+                    db.execSQL("DETACH DATABASE pre113")
+                }
+            }
+            prefs.edit().putBoolean(PRE_113_RECOVERY_KEY, true).commit()
+            recordDiagnostic(
+                context,
+                "Database/Pre113CoreRecovery",
+                "operators=$restoredOperators,sessions=$restoredSessions,messages=$restoredMessages,groupMembers=$restoredGroupMembers"
+            )
+        } catch (e: Exception) {
+            recordDiagnostic(context, "Database/Pre113CoreRecoveryFailed", "error=${e.javaClass.simpleName}:${e.message?.take(180)}")
+        }
+    }
+
+    private fun hasCoreBackupTables(db: SQLiteDatabase): Boolean = listOf("operators", "chat_sessions", "chat_messages")
+        .all { table ->
+            db.rawQuery("SELECT name FROM pre113.sqlite_master WHERE type='table' AND name=?", arrayOf(table)).use { it.moveToFirst() }
+        }
+
+    private fun isFreshInstall(context: Context): Boolean = context
+        .getSharedPreferences(SETTINGS_SP, Context.MODE_PRIVATE)
+        .getBoolean(FRESH_INSTALL_KEY, false)
+
+    private fun insertMissingRows(db: SQLiteDatabase, table: String, columns: List<String>): Long {
+        val columnList = columns.joinToString(", ")
+        val before = tableCount(db, table)
+        db.execSQL("INSERT OR IGNORE INTO $table ($columnList) SELECT $columnList FROM pre113.$table")
+        return (tableCount(db, table) - before).coerceAtLeast(0L)
+    }
+
+    /** Preserve both the old member list and any members added after the upgrade. */
+    private fun mergeMissingGroupMembers(db: SQLiteDatabase): Int {
+        var restored = 0
+        db.rawQuery(
+            "SELECT id, members FROM pre113.chat_sessions WHERE operatorId LIKE 'group_%'",
+            null
+        ).use { source ->
+            while (source.moveToNext()) {
+                val groupId = source.getString(0)
+                val backupMembers = source.getString(1).orEmpty().split(',').map(String::trim).filter(String::isNotBlank)
+                val currentMembers = db.rawQuery("SELECT members FROM chat_sessions WHERE id=?", arrayOf(groupId)).use { current ->
+                    if (current.moveToFirst()) current.getString(0).orEmpty().split(',').map(String::trim).filter(String::isNotBlank) else emptyList()
+                }
+                if (currentMembers.isEmpty() && backupMembers.isEmpty()) continue
+                val merged = (backupMembers + currentMembers).distinct()
+                val added = merged.count { it !in currentMembers }
+                if (added > 0) {
+                    db.execSQL("UPDATE chat_sessions SET members=? WHERE id=?", arrayOf(merged.joinToString(","), groupId))
+                    restored += added
+                }
+            }
+        }
+        return restored
+    }
+
+    private val operatorColumns = listOf(
+        "id", "name", "title", "description", "gender", "avatarUri", "location", "activity", "emotion", "intimacy",
+        "privatePrompt", "groupPrompt", "memoryInjection", "userRelation", "lmb", "attack", "defense", "meldPref",
+        "activityLevel", "voiceName", "voiceSpeed", "voicePitch"
+    )
+    private val sessionColumns = listOf(
+        "id", "operatorId", "operatorName", "lastMessage", "lastTime", "mode", "isPinned", "unreadCount",
+        "members", "rules", "avatarUri", "mutedMembers"
+    )
+    private val messageColumns = listOf(
+        "id", "sessionId", "senderId", "senderName", "content", "type", "mode", "emotion", "activity", "location",
+        "narration", "segmentGroup", "intimacyChange", "timestamp", "isMe"
+    )
 
     private fun isDerivedDataCleaned(context: Context): Boolean = try {
         context.getSharedPreferences(SETTINGS_SP, Context.MODE_PRIVATE)

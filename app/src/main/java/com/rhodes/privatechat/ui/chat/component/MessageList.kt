@@ -134,11 +134,13 @@ fun MessageList(
         }
     }
     val eventOrder = localEvents.associate { "${it.messageId}:${it.segmentIndex}" to it.revealOrder }
-    val displayMessages = if (!progressiveDisplay) messages else {
-        // Never gate rendering on the auxiliary chat_display_events table. Old installs can have
-        // repaired/future timestamps or unavailable event rows; hiding their messages is worse
-        // than skipping a reveal animation.
-        val visible = messages
+    val displayMessages = if (!progressiveDisplay || !displayEventsLoaded) messages else {
+        // Historical messages predate this screen and must remain visible even without an event.
+        // New AI segments reveal one at a time only after their display event is persisted.
+        val visible = messages.filter { message ->
+            !message.isAiSegment || message.timestamp < legacyMessageCutoff ||
+                localEvents.any { it.messageId == message.originalMessageId && it.segmentIndex == message.segmentIndex }
+        }
         // Reveal order only resolves the shared timestamp of one AI reply; it never moves a reply across the wider history.
         visible.sortedWith(
             compareBy<ChatUiMessage> { it.timestamp }

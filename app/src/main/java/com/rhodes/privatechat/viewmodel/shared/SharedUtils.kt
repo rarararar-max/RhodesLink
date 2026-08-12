@@ -15,6 +15,47 @@ import kotlin.time.TimeSource
 
 internal object CachePromptLayering {
     private val placeholderPattern = Regex("\\{\\{([A-Z0-9_]+)\\}\\}")
+    private val runtimeLabels = mapOf(
+        "CURRENT_TIME" to "当前时间",
+        "CURRENT_DATE" to "当前日期",
+        "USER_NAME" to "用户称呼",
+        "USER_GENDER" to "用户性别",
+        "USER_BIO" to "用户设定",
+        "SHORT_TERM_SUMMARY" to "最近聊天进展",
+        "PRIVATE_CONTINUITY_STATE" to "当前对话进展",
+        "MEMORY_V2_CONTEXT" to "可能相关的过往经历",
+        "MEMORY_ANCHORS" to "可能相关的过往经历",
+        "SOURCE_AWARE_MEMORIES" to "可能相关的背景",
+        "GROUP_CONTEXT" to "从群聊得知的近况",
+        "GROUP_SUMMARY" to "最近群聊进展",
+        "GROUP_PLOT_SUMMARY" to "当前群聊主线",
+        "DAILY_SUMMARY" to "最近的日常回顾",
+        "RECENT_SOCIAL_CONTEXT" to "近期公开动态与评论",
+        "RECENT_POSTS" to "最近发布过的动态",
+        "MEMBER_PRIVATE_CONTEXT" to "本轮明确提起的私聊背景",
+        "RELATION_HINTS" to "人物关系",
+        "GROUP_RELATION_HINTS" to "人物关系",
+        "MEMBER_PROFILES" to "当前成员资料",
+        "MEMBER_NAMES" to "当前成员名单",
+        "GROUP_RULES" to "群聊约定",
+        "POST_CONTENT" to "动态原文",
+        "COMMENT_CONTEXT" to "最近评论内容",
+        "COMMENT_TASK" to "本轮评论任务",
+        "COMMENT_INSTRUCTION" to "评论要求",
+        "REPLY_TARGET" to "本轮回复对象",
+        "PRIVATE_SUMMARY" to "昨天确认的私聊经历",
+        "GROUP_SUMMARIES" to "昨天确认的群聊与公开经历",
+        "RECENT_MEMORIES" to "近期回忆与背景",
+        "RELATION_EVENTS" to "与他人的相关经历",
+        "SELF_STATUS_CHANGES" to "今天的状态",
+        "PROACTIVE_TRIGGER_CONTEXT" to "这次主动联系的缘由",
+        "PROACTIVE_RECENT_HISTORY" to "最近互动记录",
+        "PROACTIVE_UNRESOLVED_TOPIC" to "尚未结束的话题",
+        "PROACTIVE_LAST_USER_MESSAGE" to "用户最后说的话",
+        "PROACTIVE_LAST_AI_MESSAGE" to "你最后说的话"
+    )
+
+    private fun runtimeLabel(key: String): String = runtimeLabels[key] ?: "本轮相关资料"
 
     fun build(
         template: String,
@@ -25,16 +66,16 @@ internal object CachePromptLayering {
         val stableReplacements = replacements.mapValues { (key, value) ->
             when {
                 key in setOf("USER_CONTENT", "USER_MESSAGE") -> ""
-                key in dynamicKeys -> "见本轮运行时上下文"
+                key in dynamicKeys -> "见本轮资料"
                 else -> value
             }
         }
         val referencedKeys = placeholderPattern.findAll(template).map { it.groupValues[1] }.toSet()
         val runtime = dynamicKeys.intersect(referencedKeys).sorted().mapNotNull { key ->
             replacements[key]?.takeIf { it.isNotBlank() && key !in setOf("USER_CONTENT", "USER_MESSAGE") }
-                ?.let { "【$key】\n$it" }
+                ?.let { "【${runtimeLabel(key)}】\n$it" }
         }.joinToString("\n")
-        return SharedUtils.CachePromptLayers(render(stableReplacements), runtime.ifBlank { "【本轮运行时上下文】\n无" })
+        return SharedUtils.CachePromptLayers(render(stableReplacements), runtime.ifBlank { "【本轮资料】\n暂无与本轮相关的补充资料。" })
     }
 }
 
@@ -49,6 +90,7 @@ class SharedUtils(
     companion object {
         const val DEBUG = false
         private const val RECENT_SOCIAL_WINDOW_MS = 3L * 86_400_000L
+        private val TEMPLATE_PLACEHOLDER_PATTERN = Regex("\\{\\{([A-Z0-9_]+)\\}\\}")
 
         fun getTimeOfDay(hour: Int): String = when {
             hour in 5..7 -> "清晨"
@@ -158,28 +200,34 @@ class SharedUtils(
     fun logAiCall(tag: String, prompt: String, response: String, allMessages: List<AiMessage>? = null) {
         if (!DebugLogger.enabled) return
         val isPrivateTurnAnalysis = tag.removePrefix("AI/→").removePrefix("AI/←") == "PrivateTurnAnalysis"
-        val isGroupTurnPlanner = tag.removePrefix("AI/→").removePrefix("AI/←") == "GroupTurnPlanner"
         val details = buildString {
             val messages = allMessages.orEmpty()
             append("【实际发送给大模型的完整请求】\n")
             if (messages.isEmpty()) {
-                append(if (isPrivateTurnAnalysis || isGroupTurnPlanner) "\n【模型1固定系统规则】\n" else "\n【系统提示词】\n")
+                append(if (isPrivateTurnAnalysis) "\n【模型1固定系统规则】\n" else "\n【系统提示词】\n")
                 append(prompt)
             } else {
                 messages.firstOrNull { it.role == "system" }?.let { system ->
-                    append(if (isPrivateTurnAnalysis || isGroupTurnPlanner) "\n【模型1固定系统规则】\n" else "\n【系统提示词】\n")
+                    append(if (isPrivateTurnAnalysis) "\n【模型1固定系统规则】\n" else "\n【系统提示词】\n")
                     append(system.content)
                 }
                 val conversation = messages.filter { it.role != "system" }
                 if (conversation.isNotEmpty()) {
-                    append(if (isPrivateTurnAnalysis || isGroupTurnPlanner) "\n\n【模型1本轮分析资料（user）】\n" else "\n\n【对话上下文与本轮输入】\n")
+                    append(if (isPrivateTurnAnalysis) "\n\n【模型1本轮分析资料】\n" else "\n\n【历史、参考资料与本轮输入】\n")
                     conversation.forEachIndexed { index, message ->
                         val role = when (message.role) {
-                            "user" -> if (isPrivateTurnAnalysis || isGroupTurnPlanner) "分析资料" else "用户"
+                            "user" -> when {
+                                isPrivateTurnAnalysis -> "分析资料"
+                                message.content.startsWith("【本轮参考资料】") -> "本轮参考资料"
+                                message.content.startsWith("【本轮互动变化】") -> "本轮互动变化"
+                                message.content.startsWith("【用户本轮消息】") -> "用户本轮消息"
+                                message.content.startsWith("【本轮续聊任务】") -> "本轮续聊任务"
+                                else -> "历史用户消息"
+                            }
                             "assistant" -> "模型/角色"
                             else -> message.role
                         }
-                        append("\n[$role ${index + 1}]\n")
+                        append("\n[$role #${index + 1} | ${message.content.length}字]\n")
                         append(message.content)
                         if (index != conversation.lastIndex) append("\n")
                     }
@@ -277,14 +325,36 @@ class SharedUtils(
     // === 纯工具函数 ===
 
     fun applyTemplate(template: String, replacements: Map<String, String>): String {
-        var result = template
-        for ((key, value) in withLegacyPromptPlaceholders(replacements)) {
-            result = result.replace("{{${key}}}", value)
+        val values = withLegacyPromptPlaceholders(replacements)
+        // Replace only tokens from the original template. Re-scanning replacement values lets
+        // user-authored content such as {{OPERATOR_NAME}} alter later substitutions.
+        return TEMPLATE_PLACEHOLDER_PATTERN.replace(template) { match ->
+            values[match.groupValues[1]] ?: match.value
         }
-        // Unknown tokens stay visible for custom-template compatibility. Do not inspect them here:
-        // template diagnostics must never block a chat request.
-        return result
     }
+
+    fun unresolvedTemplateTokens(renderedTemplate: String): Set<String> =
+        TEMPLATE_PLACEHOLDER_PATTERN.findAll(renderedTemplate)
+            .map { it.groupValues[1] }
+            .toSet()
+
+    fun requireNoUnresolvedTemplateTokens(renderedTemplate: String, surface: String) {
+        val unresolved = unresolvedTemplateTokens(renderedTemplate)
+        require(unresolved.isEmpty()) {
+            "$surface 模板包含无法解析的占位符：${unresolved.sorted().joinToString(", ")}" 
+        }
+    }
+
+    /** Removes former JSON/schema directives while preserving persona and scene instructions. */
+    fun stripLegacyChatJsonInstructions(template: String): String = template.lineSequence()
+        .filterNot { line ->
+            val value = line.trim().lowercase()
+            value.startsWith("{") || value.startsWith("[") ||
+                value.startsWith("\\\"segments\\\"") || value.startsWith("\\\"speaker\\\"") ||
+                value.startsWith("\\\"message\\\"") || value.startsWith("\\\"type\\\"") ||
+                value.startsWith("\\\"content\\\"")
+        }
+        .joinToString("\n")
 
     private fun logDeepSeekReasoning(logTag: String, result: AIService.ChatResult) {
         if (settings.provider != "deepseek") return
@@ -300,11 +370,7 @@ class SharedUtils(
         }
     }
 
-    /**
-     * Keeps shipped prompt rules cacheable while retaining all volatile values in a trusted
-     * runtime block. Custom templates intentionally do not use this path because their layout
-     * is user-authored and must remain byte-for-byte compatible.
-     */
+    /** Keeps fixed prompt rules separate from volatile, potentially untrusted runtime data. */
     fun buildCachePromptLayers(template: String, replacements: Map<String, String>, dynamicKeys: Set<String>): CachePromptLayers {
         return CachePromptLayering.build(template, replacements, dynamicKeys) { stableReplacements ->
             compactTemplate(applyTemplate(template, stableReplacements))
@@ -340,10 +406,10 @@ class SharedUtils(
         map.putIfAbsent("RELATION_RULES", "关系信息只作为互动背景，相关时自然体现，不要提到系统记录或关系表。")
         map.putIfAbsent("OPERATOR_USER_RELATION", map["USER_RELATION"] ?: "未知")
         map.putIfAbsent("MODE_RULES", "")
-        map.putIfAbsent("OUTPUT_FORMAT", "请按当前模板要求的JSON格式输出。")
+        map.putIfAbsent("OUTPUT_FORMAT", "请按当前运行时标签协议输出。")
         map.putIfAbsent("MIND_READ", "")
         map.putIfAbsent("HYPNOSIS", "")
-        map.putIfAbsent("AI_ANALYSIS", "")
+        map.putIfAbsent("PRIVATE_CONTINUITY_STATE", "")
         map.putIfAbsent("TRANSITION_NOTICE", "")
         map.putIfAbsent("PROACTIVE_TRIGGER_TYPE", "none")
         map.putIfAbsent("PROACTIVE_TRIGGER_CONTEXT", "无")
@@ -362,7 +428,7 @@ class SharedUtils(
         map.putIfAbsent("SOURCE_AWARE_RULES", "")
         map.putIfAbsent("KNOWN_FROM_CONTEXT", "无")
         map.putIfAbsent("GROUP_MODE_FORMAT", "")
-        map.putIfAbsent("GROUP_TURN_GUIDANCE", "")
+        map.putIfAbsent("GROUP_PLOT_SUMMARY", "")
         map.putIfAbsent("USER_OBSERVING", "")
         map.putIfAbsent("AUTO_REASON", "manual")
         map.putIfAbsent("AUTO_REASON_TEXT", "用户主动发言。")
@@ -495,7 +561,7 @@ class SharedUtils(
 
     fun sourceAwareUsageRule(surface: MemorySurface): String {
         if (!settings.sourceAwareMemoryEnabled) return ""
-        val base = "不要说“系统记录”“记忆锚点”“摘要显示”。这些内容是过往经历、听说的故事或背景事实，只用于核对事实和理解关系；当前用户发言与最近对话已确认的地点、时间、位置、状态、在场人物、进行中行动和话题优先，绝不能因旧记忆擅自切换当前场景、状态或剧情。需要时自然表现你是从哪里知道的。"
+        val base = "不要说“系统记录”“摘要显示”或任何内部资料名称。这里提供的是过往经历、听说的事或背景信息，不是当前正在发生的场景；当前用户发言与最近对话已确认的地点、时间、位置、状态、在场人物、进行中行动和话题优先。需要时自然表现你是从哪里知道的。"
         return when (surface) {
             MemorySurface.PRIVATE_CHAT -> "$base 可以说“你上次跟我说过”“我看到你评论了”“群里之前聊到”。"
             MemorySurface.GROUP_CHAT -> "$base 可以说“之前群里聊过”“我听谁提过”“动态下面有人说”。"

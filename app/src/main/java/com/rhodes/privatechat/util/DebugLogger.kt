@@ -15,6 +15,7 @@ object DebugLogger {
     private val entries = mutableListOf<LogEntry>()
     private val lock = Any()
     private val idCounter = java.util.concurrent.atomic.AtomicInteger(0)
+    private val roundCounter = java.util.concurrent.atomic.AtomicInteger(0)
     private var diagnosticPrefs: android.content.SharedPreferences? = null
 
     data class LogEntry(val id: Int, val timestamp: Long, val tag: String, val message: String) {
@@ -85,6 +86,20 @@ object DebugLogger {
         log("ChatEvent/$surface", buildString {
             append("$surface | $event | $status")
             if (details.isNotBlank()) append(" | $details")
+        })
+    }
+
+    /** Human-readable lifecycle records for one private or group reply round. */
+    fun startConversationRound(surface: String, target: String, mode: String): String {
+        val id = "${System.currentTimeMillis().toString(36)}-${roundCounter.incrementAndGet()}"
+        conversationStep(id, surface, "开始", "进行中", "对象=$target，模式=$mode")
+        return id
+    }
+
+    fun conversationStep(roundId: String, surface: String, stage: String, status: String, details: String = "") {
+        log("Round/$roundId/$surface/$stage/$status", buildString {
+            append("[$surface][$stage] $status")
+            if (details.isNotBlank()) append("\n$details")
         })
     }
 

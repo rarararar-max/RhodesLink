@@ -1,0 +1,141 @@
+CREATE TABLE IF NOT EXISTS knowledge_bases (
+    id TEXT NOT NULL PRIMARY KEY,
+    name TEXT NOT NULL,
+    rawContent TEXT NOT NULL DEFAULT '',
+    sourceFileName TEXT NOT NULL DEFAULT '',
+    sourceFormat TEXT NOT NULL DEFAULT '',
+    chunkingMode TEXT NOT NULL DEFAULT 'smart',
+    indexStatus TEXT NOT NULL DEFAULT 'pending',
+    indexedEmbeddingSignature TEXT NOT NULL DEFAULT '',
+    createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_base_chunks (
+    id TEXT NOT NULL PRIMARY KEY,
+    knowledgeBaseId TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    sourceHeading TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL,
+    userKeywords TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    indexedAt INTEGER NOT NULL DEFAULT 0,
+    indexError TEXT NOT NULL DEFAULT '',
+    createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL,
+    UNIQUE(knowledgeBaseId, ordinal)
+);
+
+CREATE INDEX IF NOT EXISTS knowledge_base_chunks_by_book
+ON knowledge_base_chunks(knowledgeBaseId, ordinal);
+
+CREATE TABLE IF NOT EXISTS operator_knowledge_bases (
+    operatorId TEXT NOT NULL,
+    knowledgeBaseId TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    sortOrder INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(operatorId, knowledgeBaseId)
+);
+
+CREATE INDEX IF NOT EXISTS operator_knowledge_bases_by_book
+ON operator_knowledge_bases(knowledgeBaseId, operatorId);
+
+getAllKnowledgeBases:
+SELECT * FROM knowledge_bases ORDER BY updatedAt DESC, name COLLATE NOCASE ASC;
+
+getKnowledgeBase:
+SELECT * FROM knowledge_bases WHERE id = ?;
+
+getKnowledgeBaseCount:
+SELECT COUNT(*) FROM knowledge_bases;
+
+insertKnowledgeBase:
+INSERT OR REPLACE INTO knowledge_bases(id, name, rawContent, sourceFileName, sourceFormat, chunkingMode, indexStatus, indexedEmbeddingSignature, createdAt, updatedAt)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+updateKnowledgeBaseContent:
+UPDATE knowledge_bases
+SET name = ?, rawContent = ?, sourceFileName = ?, sourceFormat = ?, chunkingMode = ?, indexStatus = ?, indexedEmbeddingSignature = ?, updatedAt = ?
+WHERE id = ?;
+
+updateKnowledgeBaseIndexStatus:
+UPDATE knowledge_bases SET indexStatus = ?, indexedEmbeddingSignature = ?, updatedAt = ? WHERE id = ?;
+
+renameKnowledgeBase:
+UPDATE knowledge_bases SET name = ?, updatedAt = ? WHERE id = ?;
+
+deleteKnowledgeBase:
+DELETE FROM knowledge_bases WHERE id = ?;
+
+getChunksByKnowledgeBase:
+SELECT * FROM knowledge_base_chunks WHERE knowledgeBaseId = ? ORDER BY ordinal ASC;
+
+getAllKnowledgeBaseChunks:
+SELECT * FROM knowledge_base_chunks ORDER BY knowledgeBaseId ASC, ordinal ASC;
+
+getChunkCountByKnowledgeBase:
+SELECT COUNT(*) FROM knowledge_base_chunks WHERE knowledgeBaseId = ?;
+
+insertKnowledgeBaseChunk:
+INSERT OR REPLACE INTO knowledge_base_chunks(id, knowledgeBaseId, ordinal, sourceHeading, content, userKeywords, enabled, indexedAt, indexError, createdAt, updatedAt)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+updateKnowledgeBaseChunkIndex:
+UPDATE knowledge_base_chunks SET indexedAt = ?, indexError = ?, updatedAt = ? WHERE id = ?;
+
+updateKnowledgeBaseChunkEnabled:
+UPDATE knowledge_base_chunks SET enabled = ?, updatedAt = ? WHERE id = ?;
+
+updateKnowledgeBaseChunkContent:
+UPDATE knowledge_base_chunks SET content = ?, indexedAt = 0, indexError = '', updatedAt = ? WHERE id = ?;
+
+clearKnowledgeBaseChunkIndexes:
+UPDATE knowledge_base_chunks SET indexedAt = 0, indexError = '', updatedAt = ? WHERE knowledgeBaseId = ?;
+
+deleteChunksByKnowledgeBase:
+DELETE FROM knowledge_base_chunks WHERE knowledgeBaseId = ?;
+
+deleteChunk:
+DELETE FROM knowledge_base_chunks WHERE id = ?;
+
+getKnowledgeBasesByOperator:
+SELECT kb.*, okb.enabled AS assignmentEnabled, okb.sortOrder AS assignmentSortOrder
+FROM knowledge_bases kb
+INNER JOIN operator_knowledge_bases okb ON okb.knowledgeBaseId = kb.id
+WHERE okb.operatorId = ?
+ORDER BY okb.sortOrder ASC, kb.name COLLATE NOCASE ASC;
+
+getKnowledgeBaseAssignmentsByOperator:
+SELECT * FROM operator_knowledge_bases WHERE operatorId = ? ORDER BY sortOrder ASC, knowledgeBaseId ASC;
+
+getKnowledgeBaseAssignmentsByKnowledgeBase:
+SELECT * FROM operator_knowledge_bases WHERE knowledgeBaseId = ? ORDER BY sortOrder ASC, operatorId ASC;
+
+getAllKnowledgeBaseAssignments:
+SELECT * FROM operator_knowledge_bases ORDER BY operatorId ASC, sortOrder ASC, knowledgeBaseId ASC;
+
+getKnowledgeBaseAssignmentCount:
+SELECT COUNT(*) FROM operator_knowledge_bases WHERE knowledgeBaseId = ?;
+
+insertKnowledgeBaseAssignment:
+INSERT OR REPLACE INTO operator_knowledge_bases(operatorId, knowledgeBaseId, enabled, sortOrder)
+VALUES (?, ?, ?, ?);
+
+deleteKnowledgeBaseAssignmentsByOperator:
+DELETE FROM operator_knowledge_bases WHERE operatorId = ?;
+
+deleteKnowledgeBaseAssignmentsByKnowledgeBase:
+DELETE FROM operator_knowledge_bases WHERE knowledgeBaseId = ?;
+
+insertKnowledgeBaseAssignmentsForBook:
+INSERT OR REPLACE INTO operator_knowledge_bases(operatorId, knowledgeBaseId, enabled, sortOrder)
+VALUES (?, ?, ?, ?);
+
+deleteAllKnowledgeBaseAssignments:
+DELETE FROM operator_knowledge_bases;
+
+deleteAllKnowledgeBaseChunks:
+DELETE FROM knowledge_base_chunks;
+
+deleteAllKnowledgeBases:
+DELETE FROM knowledge_bases;

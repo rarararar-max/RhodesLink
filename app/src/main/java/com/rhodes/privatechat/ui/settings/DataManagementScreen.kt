@@ -43,6 +43,7 @@ data class CleanupItem(
 fun DataManagementScreen(
     viewModel: MainViewModel,
     onBack: () -> Unit,
+    onBackupRestore: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val settings: SettingsRepository = koinInject()
@@ -55,10 +56,10 @@ fun DataManagementScreen(
 
     val items = remember(stats) {
         listOf(
-            CleanupItem(Icons.Default.AutoDelete, "记忆锚点", stats.anchors, "clean_days_anchors", 3),
-            CleanupItem(Icons.Default.Forum, "聊天摘要", stats.messages, "clean_days_messages", 30),
+            CleanupItem(Icons.Default.AutoDelete, "记忆锚点", stats.anchors, "clean_days_anchors", 7),
+            CleanupItem(Icons.Default.Forum, "聊天记录", stats.messages, "clean_days_messages", 30),
             CleanupItem(Icons.AutoMirrored.Filled.MenuBook, "干员日记", stats.diaries, "clean_days_diaries", 30),
-            CleanupItem(Icons.Default.Share, "动态记录", stats.moments, "clean_days_moments", 30),
+            CleanupItem(Icons.Default.Share, "动态记录", stats.moments, "clean_days_moments", 7),
             CleanupItem(Icons.AutoMirrored.Filled.SendToMobile, "派遣历史", stats.dispatches, "clean_days_dispatches", 30)
         )
     }
@@ -73,6 +74,23 @@ fun DataManagementScreen(
         HorizontalDivider(color = Divider)
 
         Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Card)
+                    .clickable(onClick = onBackupRestore).padding(16.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)).background(PrimaryContainer), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Default.Backup, null, tint = Primary, modifier = Modifier.size(18.dp))
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("备份与恢复", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                        Text("导出完整数据、迁移新设备、校验备份文件", fontSize = 12.sp, color = TextSecondary)
+                    }
+                    Icon(Icons.Default.ChevronRight, null, tint = TextSecondary)
+                }
+            }
+            Spacer(Modifier.height(8.dp))
             Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Card).padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)).background(PrimaryContainer), contentAlignment = Alignment.Center) {

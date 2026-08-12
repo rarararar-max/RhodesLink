@@ -29,21 +29,23 @@ internal object PlainGeneratedContentNormalizer {
 
     private fun unwrapFence(text: String): String {
         val trimmed = text.trim()
-        if (!trimmed.startsWith("```")) return trimmed
-        val firstLineEnd = trimmed.indexOf('\n')
-        if (firstLineEnd < 0 || !trimmed.endsWith("```")) return trimmed
-        return trimmed.substring(firstLineEnd + 1, trimmed.length - 3).trim()
+        val match = Regex("""^\s*```(?:json|text|markdown)?\s*\n([\s\S]*?)\n?```\s*$""", RegexOption.IGNORE_CASE)
+            .matchEntire(trimmed) ?: return trimmed
+        return match.groupValues[1].trim()
     }
 
     private fun unwrapJson(text: String): String? {
         val trimmed = text.trim()
         if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return trimmed
-        val element = runCatching { json.parseToJsonElement(trimmed) }.getOrNull() ?: return null
+        val element = runCatching { json.parseToJsonElement(trimmed) }.getOrNull()
+        // A normal sentence may legitimately start with a bracket. Reject only text that is a
+        // valid but unsupported JSON wrapper; malformed prose remains ordinary text.
+            ?: return trimmed
         val objectValue = element as? JsonObject ?: return null
         return contentKeys.asSequence()
             .mapNotNull { key ->
                 (objectValue[key] as? JsonPrimitive)
-                    ?.takeIf { it.toString().startsWith('"') }
+                    ?.takeIf { it.isString }
                     ?.content
             }
             .firstOrNull { value -> value.isNotBlank() }

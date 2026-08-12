@@ -103,8 +103,8 @@ private fun MemoryGeneration(settings: SettingsRepository) {
             SettingsSwitchCard("动态长期沉淀", "允许动态记忆继续合并为 L2/L3", settings.momentMemoryPromotionEnabled) { settings.momentMemoryPromotionEnabled = it }
             SettingsSwitchCard("评论长期沉淀", "允许评论记忆继续合并为 L2/L3", settings.momentCommentMemoryPromotionEnabled) { settings.momentCommentMemoryPromotionEnabled = it }
             SettingsSwitchCard("日记长期沉淀", "允许日记记忆继续合并为 L2/L3", settings.diaryMemoryPromotionEnabled) { settings.diaryMemoryPromotionEnabled = it }
-            SettingsParamSlider(settings, "memory_v2_promote_l1_threshold", "L1 合并为 L2 的阈值", 20, 5f..100f, "同一话题中，内容有效且重要度至少 20 的 L1 达到此条数后尝试合并。高重要度承诺和提醒可使用下方优先阈值。", step = 1f)
-            SettingsParamSlider(settings, "memory_v2_promote_l2_threshold", "L2 合并为 L3 的阈值", 10, 3f..50f, "同一话题中，内容有效且重要度至少 20 的 L2 达到此条数后尝试合并；还需满足长期稳定性判断。", step = 1f)
+            SettingsParamSlider(settings, "memory_v2_promote_l1_threshold", "L1 合并为 L2 的阈值", 20, 5f..200f, "同一话题中，内容有效且重要度至少 20 的 L1 达到此条数后尝试合并。高重要度承诺和提醒可使用下方优先阈值。", step = 1f)
+            SettingsParamSlider(settings, "memory_v2_promote_l2_threshold", "L2 合并为 L3 的阈值", 10, 3f..100f, "同一话题中，内容有效且重要度至少 20 的 L2 达到此条数后尝试合并；还需满足长期稳定性判断。", step = 1f)
             SettingsParamSlider(settings, "memory_v2_important_promotion_threshold", "重要承诺/提醒优先沉淀阈值", 2, 2f..20f, "高重要度、承诺或关怀提醒达到此条数后可优先尝试沉淀，可能早于上述常规阈值。", step = 1f)
 }
 

@@ -76,19 +76,20 @@ fun DailyContentSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier
             }
             SettingsParamSlider(settings, "daily_moment_target", "每角色每日动态数", 1, 0f..3f, "每个角色每天自动发几条动态。建议1。太高（超过3）信息流刷屏太快看不过来。", step = 1f, enabled = autoEnabled)
             SettingsSectionTitle("主动私聊")
-            DailyContentInfoCard("自然分散发送", "每天从有私聊权限的角色中抽人主动找你。每人每天最多一次；刚聊过15分钟内不会又来。")
+            DailyContentInfoCard("自然分散发送", "每天从有私聊权限的角色中抽人主动找你。每人每天最多一次；刚聊过一段时间内不会又来。")
             SettingsSwitchCard("主动私聊", "开启后，已授予主动消息权限且有聊天上下文的干员可能主动联系你。", proactiveEnabled, enabled = autoEnabled) {
                 proactiveEnabled = it
                 settings.idleProactiveChatEnabled = it
             }
             SettingsParamSlider(settings, "daily_proactive_chance", "角色每日主动概率", 80, 0f..100f, "每个角色每天可能主动找你的概率。建议80。太低（低于30）基本没人找你，太高（100）每天都有很多人来。", step = 5f, enabled = autoEnabled && proactiveEnabled)
             SettingsParamSlider(settings, "daily_proactive_max", "每天最多主动角色数", 5, 0f..20f, "每天最多有多少个角色主动找你。建议5。太低（低于2）每天就一两个人来，太高（超过10）消息太多看不过来。", step = 1f, enabled = autoEnabled && proactiveEnabled)
+            SettingsParamSlider(settings, "proactive_quiet_after_user_minutes", "用户发言后静默分钟", 15, 0f..240f, "用户刚发过消息后，角色至少等待多久才会再次主动联系。设为0表示不额外等待。", step = 5f, enabled = autoEnabled && proactiveEnabled)
             SettingsSwitchCard("免打扰时段", "开启后主动私聊会避开这个时段，过后再发。动态照常。", quietHoursEnabled, enabled = autoEnabled && proactiveEnabled) {
                 quietHoursEnabled = it
                 settings.quietHoursEnabled = it
             }
             SettingsParamSlider(settings, "quiet_hours_start", "免打扰开始时间", 1, 0f..23f, "几点开始不打扰（24小时制）。建议凌晨1点。", step = 1f, enabled = autoEnabled && proactiveEnabled && quietHoursEnabled)
-            SettingsParamSlider(settings, "quiet_hours_end", "免打扰结束时间", 9, 0f..23f, "几点恢复（24小时制）。建议早上9点。", step = 1f, enabled = autoEnabled && proactiveEnabled && quietHoursEnabled)
+            SettingsParamSlider(settings, "quiet_hours_end", "免打扰结束时间", 9, 0f..23f, "几点恢复（24小时制）。建议早上9点；与开始时间相同时不启用免打扰。", step = 1f, enabled = autoEnabled && proactiveEnabled && quietHoursEnabled)
             Spacer(Modifier.height(12.dp))
         }
     }

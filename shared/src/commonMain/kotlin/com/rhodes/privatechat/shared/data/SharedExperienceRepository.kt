@@ -4,6 +4,7 @@ import com.rhodes.privatechat.shared.db.DatabaseWrapper
 import com.rhodes.privatechat.shared.model.SharedExperience
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
 
 class SharedExperienceRepository(private val wrapper: DatabaseWrapper) {
     private val db get() = wrapper.database
@@ -28,4 +29,19 @@ class SharedExperienceRepository(private val wrapper: DatabaseWrapper) {
             db.sharedExperiencesQueries.deleteSharedExperiencesBySource(sourceKind, sourceRefId)
         }
     }
+
+    suspend fun getAll(): List<SharedExperience> = withContext(Dispatchers.Default) {
+        db.sharedExperiencesQueries.getAllSharedExperiences { id, sourceKind, sourceRefId, groupId, content, importance, status, createdAt, expiresAt ->
+            SharedExperience(id, sourceKind, sourceRefId, groupId, content, importance.toInt(), status, createdAt, expiresAt)
+        }.executeAsList()
+    }
+
+    suspend fun getAllParticipants(): List<SharedExperienceParticipant> = withContext(Dispatchers.Default) {
+        db.sharedExperiencesQueries.getSharedExperienceParticipants { experienceId, operatorId, role ->
+            SharedExperienceParticipant(experienceId, operatorId, role)
+        }.executeAsList()
+    }
 }
+
+@Serializable
+data class SharedExperienceParticipant(val experienceId: Long, val operatorId: String, val role: String)

@@ -2,6 +2,7 @@ package com.rhodes.privatechat.viewmodel
 
 import com.rhodes.privatechat.shared.model.Operator
 import com.rhodes.privatechat.shared.model.Relationship
+import com.rhodes.privatechat.shared.model.OperatorKnowledgeBaseAssignment
 import com.rhodes.privatechat.shared.data.BfsNode
 import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.viewmodel.shared.AppStateHolder
@@ -29,6 +30,7 @@ class OperatorViewModel(
         userRelation: String = "", avatarUri: String = "",
         autoPost: Boolean = true, allowChat: Boolean = true,
         relationships: List<Relationship> = emptyList(),
+        knowledgeBaseAssignments: List<OperatorKnowledgeBaseAssignment> = emptyList(),
         activityLevel: Float = 0.5f,
         gender: String = "",
         voiceName: String = "",
@@ -88,6 +90,9 @@ class OperatorViewModel(
                 val saved = withTimeout(8_000L) { repository.getOperator(id) }
                 if (saved?.id != id) throw IllegalStateException("角色写入后读取不到")
                 DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=insert_readback_done")
+                // Persist associations before declaring the editor save successful. Unlike prompt
+                // slot preferences, these rows change what the role can retrieve at runtime.
+                withTimeout(8_000L) { repository.knowledgeBases.replaceAssignments(id, knowledgeBaseAssignments) }
                 // Database readback is the success boundary. The contacts state must be refreshed
                 // before the editor callback, but optional synchronization must not delay it.
                 appState.refreshOperators(repository.getAllOperatorsSync())

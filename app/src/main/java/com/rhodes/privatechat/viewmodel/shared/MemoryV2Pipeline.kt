@@ -112,6 +112,11 @@ class MemoryV2Pipeline(
             repository.retryMemorySource(sourceId, claimToken, System.currentTimeMillis() + 60_000L, e.message?.take(160) ?: "提取失败")
             return false
         }
+        if (settings.getMemoryTimelineEpoch(sessionId) > source.createdAt) {
+            repository.skipMemorySource(sourceId, claimToken, "会话时间线已失效")
+            leaseRenewal.cancel()
+            return false
+        }
         if (l1.isNotEmpty()) {
             saveMemoryItems(l1)
             repository.saveMemoryBatch(MemoryBatch(
@@ -142,17 +147,16 @@ class MemoryV2Pipeline(
         // A group has many extraction windows.  Use the window identity rather than the group
         // identity so deleting one source in memory management cannot purge the whole group.
         val sourceRefId = "$groupId:${messages.first().id}-${messages.last().id}"
-        val sourceId = repository.insertMemorySource(
-            MemorySourceItem(
-                sourceKind = MemorySourceKind.GROUP_CHAT,
-                ownerType = "group",
-                ownerId = groupId,
-                sourceRefId = sourceRefId,
-                contentText = sourceText,
-                timestamp = messages.lastOrNull()?.timestamp ?: System.currentTimeMillis(),
-                createdAt = System.currentTimeMillis()
-            )
+        val source = MemorySourceItem(
+            sourceKind = MemorySourceKind.GROUP_CHAT,
+            ownerType = "group",
+            ownerId = groupId,
+            sourceRefId = sourceRefId,
+            contentText = sourceText,
+            timestamp = messages.lastOrNull()?.timestamp ?: System.currentTimeMillis(),
+            createdAt = System.currentTimeMillis()
         )
+        val sourceId = repository.insertMemorySource(source)
         if (repository.isMemorySourceFinished(sourceId)) return true
         val claimToken = sourceId.takeIf { it > 0 }?.let { repository.claimMemorySource(it, System.currentTimeMillis()) }
             ?: return false
@@ -164,6 +168,11 @@ class MemoryV2Pipeline(
             com.rhodes.privatechat.util.DebugLogger.log("MemoryV2", "群聊L1提取失败，已保留队列等待重试: ${e.message?.take(80)}")
             leaseRenewal.cancel()
             repository.retryMemorySource(sourceId, claimToken, System.currentTimeMillis() + 60_000L, e.message?.take(160) ?: "提取失败")
+            return false
+        }
+        if (settings.getMemoryTimelineEpoch(groupId) > source.createdAt) {
+            repository.skipMemorySource(sourceId, claimToken, "群聊时间线已失效")
+            leaseRenewal.cancel()
             return false
         }
         if (l1.isNotEmpty()) {
@@ -852,6 +861,7 @@ class MemoryV2Pipeline(
                     MemorySourceKind.PRIVATE_CHAT -> {
                         val operator = repository.getOperator(source.ownerId) ?: return@runCatching false
                         val l1 = extractL1(source.sourceKind, source.contentText, source.ownerType, source.ownerId, source.sourceRefId, source.sourceRefId, operator.name)
+                        if (settings.getMemoryTimelineEpoch(source.sourceRefId) > source.createdAt) return@runCatching false
                         if (l1.isNotEmpty()) saveMemoryItems(l1)
                         if (settings.privateMemoryPromotionEnabled) maybePromotePrivateMemory(source.ownerId, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
                         true
@@ -859,6 +869,7 @@ class MemoryV2Pipeline(
                     MemorySourceKind.GROUP_CHAT -> {
                         val group = repository.getSession(source.ownerId) ?: return@runCatching false
                         val l1 = extractGroupL1(source.ownerId, group.operatorName, source.contentText, source.sourceRefId)
+                        if (settings.getMemoryTimelineEpoch(source.ownerId) > source.createdAt) return@runCatching false
                         if (l1.isNotEmpty()) {
                             val saved = saveMemoryItems(l1)
                             val memberIds = group.members.split(',').map { it.trim() }.filter { it.isNotBlank() }

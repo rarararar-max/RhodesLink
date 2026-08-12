@@ -10,5 +10,8 @@ actual class DatabaseWrapper(context: Context) {
 
     actual val database: RhodesDatabase = RhodesDatabase(
         AndroidSqliteDriver(RhodesDatabase.Schema, context, "rhodes_terminal.db")
-    ).also { DatabaseCompatibility.markDerivedDataCleaned(context) }
+    ).also {
+        DatabaseCompatibility.restoreMissingCoreDataFromPre113Backup(context)
+        DatabaseCompatibility.markDerivedDataCleaned(context)
+    }
 }

@@ -23,6 +23,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -30,6 +32,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Refresh
@@ -87,10 +91,18 @@ import com.rhodes.privatechat.shared.voice.hasAsrConfiguration
 import com.rhodes.privatechat.shared.voice.voiceCallSetupMessage
 import com.rhodes.privatechat.shared.voice.hasTtsConfiguration
 import com.rhodes.privatechat.viewmodel.MainViewModel
+import com.rhodes.privatechat.data.backup.OperatorImportMode
+import com.rhodes.privatechat.data.backup.OperatorPackage
+import com.rhodes.privatechat.data.backup.OperatorPackageReader
+import com.rhodes.privatechat.data.backup.OperatorPackageService
+import com.rhodes.privatechat.data.backup.OperatorPackageWriter
+import com.rhodes.privatechat.data.RelationshipExport
 import org.koin.compose.koinInject
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -185,6 +197,42 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     val op = operator
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var selectedCardForImport by remember { mutableStateOf<OperatorPackage?>(null) }
+    var showImportModePicker by remember { mutableStateOf(false) }
+    var pendingCardExport by remember { mutableStateOf(false) }
+    var importCandidates by remember { mutableStateOf(emptyList<Operator>()) }
+    var relationshipMappings by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var mappingRelationship by remember { mutableStateOf<RelationshipExport?>(null) }
+    val exportOperatorCard = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        if (uri == null || !pendingCardExport) return@rememberLauncherForActivityResult
+        pendingCardExport = false
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val (payload, avatar) = OperatorPackageService(viewModel.repository, settings).exportCard(context, op.id)
+                    context.contentResolver.openOutputStream(uri, "w")?.use { output ->
+                        OperatorPackageWriter(context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "unknown").write(output, payload, avatar)
+                    } ?: error("无法写入所选位置")
+                    avatar != null
+                }
+            }.onSuccess { includedAvatar -> Toast.makeText(context, if (includedAvatar) "角色设定已导出，头像已包含" else "角色设定已导出，头像未包含", Toast.LENGTH_LONG).show() }
+                .onFailure { Toast.makeText(context, it.message ?: "导出角色设定失败", Toast.LENGTH_LONG).show() }
+        }
+    }
+    val importOperatorCard = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            runCatching { withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri)?.use { OperatorPackageReader().read(it) } ?: error("无法读取所选文件") } }
+                .onSuccess {
+                    selectedCardForImport = it
+                    relationshipMappings = emptyMap()
+                    importCandidates = withContext(Dispatchers.IO) { viewModel.repository.getAllOperatorsSync().filter { operator -> operator.id != op.id } }
+                    showImportModePicker = true
+                }
+                .onFailure { Toast.makeText(context, it.message ?: "角色设定包无效", Toast.LENGTH_LONG).show() }
+        }
+    }
     val userProfile by viewModel.userProfile.collectAsState()
     val visionReady = settings.visionBaseUrl.isNotBlank() &&
         settings.visionModelName.isNotBlank() &&
@@ -285,7 +333,6 @@ fun ChatScreen(
     var forceScrollThroughMessageCount by remember { mutableStateOf(0) }
     var recordingVoice by rememberSaveable { mutableStateOf(false) }
     val audioController = remember { LocalAudioController(context) }
-    val scope = rememberCoroutineScope()
     var voiceEnabled by rememberSaveable(op.id) { mutableStateOf(settings.getBoolean("chat_tts_${op.id}", false)) }
     val enteredAt = remember(op.id) { System.currentTimeMillis() }
     var seenSpeechKeys by remember(op.id) { mutableStateOf(emptySet<String>()) }
@@ -366,6 +413,16 @@ fun ChatScreen(
                         onClick = { onEditOperator() }
                     )
                     ChatDropdownMenuItem(
+                        text = { Text("导出当前角色设定") },
+                        leadingIcon = { Icon(Icons.Default.FileDownload, null, tint = TextPrimary) },
+                        onClick = { pendingCardExport = true; exportOperatorCard.launch("${op.name}_角色包_${System.currentTimeMillis()}.roperator") }
+                    )
+                    ChatDropdownMenuItem(
+                        text = { Text("导入角色设定") },
+                        leadingIcon = { Icon(Icons.Default.FileUpload, null, tint = TextPrimary) },
+                        onClick = { importOperatorCard.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) }
+                    )
+                    ChatDropdownMenuItem(
                         text = { Text("更换背景图") },
                         leadingIcon = { Icon(Icons.Default.Image, null, tint = TextPrimary) },
                         onClick = { bgPicker.launch("image/*") }
@@ -443,12 +500,14 @@ fun ChatScreen(
                             imageSending = true
                             // The persisted image card is now the send-state UI; restore the composer immediately.
                             pendingImageUri = ""
-                            forceScrollThroughMessageCount = rawMessages.size + 1
+                            forceScrollThroughMessageCount = rawMessages.size + 2
                             viewModel.chatViewModel.sendImageMessage(imageUri, MainActivity.imageForModel(imageUri), inputText) { success ->
                                 imageSending = false
                                 if (success) forceScrollThroughMessageCount = rawMessages.size
                             }
                         } else {
+                            // One user row and one AI container row are added for a normal turn.
+                            forceScrollThroughMessageCount = rawMessages.size + 2
                             viewModel.sendMessage()
                         }
                     },
@@ -518,6 +577,76 @@ fun ChatScreen(
                 )
             }
         }
+    }
+    if (showImportModePicker) {
+        val card = selectedCardForImport
+        AlertDialog(
+            onDismissRequest = { showImportModePicker = false; selectedCardForImport = null },
+            title = { Text("导入角色设定") },
+            text = {
+                Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("将“${card?.payload?.operator?.name.orEmpty()}”的设定导入到当前角色“${op.name}”。")
+                    Text("会导入角色包中的 1/2/3 号私聊和群聊人设槽及当前选中槽。不会影响当前私聊、记忆、日记、动态、群聊或聊天背景。", fontSize = 12.sp, color = TextSecondary)
+                    val unmatched = card?.payload?.relationships.orEmpty().filter { relation ->
+                        importCandidates.none { it.id == relation.relatedOperatorId } && relation.relatedOperatorId !in relationshipMappings
+                    }
+                    if (unmatched.isEmpty()) Text("角色关系可直接匹配，或已完成映射。", fontSize = 12.sp, color = TextSecondary)
+                    else {
+                        Text("以下关系在本机未找到同一角色 ID。可手动映射，未映射的关系会跳过。", fontSize = 12.sp, color = TextSecondary)
+                        unmatched.forEach { relation ->
+                            TextButton(onClick = { mappingRelationship = relation }, modifier = Modifier.fillMaxWidth()) {
+                                Text("为「${relation.relatedOperatorName}」选择本机角色")
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val source = card ?: return@TextButton
+                    scope.launch {
+                        runCatching { withContext(Dispatchers.IO) { OperatorPackageService(viewModel.repository, settings).importCard(context, source, OperatorImportMode.PERSONA_AND_APPEARANCE, op.id, relationshipMappings) } }
+                            .onSuccess { result -> viewModel.selectOperator(viewModel.repository.getOperator(op.id) ?: op); Toast.makeText(context, "已导入人设、外观和提示词槽；关系未导入", Toast.LENGTH_LONG).show() }
+                            .onFailure { Toast.makeText(context, it.message ?: "导入失败", Toast.LENGTH_LONG).show() }
+                        showImportModePicker = false; selectedCardForImport = null
+                    }
+                }) { Text("仅人设与外观") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = {
+                        val source = card ?: return@TextButton
+                        scope.launch {
+                            runCatching { withContext(Dispatchers.IO) { OperatorPackageService(viewModel.repository, settings).importCard(context, source, OperatorImportMode.FULL_REPLACE, op.id, relationshipMappings) } }
+                                .onSuccess { result -> viewModel.selectOperator(viewModel.repository.getOperator(op.id) ?: op); Toast.makeText(context, "已覆盖角色资料；关系 ${result.importedRelationships} 条，跳过 ${result.skippedRelationships} 条", Toast.LENGTH_LONG).show() }
+                                .onFailure { Toast.makeText(context, it.message ?: "导入失败", Toast.LENGTH_LONG).show() }
+                            showImportModePicker = false; selectedCardForImport = null
+                        }
+                    }) { Text("覆盖全部资料") }
+                    TextButton(onClick = { showImportModePicker = false; selectedCardForImport = null }) { Text("取消") }
+                }
+            },
+        )
+    }
+    mappingRelationship?.let { relationship ->
+        AlertDialog(
+            onDismissRequest = { mappingRelationship = null },
+            title = { Text("映射「${relationship.relatedOperatorName}」") },
+            text = {
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 400.dp)) {
+                    item { TextButton(onClick = { relationshipMappings = relationshipMappings - relationship.relatedOperatorId; mappingRelationship = null }, modifier = Modifier.fillMaxWidth()) { Text("不导入这条关系") } }
+                    items(importCandidates, key = { it.id }) { candidate ->
+                        TextButton(onClick = {
+                            relationshipMappings = relationshipMappings + (relationship.relatedOperatorId to candidate.id)
+                            mappingRelationship = null
+                        }, modifier = Modifier.fillMaxWidth()) {
+                            Column { Text(candidate.name); candidate.title.takeIf { it.isNotBlank() }?.let { Text(it, fontSize = 11.sp, color = TextSecondary) } }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { mappingRelationship = null }) { Text("取消") } },
+        )
     }
     }
 

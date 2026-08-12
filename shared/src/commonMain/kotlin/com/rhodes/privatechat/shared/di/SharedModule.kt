@@ -2,6 +2,9 @@ package com.rhodes.privatechat.shared.di
 
 import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.shared.db.DatabaseWrapper
+import com.rhodes.privatechat.shared.knowledge.KnowledgeBaseImportService
+import com.rhodes.privatechat.shared.knowledge.KnowledgeBaseIndexService
+import com.rhodes.privatechat.shared.knowledge.KnowledgeBaseContextBuilder
 import com.rhodes.privatechat.shared.network.AIService
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.shared.modelgateway.AliyunQwenVlGateway
@@ -31,6 +34,10 @@ fun sharedModule(databaseWrapper: DatabaseWrapper) = module {
     single { get<ChatRepository>().dispatches }
     single { get<ChatRepository>().mahjong }
     single { get<ChatRepository>().cleanup }
+    single { get<ChatRepository>().knowledgeBases }
+    single { KnowledgeBaseIndexService(get(), get(), get()) }
+    single { KnowledgeBaseContextBuilder(get(), get()) }
+    single { KnowledgeBaseImportService(get(), get(), get()) }
 
     single<VectorStoreGateway> {
         LocalVectorStoreGateway(get())

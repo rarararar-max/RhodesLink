@@ -10,6 +10,7 @@ import com.rhodes.privatechat.viewmodel.MainViewModel
 import com.rhodes.privatechat.viewmodel.shared.AppStateHolder
 import com.rhodes.privatechat.viewmodel.shared.OperatorStateUpdater
 import com.rhodes.privatechat.viewmodel.shared.SharedUtils
+import com.rhodes.privatechat.data.backup.BackupRestoreMaintenance
 import kotlinx.coroutines.suspendCancellableCoroutine
 import org.koin.java.KoinJavaComponent.get
 import kotlin.coroutines.resume
@@ -17,6 +18,7 @@ import kotlin.coroutines.resume
 class ManualReplyWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         return try {
+            if (BackupRestoreMaintenance.active) return Result.success()
             val sessionId = inputData.getString("sessionId") ?: return Result.success()
             val messageId = inputData.getLong("messageId", 0L)
             if (messageId <= 0L) return Result.success()
@@ -38,6 +40,7 @@ class ManualReplyWorker(context: Context, params: WorkerParameters) : CoroutineW
                 if (isGroup) viewModel.resumeGroupReply(sessionId, messageId) { if (continuation.isActive) continuation.resume(it) }
                 else viewModel.resumePrivateReply(sessionId, messageId) { if (continuation.isActive) continuation.resume(it) }
             }
+            if (BackupRestoreMaintenance.active) return Result.success()
             if (completed) Result.success() else Result.retry()
         } catch (_: Exception) {
             Result.retry()

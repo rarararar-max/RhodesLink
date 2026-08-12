@@ -18,3 +18,6 @@ UPDATE daily_deliveries SET status = 'succeeded', updatedAt = ? WHERE deliveryId
 
 markDeliveryPending:
 UPDATE daily_deliveries SET status = 'pending', updatedAt = ? WHERE deliveryId = ?;
+
+deleteAllDailyDeliveries:
+DELETE FROM daily_deliveries;

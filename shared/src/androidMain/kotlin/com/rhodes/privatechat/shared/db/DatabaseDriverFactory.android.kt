@@ -8,6 +8,9 @@ actual class DatabaseDriverFactory(private val context: Context) {
     actual fun createDriver(): SqlDriver {
         DatabaseCompatibility.prepareBeforeOpen(context)
         return AndroidSqliteDriver(RhodesDatabase.Schema, context, "rhodes_terminal.db")
-            .also { DatabaseCompatibility.markDerivedDataCleaned(context) }
+            .also {
+                DatabaseCompatibility.restoreMissingCoreDataFromPre113Backup(context)
+                DatabaseCompatibility.markDerivedDataCleaned(context)
+            }
     }
 }

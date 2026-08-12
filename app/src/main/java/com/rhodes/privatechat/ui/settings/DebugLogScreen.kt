@@ -54,6 +54,7 @@ fun DebugLogScreen(onBack: () -> Unit) {
     var onlyAi by remember { mutableStateOf(false) }
     var onlyErrors by remember { mutableStateOf(false) }
     var onlySpecial by remember { mutableStateOf(false) }
+    var onlyRounds by remember { mutableStateOf(false) }
     var checking by remember { mutableStateOf(false) }
     var problemReport by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
@@ -74,7 +75,7 @@ fun DebugLogScreen(onBack: () -> Unit) {
                 title = {
                     Column {
                         Text("调试日志", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                        Text("最新日志在最上方，点击可查看完整内容", fontSize = 11.sp, color = TextTertiary)
+                        Text("可按对话轮次查看私聊/群聊的完整处理结果", fontSize = 11.sp, color = TextTertiary)
                     }
                 },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) } },
@@ -137,13 +138,15 @@ fun DebugLogScreen(onBack: () -> Unit) {
         containerColor = BG
     ) { padding ->
         val filteredLogs = logs.asReversed().filter { entry ->
-            (!onlyAi || entry.tag.startsWith("AI/")) &&
-                (!onlyErrors || entry.tag.contains("错误") || entry.tag.contains("ERROR", true) || entry.message.contains("失败")) &&
+                (!onlyAi || entry.tag.startsWith("AI/")) &&
+                (!onlyErrors || entry.tag.contains("错误") || entry.tag.contains("ERROR", true) || entry.tag.endsWith("/失败") || entry.message.contains("失败")) &&
+                (!onlyRounds || entry.tag.startsWith("Round/")) &&
                 (!onlySpecial || entry.tag.startsWith("Diagnostic/Special/"))
         }
         Column(Modifier.fillMaxSize().padding(padding)) {
             Column(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 12.dp, vertical = 8.dp)) {
                 Text("状态：${if (loggingEnabled) "正在记录" else "常规日志关闭，关键诊断仍保留"}  |  当前缓存 ${logs.size}/500 条", fontSize = 12.sp, color = if (loggingEnabled) AccentGreen else AccentOrange)
+                Text("对话轮次会记录：请求、原始返回、解析、重试、格式补全、落库和明确失败原因。", fontSize = 11.sp, color = TextSecondary)
                 if (problemReport.isNotBlank()) {
                     Text("最近一次问题检查报告", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Primary)
                     SelectionContainer {
@@ -161,6 +164,7 @@ fun DebugLogScreen(onBack: () -> Unit) {
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(selected = onlyAi, onClick = { onlyAi = !onlyAi }, label = { Text("仅模型调用") })
+                    FilterChip(selected = onlyRounds, onClick = { onlyRounds = !onlyRounds }, label = { Text("仅对话轮次") })
                     FilterChip(selected = onlyErrors, onClick = { onlyErrors = !onlyErrors }, label = { Text("仅失败/错误") })
                     FilterChip(selected = onlySpecial, onClick = { onlySpecial = !onlySpecial }, label = { Text("特殊问题") })
                 }
@@ -204,6 +208,10 @@ fun DebugLogScreen(onBack: () -> Unit) {
                             Text(entry.formattedTime, fontSize = 10.sp, color = TextTertiary, fontFamily = FontFamily.Monospace)
                             Spacer(Modifier.width(6.dp))
                             Text(logTitle(entry.tag), fontSize = 10.sp, color = tagColor, fontWeight = FontWeight.Bold)
+                            if (entry.tag.startsWith("Round/")) {
+                                Spacer(Modifier.width(6.dp))
+                                Text(roundStatus(entry.tag), fontSize = 10.sp, color = if (entry.tag.endsWith("/成功")) AccentGreen else if (entry.tag.endsWith("/失败")) ErrorRed else AccentOrange, fontWeight = FontWeight.Bold)
+                            }
                         }
                         Text(logDescription(entry.tag), fontSize = 11.sp, color = TextSecondary)
                         Text(logPreview(entry.message), fontSize = 12.sp, color = TextPrimary, fontFamily = FontFamily.Monospace)
@@ -248,15 +256,13 @@ private fun logPreview(message: String): String =
     if (message.length <= 800) message else "${message.take(800)}\n… 已省略列表预览，点击查看完整内容"
 
 private fun logDescription(tag: String): String = when {
+    tag.startsWith("Round/") -> "对话轮次：按顺序记录本轮用户消息、模型请求、返回解析、内容重试、格式补全和最终结果。完整模型内容请查看对应 AI/→ 与 AI/← 记录。"
     tag.endsWith("/请求") -> "模型请求摘要：厂商、模型、参数和输入规模。完整输入请查看同名“传给大模型”记录。"
     tag.endsWith("/响应") -> "模型响应摘要：耗时、Token 使用量和输出规模。完整输出请查看同名“大模型返回”记录。"
     tag.endsWith("/错误") -> "模型调用失败：异常类型、耗时和服务端/网络原因。"
     tag.startsWith("ChatEvent/") -> "聊天流程事件：请求、模型返回、解析、重试、格式修复和最终写入结果。"
-    tag == "AI/→GroupChat" -> "群聊实际请求：系统提示词、历史消息和本轮用户输入。"
-    tag == "AI/←GroupChat" -> "群聊实际请求与模型原始返回。"
-    tag == "AI/→GroupTurnPlanner" -> "群聊模型1规划请求：成员短人设、最近三轮完整群聊和本轮用户输入。"
-    tag == "AI/←GroupTurnPlanner" -> "群聊模型1规划返回：本轮主线、主回应成员与全员回应方向 JSON。"
-    tag == "AI/GroupTurnPlannerResult" -> "群聊模型1解析结果：是否向群聊生成模型注入成员回应方向。"
+    tag.startsWith("AI/→GroupChat") -> "群聊实际请求：系统提示词、历史消息和本轮用户输入。"
+    tag.startsWith("AI/←GroupChat") -> "群聊实际请求与模型原始返回。"
     tag == "AI/→PrivateTurnAnalysis" -> "私聊模型1状态分析请求：人设摘要、上一轮状态、最近三轮对话和本轮用户输入。"
     tag == "AI/←PrivateTurnAnalysis" -> "私聊模型1状态分析返回：原始 JSON 或非结构化输出。"
     tag == "AI/PrivateTurnAnalysisResult" -> "私聊模型1解析结果：是否成功生成并向角色回复模型注入状态卡。"
@@ -264,7 +270,7 @@ private fun logDescription(tag: String): String = when {
     tag.endsWith("/思维链") -> "DeepSeek 返回的完整 reasoning_content。该内容敏感，仅在“完整模型内容”已开启时记录。"
     tag.startsWith("AI/→Chat") || tag.startsWith("AI/→VisionChat") -> "私聊实际请求：系统提示词、历史消息和本轮用户输入。"
     tag.startsWith("AI/←Chat") || tag.startsWith("AI/←VisionChat") -> "私聊实际请求与模型原始返回。"
-    tag == "AI/GroupContentRetry" -> "群聊内容重试：首次模型输出没有可用群聊内容时记录的原始输出。"
+    tag.startsWith("AI/GroupContentRetry") -> "群聊内容重试：首次模型输出没有可用群聊内容时记录的原始输出。"
     tag == "AI/GroupFormatRepair" -> "群聊格式修复：模型输出格式不规范时的原文与修复结果。"
     tag == "GroupChat/InvalidResponse" -> "群聊回复无效：模型返回内容无法解析为当前群成员可展示的消息。"
     tag == "GroupChat/Error" -> "群聊请求失败：网络、API 配置、额度或服务端异常的具体原因。"
@@ -281,12 +287,10 @@ private fun logDescription(tag: String): String = when {
 }
 
 private fun logTitle(tag: String): String = when {
+    tag.startsWith("Round/") -> roundTitle(tag)
     tag.startsWith("ChatEvent/") -> "聊天流程"
     tag.startsWith("AI/→GroupChat") -> "群聊传给大模型"
     tag.startsWith("AI/←GroupChat") -> "群聊大模型返回"
-    tag == "AI/→GroupTurnPlanner" -> "群聊模型1请求"
-    tag == "AI/←GroupTurnPlanner" -> "群聊模型1返回"
-    tag == "AI/GroupTurnPlannerResult" -> "群聊模型1解析"
     tag == "AI/→PrivateTurnAnalysis" -> "私聊模型1请求"
     tag == "AI/←PrivateTurnAnalysis" -> "私聊模型1返回"
     tag == "AI/PrivateTurnAnalysisResult" -> "私聊模型1解析"
@@ -294,7 +298,7 @@ private fun logTitle(tag: String): String = when {
     tag.endsWith("/思维链") -> "DeepSeek 完整思维链"
     tag.startsWith("AI/→Chat") || tag.startsWith("AI/→VisionChat") -> "私聊传给大模型"
     tag.startsWith("AI/←Chat") || tag.startsWith("AI/←VisionChat") -> "私聊大模型返回"
-    tag == "AI/GroupContentRetry" -> "群聊内容重试"
+    tag.startsWith("AI/GroupContentRetry") -> "群聊内容重试"
     tag == "AI/GroupFormatRepair" -> "群聊格式修复"
     tag.startsWith("AI/") -> "大模型处理"
     tag.startsWith("Memory/") -> "记忆处理"
@@ -304,3 +308,12 @@ private fun logTitle(tag: String): String = when {
     tag.startsWith("Diary") -> "日记处理"
     else -> tag
 }
+
+private fun roundTitle(tag: String): String {
+    val parts = tag.split('/')
+    val surface = parts.getOrNull(2).orEmpty()
+    val stage = parts.getOrNull(3).orEmpty()
+    return "$surface · $stage"
+}
+
+private fun roundStatus(tag: String): String = tag.substringAfterLast('/')

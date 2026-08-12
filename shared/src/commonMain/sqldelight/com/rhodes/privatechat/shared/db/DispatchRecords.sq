@@ -20,6 +20,9 @@ SELECT * FROM dispatch_records WHERE status IN ('active', 'generating') ORDER BY
 getHistoryDispatches:
 SELECT * FROM dispatch_records WHERE status NOT IN ('active', 'generating') ORDER BY startTime DESC;
 
+getAllDispatches:
+SELECT * FROM dispatch_records ORDER BY startTime DESC;
+
 getDispatch:
 SELECT * FROM dispatch_records WHERE id = ?;
 
@@ -37,3 +40,6 @@ WHERE id = ?;
 
 deleteOldDispatches:
 DELETE FROM dispatch_records WHERE status NOT IN ('active', 'generating') AND endTime > 0 AND endTime < ?;
+
+deleteAllDispatches:
+DELETE FROM dispatch_records;

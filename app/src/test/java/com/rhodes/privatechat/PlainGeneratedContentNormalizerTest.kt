@@ -47,4 +47,11 @@ class PlainGeneratedContentNormalizerTest {
         assertNull(PlainGeneratedContentNormalizer.normalize("{\"content\":12345}", 2, 40))
         assertNull(PlainGeneratedContentNormalizer.normalize("{\"content\":true}", 2, 40))
     }
+
+    @Test
+    fun keepsBracketPrefixedProseButRejectsValidUnsupportedJson() {
+        assertEquals("【深夜】甲板上风很凉。", PlainGeneratedContentNormalizer.normalize("【深夜】甲板上风很凉。", 5, 40))
+        assertEquals("{今天的值班很安静。", PlainGeneratedContentNormalizer.normalize("{今天的值班很安静。", 5, 40))
+        assertNull(PlainGeneratedContentNormalizer.normalize("[\"不是正文协议\"]", 2, 40))
+    }
 }

@@ -1,0 +1,41 @@
+CREATE TABLE knowledge_bases (
+    id TEXT NOT NULL PRIMARY KEY,
+    name TEXT NOT NULL,
+    rawContent TEXT NOT NULL DEFAULT '',
+    sourceFileName TEXT NOT NULL DEFAULT '',
+    sourceFormat TEXT NOT NULL DEFAULT '',
+    chunkingMode TEXT NOT NULL DEFAULT 'smart',
+    indexStatus TEXT NOT NULL DEFAULT 'pending',
+    indexedEmbeddingSignature TEXT NOT NULL DEFAULT '',
+    createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL
+);
+
+CREATE TABLE knowledge_base_chunks (
+    id TEXT NOT NULL PRIMARY KEY,
+    knowledgeBaseId TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    sourceHeading TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL,
+    userKeywords TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    indexedAt INTEGER NOT NULL DEFAULT 0,
+    indexError TEXT NOT NULL DEFAULT '',
+    createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL,
+    UNIQUE(knowledgeBaseId, ordinal)
+);
+
+CREATE INDEX knowledge_base_chunks_by_book
+ON knowledge_base_chunks(knowledgeBaseId, ordinal);
+
+CREATE TABLE operator_knowledge_bases (
+    operatorId TEXT NOT NULL,
+    knowledgeBaseId TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    sortOrder INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(operatorId, knowledgeBaseId)
+);
+
+CREATE INDEX operator_knowledge_bases_by_book
+ON operator_knowledge_bases(knowledgeBaseId, operatorId);

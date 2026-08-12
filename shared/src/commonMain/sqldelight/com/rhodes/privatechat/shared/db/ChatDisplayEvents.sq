@@ -15,6 +15,11 @@ FROM chat_display_events
 WHERE sessionId = ?
 ORDER BY revealOrder ASC, messageId ASC, segmentIndex ASC;
 
+getAllDisplayEvents:
+SELECT messageId, segmentIndex, sessionId, revealOrder
+FROM chat_display_events
+ORDER BY sessionId ASC, revealOrder ASC, messageId ASC, segmentIndex ASC;
+
 getNextRevealOrder:
 SELECT MAX(revealOrder) FROM chat_display_events WHERE sessionId = ?;
 

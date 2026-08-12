@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -79,6 +80,8 @@ import com.rhodes.privatechat.data.db.entity.RelationshipType
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.util.copyToCache
 import com.rhodes.privatechat.shared.settings.SettingsRepository
+import com.rhodes.privatechat.shared.model.KnowledgeBase
+import com.rhodes.privatechat.shared.model.OperatorKnowledgeBaseAssignment
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import com.rhodes.privatechat.util.DebugLogger
 import kotlinx.coroutines.launch
@@ -118,6 +121,11 @@ fun OperatorEditScreen(
     var voiceVolume by remember { mutableFloatStateOf(settings.getOperatorVoiceVolume(customOperatorId)) }
     var relationships by remember { mutableStateOf<List<RelationshipEntity>>(emptyList()) }
     var initialRelationships by remember { mutableStateOf<List<RelationshipEntity>>(emptyList()) }
+    var knowledgeBases by remember { mutableStateOf<List<KnowledgeBase>>(emptyList()) }
+    var selectedKnowledgeBaseIds by remember { mutableStateOf<Set<String>>(linkedSetOf()) }
+    var initialKnowledgeBaseIds by remember { mutableStateOf<Set<String>>(linkedSetOf()) }
+    var showKnowledgeBasePicker by remember { mutableStateOf(false) }
+    var knowledgeBasePickerSnapshot by remember { mutableStateOf<Set<String>>(emptySet()) }
     var showAddPicker by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
     var showUnsavedConfirm by remember { mutableStateOf(false) }
@@ -147,6 +155,12 @@ fun OperatorEditScreen(
                 initialRelationships = it
             }
         }
+        knowledgeBases = viewModel.getKnowledgeBases()
+        if (operator != null) {
+            val selected = viewModel.getKnowledgeBaseAssignments(operator.id).filter { it.enabled }.mapTo(linkedSetOf()) { it.knowledgeBaseId }
+            selectedKnowledgeBaseIds = selected
+            initialKnowledgeBaseIds = selected
+        }
     }
 
     val onSave: () -> Unit = save@{
@@ -175,6 +189,9 @@ fun OperatorEditScreen(
             userRelation = userRelation, avatarUri = avatarUri,
             autoPost = autoPost, allowChat = allowChat,
             relationships = relationships,
+            knowledgeBaseAssignments = selectedKnowledgeBaseIds.mapIndexed { index, id ->
+                OperatorKnowledgeBaseAssignment(customOperatorId, id, enabled = true, sortOrder = index)
+            },
             activityLevel = activity,
             gender = gender,
             voiceName = voiceName,
@@ -197,7 +214,7 @@ fun OperatorEditScreen(
         userRelation != (operator?.userRelation ?: "") ||
         voiceName != (operator?.voiceName ?: "") ||
         voiceVolume != settings.getOperatorVoiceVolume(customOperatorId) ||
-        relationships != initialRelationships || slotDirty
+        relationships != initialRelationships || selectedKnowledgeBaseIds != initialKnowledgeBaseIds || slotDirty
     val requestBack = { if (hasUnsavedChanges) showUnsavedConfirm = true else onBack() }
 
     BackHandler { requestBack() }
@@ -390,6 +407,18 @@ fun OperatorEditScreen(
                 Spacer(modifier = Modifier.height(12.dp))
             }
             SectionCard {
+                SectionTitle("知识库")
+                Text(
+                    if (selectedKnowledgeBaseIds.isEmpty()) "未关联知识库。关联后，该角色可在相关话题中参考其中的设定资料。"
+                    else "已关联：${knowledgeBases.filter { it.id in selectedKnowledgeBaseIds }.joinToString("、") { it.name }}",
+                    fontSize = 12.sp, color = TextSecondary
+                )
+                TextButton(onClick = { knowledgeBasePickerSnapshot = selectedKnowledgeBaseIds; showKnowledgeBasePicker = true }, modifier = Modifier.align(Alignment.End)) {
+                    Text("管理关联", color = Primary)
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            SectionCard {
                 SectionTitle("群聊人设")
                 PromptSlotBar(
                     selected = groupSlot,
@@ -497,6 +526,31 @@ fun OperatorEditScreen(
                 )
                 showAddPicker = false
             }
+        )
+    }
+    if (showKnowledgeBasePicker) {
+        AlertDialog(
+            onDismissRequest = { showKnowledgeBasePicker = false },
+            title = { Text("关联知识库") },
+            text = {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState()).heightIn(max = 360.dp)) {
+                    if (knowledgeBases.isEmpty()) Text("尚无知识库，请先在设置 > 知识库中创建或导入。", color = TextSecondary)
+                    knowledgeBases.forEach { book ->
+                        Row(Modifier.fillMaxWidth().clickable {
+                            selectedKnowledgeBaseIds = selectedKnowledgeBaseIds.toCollection(LinkedHashSet()).also {
+                                if (!it.add(book.id)) it.remove(book.id)
+                            }
+                        }, verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(book.id in selectedKnowledgeBaseIds, onCheckedChange = { checked ->
+                                selectedKnowledgeBaseIds = selectedKnowledgeBaseIds.toCollection(LinkedHashSet()).also { if (checked) it.add(book.id) else it.remove(book.id) }
+                            })
+                            Column { Text(book.name); Text(book.indexStatus, fontSize = 11.sp, color = TextSecondary) }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showKnowledgeBasePicker = false }) { Text("完成") } },
+            dismissButton = { TextButton(onClick = { selectedKnowledgeBaseIds = knowledgeBasePickerSnapshot; showKnowledgeBasePicker = false }) { Text("取消") } },
         )
     }
     cropTarget?.let { uri ->

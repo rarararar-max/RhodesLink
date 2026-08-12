@@ -90,6 +90,9 @@ class MemoryVectorService(
     suspend fun clearSessionMemory(ownerType: String, ownerId: String, sourceId: String) =
         vectorStoreGateway.deleteBySource(ownerType, ownerId, sourceId)
 
+    suspend fun clearOwnerMemory(ownerType: String, ownerId: String) =
+        vectorStoreGateway.clearOwnerMemory(ownerType, ownerId)
+
     private suspend fun embedCached(text: String): List<Double> {
         val normalized = text.trim()
         if (normalized.isBlank()) return emptyList()

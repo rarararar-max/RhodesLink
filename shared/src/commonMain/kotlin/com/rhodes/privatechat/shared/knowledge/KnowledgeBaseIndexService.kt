@@ -34,6 +34,7 @@ class KnowledgeBaseIndexService(
     private val settings: SettingsRepository,
 ) {
     private val indexMutex = Mutex()
+    private val cancelledBooks = mutableSetOf<String>()
 
     private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -77,9 +78,15 @@ class KnowledgeBaseIndexService(
     ): KnowledgeBaseIndexResult = index(knowledgeBaseId, rebuildAll = false, onProgress)
 
     suspend fun invalidate(knowledgeBaseId: String) = indexMutex.withLock {
+        cancelledBooks.remove(knowledgeBaseId)
         vectorService.clearOwnerMemory(OWNER_TYPE, knowledgeBaseId)
         repository.clearChunkIndexes(knowledgeBaseId)
         repository.updateIndexStatus(knowledgeBaseId, "pending")
+    }
+
+    suspend fun cancelAndRemove(knowledgeBaseId: String) = indexMutex.withLock {
+        cancelledBooks += knowledgeBaseId
+        vectorService.clearOwnerMemory(OWNER_TYPE, knowledgeBaseId)
     }
 
     private suspend fun index(
@@ -88,6 +95,7 @@ class KnowledgeBaseIndexService(
         onProgress: (done: Int, total: Int) -> Unit,
     ): KnowledgeBaseIndexResult = indexMutex.withLock {
         try {
+        if (knowledgeBaseId in cancelledBooks) return@withLock KnowledgeBaseIndexResult(knowledgeBaseId, 0, 0, 0)
         val book = repository.get(knowledgeBaseId) ?: throw IllegalArgumentException("知识库不存在")
         val chunks = repository.getChunks(knowledgeBaseId).filter {
             it.enabled && it.content.isNotBlank() && (rebuildAll || it.indexError.isNotBlank())
@@ -111,6 +119,7 @@ class KnowledgeBaseIndexService(
         var failed = 0
         val errors = mutableListOf<String>()
         chunks.forEachIndexed { index, chunk ->
+            if (knowledgeBaseId in cancelledBooks || repository.get(knowledgeBaseId) == null) return@withLock KnowledgeBaseIndexResult(knowledgeBaseId, chunks.size, succeeded, failed)
             try {
                 val searchableContent = buildSearchableContent(book.name, chunk.sourceHeading, chunk.userKeywords, chunk.content)
                 vectorService.saveMemory(

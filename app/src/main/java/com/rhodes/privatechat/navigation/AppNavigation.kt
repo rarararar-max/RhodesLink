@@ -225,6 +225,7 @@ private fun FeaturesTabContent(navigator: Navigator) {
         onRanking = { navigator.push(RankingRoute) },
         onImpressions = { navigator.push(ImpressionsRoute) },
         onDispatch = { navigator.push(DispatchRoute) },
+        onGalgame = { navigator.push(GalgameRoute) },
         onTokenStats = { navigator.push(TokenStatsRoute) },
         onGameRoom = { navigator.push(GameRoomRoute) },
         onSleep = { navigator.push(SleepRoute) }

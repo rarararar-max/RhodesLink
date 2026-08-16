@@ -50,6 +50,12 @@ import com.rhodes.privatechat.ui.common.ThemedDropdownMenu
 import com.rhodes.privatechat.ui.common.TerminalPanelShape
 import com.rhodes.privatechat.ui.theme.*
 
+data class ChatStatusDetails(
+    val emotion: String = "",
+    val location: String = "",
+    val activity: String = "",
+)
+
 /** 供 ChatDropdownMenuItem 使用的菜单关闭回调 */
 val LocalDismissMenu = compositionLocalOf<(() -> Unit)?> { null }
 
@@ -60,7 +66,8 @@ val LocalDismissMenu = compositionLocalOf<(() -> Unit)?> { null }
  * @param avatarUri 头像 URI（私聊为 operator.avatarUri，群聊为 groupSession.avatarUri）
  * @param mode 当前模式 "online"/"offline"/"director"
  * @param isLoading 是否正在加载（私聊显示"输入中..."）
- * @param subtitleText 副标题文本（私聊为 "地点 | 活动 | 心情"，群聊为 "模式 · N条消息"）
+ * @param subtitleText 副标题文本（私聊为状态摘要，群聊为 "模式 · N条消息"）
+ * @param statusDetails 私聊状态详情；为空时副标题不可点击
  * @param showGroupIcon 群聊头像为空时显示默认 Groups 图标
  * @param onBack 返回回调
  * @param menuContent 菜单内容（DropdownMenuItem 列表）
@@ -72,6 +79,7 @@ fun ChatHeader(
     mode: String = "online",
     isLoading: Boolean = false,
     subtitleText: String = "",
+    statusDetails: ChatStatusDetails? = null,
     showGroupIcon: Boolean = false,
     onBack: () -> Unit,
     onModeClick: (() -> Unit)? = null,
@@ -112,7 +120,11 @@ fun ChatHeader(
                 Spacer(Modifier.width(9.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(title, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(subtitleText.ifBlank { if (showGroupIcon) "群聊频道已连接" else "与${title}的专属通讯" }, fontSize = 10.sp, color = TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    HeaderSubtitle(
+                        text = subtitleText.ifBlank { if (showGroupIcon) "群聊频道已连接" else "与${title}的专属通讯" },
+                        statusDetails = statusDetails,
+                        fontSize = 10.sp,
+                    )
                 }
                 Column(horizontalAlignment = Alignment.End, modifier = Modifier.then(if (onModeClick != null) Modifier.clickable { onModeClick() } else Modifier)) {
                     Text(modeCode, fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Primary, letterSpacing = 0.7.sp)
@@ -204,7 +216,7 @@ fun ChatHeader(
                     }
                 }
                 if (subtitleText.isNotBlank()) {
-                    Text(subtitleText, fontSize = 11.sp, color = TextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    HeaderSubtitle(text = subtitleText, statusDetails = statusDetails, fontSize = 11.sp)
                 }
             }
 
@@ -221,6 +233,48 @@ fun ChatHeader(
         }
         HorizontalDivider(color = Stroke)
     }
+}
+
+@Composable
+private fun HeaderSubtitle(
+    text: String,
+    statusDetails: ChatStatusDetails?,
+    fontSize: androidx.compose.ui.unit.TextUnit,
+) {
+    var showStatus by remember { mutableStateOf(false) }
+    Box {
+        Text(
+            text = text,
+            fontSize = fontSize,
+            color = TextSecondary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = if (statusDetails != null) Modifier.clickable { showStatus = !showStatus } else Modifier,
+        )
+        if (statusDetails != null) {
+            ThemedDropdownMenu(
+                expanded = showStatus,
+                onDismissRequest = { showStatus = false },
+            ) {
+                StatusMenuItem("心情", statusDetails.emotion) { showStatus = false }
+                StatusMenuItem("位置", statusDetails.location) { showStatus = false }
+                StatusMenuItem("状态", statusDetails.activity) { showStatus = false }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusMenuItem(label: String, value: String, onClick: () -> Unit) {
+    DropdownMenuItem(
+        text = {
+            Column {
+                Text(label, fontSize = 11.sp, color = TextTertiary)
+                Text(value.ifBlank { "未确认" }, fontSize = 13.sp, color = TextPrimary, maxLines = 3)
+            }
+        },
+        onClick = onClick,
+    )
 }
 
 /**

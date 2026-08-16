@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Casino
 import androidx.compose.material.icons.filled.Bedtime
+import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -63,6 +64,7 @@ fun FeaturesScreen(
     onRanking: () -> Unit = {},
     onImpressions: () -> Unit = {},
     onDispatch: () -> Unit = {},
+    onGalgame: () -> Unit = {},
     onTokenStats: () -> Unit = {},
     onGameRoom: () -> Unit = {},
     onSleep: () -> Unit = {},
@@ -80,6 +82,7 @@ fun FeaturesScreen(
             Spacer(Modifier.height(8.dp))
             WechatListGroup {
                 FeatureButton(FeatureEntry(Icons.AutoMirrored.Filled.SendToMobile, "干员派遣", "组建小队执行任务", iconColor = Color(0xFF8B5CF6)), onClick = onDispatch)
+                FeatureButton(FeatureEntry(Icons.Default.AutoStories, "Galgame", "创建、导入和游玩互动剧情", iconColor = Color(0xFFE07A9B)), onClick = onGalgame)
             }
             Spacer(Modifier.height(8.dp))
             WechatListGroup {

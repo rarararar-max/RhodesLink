@@ -32,8 +32,19 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import org.koin.compose.koinInject
 import org.koin.compose.viewmodel.koinViewModel
+import com.rhodes.privatechat.galgame_full.GalgameFullScreen
 
 private val json = Json { ignoreUnknownKeys = true }
+
+data object GalgameRoute : Screen {
+    @Composable
+    override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        val context = androidx.compose.ui.platform.LocalContext.current
+        val viewModel: MainViewModel = koinViewModel()
+        GalgameFullScreen(context, viewModel.sharedUtils) { navigator.pop() }
+    }
+}
 
 // ──────────────────────────────────────────────
 // Game Room

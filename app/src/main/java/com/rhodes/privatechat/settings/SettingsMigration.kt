@@ -27,9 +27,6 @@ object SettingsMigration {
         // Defaults apply only when neither the unified store nor the legacy store has a value.
         // Never overwrite a choice made by an existing 1.11/1.12 user.
         val legacy = context.getSharedPreferences("chat_prefs", Context.MODE_PRIVATE)
-        if (!target.contains("dual_model") && !legacy.contains("dual_model")) {
-            editor.putBoolean("dual_model", true)
-        }
         editor.putBoolean(CONTINUITY_OPTIMIZATIONS_INITIALIZED_KEY, true)
         editor.commit()
     }
@@ -110,7 +107,7 @@ object SettingsMigration {
         ))
         // Migrate boolean keys
         migrateBooleanKeys(context, "chat_prefs", editor, listOf(
-            "dual_model", "dispatch_fast_mode", "dark_mode"
+            "dispatch_fast_mode", "dark_mode"
         ))
         // Migrate dynamic keys (bg_*, gbg_*, group_auto_*, group_mode_*, moment_count_*)
         migrateDynamicKeys(context, "chat_prefs", editor)
@@ -159,7 +156,7 @@ object SettingsMigration {
 
         // 修复已迁移用户：被旧版 migrateFile 存成 String 的 int/bool 转回正确类型
         fixupCorruptedInts(context, editor, intFixKeys)
-        fixupCorruptedBooleans(context, editor, listOf("dual_model", "dispatch_fast_mode", "dark_mode", "permissions_initialized", "initial_hidden_done"))
+        fixupCorruptedBooleans(context, editor, listOf("dispatch_fast_mode", "dark_mode", "permissions_initialized", "initial_hidden_done"))
         editor.putBoolean(MIGRATION_DONE_KEY, true)
         editor.putBoolean(MIGRATION_FIX_V2_KEY, true)
         editor.commit()
@@ -188,7 +185,7 @@ object SettingsMigration {
         }
 
         fixupCorruptedInts(context, editor, intFixKeys)
-        fixupCorruptedBooleans(context, editor, listOf("dual_model", "dispatch_fast_mode", "dark_mode", "permissions_initialized", "initial_hidden_done"))
+        fixupCorruptedBooleans(context, editor, listOf("dispatch_fast_mode", "dark_mode", "permissions_initialized", "initial_hidden_done"))
 
         editor.putBoolean(MIGRATION_FIX_V2_KEY, true)
         editor.commit()

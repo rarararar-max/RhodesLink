@@ -55,6 +55,7 @@ fun KnowledgeBasesScreen(onBack: () -> Unit, onOpen: (String) -> Unit, modifier:
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var books by remember { mutableStateOf<List<KnowledgeBase>>(emptyList()) }
+    var bookStats by remember { mutableStateOf<Map<String, Triple<Int, Int, Int>>>(emptyMap()) }
     var loading by remember { mutableStateOf(true) }
     var creating by remember { mutableStateOf(false) }
     var remoteConfirm by remember { mutableStateOf<KnowledgeBase?>(null) }
@@ -64,6 +65,12 @@ fun KnowledgeBasesScreen(onBack: () -> Unit, onOpen: (String) -> Unit, modifier:
     fun refresh() = scope.launch {
         loading = true
         books = runCatching { viewModel.getKnowledgeBases() }.getOrElse { emptyList() }
+        bookStats = books.associate { book ->
+            val chunks = viewModel.getKnowledgeBaseChunks(book.id)
+            val roles = viewModel.getKnowledgeBaseAssignmentsForBook(book.id).count { it.enabled }
+            val surfaces = listOf("private_chat", "group_chat", "moment", "comment", "diary").count { settings.isKnowledgeBaseEnabledForBook(book.id, it) }
+            book.id to Triple(chunks.size, roles, surfaces)
+        }
         loading = false
     }
     androidx.compose.runtime.LaunchedEffect(Unit) { refresh() }
@@ -129,7 +136,7 @@ fun KnowledgeBasesScreen(onBack: () -> Unit, onOpen: (String) -> Unit, modifier:
         Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
             Text("导入 TXT 或 MD 后会自动分段。知识库仅在关联角色和当前话题相关时才会在后续生成中使用。", fontSize = 12.sp, color = TextSecondary)
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { creating = true }, modifier = Modifier.weight(1f)) { Text("新建文本") }
+                Button(onClick = { creating = true }, modifier = Modifier.weight(1f)) { Text("新建知识库") }
                 Button(onClick = { importer.launch(arrayOf("text/plain", "text/markdown", "text/*")) }, modifier = Modifier.weight(1f)) { Text("导入 TXT / MD") }
             }
             if (message.isNotBlank()) Text(message, modifier = Modifier.padding(top = 8.dp), fontSize = 12.sp, color = TextSecondary)
@@ -142,7 +149,9 @@ fun KnowledgeBasesScreen(onBack: () -> Unit, onOpen: (String) -> Unit, modifier:
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(book.name, color = TextPrimary)
-                        Text("${book.rawContent.length} 字 · ${indexStatusText(book.indexStatus)}", fontSize = 12.sp, color = TextSecondary)
+                        val stats = bookStats[book.id] ?: Triple(0, 0, 0)
+                        Text("${book.rawContent.length} 字 · ${stats.first} 个分段 · 关联 ${stats.second} 个角色 · ${stats.third} 个场景", fontSize = 12.sp, color = TextSecondary)
+                        Text(indexStatusText(book.indexStatus), fontSize = 12.sp, color = TextSecondary)
                     }
                     Text("›", color = TextSecondary, fontSize = 24.sp)
                 }

@@ -89,6 +89,9 @@ UPDATE knowledge_base_chunks SET enabled = ?, updatedAt = ? WHERE id = ?;
 updateKnowledgeBaseChunkContent:
 UPDATE knowledge_base_chunks SET content = ?, indexedAt = 0, indexError = '', updatedAt = ? WHERE id = ?;
 
+updateKnowledgeBaseChunk:
+UPDATE knowledge_base_chunks SET sourceHeading = ?, content = ?, userKeywords = ?, indexedAt = 0, indexError = '', updatedAt = ? WHERE id = ?;
+
 clearKnowledgeBaseChunkIndexes:
 UPDATE knowledge_base_chunks SET indexedAt = 0, indexError = '', updatedAt = ? WHERE knowledgeBaseId = ?;
 
@@ -97,6 +100,9 @@ DELETE FROM knowledge_base_chunks WHERE knowledgeBaseId = ?;
 
 deleteChunk:
 DELETE FROM knowledge_base_chunks WHERE id = ?;
+
+getNextChunkOrdinal:
+SELECT COALESCE(MAX(ordinal), 0) + 1 FROM knowledge_base_chunks WHERE knowledgeBaseId = ?;
 
 getKnowledgeBasesByOperator:
 SELECT kb.*, okb.enabled AS assignmentEnabled, okb.sortOrder AS assignmentSortOrder

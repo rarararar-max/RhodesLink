@@ -165,18 +165,6 @@ data class GoogleGenerationRequest(
 )
 
 @Serializable
-data class PrivateTurnAnalysis(
-    val current_topic: String = "",
-    val unresolved_thread: String = "",
-    val pending_action: String = "",
-    val operator_emotion: String = "",
-    val operator_location: String = "",
-    val operator_activity: String = "",
-    val user_intent: String = "",
-    val reply_strategy: String = ""
-)
-
-@Serializable
 data class PrivateTurnState(
     val emotion: String = "平静",
     val location: String = "未确认",

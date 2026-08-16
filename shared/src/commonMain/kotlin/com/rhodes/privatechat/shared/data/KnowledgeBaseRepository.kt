@@ -7,6 +7,8 @@ import com.rhodes.privatechat.shared.model.KnowledgeBaseChunk
 import com.rhodes.privatechat.shared.model.OperatorKnowledgeBaseAssignment
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.datetime.Clock
+import kotlin.random.Random
 
 class KnowledgeBaseRepository(private val wrapper: DatabaseWrapper) {
     private val db: RhodesDatabase get() = wrapper.database
@@ -76,6 +78,31 @@ class KnowledgeBaseRepository(private val wrapper: DatabaseWrapper) {
     suspend fun updateChunkContent(id: String, content: String, updatedAt: Long = System.currentTimeMillis()) = withContext(Dispatchers.Default) {
         require(content.trim().isNotBlank()) { "分段正文不能为空" }
         db.knowledgeBasesQueries.updateKnowledgeBaseChunkContent(content.trim(), updatedAt, id)
+    }
+
+    suspend fun updateChunk(id: String, heading: String, content: String, keywords: String, updatedAt: Long = System.currentTimeMillis()) = withContext(Dispatchers.Default) {
+        require(content.trim().isNotBlank()) { "分段正文不能为空" }
+        db.knowledgeBasesQueries.updateKnowledgeBaseChunk(heading.trim(), content.trim(), keywords.trim(), updatedAt, id)
+    }
+
+    suspend fun addChunk(knowledgeBaseId: String, heading: String, content: String, keywords: String = ""): KnowledgeBaseChunk = withContext(Dispatchers.Default) {
+        require(get(knowledgeBaseId) != null) { "知识库不存在" }
+        require(content.trim().isNotBlank()) { "分段正文不能为空" }
+        val now = Clock.System.now().toEpochMilliseconds()
+        val chunk = KnowledgeBaseChunk(
+            id = "kbc-${Random.nextLong().toString().replace("-", "")}",
+            knowledgeBaseId = knowledgeBaseId,
+            ordinal = db.knowledgeBasesQueries.getNextChunkOrdinal(knowledgeBaseId).executeAsOne().toInt(),
+            sourceHeading = heading.trim(), content = content.trim(), userKeywords = keywords.trim(),
+            createdAt = now, updatedAt = now,
+        )
+        db.knowledgeBasesQueries.insertKnowledgeBaseChunk(chunk.id, chunk.knowledgeBaseId, chunk.ordinal.toLong(), chunk.sourceHeading, chunk.content, chunk.userKeywords, 1L, 0L, "", now, now)
+        chunk
+    }
+
+    suspend fun deleteChunk(knowledgeBaseId: String, chunkId: String) = withContext(Dispatchers.Default) {
+        require(getChunks(knowledgeBaseId).any { it.id == chunkId }) { "分段不存在或不属于当前知识库" }
+        db.knowledgeBasesQueries.deleteChunk(chunkId)
     }
 
     suspend fun replaceAssignments(operatorId: String, assignments: List<OperatorKnowledgeBaseAssignment>) = withContext(Dispatchers.Default) {

@@ -170,10 +170,10 @@ class OperatorViewModel(
                 }
                 appState.refreshOperators(repository.getAllOperatorsSync())
                 appState.refreshAllSessions(repository.getAllSessionsSync(), settings.hiddenIds)
-                onComplete(null)
+                finish(onComplete, null)
             } catch (e: Exception) {
                 DebugLogger.diagnostic("Operator/DeleteFailed", "operatorIds=${ids.joinToString(",")}, error=${e.javaClass.simpleName}:${e.message?.take(160)}")
-                onComplete("删除失败：${e.message?.take(80) ?: "请稍后重试"}")
+                finish(onComplete, "删除失败：${e.message?.take(80) ?: "请稍后重试"}")
             }
         }
     }

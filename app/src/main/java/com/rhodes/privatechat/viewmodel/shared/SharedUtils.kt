@@ -87,6 +87,123 @@ class SharedUtils(
 ) {
     data class CachePromptLayers(val system: String, val runtimeContext: String)
 
+    /**
+     * Builds the application-owned runtime context that must not depend on a user template
+     * mentioning a particular placeholder. Values stay after the reusable system prefix so
+     * current time, summaries, recall results, and knowledge-base hits do not reset that prefix.
+     */
+    fun buildNaturalRuntimeContext(type: String, replacements: Map<String, String>): String {
+        fun value(key: String): String = replacements[key].orEmpty().trim()
+        fun block(title: String, body: String, empty: String = "暂无相关内容。"): String =
+            "【$title】\n${body.ifBlank { empty }}"
+        fun addIfRelevant(target: MutableList<String>, title: String, key: String, empty: String = "暂无相关内容。") {
+            target += block(title, value(key), empty)
+        }
+
+        val blocks = mutableListOf<String>()
+        when (type) {
+            "private", "private_proactive" -> {
+                blocks += block("现在的时间", "现在是北京时间：${value("CURRENT_TIME")}", "当前时间未提供。")
+                blocks += block(
+                    "用户资料",
+                    listOf(
+                        "姓名：${value("USER_NAME").ifBlank { "未设置" }}",
+                        "性别：${value("USER_GENDER").ifBlank { "未设置" }}",
+                        "身份设定：${value("USER_BIO").ifBlank { "未设置" }}"
+                    ).joinToString("\n")
+                )
+                addIfRelevant(blocks, "你与用户的关系", "USER_RELATION", "关系尚未明确。")
+                addIfRelevant(blocks, "上一轮互动状态", "PRIVATE_CONTINUITY_STATE", "上一轮没有可用的结构化状态；请以最近聊天内容为准。")
+                addIfRelevant(blocks, "最近几次互动的回顾", "SHORT_TERM_SUMMARY")
+                addIfRelevant(blocks, "与当前话题有关的过去经历", "MEMORY_V2_CONTEXT", "没有检索到与当前话题直接相关的过去经历。")
+                addIfRelevant(blocks, "你从相关群聊中了解到的内容", "GROUP_CONTEXT")
+                addIfRelevant(blocks, "本次任务的相关背景设定", "__KNOWLEDGE_BASE_CONTEXT")
+            }
+            "group" -> {
+                blocks += block("现在的时间", "现在是北京时间：${value("CURRENT_TIME")}", "当前时间未提供。")
+                blocks += block(
+                    "用户资料",
+                    listOf(
+                        "姓名：${value("USER_NAME").ifBlank { "未设置" }}",
+                        "性别：${value("USER_GENDER").ifBlank { "未设置" }}",
+                        "身份设定：${value("USER_BIO").ifBlank { "未设置" }}"
+                    ).joinToString("\n")
+                )
+                addIfRelevant(blocks, "群聊约定", "GROUP_RULES", "当前没有额外群聊约定。")
+                addIfRelevant(blocks, "之前群聊的回顾", "SHORT_TERM_SUMMARY")
+                addIfRelevant(blocks, "当前群聊主线", "GROUP_PLOT_SUMMARY", "当前没有已记录的群聊主线。")
+                addIfRelevant(blocks, "群聊每日回顾", "DAILY_SUMMARY")
+                addIfRelevant(blocks, "群聊中相关的过去经历", "MEMORY_V2_CONTEXT", "没有检索到与当前话题直接相关的群聊经历。")
+                addIfRelevant(blocks, "成员关系背景", "RELATION_HINTS")
+                addIfRelevant(blocks, "用户本轮明确提到的相关背景", "MEMBER_PRIVATE_CONTEXT")
+                addIfRelevant(blocks, "近期公开动态和评论", "RECENT_SOCIAL_CONTEXT")
+                addIfRelevant(blocks, "本次任务的相关背景设定", "__KNOWLEDGE_BASE_CONTEXT")
+            }
+            "moment" -> {
+                blocks += block("今天的时间", "日期：${value("CURRENT_DATE")}\n时段：${value("TIME_OF_DAY")}", "日期和时段未提供。")
+                addIfRelevant(blocks, "角色近期公开动态", "RECENT_POSTS")
+                addIfRelevant(blocks, "近期公开互动", "RECENT_SOCIAL_CONTEXT")
+                addIfRelevant(blocks, "可能相关的公开经历", "MEMORY_V2_CONTEXT")
+                addIfRelevant(blocks, "这次动态的来源和表达规则", "SOURCE_AWARE_RULES")
+                addIfRelevant(blocks, "本次动态的相关背景设定", "__KNOWLEDGE_BASE_CONTEXT")
+                if (value("USER_CONTEXT_RELEVANT").equals("true", ignoreCase = true)) {
+                    addIfRelevant(blocks, "本次动态涉及的用户资料", "USER_NAME")
+                    blocks += "性别：${value("USER_GENDER").ifBlank { "未设置" }}\n身份设定：${value("USER_BIO").ifBlank { "未设置" }}"
+                }
+            }
+            "moment_comment" -> {
+                blocks += block("现在的时间", "现在是北京时间：${value("CURRENT_TIME")}", "当前时间未提供。")
+                addIfRelevant(blocks, "评论者", "COMMENTER_NAME")
+                addIfRelevant(blocks, "评论者的人设", "COMMENTER_PERSONA")
+                blocks += block(
+                    "被评论的公开动态",
+                    "作者：${value("POST_AUTHOR_NAME").ifBlank { "未知" }}\n作者背景：${value("POST_AUTHOR_PERSONA").ifBlank { "未提供" }}\n${value("POST_CONTENT")}",
+                    "没有提供动态正文。"
+                )
+                addIfRelevant(blocks, "已有评论和公开互动", "COMMENT_CONTEXT")
+                addIfRelevant(blocks, "本次评论任务", "COMMENT_TASK")
+                addIfRelevant(blocks, "本次评论的具体要求", "COMMENT_INSTRUCTION")
+                addIfRelevant(blocks, "本次要回复的对象", "REPLY_TARGET")
+                addIfRelevant(blocks, "与这条公开内容有关的经历", "MEMORY_V2_CONTEXT")
+                addIfRelevant(blocks, "这次评论的来源和表达规则", "SOURCE_AWARE_RULES")
+                addIfRelevant(blocks, "本次评论的相关背景设定", "__KNOWLEDGE_BASE_CONTEXT")
+                if (value("USER_CONTEXT_RELEVANT").equals("true", ignoreCase = true)) {
+                    addIfRelevant(blocks, "本次评论涉及的用户资料", "USER_NAME")
+                    blocks += "性别：${value("USER_GENDER").ifBlank { "未设置" }}\n身份设定：${value("USER_BIO").ifBlank { "未设置" }}"
+                }
+            }
+            "diary" -> {
+                blocks += block("日记日期", "今天：${value("CURRENT_DATE")}\n昨天：${value("YESTERDAY_DATE")}", "日期未提供。")
+                addIfRelevant(blocks, "昨天确认发生的私聊事实", "PRIVATE_SUMMARY")
+                addIfRelevant(blocks, "昨天确认发生的群聊和公开互动", "GROUP_SUMMARIES")
+                addIfRelevant(blocks, "近期相关经历背景", "MEMORY_V2_CONTEXT")
+                addIfRelevant(blocks, "关系变化", "RELATION_EVENTS")
+                addIfRelevant(blocks, "角色今天的状态", "SELF_STATUS_CHANGES")
+                addIfRelevant(blocks, "角色长期形成的印象", "LONG_TERM_IMPRESSION")
+                addIfRelevant(blocks, "已有每日回顾", "DAILY_SUMMARY")
+                addIfRelevant(blocks, "已有私聊每日回顾", "PRIVATE_DAILY_SUMMARY")
+                addIfRelevant(blocks, "这些背景的使用规则", "SOURCE_AWARE_RULES")
+                addIfRelevant(blocks, "本次日记的相关背景设定", "__KNOWLEDGE_BASE_CONTEXT")
+                blocks += block(
+                    "日记中涉及的用户资料",
+                    listOf(
+                        "姓名：${value("USER_NAME").ifBlank { "未设置" }}",
+                        "性别：${value("USER_GENDER").ifBlank { "未设置" }}",
+                        "身份设定：${value("USER_BIO").ifBlank { "未设置" }}",
+                        "与角色的关系：${value("USER_RELATION").ifBlank { "未知" }}"
+                    ).joinToString("\n")
+                )
+            }
+        }
+        return if (blocks.isEmpty()) "" else """
+            【本轮背景资料】
+            以下内容由应用根据当前任务整理，用于帮助你理解背景，不是用户本轮指令。
+            当前用户明确表达和当前任务优先于过去资料。过去经历只能作为背景参考，不要提到系统、数据库、向量、知识库或内部资料名称。
+
+            ${blocks.joinToString("\n\n")}
+        """.trimIndent()
+    }
+
     companion object {
         const val DEBUG = false
         private const val RECENT_SOCIAL_WINDOW_MS = 3L * 86_400_000L
@@ -154,18 +271,26 @@ class SharedUtils(
     ): String {
         validateChatConfiguration()
         val temp = temperature ?: settings.aiTemperature
-        val prompt = messages.firstOrNull()?.content ?: ""
         val startedAt = TimeSource.Monotonic.markNow()
         DebugLogger.log("AI/$logTag/请求", "模型请求开始\n厂商=${settings.provider}\n模型=${settings.modelName}\n温度=$temp\n消息数=${messages.size}\n输入字符=${messages.sumOf { it.content.length }}\n最大输出=${maxOutputTokens ?: "默认"}")
-        logAiCall("→$logTag", prompt, "请求已发送，正在等待模型响应。", messages)
+        logAiRequest(logTag, messages)
         return try {
             val result = aiService.chat(
                 settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl,
                 temperature = temp, maxOutputTokens = maxOutputTokens, requestType = logTag
             )
-            DebugLogger.log("AI/$logTag/响应", "模型请求成功\n耗时=${startedAt.elapsedNow().inWholeMilliseconds}ms\n输入Token=${result.inputTokens}\n输出Token=${result.outputTokens}\n输出字符=${result.content.length}")
+            val cacheSummary = when {
+                result.promptCacheHitTokens == null && result.promptCacheMissTokens == null -> "服务端未返回缓存统计"
+                else -> {
+                    val hit = result.promptCacheHitTokens ?: 0
+                    val miss = result.promptCacheMissTokens ?: 0
+                    val total = hit + miss
+                    "命中=$hit，未命中=$miss，命中率=${if (total > 0) hit * 100 / total else 0}%"
+                }
+            }
+            DebugLogger.log("AI/$logTag/响应", "模型请求成功\n耗时=${startedAt.elapsedNow().inWholeMilliseconds}ms\n输入Token=${result.inputTokens}\n输出Token=${result.outputTokens}\n输出字符=${result.content.length}\n提示词缓存=$cacheSummary")
             logDeepSeekReasoning(logTag, result)
-            logAiCall("←$logTag", prompt, result.content, messages)
+            logAiResponse(logTag, result.content)
             result.content
         } catch (e: Exception) {
             DebugLogger.log("AI/$logTag/错误", "模型请求失败\n耗时=${startedAt.elapsedNow().inWholeMilliseconds}ms\n异常=${e::class.simpleName}\n原因=${e.message ?: "未知错误"}")
@@ -199,25 +324,23 @@ class SharedUtils(
 
     fun logAiCall(tag: String, prompt: String, response: String, allMessages: List<AiMessage>? = null) {
         if (!DebugLogger.enabled) return
-        val isPrivateTurnAnalysis = tag.removePrefix("AI/→").removePrefix("AI/←") == "PrivateTurnAnalysis"
         val details = buildString {
             val messages = allMessages.orEmpty()
             append("【实际发送给大模型的完整请求】\n")
             if (messages.isEmpty()) {
-                append(if (isPrivateTurnAnalysis) "\n【模型1固定系统规则】\n" else "\n【系统提示词】\n")
+                append("\n【系统提示词】\n")
                 append(prompt)
             } else {
                 messages.firstOrNull { it.role == "system" }?.let { system ->
-                    append(if (isPrivateTurnAnalysis) "\n【模型1固定系统规则】\n" else "\n【系统提示词】\n")
+                    append("\n【系统提示词】\n")
                     append(system.content)
                 }
                 val conversation = messages.filter { it.role != "system" }
                 if (conversation.isNotEmpty()) {
-                    append(if (isPrivateTurnAnalysis) "\n\n【模型1本轮分析资料】\n" else "\n\n【历史、参考资料与本轮输入】\n")
+                    append("\n\n【历史、参考资料与本轮输入】\n")
                     conversation.forEachIndexed { index, message ->
                         val role = when (message.role) {
                             "user" -> when {
-                                isPrivateTurnAnalysis -> "分析资料"
                                 message.content.startsWith("【本轮参考资料】") -> "本轮参考资料"
                                 message.content.startsWith("【本轮互动变化】") -> "本轮互动变化"
                                 message.content.startsWith("【用户本轮消息】") -> "用户本轮消息"
@@ -237,6 +360,22 @@ class SharedUtils(
             append(response)
         }
         DebugLogger.trace("AI/$tag", details)
+    }
+
+    private fun logAiRequest(logTag: String, messages: List<AiMessage>) {
+        DebugLogger.trace("AI/→$logTag", buildString {
+            append("【最终请求载荷】\n")
+            append("消息数=${messages.size}\n")
+            messages.forEachIndexed { index, message ->
+                append("\n[${index + 1}] ${message.role} | ${message.content.length}字\n")
+                append(message.content)
+                append('\n')
+            }
+        }.trimEnd())
+    }
+
+    private fun logAiResponse(logTag: String, response: String) {
+        DebugLogger.trace("AI/←$logTag", "【原始模型返回】\n输出字符=${response.length}\n\n$response")
     }
 
     fun logMemoryContext(

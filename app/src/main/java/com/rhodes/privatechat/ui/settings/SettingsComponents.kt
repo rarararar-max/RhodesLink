@@ -52,12 +52,13 @@ fun SaveableSettingsScaffold(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     icon: (@Composable () -> Unit)? = null,
-    onSaveRequest: ((completeSave: () -> Unit) -> Unit)? = null,
+    onSaveRequest: ((completeSave: () -> Unit, cancelSave: () -> Unit) -> Unit)? = null,
     showSave: Boolean = true,
     content: @Composable () -> Unit
 ) {
     val settings: SettingsRepository = org.koin.compose.koinInject()
     var showDiscardDialog by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
 
     fun requestBack() {
         if (settings.hasDraftChanges()) showDiscardDialog = true else onBack()
@@ -65,11 +66,18 @@ fun SaveableSettingsScaffold(
 
     fun completeSave() {
         settings.saveDraft()
+        saving = false
         onBack()
     }
 
+    fun cancelSave() {
+        saving = false
+    }
+
     fun requestSave() {
-        onSaveRequest?.invoke(::completeSave) ?: completeSave()
+        if (saving) return
+        saving = true
+        onSaveRequest?.invoke(::completeSave, ::cancelSave) ?: completeSave()
     }
 
     androidx.compose.runtime.LaunchedEffect(Unit) { settings.beginDraft() }
@@ -78,7 +86,7 @@ fun SaveableSettingsScaffold(
 
     Column(modifier = modifier.fillMaxWidth()) {
         GradientHeader(title = title, onBack = { requestBack() }, actions = {
-            if (showSave) Button(onClick = { requestSave() }, colors = ButtonDefaults.buttonColors(containerColor = Blue400), shape = RoundedCornerShape(999.dp)) { Text("保存", color = androidx.compose.ui.graphics.Color.White, fontSize = 13.sp) }
+            if (showSave) Button(enabled = !saving, onClick = { requestSave() }, colors = ButtonDefaults.buttonColors(containerColor = Blue400), shape = RoundedCornerShape(999.dp)) { Text(if (saving) "保存中" else "保存", color = androidx.compose.ui.graphics.Color.White, fontSize = 13.sp) }
         })
         content()
     }
@@ -162,8 +170,10 @@ fun SettingsParamSlider(settings: SettingsRepository, key: String, label: String
             } else value = v
         }, onValueChangeFinished = {
             val oldValue = settings.getInt(key, defaultVal)
-            settings.putInt(key, value.toInt())
-            DebugLogger.log("Settings/Param", "参数调整: $label($key) $oldValue -> ${value.toInt()}")
+            val snapped = (range.start + (((value - range.start) / step).toInt() * step)).coerceIn(range).toInt()
+            value = snapped.toFloat()
+            settings.putInt(key, snapped)
+            DebugLogger.log("Settings/Param", "参数调整: $label($key) $oldValue -> $snapped")
         }, valueRange = range, steps = (((range.endInclusive - range.start) / step).toInt() - 1).coerceAtLeast(0), colors = SliderDefaults.colors(thumbColor = Blue400, activeTrackColor = Blue400))
     } }
     Spacer(Modifier.height(4.dp))

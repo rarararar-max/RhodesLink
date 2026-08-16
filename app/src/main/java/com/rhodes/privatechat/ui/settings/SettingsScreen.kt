@@ -119,7 +119,7 @@ fun SettingsScreen(
             Spacer(Modifier.height(8.dp))
             WechatListGroup {
                 SettingItem(SettingEntry(Icons.Default.AutoFixHigh, "数据管理", "统计信息与自动清理", iconColor = Color(0xFF8B5CF6)), onClick = onDataManage)
-                SettingItem(SettingEntry(Icons.Default.Favorite, "感谢", "支持股东名单", iconColor = Primary), onClick = onCredits)
+                SettingItem(SettingEntry(Icons.Default.Favorite, "感谢名单与联系方式", "支持股东名单与联系方式", iconColor = Primary), onClick = onCredits)
                 SettingItem(SettingEntry(Icons.Default.DarkMode, "外观设置", "白天/黑夜模式、界面外观", iconColor = Color(0xFF607D8B)), onClick = onAppearance)
             }
             Spacer(Modifier.height(8.dp))

@@ -37,6 +37,7 @@ import com.rhodes.privatechat.ui.theme.TextPrimary
 import com.rhodes.privatechat.ui.theme.TextSecondary
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import org.koin.compose.koinInject
+import android.widget.Toast
 
 @Composable
 fun DailyContentSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
@@ -52,14 +53,16 @@ fun DailyContentSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier
         onBack = onBack,
         modifier = modifier.fillMaxSize().background(BG).systemBarsPadding(),
         icon = { Icon(Icons.Default.AutoAwesome, null, tint = Primary) },
-        onSaveRequest = { completeSave ->
+        onSaveRequest = { completeSave, _ ->
             completeSave()
-            DailyContentScheduler.rebuildTodayPlan(
+            DailyContentScheduler.rebuildTodayPlanAsync(
                 context = context,
                 repository = viewModel.repository,
                 settings = settings
-            )
-            viewModel.refreshAutoGroupChats()
+            ) { error ->
+                if (error != null) Toast.makeText(context, "设置已保存，$error，将在下次启动时重试。", Toast.LENGTH_LONG).show()
+                else viewModel.refreshAutoGroupChats()
+            }
         }
     ) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp).imePadding().navigationBarsPadding()) {

@@ -70,6 +70,7 @@ import coil3.compose.AsyncImage
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.ui.chat.component.ChatDropdownMenuItem
 import com.rhodes.privatechat.ui.chat.component.ChatHeader
+import com.rhodes.privatechat.ui.chat.component.ChatStatusDetails
 import com.rhodes.privatechat.ui.chat.component.ChatInputBar
 import com.rhodes.privatechat.ui.chat.component.MenuChip
 import com.rhodes.privatechat.ui.chat.component.MessageList
@@ -154,8 +155,17 @@ private fun cleanInnerThought(raw: String, operatorName: String): String? {
     var text = raw.trim()
         .removePrefix("```text").removePrefix("```txt").removePrefix("```")
         .removeSuffix("```").trim()
+    // Some providers still wrap a plain-text request in a small JSON envelope.
+    // Accept only readable text fields; never display the envelope itself.
+    if (text.startsWith("{") || text.startsWith("[")) {
+        val parsed = runCatching { innerThoughtJson.parseToJsonElement(text) }.getOrNull()
+        val obj = parsed as? JsonObject
+        text = listOf("thought", "innerThought", "inner_thought", "content", "text", "message")
+            .firstNotNullOfOrNull { key -> (obj?.get(key) as? JsonPrimitive)?.contentOrNull }
+            ?: text
+    }
     text = text.replace(
-        Regex("^(?:【(?:内心独白|心理活动)】|(?:内心独白|心理活动|内心|心理)\\s*[：:]|(?:以下是|这是)干员[^：:]*的内心(?:独白)?[：:])\\s*"),
+        Regex("^(?:【(?:内心独白|心理活动)】|(?:内心独白|心理活动|内心|心理)\\s*[：:]|(?:以下是|这是)干员[^：:]*的内心(?:独白)?[：:]|(?:thought|inner\\s*thoughts?)\\s*[：:])\\s*", RegexOption.IGNORE_CASE),
         ""
     ).trim().trim('"', '“', '”', '‘', '’').trim()
     if (text.isBlank() || text.length > 600) return null
@@ -378,9 +388,16 @@ fun ChatScreen(
                 avatarUri = displayOp.avatarUri,
                 mode = currentMode,
                 isLoading = isLoading,
-                subtitleText = privateTurnState?.let {
-                    privateTurnHeaderText(it.emotion, it.location, it.activity)
-                }.orEmpty(),
+                 subtitleText = privateTurnState?.let {
+                     privateTurnHeaderText(it.emotion, it.location, it.activity)
+                 }.orEmpty(),
+                 statusDetails = privateTurnState?.let {
+                     ChatStatusDetails(
+                         emotion = it.emotion,
+                         location = it.location,
+                         activity = it.activity,
+                     )
+                 },
                 onBack = onBack,
                 onModeClick = { showModePicker.value = true },
                 voiceEnabled = voiceEnabled,
@@ -836,7 +853,14 @@ ${recentChats.ifBlank { "暂无" }}
                                          val messages = if (attempt == 0) requestMessages else requestMessages + AiMessage(
                                              "user", "上一版不合格。请重写：只输出100~200字、当前干员的第一人称心理独白纯文本，不要标题、旁白、第三人称、JSON或任何解释。"
                                          )
-                                         val result = viewModel.sharedUtils.chat(messages, if (attempt == 0) "InnerThoughts" else "InnerThoughtsRetry")
+                                          val result = withTimeoutOrNull(45_000) {
+                                              viewModel.sharedUtils.chat(
+                                                  messages,
+                                                  if (attempt == 0) "InnerThoughts" else "InnerThoughtsRetry",
+                                                  maxOutputTokens = 300,
+                                                  temperature = 0.7
+                                              )
+                                          } ?: ""
                                          viewModel.sharedUtils.trackTokens("inner_monologue", messages, result)
                                          thought = cleanInnerThought(result, operatorName)
                                          if (thought != null) break

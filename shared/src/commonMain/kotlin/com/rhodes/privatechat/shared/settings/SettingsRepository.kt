@@ -123,10 +123,6 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putString("bg_uri", value)
 
     // === 聊天设置 ===
-    var dualModel: Boolean
-        get() = getBoolean("dual_model", true)
-        set(value) = putBoolean("dual_model", value)
-
     var debugLogEnabled: Boolean
         get() = getBoolean("debug_log_enabled", false)
         set(value) = putBoolean("debug_log_enabled", value)
@@ -707,6 +703,16 @@ class SettingsRepository(private val settings: ObservableSettings) {
     fun isKnowledgeBaseEnabled(surface: String): Boolean = getBoolean("knowledge_base_$surface", surface in setOf("private_chat", "group_chat"))
     fun setKnowledgeBaseEnabled(surface: String, enabled: Boolean) = putBoolean("knowledge_base_$surface", enabled)
 
+    fun isKnowledgeBaseEnabledForBook(knowledgeBaseId: String, surface: String): Boolean =
+        getBoolean("knowledge_base_surface_${knowledgeBaseId}_$surface", surface in setOf("private_chat", "group_chat"))
+
+    fun setKnowledgeBaseEnabledForBook(knowledgeBaseId: String, surface: String, enabled: Boolean) =
+        putBoolean("knowledge_base_surface_${knowledgeBaseId}_$surface", enabled)
+
+    fun clearKnowledgeBaseSurfaceSettings(knowledgeBaseId: String) {
+        listOf("private_chat", "group_chat", "moment", "comment", "diary").forEach { remove("knowledge_base_surface_${knowledgeBaseId}_$it") }
+    }
+
     var visionProvider: String
         get() = getString("vision_provider", "ali")
         set(value) = putString("vision_provider", value)
@@ -1010,8 +1016,8 @@ class SettingsRepository(private val settings: ObservableSettings) {
     fun resolvePromptTemplate(type: String, mode: String, defaultTemplate: String, defaultVersion: Int): String {
         val key = if (mode.isNotBlank()) "prompt_${type}_${mode}" else "prompt_$type"
         val saved = getString(key, "").orEmpty()
-        if (saved.isBlank()) return defaultTemplate
         if (getBoolean("${key}_custom", false)) return saved
+        if (saved.isBlank()) return defaultTemplate
         // A saved template without the custom marker is an old shipped default. Upgrade it so
         // protocol fixes reach users, while explicitly custom templates remain untouched.
         return if (getPromptTemplateVersion(type, mode) < defaultVersion) defaultTemplate else saved
@@ -1032,6 +1038,42 @@ class SettingsRepository(private val settings: ObservableSettings) {
         remove(key)
         remove(if (mode.isNotBlank()) "prompt_${type}_${mode}_version" else "prompt_${type}_version")
         remove("${key}_custom")
+    }
+
+    private fun promptModuleKey(module: String, type: String, mode: String): String =
+        if (mode.isBlank()) "prompt_${module}_${type}" else "prompt_${module}_${type}_${mode}"
+
+    fun getPromptModule(module: String, type: String, mode: String = ""): String =
+        getString(promptModuleKey(module, type, mode), "")
+
+    /**
+     * Returns null only when the module has never been customized. An empty string is a
+     * deliberate user configuration and must not fall back to the shipped default.
+     */
+    fun getCustomPromptModuleOrNull(module: String, type: String, mode: String = ""): String? =
+        getPromptModule(module, type, mode).takeIf { isPromptModuleCustom(module, type, mode) }
+
+    fun savePromptModule(module: String, type: String, mode: String, value: String, version: Int) {
+        val key = promptModuleKey(module, type, mode)
+        putString(key, value)
+        putBoolean("${key}_custom", true)
+        putPromptModuleVersion(module, type, mode, version)
+    }
+
+    fun isPromptModuleCustom(module: String, type: String, mode: String = ""): Boolean =
+        getBoolean("${promptModuleKey(module, type, mode)}_custom", false)
+
+    fun getPromptModuleVersion(module: String, type: String, mode: String = ""): Int =
+        getInt("${promptModuleKey(module, type, mode)}_version", 0)
+
+    fun putPromptModuleVersion(module: String, type: String, mode: String, version: Int) =
+        putInt("${promptModuleKey(module, type, mode)}_version", version)
+
+    fun removePromptModule(module: String, type: String, mode: String = "") {
+        val key = promptModuleKey(module, type, mode)
+        remove(key)
+        remove("${key}_custom")
+        remove("${key}_version")
     }
 
     fun getMomentCount(operatorId: String, date: String): Int =

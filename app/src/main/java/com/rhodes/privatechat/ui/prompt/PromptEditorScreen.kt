@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
@@ -64,6 +65,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.viewmodel.MainViewModel
+import com.rhodes.privatechat.viewmodel.shared.PromptTemplates
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -90,16 +92,22 @@ fun PromptEditorScreen(
     var privModeIdx by remember { mutableIntStateOf(0) }
     var grpModeIdx by remember { mutableIntStateOf(0) }
     var dispatchModeIdx by remember { mutableIntStateOf(0) }
+    var moduleIdx by remember { mutableIntStateOf(0) }
 
     val textMap = remember { mutableStateMapOf<String, TextFieldValue>() }
     val dirtyKeys = remember { mutableStateListOf<String>() }
+    val resetKeys = remember { mutableStateListOf<String>() }
     var showExitDialog by remember { mutableStateOf(false) }
 
     fun loadTemplate(type: String, mode: String) = viewModel.getPromptTemplate(type, mode)
 
+    fun currentModule(): String = if (tabIndex == 0 || tabIndex == 1) {
+        listOf("role", "protocol", "runtime")[moduleIdx]
+    } else "role"
+
     fun currentKey(): String = when (tabIndex) {
-        0 -> "private:${privModes[privModeIdx]}"
-        1 -> "group:${grpModes[grpModeIdx]}"
+        0 -> "private:${privModes[privModeIdx]}:${currentModule()}"
+        1 -> "group:${grpModes[grpModeIdx]}:${currentModule()}"
         2 -> "moment:"
         3 -> "moment_comment:"
         4 -> "diary:"
@@ -114,6 +122,12 @@ fun PromptEditorScreen(
         1 -> grpModes[grpModeIdx]
         5 -> dispatchModes[dispatchModeIdx]
         else -> ""
+    }
+
+    fun loadCurrentModule(): String = when (currentModule()) {
+        "protocol" -> viewModel.getPromptModule("protocol", currentType(), currentMode())
+        "runtime" -> viewModel.getPromptModule("runtime", currentType(), currentMode())
+        else -> loadTemplate(currentType(), currentMode())
     }
 
     fun criticalPlaceholders(type: String, mode: String): Set<String> = when (type) {
@@ -132,7 +146,7 @@ fun PromptEditorScreen(
     var textFieldValue by remember(key) {
         mutableStateOf(
             if (tabIndex < 6) {
-                textMap[key] ?: TextFieldValue(loadTemplate(currentType(), currentMode()))
+                textMap[key] ?: TextFieldValue(loadCurrentModule())
             } else {
                 TextFieldValue("")
             }
@@ -142,7 +156,17 @@ fun PromptEditorScreen(
     val saveCurrent: () -> Boolean = saveCurrent@{
         if (tabIndex < 6 && currentKey() in dirtyKeys) {
             textMap[currentKey()] = textFieldValue
-            val result = runCatching { viewModel.savePromptTemplate(currentType(), currentMode(), textFieldValue.text) }
+            if (currentKey() in resetKeys) {
+                if (currentModule() == "role") viewModel.resetPromptTemplate(currentType(), currentMode())
+                else viewModel.resetPromptModule(currentModule(), currentType(), currentMode())
+                resetKeys.remove(currentKey())
+                dirtyKeys.remove(currentKey())
+                return@saveCurrent true
+            }
+            val result = runCatching {
+                if (currentModule() == "role") viewModel.savePromptTemplate(currentType(), currentMode(), textFieldValue.text)
+                else viewModel.savePromptModule(currentModule(), currentType(), currentMode(), textFieldValue.text)
+            }
             if (result.isFailure) {
                 Toast.makeText(context, "保存失败：${result.exceptionOrNull()?.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
                 return@saveCurrent false
@@ -159,8 +183,10 @@ fun PromptEditorScreen(
         if (tabIndex < 6) textMap[currentKey()] = textFieldValue
         val editedTemplates = textMap.filterKeys { it in dirtyKeys }.toMap()
         val validationErrors = editedTemplates.flatMap { (templateKey, value) ->
-            viewModel.validatePromptTemplate(templateKey.substringBefore(":"), templateKey.substringAfter(":", ""), value.text)
+            val parts = templateKey.split(":")
+            if (parts.getOrNull(2) == "role") viewModel.validatePromptTemplate(parts[0], parts.getOrNull(1).orEmpty(), value.text)
                 .map { "$templateKey：$it" }
+            else emptyList()
         }
         if (validationErrors.isNotEmpty()) {
             Toast.makeText(context, validationErrors.joinToString("\n"), Toast.LENGTH_LONG).show()
@@ -168,9 +194,18 @@ fun PromptEditorScreen(
         }
         val warnings = mutableListOf<String>()
         for ((templateKey, value) in editedTemplates) {
-            val type = templateKey.substringBefore(":")
-            val mode = templateKey.substringAfter(":", "")
-            val result = runCatching { viewModel.savePromptTemplate(type, mode, value.text) }
+            val parts = templateKey.split(":")
+            val type = parts[0]
+            val mode = parts.getOrNull(1).orEmpty()
+            val module = parts.getOrNull(2).orEmpty().ifBlank { "role" }
+            val result = runCatching {
+                if (templateKey in resetKeys) {
+                    if (module == "role") viewModel.resetPromptTemplate(type, mode)
+                    else viewModel.resetPromptModule(module, type, mode)
+                    emptyList()
+                } else if (module == "role") viewModel.savePromptTemplate(type, mode, value.text)
+                else viewModel.savePromptModule(module, type, mode, value.text)
+            }
             if (result.isFailure) {
                 Toast.makeText(context, "保存失败：${result.exceptionOrNull()?.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
                 return@saveAllEdited false
@@ -178,6 +213,7 @@ fun PromptEditorScreen(
             warnings += result.getOrThrow()
         }
         dirtyKeys.clear()
+        resetKeys.clear()
         if (warnings.isNotEmpty()) {
             android.widget.Toast.makeText(context, warnings.distinct().joinToString("\n"), android.widget.Toast.LENGTH_LONG).show()
         }
@@ -192,6 +228,7 @@ fun PromptEditorScreen(
 
     var showResetDialog by remember { mutableStateOf(false) }
     var showHelpDialog by remember { mutableStateOf(false) }
+    var showStructureDialog by remember { mutableStateOf(false) }
 
     val allPlaceholders = listOf(
         "{{OPERATOR_NAME}}" to "干员名称",
@@ -219,6 +256,7 @@ fun PromptEditorScreen(
         "{{PROACTIVE_UNRESOLVED_TOPIC}}" to "明确未回应的问题；无则为无",
         "{{PROACTIVE_RECENT_HISTORY}}" to "最近带时间戳的聊天记录，仅用于核对事实",
         "{{OPERATOR_GENDER}}" to "干员性别设定",
+        "{{COMMENTER_GENDER}}" to "评论者性别设定",
         "{{MEMORY_INJECTION}}" to "系统自动注入的记忆上下文（每日摘要/对话摘要/长期印象/锚点/共享记忆）",
         "{{MEMORY_V2_CONTEXT}}" to "当前角色可用的记忆与共同经历；无相关记忆时为空",
         "{{USER_CONTENT}}" to "用户本轮内容；私聊通常由应用单独附加",
@@ -417,6 +455,22 @@ fun PromptEditorScreen(
             }
         }
 
+        if (tabIndex == 0 || tabIndex == 1) {
+            HorizontalDivider(color = Divider)
+            TabRow(selectedTabIndex = moduleIdx, containerColor = Surface, contentColor = Blue400) {
+                listOf("角色规则", "输出协议", "运行时资料").forEachIndexed { i, label ->
+                    Tab(
+                        selected = moduleIdx == i,
+                        onClick = {
+                            textMap[currentKey()] = textFieldValue
+                            moduleIdx = i
+                        },
+                        text = { Text(label, fontWeight = if (moduleIdx == i) FontWeight.SemiBold else FontWeight.Normal) }
+                    )
+                }
+            }
+        }
+
         Column(modifier = Modifier.weight(1f).imePadding()) {
         if (tabIndex < 6) {
             Column(
@@ -425,34 +479,45 @@ fun PromptEditorScreen(
                     .padding(12.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                val isCustom = viewModel.isPromptTemplateCustom(currentType(), currentMode())
+                 val persistedCustom = if (currentModule() == "role") viewModel.isPromptTemplateCustom(currentType(), currentMode())
+                 else viewModel.isPromptModuleCustom(currentModule(), currentType(), currentMode())
+                 val isDirty = currentKey() in dirtyKeys
+                 val isCustom = persistedCustom || isDirty
                 val missingCritical = criticalPlaceholders(currentType(), currentMode())
                     .filter { "{{$it}}" !in textFieldValue.text }
-                Card(colors = CardDefaults.cardColors(containerColor = Blue400.copy(alpha = 0.08f))) {
-                    Column(Modifier.padding(12.dp)) {
+                 Card(colors = CardDefaults.cardColors(containerColor = Blue400.copy(alpha = 0.08f))) {
+                     Column(Modifier.padding(12.dp)) {
                         Text(
-                            if (isCustom) "你正在使用自己的模板" else "你正在使用系统默认模板",
+                             if (isDirty) "有未保存的模板修改" else if (isCustom) "你正在使用自己的模板" else "你正在使用系统默认模板",
                             fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = TextPrimary
                         )
                         Spacer(Modifier.height(4.dp))
+                         Text(
+                             when {
+                                 isDirty -> "当前编辑内容尚未保存。点击保存后，系统将按你编辑的内容使用，不会自动恢复默认模板。"
+                                 currentModule() == "runtime" && isCustom -> "运行时资料会按你保存的内容生成。本编辑框不是完整的最终请求；用户消息、历史消息和群聊必要资料仍由应用单独组装。"
+                                 currentModule() == "protocol" && isCustom -> "输出协议会按你保存的内容追加到本轮请求。你可以自由改写格式，程序只会尽量解析模型输出。"
+                                 isCustom -> "你可以编辑角色性格、语气、世界观和互动偏好。系统固定规则、运行时资料、历史消息和输出协议仍由应用自动加入；本编辑框不是完整的最终请求。"
+                                 else -> "这里显示的是角色规则模板，不是完整的最终请求。系统固定规则、时间、记忆、历史消息和本轮输入会在每次聊天时由应用自动组装。"
+                             },
+                             fontSize = 11.sp,
+                             color = TextSecondary,
+                             lineHeight = 16.sp
+                         )
+                        Spacer(Modifier.height(8.dp))
                         Text(
-                            if (isCustom) {
-                "你可以自由编写角色、语气、剧情和互动偏好。系统仍会加入安全基础规则、当前上下文与固定回复协议；JSON、XML、Markdown或自定义标签允许保存，但可能与固定协议冲突并触发修复或重试。"
-                            } else {
-                "系统默认模板已做连续聊天优化：固定规则会尽量复用，时间、记忆和本轮消息会按系统方式补充。自定义模板用于补充角色规则，固定回复协议仍由系统处理。"
-                            },
-                            fontSize = 11.sp,
-                            color = TextSecondary,
-                            lineHeight = 16.sp
+                             "模板版本 v${PromptTemplates.VERSION} · ${if (isDirty) "有未保存修改" else if (isCustom) "当前为自定义模板" else "当前为系统默认模板"} · ${if (currentModule() == "runtime") "本模块进入 user 消息" else "本模块进入 system 消息"}",
+                            fontSize = 10.sp,
+                            color = TextTertiary
                         )
                     }
                 }
                 Spacer(Modifier.height(8.dp))
                 // Shipped templates receive the current user message outside the template.
                 // Only warn when a user-authored template deliberately omits critical context.
-                if (isCustom && missingCritical.isNotEmpty()) {
+                if (currentModule() == "role" && isCustom && missingCritical.isNotEmpty()) {
                     Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFFF9500).copy(alpha = 0.10f))) {
                         Text(
                             "提醒：当前模板没有 ${missingCritical.joinToString { "{{$it}}" }}。保存后相关信息可能不会传给模型，聊天效果可能变差。你仍可保存，但建议确认这是有意修改。",
@@ -464,13 +529,13 @@ fun PromptEditorScreen(
                     }
                     Spacer(Modifier.height(8.dp))
                 }
-                if (tabIndex == 0) {
+                if (tabIndex == 0 && currentModule() == "role") {
                     Card(colors = CardDefaults.cardColors(containerColor = Blue400.copy(alpha = 0.08f))) {
                         Column(Modifier.padding(12.dp)) {
                             Text("基础回复规则始终生效", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                "系统会优先理解并回应用户当前真正想表达的内容。固定协议：线上为【状态】【心情】【位置】【本轮简述】【台词】；线下/导演额外包含【旁白】。\n\n你可以编辑角色性格、语气、世界观和互动风格。JSON、XML、Markdown和自定义标签允许使用，但可能与固定协议冲突。",
+                                "系统会优先理解并回应用户当前真正想表达的内容。固定协议：线上为【状态】【心情】【位置】【本轮简述】【台词】；线下/导演额外包含【旁白】。\n\n这里的模板只负责角色规则。输出协议、历史消息、运行时资料和本轮输入由应用自动组装；不要在模板中尝试替换系统协议。",
                                 fontSize = 11.sp,
                                 color = TextSecondary,
                                 lineHeight = 16.sp
@@ -479,13 +544,13 @@ fun PromptEditorScreen(
                     }
                     Spacer(Modifier.height(8.dp))
                 }
-                if (tabIndex == 1) {
+                if (tabIndex == 1 && currentModule() == "role") {
                     Card(colors = CardDefaults.cardColors(containerColor = Blue400.copy(alpha = 0.08f))) {
                         Column(Modifier.padding(12.dp)) {
                             Text("群聊回复规则始终生效", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                "系统会限制当前模式的旁白规则、成员发言次数和消息字数。固定协议使用【本轮剧情简述】、【旁白】和【发言人: operator_id】。你可以编辑群聊氛围、成员关系和世界观；自定义格式允许保存，但可能触发结构修复。",
+                                "系统会限制当前模式的旁白规则、成员发言次数和消息字数。固定协议使用【本轮剧情简述】、【旁白】和【发言人: operator_id】。这里的模板只负责群聊氛围、关系和世界观；成员资料、历史消息和当前任务由应用自动组装。",
                                 fontSize = 11.sp,
                                 color = TextSecondary,
                                 lineHeight = 16.sp
@@ -494,12 +559,42 @@ fun PromptEditorScreen(
                     }
                     Spacer(Modifier.height(8.dp))
                 }
+                OutlinedButton(
+                    onClick = { showStructureDialog = true },
+                    modifier = Modifier.fillMaxWidth().height(38.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Blue400)
+                ) {
+                    Text("查看本场景的请求结构", fontSize = 12.sp)
+                }
+                Spacer(Modifier.height(8.dp))
+                 if (currentModule() != "role") {
+                     Text(
+                         if (currentModule() == "protocol") "输出协议是自由文本。可以删除、新增或改写标签；程序会尽量解析可识别内容，无法解析时仍会保留可读回复。"
+                         else "运行时资料模板是自由文本。可以调整资料顺序、说明和占位符；只要保存过自定义内容，系统就不会自动恢复默认模板。未知占位符只会产生警告。内容清空并保存后，本场景不会发送这部分资料；如需恢复系统资料，请点击“恢复默认”。",
+                         fontSize = 11.sp,
+                         color = TextSecondary,
+                         lineHeight = 16.sp,
+                         modifier = Modifier.padding(bottom = 8.dp)
+                     )
+                 }
+                 if (currentModule() == "runtime" && textFieldValue.text.isEmpty()) {
+                     Card(colors = CardDefaults.cardColors(containerColor = Blue400.copy(alpha = 0.08f))) {
+                         Text(
+                             "当前内容为空。保存后不会自动恢复默认运行时资料。",
+                             fontSize = 11.sp,
+                             color = TextSecondary,
+                             modifier = Modifier.padding(12.dp)
+                         )
+                     }
+                     Spacer(Modifier.height(8.dp))
+                 }
                 OutlinedTextField(
                     value = textFieldValue,
-                    onValueChange = {
-                        textFieldValue = it
-                        if (currentKey() !in dirtyKeys) dirtyKeys += currentKey()
-                    },
+                     onValueChange = {
+                         textFieldValue = it
+                         resetKeys.remove(currentKey())
+                         if (currentKey() !in dirtyKeys) dirtyKeys += currentKey()
+                     },
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 360.dp)
@@ -523,8 +618,9 @@ fun PromptEditorScreen(
                         onClick = {
                             val clip = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
                             clip?.primaryClip?.getItemAt(0)?.text?.toString()?.let {
-                                textFieldValue = TextFieldValue(it)
-                                if (currentKey() !in dirtyKeys) dirtyKeys += currentKey()
+                                 textFieldValue = TextFieldValue(it)
+                                 resetKeys.remove(currentKey())
+                                 if (currentKey() !in dirtyKeys) dirtyKeys += currentKey()
                             }
                         },
                         modifier = Modifier.height(32.dp),
@@ -565,29 +661,12 @@ fun PromptEditorScreen(
                     .padding(12.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                val allowed = PromptPlaceholderRegistry.allowed(currentType(), currentMode())
-                val recommended = PromptPlaceholderRegistry.recommended(currentType(), currentMode())
-                allPlaceholders.distinctBy { it.first }.filter { (key, _) -> key.removePrefix("{{").removeSuffix("}}") in allowed }
-                    .sortedBy { (key, _) -> if (key.removePrefix("{{").removeSuffix("}}") in recommended) 0 else 1 }
-                    .forEach { (key, desc) ->
-                    Row(
-                        modifier = Modifier.padding(vertical = 6.dp),
-                        verticalAlignment = Alignment.Top
-                    ) {
-                        Text(
-                            key,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Blue400,
-                            modifier = Modifier.width(200.dp)
-                        )
-                        Text(
-                            if (key.removePrefix("{{").removeSuffix("}}") in recommended) "$desc（推荐使用）" else "$desc（当前可用；部分场景可能为空）",
-                            fontSize = 13.sp,
-                            color = TextSecondary
-                        )
-                    }
-                }
+                HelpContent(
+                    type = currentType(),
+                    mode = currentMode(),
+                    placeholders = allPlaceholders,
+                    onStructure = { showStructureDialog = true }
+                )
             }
         }
     }
@@ -607,10 +686,14 @@ fun PromptEditorScreen(
             text = { Text("确定要将「${resetLabel}」恢复为系统默认模板吗？你自己编辑过的内容会丢失。恢复后会重新使用系统的连续聊天优化模板。", fontSize = 14.sp, color = TextSecondary) },
             confirmButton = {
                 TextButton(onClick = {
-                    val fresh = TextFieldValue(viewModel.getDefaultPromptTemplate(currentType(), currentMode()))
+                    val fresh = TextFieldValue(
+                        if (currentModule() == "role") viewModel.getDefaultPromptTemplate(currentType(), currentMode())
+                        else viewModel.getDefaultPromptModule(currentModule(), currentType(), currentMode())
+                    )
                     textMap[currentKey()] = fresh
                     textFieldValue = fresh
                     if (currentKey() !in dirtyKeys) dirtyKeys += currentKey()
+                    if (currentKey() !in resetKeys) resetKeys += currentKey()
                     showResetDialog = false
                 }) { Text("确定", color = Color(0xFFFF9500), fontWeight = FontWeight.SemiBold) }
             },
@@ -647,32 +730,34 @@ fun PromptEditorScreen(
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     Text(
-                        "每个模式都有独立模板。模板用于补充角色与剧情规则；系统仍会追加安全规则、动态上下文和固定输出协议。JSON、XML、Markdown和自定义标签允许保存，但可能导致回复被修复或重试。私聊用户本轮消息由应用单独发送；{{USER_MESSAGE}} 是群聊用户最新发言。占位符必须使用 {{大写英文_数字}} 格式，错误或不适用的占位符不能保存。",
+                        "每个模式都有独立的角色规则模板。模板不是发送给 AI 的全部内容：应用还会自动加入系统固定规则、运行时资料、历史 user/assistant 消息、本轮输入和输出协议。私聊用户本轮消息通常单独作为 user 消息发送；{{USER_MESSAGE}} 是群聊用户最新发言。占位符必须使用 {{大写英文_数字}} 格式，错误或不适用的占位符不能保存。",
                         fontSize = 13.sp,
                         color = TextSecondary,
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
-                    val allowed = PromptPlaceholderRegistry.allowed(currentType(), currentMode())
-                    val recommended = PromptPlaceholderRegistry.recommended(currentType(), currentMode())
-                    allPlaceholders.distinctBy { it.first }.filter { (key, _) -> key.removePrefix("{{").removeSuffix("}}") in allowed }
-                        .sortedBy { (key, _) -> if (key.removePrefix("{{").removeSuffix("}}") in recommended) 0 else 1 }
-                        .forEach { (key, desc) ->
-                        Row(
-                            modifier = Modifier.padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.Top
-                        ) {
-                            Text(
-                                key,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Blue400,
-                                modifier = Modifier.width(170.dp)
-                            )
-                            Text(
-                                if (key.removePrefix("{{").removeSuffix("}}") in recommended) "$desc（推荐使用）" else "$desc（当前可用；部分场景可能为空）",
-                                fontSize = 13.sp,
-                                color = TextSecondary
-                            )
+                    if (currentType() != "help") {
+                        val allowed = PromptPlaceholderRegistry.allowed(currentType(), currentMode())
+                        val recommended = PromptPlaceholderRegistry.recommended(currentType(), currentMode())
+                        allPlaceholders.distinctBy { it.first }.filter { (key, _) -> key.removePrefix("{{").removeSuffix("}}") in allowed }
+                            .sortedBy { (key, _) -> if (key.removePrefix("{{").removeSuffix("}}") in recommended) 0 else 1 }
+                            .forEach { (key, desc) ->
+                            Row(
+                                modifier = Modifier.padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.Top
+                            ) {
+                                Text(
+                                    key,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Blue400,
+                                    modifier = Modifier.width(170.dp)
+                                )
+                                Text(
+                                    if (key.removePrefix("{{").removeSuffix("}}") in recommended) "$desc（推荐使用）" else "$desc（当前可用；部分场景可能为空）",
+                                    fontSize = 13.sp,
+                                    color = TextSecondary
+                                )
+                            }
                         }
                     }
                 }
@@ -684,4 +769,133 @@ fun PromptEditorScreen(
             }
         )
     }
+
+    if (showStructureDialog) {
+        val preview = promptStructurePreview(currentType(), currentMode())
+        AlertDialog(
+            onDismissRequest = { showStructureDialog = false },
+            title = { Text("${tabs[tabIndex]} · ${modeDisplayName(currentType(), currentMode())} 请求结构") },
+            text = {
+                SelectionContainer {
+                    Column(Modifier.verticalScroll(rememberScrollState())) {
+                        Text("这是结构示例，不是当前真实聊天的一轮请求。真实资料、历史和用户输入会在发送时动态生成。", fontSize = 12.sp, color = TextSecondary)
+                        Spacer(Modifier.height(10.dp))
+                        preview.forEach { (title, body, editable) ->
+                            Text(title + if (editable) "  · 可编辑" else "  · 只读", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = if (editable) Blue400 else TextPrimary)
+                            Text(body, fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, modifier = Modifier.padding(top = 4.dp, bottom = 10.dp))
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showStructureDialog = false }) { Text("知道了", color = Primary) } }
+        )
+    }
+}
+
+@Composable
+private fun HelpContent(
+    type: String,
+    mode: String,
+    placeholders: List<Pair<String, String>>,
+    onStructure: () -> Unit
+) {
+    Text("这个页面编辑的是角色规则模板，不是完整最终提示词。", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+    Spacer(Modifier.height(6.dp))
+    Text("实际请求由多个消息模块组成：system 规则、user 运行时资料、历史 user/assistant 消息，以及本轮 user 输入。你可以修改角色规则，但其他模块由应用根据当前聊天自动生成。", fontSize = 13.sp, color = TextSecondary, lineHeight = 18.sp)
+    Spacer(Modifier.height(10.dp))
+    OutlinedButton(onClick = onStructure, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.outlinedButtonColors(contentColor = Blue400)) {
+        Text("查看当前场景请求结构")
+    }
+    Spacer(Modifier.height(14.dp))
+    Text("占位符分层", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+    Spacer(Modifier.height(4.dp))
+    Text("稳定的角色信息通常进入 system；时间、记忆、摘要等易变资料通常进入 user 资料；本轮消息通常由应用单独追加。", fontSize = 12.sp, color = TextSecondary, lineHeight = 17.sp)
+    Spacer(Modifier.height(8.dp))
+    val isGeneralHelp = type == "help"
+    val allowed = if (isGeneralHelp) {
+        placeholders.map { keyName(it.first) }.toSet()
+    } else PromptPlaceholderRegistry.allowed(type, mode)
+    val recommended = if (isGeneralHelp) emptySet() else PromptPlaceholderRegistry.recommended(type, mode)
+    val runtime = if (isGeneralHelp) {
+        listOf(
+            "private" to "online", "private" to "offline", "private" to "director", "private" to "proactive",
+            "group" to "online", "group" to "offline", "group" to "director", "group" to "auto",
+            "moment" to "", "moment_comment" to "", "diary" to ""
+        ).flatMap { (surface, surfaceMode) -> PromptPlaceholderRegistry.runtimeKeys(surface, surfaceMode).toList() }.toSet()
+    } else PromptPlaceholderRegistry.runtimeKeys(type, mode)
+    placeholders.distinctBy { it.first }
+        .filter { (key, _) -> key.removePrefix("{{").removeSuffix("}}") in allowed }
+        .sortedWith(compareBy({ layerOrder(keyName(it.first), runtime) }, { it.first }))
+        .forEach { (key, desc) ->
+            val name = keyName(key)
+            Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.Top) {
+                Text(key, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Blue400, modifier = Modifier.width(170.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(desc, fontSize = 12.sp, color = TextSecondary)
+                    Text("${placeholderLayer(name, runtime)}${if (name in recommended) " · 推荐" else ""}", fontSize = 10.sp, color = TextTertiary)
+                }
+            }
+        }
+}
+
+private fun keyName(value: String): String = value.removePrefix("{{").removeSuffix("}}")
+
+private fun placeholderLayer(name: String, runtime: Set<String>): String = when {
+    name == "USER_CONTENT" || name == "USER_MESSAGE" -> "本轮 user 输入/任务"
+    name in runtime -> "运行时 user 资料"
+    else -> "稳定 system 模板"
+}
+
+private fun layerOrder(name: String, runtime: Set<String>): Int = when {
+    name == "USER_CONTENT" || name == "USER_MESSAGE" -> 2
+    name in runtime -> 1
+    else -> 0
+}
+
+private fun modeDisplayName(type: String, mode: String): String = when {
+    type == "private" -> mapOf("online" to "线上模式", "offline" to "线下模式", "director" to "导演模式", "proactive" to "主动消息")[mode] ?: mode
+    type == "group" -> mapOf("online" to "线上模式", "offline" to "线下模式", "director" to "导演模式", "auto" to "自动群聊")[mode] ?: mode
+    type == "dispatch" -> mapOf("start" to "开局", "progress" to "过程", "ending" to "结局")[mode] ?: mode
+    else -> "默认"
+}
+
+private fun promptStructurePreview(type: String, mode: String): List<Triple<String, String, Boolean>> {
+    if (type == "help") {
+        return listOf(
+            Triple("system · 固定规则", "应用始终追加的行为边界、场景连续性、安全规则和输出协议。", false),
+            Triple("system · 角色规则模板", "用户在私聊/群聊/动态等场景编辑的角色规则模板。", true),
+            Triple("user · 运行时资料", "当前时间、状态、记忆、摘要、群聊主线、成员资料和知识库内容。", false),
+            Triple("user/assistant · 历史消息", "从真实聊天记录中按历史条数和上下文上限自动裁剪。", false),
+            Triple("user · 本轮输入", "当前用户消息或本轮自动任务，由应用在发送前自动追加。", false)
+        )
+    }
+    val role = if (type == "group") "群聊角色规则模板" else "角色规则模板"
+    if (type == "dispatch") {
+        return listOf(
+            Triple("system · 派遣模板", "派遣模板、任务参数、成员档案和输出协议会合并为一条 system 消息。", true),
+            Triple("输出协议", "开局/过程：直接输出叙事文本。\n结局：输出规定的 JSON 结果。", false)
+        )
+    }
+    val output = when {
+        type == "private" -> "【状态】...\n【心情】...\n【位置】...\n【本轮简述】...\n【台词】...\n（线下/导演模式还会要求【旁白】）"
+        type == "group" -> "【本轮剧情简述】...\n【发言人: operator_id】\n角色台词\n（线下/导演模式可有【旁白】）"
+        type == "moment" -> "动态纯文本"
+        type == "moment_comment" -> "评论纯文本"
+        type == "diary" -> "第一人称日记纯文本"
+        else -> "按当前任务模板输出"
+    }
+    val runtime = when {
+        type == "private" -> "【当前时间】...\n【上一轮互动状态】...\n【相关记忆】...\n【聊天摘要】..."
+        type == "group" -> "【当前时间】...\n【当前群聊主线】...\n【成员资料】...\n【群聊记忆】..."
+        type == "diary" -> "【昨天私聊事实】...\n【昨天群聊事实】...\n【近期背景】..."
+        else -> "【本轮背景资料】...\n【相关记忆】...\n【任务参数】..."
+    }
+    return listOf(
+        Triple("system · 固定规则", "由应用追加的行为边界、场景规则和安全规则。默认只读。", false),
+        Triple("system · $role", "当前编辑框中的模板。占位符会按稳定/运行时分类处理。", true),
+        Triple("user · 运行时资料", runtime, false),
+        Triple("user/assistant · 历史消息", "[user] 用户上一轮消息\n[assistant] 角色上一轮回复\n（按历史轮数和上下文上限自动裁剪）", false),
+        Triple("user · 本轮输入", "【用户本轮消息】\n用户：示例消息\n（自动追加，不需要写入角色模板）", false),
+        Triple("输出协议", output, false)
+    )
 }

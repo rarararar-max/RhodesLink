@@ -17,6 +17,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,23 +50,30 @@ fun KnowledgeBaseDetailScreen(
     val settings: SettingsRepository = koinInject()
     var book by remember { mutableStateOf<KnowledgeBase?>(null) }
     var chunkCount by remember { mutableStateOf(0) }
+    var enabledChunkCount by remember { mutableStateOf(0) }
     var roleCount by remember { mutableStateOf(0) }
     var deleting by remember { mutableStateOf(false) }
     var confirmRemoteIndex by remember { mutableStateOf(false) }
     var indexing by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
+    var enabledSurfaces by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
     val scope = rememberCoroutineScope()
-    LaunchedEffect(knowledgeBaseId) {
+    val assignmentRevision by viewModel.knowledgeBaseAssignmentRevision.collectAsState()
+    LaunchedEffect(knowledgeBaseId, assignmentRevision) {
         book = viewModel.getKnowledgeBase(knowledgeBaseId)
-        chunkCount = viewModel.getKnowledgeBaseChunks(knowledgeBaseId).size
+        val chunks = viewModel.getKnowledgeBaseChunks(knowledgeBaseId)
+        chunkCount = chunks.size
+        enabledChunkCount = chunks.count { it.enabled }
         roleCount = viewModel.getKnowledgeBaseAssignmentsForBook(knowledgeBaseId).count { it.enabled }
+        enabledSurfaces = listOf("private_chat", "group_chat", "moment", "comment", "diary").associateWith { settings.isKnowledgeBaseEnabledForBook(knowledgeBaseId, it) }
     }
     val current = book ?: return
     SaveableSettingsScaffold("知识库详情", onBack, Modifier.fillMaxSize().background(BG), showSave = false) {
         Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
             Text(current.name, fontSize = 22.sp, color = TextPrimary)
-            Text("${current.rawContent.length} 字 · $chunkCount 个分段 · 已关联 $roleCount 个角色", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 4.dp))
-            Text("索引状态：${indexStatusText(current.indexStatus)}", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 4.dp))
+            Text("${current.rawContent.length} 字 · $chunkCount 个分段 · $enabledChunkCount 个使用中 · 已关联 $roleCount 个角色", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 4.dp))
+            Text("索引状态：${if (enabledChunkCount == 0) "没有可用分段" else indexStatusText(current.indexStatus)}", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 4.dp))
+            if (current.indexStatus == "pending") Text("内容已变更，需要重新索引后才能参与生成。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 4.dp))
             DetailRow(if (indexing) "正在索引" else "开始/重建索引", if (settings.vectorProviderMode == "third_party") "远程模式会使用当前配置发起向量请求" else "使用当前本地向量模型建立索引", {
                 if (indexing) return@DetailRow
                 if (settings.vectorProviderMode == "third_party") confirmRemoteIndex = true
@@ -79,11 +87,16 @@ fun KnowledgeBaseDetailScreen(
                 }
             })
             if (message.isNotBlank()) Text(message, fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 4.dp))
-            Text("知识库使用范围", fontSize = 14.sp, color = TextPrimary, modifier = Modifier.padding(top = 12.dp))
+            Text("此知识库适用场景", fontSize = 14.sp, color = TextPrimary, modifier = Modifier.padding(top = 12.dp))
+            Text("仅当角色关联此知识库且当前场景已启用时，资料才会参与生成。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 4.dp))
             listOf("private_chat" to "私聊", "group_chat" to "群聊", "moment" to "动态", "comment" to "评论", "diary" to "日记").forEach { (surface, label) ->
                 Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(label, Modifier.weight(1f), color = TextPrimary)
-                    Switch(settings.isKnowledgeBaseEnabled(surface), { settings.setKnowledgeBaseEnabled(surface, it) })
+                    Switch(enabledSurfaces[surface] == true, { enabled ->
+                        enabledSurfaces = enabledSurfaces + (surface to enabled)
+                        settings.setKnowledgeBaseEnabledForBook(current.id, surface, enabled)
+                        settings.saveDraft()
+                    })
                 }
             }
             DetailRow("编辑名称和正文", "修改正文后会重新分段并需要重新索引", onEdit)
@@ -95,7 +108,7 @@ fun KnowledgeBaseDetailScreen(
     if (deleting) AlertDialog(
         onDismissRequest = { deleting = false }, title = { Text("永久删除知识库") },
         text = { Text("将永久删除《${current.name}》及其 $chunkCount 个分段、索引和 $roleCount 个角色关联，无法恢复。") },
-        confirmButton = { TextButton(onClick = { scope.launch { runCatching { viewModel.deleteKnowledgeBase(current.id) }.onSuccess { onBack() }; deleting = false } }) { Text("永久删除", color = ErrorRed) } },
+        confirmButton = { TextButton(onClick = { scope.launch { runCatching { viewModel.deleteKnowledgeBase(current.id) }.onSuccess { onBack() }.onFailure { message = "删除失败：${it.message ?: "未知错误"}"; deleting = false } } }) { Text("永久删除", color = ErrorRed) } },
         dismissButton = { TextButton(onClick = { deleting = false }) { Text("取消") } }
     )
     if (confirmRemoteIndex) AlertDialog(

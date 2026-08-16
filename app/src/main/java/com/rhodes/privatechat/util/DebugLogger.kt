@@ -113,6 +113,11 @@ object DebugLogger {
         }
     }
 
+    /** Records the exact normalized result written to the local chat database. */
+    fun traceFinalSaved(surface: String, roundId: String, content: String) {
+        trace("AI/✓$surface#$roundId", "【最终保存内容】\n$content")
+    }
+
     fun getLogs(): List<LogEntry> = synchronized(lock) { entries.toList() }
 
     fun getLogText(): String = synchronized(lock) {

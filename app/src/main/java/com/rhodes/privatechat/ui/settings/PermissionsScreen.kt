@@ -22,6 +22,7 @@ import com.rhodes.privatechat.data.db.entity.ChatSessionEntity
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.viewmodel.MainViewModel
+import com.rhodes.privatechat.automation.DailyContentScheduler
 import org.koin.compose.koinInject
 
 @Composable
@@ -38,21 +39,25 @@ fun PermissionsScreen(
     var tabIndex by remember { mutableIntStateOf(0) }
     var pendingDeletionIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf(false) }
     var finishSave by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var cancelSave by remember { mutableStateOf<(() -> Unit)?>(null) }
 
     SaveableSettingsScaffold(
         title = "权限管理",
         onBack = onBack,
         modifier = modifier.fillMaxSize().background(BG).systemBarsPadding(),
         icon = { Icon(Icons.Default.Build, null, tint = Primary) },
-        onSaveRequest = { completeSave ->
+        onSaveRequest = { completeSave, cancel ->
             val finish = {
                 completeSave()
                 viewModel.refreshAutoGroupChats()
             }
+            if (deleting) return@SaveableSettingsScaffold
             if (pendingDeletionIds.isEmpty()) finish()
             else {
                 finishSave = finish
+                cancelSave = cancel
                 showDeleteConfirm = true
             }
         }
@@ -72,23 +77,32 @@ fun PermissionsScreen(
 
     if (showDeleteConfirm) {
         AlertDialog(
-            onDismissRequest = { showDeleteConfirm = false },
+            onDismissRequest = { if (!deleting) { showDeleteConfirm = false; cancelSave?.invoke(); cancelSave = null } },
             title = { Text("确认删除干员", color = TextPrimary) },
             text = { Text("已勾选删除 ${pendingDeletionIds.size} 个干员。将同时删除这些干员的私聊、记忆、关系、动态和相关数据，此操作无法恢复。是否确认？", color = TextSecondary) },
             confirmButton = {
-                TextButton(onClick = {
-                    showDeleteConfirm = false
-                    viewModel.deleteOperators(pendingDeletionIds) { error ->
+                TextButton(enabled = !deleting, onClick = {
+                    val deletingIds = pendingDeletionIds
+                    deleting = true
+                    viewModel.deleteOperators(deletingIds) { error ->
+                        deleting = false
                         if (error == null) {
+                            DailyContentScheduler.cancelTodayPlanForOperators(context, deletingIds)
+                            pendingDeletionIds = emptySet()
+                            showDeleteConfirm = false
                             finishSave?.invoke()
                             finishSave = null
+                            cancelSave = null
                         } else {
+                            showDeleteConfirm = false
+                            cancelSave?.invoke()
+                            cancelSave = null
                             android.widget.Toast.makeText(context, error, android.widget.Toast.LENGTH_LONG).show()
                         }
                     }
-                }) { Text("确认删除", color = ErrorRed) }
+                }) { Text(if (deleting) "正在删除..." else "确认删除", color = ErrorRed) }
             },
-            dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("取消", color = TextSecondary) } }
+            dismissButton = { TextButton(enabled = !deleting, onClick = { showDeleteConfirm = false; cancelSave?.invoke(); cancelSave = null }) { Text("取消", color = TextSecondary) } }
         )
     }
 }

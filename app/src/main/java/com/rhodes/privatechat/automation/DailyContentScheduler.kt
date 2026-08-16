@@ -12,6 +12,10 @@ import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.shared.settings.SettingsRepository
+import com.rhodes.privatechat.util.DebugLogger
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.util.Calendar
 import java.util.TimeZone
@@ -79,6 +83,32 @@ object DailyContentScheduler {
         }
         settings.remove("daily_content_planned_$cycle")
         ensureTodayPlan(context, repository, settings)
+    }
+
+    /** Settings must not fail just because a best-effort background plan rebuild fails. */
+    fun rebuildTodayPlanAsync(context: Context, repository: ChatRepository, settings: SettingsRepository, onComplete: (String?) -> Unit = {}) {
+        CoroutineScope(Dispatchers.IO).launch {
+            val error = runCatching { rebuildTodayPlan(context.applicationContext, repository, settings) }
+                .exceptionOrNull()
+                ?.let { "自动计划重建失败：${it.message?.take(80) ?: it.javaClass.simpleName}" }
+            if (error != null) DebugLogger.diagnostic("DailyContent/RebuildFailed", error)
+            kotlinx.coroutines.withContext(Dispatchers.Main.immediate) { onComplete(error) }
+        }
+    }
+
+    fun cancelTodayPlanForOperators(context: Context, operatorIds: Collection<String>, onComplete: () -> Unit = {}) {
+        if (operatorIds.isEmpty()) { onComplete(); return }
+        CoroutineScope(Dispatchers.IO).launch {
+            runCatching {
+                val cycle = cycleId()
+                val workManager = WorkManager.getInstance(context.applicationContext)
+                operatorIds.forEach { operatorId ->
+                    repeat(3) { index -> workManager.cancelUniqueWork(workName(cycle, TYPE_MOMENT, operatorId, index.toString())) }
+                    workManager.cancelUniqueWork(workName(cycle, TYPE_PRIVATE, operatorId, "0"))
+                }
+            }.onFailure { DebugLogger.diagnostic("DailyContent/CancelDeletedOperatorPlanFailed", it.message ?: it.javaClass.simpleName) }
+            kotlinx.coroutines.withContext(Dispatchers.Main.immediate) { onComplete() }
+        }
     }
 
     private suspend fun hasConversationContext(repository: ChatRepository, operatorId: String): Boolean {

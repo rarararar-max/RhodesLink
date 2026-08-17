@@ -10,6 +10,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
+import java.io.FileOutputStream
 import java.io.InputStream
 
 enum class BackupRestoreStage {
@@ -54,9 +55,17 @@ class BackupRestoreCoordinator(
         var safetyBackup: File? = null
         var manifest: BackupManifest? = null
         var previousSettings: Map<String, String>? = null
+        var restoreInput: File? = null
         try {
             onProgress(BackupRestoreProgress(BackupRestoreStage.VALIDATING, "正在校验备份文件"))
-            val archive = openInput().use(fileReader::read)
+            restoreInput = copyRestoreInput(openInput)
+            val verifiedInput = requireNotNull(restoreInput)
+            val archive = try {
+                verifiedInput.inputStream().use(fileReader::read)
+            } catch (e: Exception) {
+                verifiedInput.delete()
+                throw e
+            }
             manifest = archive.manifest
 
             onProgress(BackupRestoreProgress(BackupRestoreStage.STOPPING_BACKGROUND_WORK, "正在停止后台任务"))
@@ -71,7 +80,7 @@ class BackupRestoreCoordinator(
             onProgress(BackupRestoreProgress(BackupRestoreStage.RESTORING_MEDIA, "正在准备图片文件"))
             val mediaDirectory = File(context.filesDir, "restored_media/${archive.manifest.backupId}")
             val stagedMedia = if (archive.payload.media.isEmpty()) emptyMap() else {
-                openInput().use { BackupMediaStager().extract(it, archive.payload, mediaDirectory) }
+                verifiedInput.inputStream().use { BackupMediaStager().extract(it, archive.payload, mediaDirectory) }
             }
             val restoredPayload = BackupRestorePayloadRewriter.rewriteMediaUris(archive.payload, stagedMedia)
 
@@ -98,12 +107,28 @@ class BackupRestoreCoordinator(
             onProgress(BackupRestoreProgress(BackupRestoreStage.COMPLETED, "恢复完成"))
             BackupRestoreResult(true, BackupRestoreStage.COMPLETED, manifest, safetyBackup)
         } catch (e: CancellationException) {
+            restoreInput?.delete()
             BackupRestoreMaintenance.finish()
             throw e
         } catch (e: Exception) {
+            restoreInput?.delete()
             BackupRestoreMaintenance.finish()
             onProgress(BackupRestoreProgress(BackupRestoreStage.FAILED, e.message ?: "恢复失败"))
             BackupRestoreResult(false, BackupRestoreStage.FAILED, manifest, safetyBackup, e.message ?: "恢复失败")
+        } finally {
+            restoreInput?.delete()
+        }
+    }
+
+    private fun copyRestoreInput(openInput: () -> InputStream): File {
+        val directory = File(context.cacheDir, "restore-inputs").apply { mkdirs() }
+        val target = File.createTempFile("restore_", ".rbackup", directory)
+        try {
+            openInput().use { input -> FileOutputStream(target).use { output -> input.copyTo(output) } }
+            return target
+        } catch (e: Exception) {
+            target.delete()
+            throw e
         }
     }
 

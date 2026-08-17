@@ -326,7 +326,7 @@ class SharedUtils(
         if (!DebugLogger.enabled) return
         val details = buildString {
             val messages = allMessages.orEmpty()
-            append("【实际发送给大模型的完整请求】\n")
+            append("【发送给 AI 的完整内容】\n")
             if (messages.isEmpty()) {
                 append("\n【系统提示词】\n")
                 append(prompt)
@@ -364,7 +364,7 @@ class SharedUtils(
 
     private fun logAiRequest(logTag: String, messages: List<AiMessage>) {
         DebugLogger.trace("AI/→$logTag", buildString {
-            append("【最终请求载荷】\n")
+            append("【发送给 AI 的完整内容】\n")
             append("消息数=${messages.size}\n")
             messages.forEachIndexed { index, message ->
                 append("\n[${index + 1}] ${message.role} | ${message.content.length}字\n")
@@ -375,7 +375,7 @@ class SharedUtils(
     }
 
     private fun logAiResponse(logTag: String, response: String) {
-        DebugLogger.trace("AI/←$logTag", "【原始模型返回】\n输出字符=${response.length}\n\n$response")
+        DebugLogger.trace("AI/←$logTag", "【AI 返回的原始内容】\n输出字符=${response.length}\n\n$response")
     }
 
     fun logMemoryContext(
@@ -478,10 +478,9 @@ class SharedUtils(
             .toSet()
 
     fun requireNoUnresolvedTemplateTokens(renderedTemplate: String, surface: String) {
-        val unresolved = unresolvedTemplateTokens(renderedTemplate)
-        require(unresolved.isEmpty()) {
-            "$surface 模板包含无法解析的占位符：${unresolved.sorted().joinToString(", ")}" 
-        }
+        // User-defined placeholders are valid literal instructions and must reach the model.
+        // Known placeholders are replaced before this point; unresolved tokens are therefore
+        // intentionally preserved instead of treated as a request failure.
     }
 
     /** Removes former JSON/schema directives while preserving persona and scene instructions. */

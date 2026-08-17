@@ -249,9 +249,10 @@ class MainViewModel(
         { chatViewModel.markSessionRead(it) },
         { unhideSession(it) },
         { getUserProfile() },
-        { t, m -> chatViewModel.getPromptTemplate(t, m) },
-        { t, m -> settings.isPromptTemplateCustom(t, m) },
-        sessionMessageCounter,
+         { t, m -> chatViewModel.getPromptTemplate(t, m) },
+         { t, m -> settings.isPromptTemplateCustom(t, m) },
+         { module, type, mode -> getPromptModule(module, type, mode) },
+         sessionMessageCounter,
         memoryVectorService,
         visionGateway,
         { title, content, sessionId -> com.rhodes.privatechat.notification.RhodesNotificationCenter.show(application, title, content, sessionId, isGroup = true) }
@@ -339,23 +340,65 @@ class MainViewModel(
     fun getDefaultPromptTemplate(type: String, mode: String = ""): String = defaultTemplate(type, mode)
 
     fun validatePromptTemplate(type: String, mode: String, template: String): List<String> {
-        val malformed = Regex("\\{\\{[^}]*\\}\\}").findAll(template).map { it.value }
-            .filterNot { Regex("\\{\\{[A-Z0-9_]+\\}\\}").matches(it) }.distinct().sorted()
-            .map { "$it 格式不正确，请使用 {{大写英文_数字}}。" }
+        // Unknown placeholders are intentionally allowed: they remain literal text until a
+        // future runtime value is registered. Only malformed placeholder syntax blocks saving.
+        return promptSyntaxErrors(template)
+    }
+
+    fun validatePromptModule(template: String): List<String> = promptSyntaxErrors(template)
+
+    private fun promptSyntaxErrors(template: String): List<String> {
+        val errors = mutableListOf<String>()
+        var index = 0
+        while (index < template.length) {
+            val open = template.indexOf("{{", index)
+            val close = template.indexOf("}}", index)
+            if (close >= 0 && (open < 0 || close < open)) {
+                errors += "}} 格式不正确，请使用 {{名称}}。"
+                index = close + 2
+                continue
+            }
+            if (open < 0) break
+            val end = template.indexOf("}}", open + 2)
+            if (end < 0) {
+                errors += "{{ 格式不正确，请使用 {{名称}}。"
+                break
+            }
+            val body = template.substring(open + 2, end)
+            if (body.isBlank() || body.any { it == '{' || it == '}' || it == '\r' || it == '\n' }) {
+                errors += template.substring(open, end + 2) + " 格式不正确，请使用 {{名称}}。"
+            }
+            index = end + 2
+        }
+        return errors.distinct().sorted()
+    }
+
+    fun promptWarnings(type: String, mode: String, template: String): List<String> {
         val allowed = PromptPlaceholderRegistry.allowed(type, mode)
-        val unsupported = Regex("\\{\\{([A-Z0-9_]+)\\}\\}").findAll(template).map { it.groupValues[1] }
-            .filter { it !in allowed }.distinct().sorted()
-            .map { "{{$it}} 不适用于当前模板，无法保存。" }
-        return (malformed + unsupported).toList()
+        val unknown = Regex("\\{\\{([^{}\\r\\n]+)\\}\\}").findAll(template)
+            .map { it.groupValues[1].trim() }
+            .filter { it !in allowed }
+            .distinct().sorted()
+            .map { "{{$it}} 当前不会自动替换，发送给 AI 时会保留原样。" }
+        val reserved = when (type) {
+            "private" -> setOf("状态", "心情", "位置", "本轮简述", "旁白", "台词", "台詞")
+            "group" -> setOf("本轮剧情简述", "旁白", "发言人", "台词", "台詞")
+            else -> emptySet()
+        }
+        val usedReserved = Regex("[【\\[［]\\s*([^】\\]］:：]+)").findAll(template)
+            .map { it.groupValues[1].trim() }
+            .filter { it in reserved }
+            .distinct().sorted()
+            .map { "模板包含系统解析标签【$it】，这是当前场景的正常协议；不要把它当作自定义状态标签重复使用。自定义状态建议使用（名称：数值）。" }
+        return (unknown + usedReserved).toList()
     }
 
     fun savePromptTemplate(type: String, mode: String, template: String): List<String> {
-        val unsupported = validatePromptTemplate(type, mode, template)
-            .toList()
-        if (unsupported.isEmpty()) {
+        val errors = validatePromptTemplate(type, mode, template)
+        if (errors.isEmpty()) {
             settings.saveCustomPromptTemplate(type, mode, template, PromptTemplates.VERSION)
         }
-        return unsupported
+        return if (errors.isNotEmpty()) errors else promptWarnings(type, mode, template)
     }
 
     fun resetPromptTemplate(type: String, mode: String = "") {
@@ -371,6 +414,7 @@ class MainViewModel(
         return when (module) {
             "protocol" -> PromptModuleDefaults.outputProtocol(type, mode)
             "runtime" -> PromptModuleDefaults.runtime(type, mode)
+            "behavior" -> PromptModuleDefaults.behavior(type, mode)
             else -> ""
         }
     }
@@ -378,6 +422,7 @@ class MainViewModel(
     fun getDefaultPromptModule(module: String, type: String, mode: String = ""): String = when (module) {
         "protocol" -> PromptModuleDefaults.outputProtocol(type, mode)
         "runtime" -> PromptModuleDefaults.runtime(type, mode)
+        "behavior" -> PromptModuleDefaults.behavior(type, mode)
         else -> ""
     }
 
@@ -385,9 +430,11 @@ class MainViewModel(
         settings.isPromptModuleCustom(module, type, mode)
 
     fun savePromptModule(module: String, type: String, mode: String, value: String): List<String> {
-        val tokens = Regex("\\{\\{([A-Z0-9_]+)\\}\\}").findAll(value).map { it.groupValues[1] }.toSet()
+        val errors = promptSyntaxErrors(value)
+        if (errors.isNotEmpty()) return errors
+        val tokens = Regex("\\{\\{([^{}\\r\\n]+)\\}\\}").findAll(value).map { it.groupValues[1].trim() }.toSet()
         val warnings = tokens.filter { it !in PromptPlaceholderRegistry.allowed(type, mode) }
-            .sorted().map { "{{$it}} 不是当前场景登记的占位符，保存后可能保持原样或为空。" }
+            .sorted().map { "{{$it}} 当前不会自动替换，发送给 AI 时会保留原样。" }
         settings.savePromptModule(module, type, mode, value, PromptTemplates.VERSION)
         return warnings
     }
@@ -1928,7 +1975,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                             )
                         )
                         val apiMessages = buildContentGenerationMessages("moment", mmtTpl, mmtReplacements)
-                        val temp = intPref("ai_temperature", 80).toDouble() / 100.0
+                        val temp = intPref("ai_temperature", 70).toDouble() / 100.0
                         var content = ""
                         for (attempt in 0 until 3) {
                             try {

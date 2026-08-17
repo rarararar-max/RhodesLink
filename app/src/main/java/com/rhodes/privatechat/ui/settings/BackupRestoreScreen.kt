@@ -181,7 +181,7 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         scope.launch {
             state = BackupUiState.Working("正在校验角色卡")
             runCatching {
-                withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri)?.use { OperatorPackageReader().read(it) } ?: error("无法读取所选文件") }
+                withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri)?.use { OperatorPackageReader().readCompatible(it) } ?: error("无法读取所选文件") }
             }.onSuccess { pendingOperatorCard = it; state = BackupUiState.Idle }
                 .onFailure { state = BackupUiState.Error(it.message ?: "角色卡无效") }
         }
@@ -293,7 +293,7 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     OutlinedButton(onClick = { showOperatorPicker = true }, modifier = Modifier.weight(1f)) { Text("导出角色设定") }
-                    OutlinedButton(onClick = { openOperatorCard.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) }, modifier = Modifier.weight(1f)) { Text("导入角色设定") }
+                    OutlinedButton(onClick = { openOperatorCard.launch(arrayOf("application/zip", "application/json", "application/octet-stream", "*/*")) }, modifier = Modifier.weight(1f)) { Text("导入角色设定") }
                 }
             }
             BackupSection(

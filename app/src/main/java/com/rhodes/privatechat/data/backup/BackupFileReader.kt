@@ -115,6 +115,27 @@ class BackupFileReader(
         payload.content.messages.orEmpty().forEach { message ->
             if (message.sessionId !in sessionIds) throw BackupFormatException("聊天消息引用了不存在的会话")
         }
+        payload.chatArchives.forEach { archive ->
+            if (archive.sessionId !in sessionIds || archive.operatorId !in operatorIds) {
+                throw BackupFormatException("聊天存档引用不完整")
+            }
+        }
+        payload.chatHistorySegments.forEach { segment ->
+            if (segment.sessionId !in sessionIds) throw BackupFormatException("聊天历史片段引用了不存在的会话")
+        }
+        payload.giftRecords.forEach { gift ->
+            if (gift.operatorId !in operatorIds) throw BackupFormatException("礼物记录引用了不存在的角色")
+        }
+        payload.content.memories.orEmpty().forEach { memory ->
+            if (memory.operatorId !in operatorIds || memory.sessionId !in sessionIds) {
+                throw BackupFormatException("记忆引用不完整")
+            }
+        }
+        payload.content.anchors.orEmpty().forEach { anchor ->
+            if (anchor.operatorId !in operatorIds || anchor.sessionId !in sessionIds) {
+                throw BackupFormatException("记忆锚点引用不完整")
+            }
+        }
         payload.content.momentComments.orEmpty().forEach { comment ->
             if (comment.momentId !in momentIds || (comment.parentCommentId != 0L && comment.parentCommentId !in commentIds)) throw BackupFormatException("动态评论引用不完整")
         }
@@ -123,7 +144,9 @@ class BackupFileReader(
         }
         val experienceIds = payload.sharedExperiences.map { it.id }.toSet()
         payload.sharedExperienceParticipants.forEach { participant ->
-            if (participant.experienceId !in experienceIds) throw BackupFormatException("共同经历参与者引用不完整")
+            if (participant.experienceId !in experienceIds || participant.operatorId !in operatorIds) {
+                throw BackupFormatException("共同经历参与者引用不完整")
+            }
         }
     }
 

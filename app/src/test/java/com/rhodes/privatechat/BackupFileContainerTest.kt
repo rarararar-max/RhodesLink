@@ -1,6 +1,7 @@
 package com.rhodes.privatechat
 
 import com.rhodes.privatechat.data.ExportPayload
+import com.rhodes.privatechat.data.ExportHelper
 import com.rhodes.privatechat.data.backup.BackupFileReader
 import com.rhodes.privatechat.data.backup.BackupFileWriter
 import com.rhodes.privatechat.data.backup.BackupMediaItem
@@ -42,6 +43,14 @@ class BackupFileContainerTest {
         assertEquals("operator_card", card.manifest.scope)
         assertEquals("阿米娅", card.payload.operator.name)
         assertTrue("chat_history" in card.manifest.excludedCategories)
+    }
+
+    @Test
+    fun readsSingleOperatorLegacyJsonCard() {
+        val legacy = ExportPayload(type = "operators", operators = listOf(OperatorExport("amiya", "阿米娅")))
+        val card = OperatorPackageReader().readCompatible(ByteArrayInputStream(ExportHelper.toJson(legacy).encodeToByteArray()))
+
+        assertEquals("阿米娅", card.payload.operator.name)
     }
 
     @Test

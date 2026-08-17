@@ -223,8 +223,10 @@ private fun GeneralTab(settings: SettingsRepository, onPromptEditor: () -> Unit 
         "更容易记住过去互动，角色联动和自动内容更活跃。每个角色每天最多3条自动动态，最多5位角色主动联系，消耗也更高。"
     )
     Spacer(modifier = Modifier.height(12.dp))
+    HistoryRoundsSlider(settings, contextMode) { contextMode = "custom" }
+    Spacer(modifier = Modifier.height(12.dp))
     SectionTitle("生成风格")
-    ParamSlider(settings, "ai_temperature", "创意程度", 80, 0f..200f, step = 5f, tip = "角色说话风格。建议60-90。太低（低于30）说话非常死板重复，像机器人；太高（超过120）容易跑偏，说话前言不搭后语。当前值÷100就是实际使用的数值。")
+     ParamSlider(settings, "ai_temperature", "创意程度", 70, 0f..200f, step = 5f, tip = "角色说话风格。建议60-90。太低（低于30）说话非常死板重复，像机器人；太高（超过120）容易跑偏，说话前言不搭后语。当前值÷100就是实际使用的数值。")
     Spacer(modifier = Modifier.height(12.dp))
     Text("高级功能：修改各场景的角色说话规则。不了解的话建议保持默认。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
     Button(
@@ -235,6 +237,36 @@ private fun GeneralTab(settings: SettingsRepository, onPromptEditor: () -> Unit 
         Text("编辑角色说话规则", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
     }
     Spacer(modifier = Modifier.height(12.dp))
+}
+
+@Composable
+private fun HistoryRoundsSlider(settings: SettingsRepository, contextMode: String, onManualChange: () -> Unit) {
+    var value by remember(contextMode) { mutableFloatStateOf(settings.historyMessages.coerceIn(1, 200).toFloat()) }
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Card).padding(12.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("历史回看轮数", fontSize = 13.sp, color = TextPrimary)
+            HelpButton("私聊和群聊共用。每轮请求优先带入最近的互动轮次；超过模型上下文上限时，会自动从最早历史开始裁剪。手动调整只影响历史回看，不会修改滚动摘要、记忆提取或自动内容设置。")
+            Spacer(Modifier.weight(1f))
+            Text(value.toInt().toString(), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Blue400)
+        }
+        Slider(
+            value = value,
+            onValueChange = { value = it },
+            onValueChangeFinished = {
+                val rounds = value.toInt().coerceIn(1, 200)
+                val previous = settings.historyMessages
+                settings.historyMessages = rounds
+                settings.contextMode = "custom"
+                onManualChange()
+                DebugLogger.log("Settings/Param", "参数调整: 历史回看轮数(history_messages) $previous -> $rounds")
+            },
+            valueRange = 1f..200f,
+            steps = 198,
+            colors = SliderDefaults.colors(thumbColor = Blue400, activeTrackColor = Blue400)
+        )
+        Text("私聊与群聊共用。手动调整只影响本轮请求带入的近期互动，不改变滚动摘要、记忆提取或自动内容设置。", fontSize = 11.sp, color = TextSecondary)
+    }
+    Spacer(Modifier.height(4.dp))
 }
 
 @Composable

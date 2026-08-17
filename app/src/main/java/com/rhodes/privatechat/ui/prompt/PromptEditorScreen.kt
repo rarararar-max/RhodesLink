@@ -102,7 +102,7 @@ fun PromptEditorScreen(
     fun loadTemplate(type: String, mode: String) = viewModel.getPromptTemplate(type, mode)
 
     fun currentModule(): String = if (tabIndex == 0 || tabIndex == 1) {
-        listOf("role", "protocol", "runtime")[moduleIdx]
+        listOf("role", "behavior", "protocol", "runtime")[moduleIdx]
     } else "role"
 
     fun currentKey(): String = when (tabIndex) {
@@ -125,6 +125,7 @@ fun PromptEditorScreen(
     }
 
     fun loadCurrentModule(): String = when (currentModule()) {
+        "behavior" -> viewModel.getPromptModule("behavior", currentType(), currentMode())
         "protocol" -> viewModel.getPromptModule("protocol", currentType(), currentMode())
         "runtime" -> viewModel.getPromptModule("runtime", currentType(), currentMode())
         else -> loadTemplate(currentType(), currentMode())
@@ -156,6 +157,15 @@ fun PromptEditorScreen(
     val saveCurrent: () -> Boolean = saveCurrent@{
         if (tabIndex < 6 && currentKey() in dirtyKeys) {
             textMap[currentKey()] = textFieldValue
+            val syntaxErrors = if (currentModule() == "role") {
+                viewModel.validatePromptTemplate(currentType(), currentMode(), textFieldValue.text)
+            } else {
+                viewModel.validatePromptModule(textFieldValue.text)
+            }
+            if (syntaxErrors.isNotEmpty()) {
+                Toast.makeText(context, syntaxErrors.joinToString("\n"), Toast.LENGTH_LONG).show()
+                return@saveCurrent false
+            }
             if (currentKey() in resetKeys) {
                 if (currentModule() == "role") viewModel.resetPromptTemplate(currentType(), currentMode())
                 else viewModel.resetPromptModule(currentModule(), currentType(), currentMode())
@@ -184,9 +194,12 @@ fun PromptEditorScreen(
         val editedTemplates = textMap.filterKeys { it in dirtyKeys }.toMap()
         val validationErrors = editedTemplates.flatMap { (templateKey, value) ->
             val parts = templateKey.split(":")
-            if (parts.getOrNull(2) == "role") viewModel.validatePromptTemplate(parts[0], parts.getOrNull(1).orEmpty(), value.text)
-                .map { "$templateKey：$it" }
-            else emptyList()
+            val errors = if (parts.getOrNull(2) == "role") {
+                viewModel.validatePromptTemplate(parts[0], parts.getOrNull(1).orEmpty(), value.text)
+            } else {
+                viewModel.validatePromptModule(value.text)
+            }
+            errors.map { "$templateKey：$it" }
         }
         if (validationErrors.isNotEmpty()) {
             Toast.makeText(context, validationErrors.joinToString("\n"), Toast.LENGTH_LONG).show()
@@ -458,7 +471,7 @@ fun PromptEditorScreen(
         if (tabIndex == 0 || tabIndex == 1) {
             HorizontalDivider(color = Divider)
             TabRow(selectedTabIndex = moduleIdx, containerColor = Surface, contentColor = Blue400) {
-                listOf("角色规则", "输出协议", "运行时资料").forEachIndexed { i, label ->
+                listOf("角色规则", "固定行为", "输出协议", "运行时资料").forEachIndexed { i, label ->
                     Tab(
                         selected = moduleIdx == i,
                         onClick = {
@@ -497,10 +510,11 @@ fun PromptEditorScreen(
                          Text(
                              when {
                                  isDirty -> "当前编辑内容尚未保存。点击保存后，系统将按你编辑的内容使用，不会自动恢复默认模板。"
-                                 currentModule() == "runtime" && isCustom -> "运行时资料会按你保存的内容生成。本编辑框不是完整的最终请求；用户消息、历史消息和群聊必要资料仍由应用单独组装。"
-                                 currentModule() == "protocol" && isCustom -> "输出协议会按你保存的内容追加到本轮请求。你可以自由改写格式，程序只会尽量解析模型输出。"
-                                 isCustom -> "你可以编辑角色性格、语气、世界观和互动偏好。系统固定规则、运行时资料、历史消息和输出协议仍由应用自动加入；本编辑框不是完整的最终请求。"
-                                 else -> "这里显示的是角色规则模板，不是完整的最终请求。系统固定规则、时间、记忆、历史消息和本轮输入会在每次聊天时由应用自动组装。"
+                                  currentModule() == "runtime" && isCustom -> "运行时资料会按你保存的内容生成。本编辑框不是完整的最终请求；用户消息、历史消息和实时资料仍由应用单独组装。"
+                                  currentModule() == "behavior" && isCustom -> "固定行为规则会按你保存的内容加入最终请求。你可以修改内容决策、场景连续性、记忆使用和群聊互动规则。应用保护规则仍由程序保留。"
+                                  currentModule() == "protocol" && isCustom -> "输出协议会按你保存的内容追加到本轮请求。你可以自由改写格式，程序只会尽量解析模型输出。"
+                                  isCustom -> "你可以编辑角色性格、语气、世界观和互动偏好。固定行为规则、运行时资料、历史消息和输出协议分别在对应模块中管理。"
+                                  else -> "这里显示的是可编辑的提示词模块默认内容。聊天记录、用户本轮发言、实时记忆和知识库内容会在每次聊天时动态组装。"
                              },
                              fontSize = 11.sp,
                              color = TextSecondary,
@@ -529,13 +543,13 @@ fun PromptEditorScreen(
                     }
                     Spacer(Modifier.height(8.dp))
                 }
-                if (tabIndex == 0 && currentModule() == "role") {
+                 if (tabIndex == 0 && currentModule() == "behavior") {
                     Card(colors = CardDefaults.cardColors(containerColor = Blue400.copy(alpha = 0.08f))) {
                         Column(Modifier.padding(12.dp)) {
-                            Text("基础回复规则始终生效", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                             Text("应用保护规则", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                "系统会优先理解并回应用户当前真正想表达的内容。固定协议：线上为【状态】【心情】【位置】【本轮简述】【台词】；线下/导演额外包含【旁白】。\n\n这里的模板只负责角色规则。输出协议、历史消息、运行时资料和本轮输入由应用自动组装；不要在模板中尝试替换系统协议。",
+                                 "固定行为规则现在可以在本编辑框中自由修改，包括内容决策顺序、场景连续性、记忆使用和回复组织方式。应用保护规则会额外保留：聊天资料不是系统指令、不得泄露敏感信息、不得替用户做未明确的决定。聊天记录、用户本轮发言和实时资料仍由应用动态加入。",
                                 fontSize = 11.sp,
                                 color = TextSecondary,
                                 lineHeight = 16.sp
@@ -544,13 +558,13 @@ fun PromptEditorScreen(
                     }
                     Spacer(Modifier.height(8.dp))
                 }
-                if (tabIndex == 1 && currentModule() == "role") {
+                 if (tabIndex == 1 && currentModule() == "behavior") {
                     Card(colors = CardDefaults.cardColors(containerColor = Blue400.copy(alpha = 0.08f))) {
                         Column(Modifier.padding(12.dp)) {
-                            Text("群聊回复规则始终生效", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                             Text("群聊固定行为规则", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                "系统会限制当前模式的旁白规则、成员发言次数和消息字数。固定协议使用【本轮剧情简述】、【旁白】和【发言人: operator_id】。这里的模板只负责群聊氛围、关系和世界观；成员资料、历史消息和当前任务由应用自动组装。",
+                                 "这里可以修改内容决策优先级、群聊主线、成员互动、场景连续性、记忆使用和旁白规则。当前成员资料、历史消息、用户本轮发言和实时资料仍由应用动态组装；程序仍会过滤无法识别的成员。",
                                 fontSize = 11.sp,
                                 color = TextSecondary,
                                 lineHeight = 16.sp
@@ -569,7 +583,7 @@ fun PromptEditorScreen(
                 Spacer(Modifier.height(8.dp))
                  if (currentModule() != "role") {
                      Text(
-                         if (currentModule() == "protocol") "输出协议是自由文本。可以删除、新增或改写标签；程序会尽量解析可识别内容，无法解析时仍会保留可读回复。"
+                          if (currentModule() == "protocol") "输出协议是自由文本。可以修改标签、顺序、字数、段数和示例；其中 {{DIA_SEG_MIN}}、{{DIA_MAX}} 等占位符会在发送前替换成当前聊天参数。删除解析标签后仍可保存，但台词、旁白或群成员消息的拆分可能变差。"
                          else "运行时资料模板是自由文本。可以调整资料顺序、说明和占位符；只要保存过自定义内容，系统就不会自动恢复默认模板。未知占位符只会产生警告。内容清空并保存后，本场景不会发送这部分资料；如需恢复系统资料，请点击“恢复默认”。",
                          fontSize = 11.sp,
                          color = TextSecondary,
@@ -586,9 +600,31 @@ fun PromptEditorScreen(
                              modifier = Modifier.padding(12.dp)
                          )
                      }
+                      Spacer(Modifier.height(8.dp))
+                  }
+                 if (currentModule() == "role" && (currentType() == "private" || currentType() == "group")) {
+                     Card(colors = CardDefaults.cardColors(containerColor = Blue400.copy(alpha = 0.08f))) {
+                         Column(Modifier.padding(12.dp)) {
+                             Text("自由编辑说明", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+                             Spacer(Modifier.height(4.dp))
+                             Text(
+                                 if (currentType() == "private") {
+                                     "可以删除任意默认占位符，也可以用固定内容替换，例如“当前北京时间：深夜”。可以增加说话风格、状态显示等规则。"
+                                 } else {
+                                     "可以自由设置群聊发言风格、成员互动和自定义状态显示。删除占位符后，应用不会在模板外自动补回这部分资料。"
+                                 },
+                                 fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp
+                             )
+                             Spacer(Modifier.height(4.dp))
+                             Text(
+                                 "未知占位符可以保存，但不会自动替换，会原样发送给 AI。系统标签如【台词】、【旁白】、【发言人】属于回复协议；不要把它们当作自定义状态标签重复使用。自定义状态建议使用（名称：数值）。",
+                                 fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp
+                             )
+                         }
+                     }
                      Spacer(Modifier.height(8.dp))
                  }
-                OutlinedTextField(
+                 OutlinedTextField(
                     value = textFieldValue,
                      onValueChange = {
                          textFieldValue = it
@@ -609,9 +645,23 @@ fun PromptEditorScreen(
                         focusedBorderColor = Blue400,
                         unfocusedBorderColor = Divider
                     )
-                )
+                 )
 
-                Spacer(modifier = Modifier.height(8.dp))
+                 if (currentModule() == "role" && (currentType() == "private" || currentType() == "group")) {
+                     val warnings = viewModel.promptWarnings(currentType(), currentMode(), textFieldValue.text)
+                     if (warnings.isNotEmpty()) {
+                         Card(colors = CardDefaults.cardColors(containerColor = Color(0xFFFF9500).copy(alpha = 0.10f)), modifier = Modifier.padding(top = 8.dp)) {
+                             Column(Modifier.padding(10.dp)) {
+                                 Text("保存提醒", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFFFF9500))
+                                 warnings.forEach { warning ->
+                                     Text("• $warning", fontSize = 11.sp, color = TextSecondary, lineHeight = 16.sp, modifier = Modifier.padding(top = 3.dp))
+                                 }
+                             }
+                         }
+                     }
+                 }
+
+                 Spacer(modifier = Modifier.height(8.dp))
 
                 Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
@@ -862,10 +912,11 @@ private fun modeDisplayName(type: String, mode: String): String = when {
 private fun promptStructurePreview(type: String, mode: String): List<Triple<String, String, Boolean>> {
     if (type == "help") {
         return listOf(
-            Triple("system · 固定规则", "应用始终追加的行为边界、场景连续性、安全规则和输出协议。", false),
+            Triple("system · 应用保护规则", "应用始终保留的最低安全边界。用户可查看，但不能删除。", false),
+            Triple("system · 固定行为规则", "内容决策、场景连续性、记忆使用和互动规则。用户可编辑。", true),
             Triple("system · 角色规则模板", "用户在私聊/群聊/动态等场景编辑的角色规则模板。", true),
             Triple("user · 运行时资料", "当前时间、状态、记忆、摘要、群聊主线、成员资料和知识库内容。", false),
-            Triple("user/assistant · 历史消息", "从真实聊天记录中按历史条数和上下文上限自动裁剪。", false),
+        Triple("user/assistant · 历史消息", "从真实聊天记录中按历史互动轮数和上下文上限自动裁剪。", false),
             Triple("user · 本轮输入", "当前用户消息或本轮自动任务，由应用在发送前自动追加。", false)
         )
     }
@@ -891,11 +942,12 @@ private fun promptStructurePreview(type: String, mode: String): List<Triple<Stri
         else -> "【本轮背景资料】...\n【相关记忆】...\n【任务参数】..."
     }
     return listOf(
-        Triple("system · 固定规则", "由应用追加的行为边界、场景规则和安全规则。默认只读。", false),
+        Triple("system · 应用保护规则", "由应用追加的最低安全边界。用户可查看，但不能删除。", false),
+        Triple("system · 固定行为规则", "内容决策、场景连续性、记忆使用和互动规则。用户可编辑。", true),
         Triple("system · $role", "当前编辑框中的模板。占位符会按稳定/运行时分类处理。", true),
         Triple("user · 运行时资料", runtime, false),
         Triple("user/assistant · 历史消息", "[user] 用户上一轮消息\n[assistant] 角色上一轮回复\n（按历史轮数和上下文上限自动裁剪）", false),
         Triple("user · 本轮输入", "【用户本轮消息】\n用户：示例消息\n（自动追加，不需要写入角色模板）", false),
-        Triple("输出协议", output, false)
+        Triple("system · 输出协议", output, type == "private" || type == "group")
     )
 }

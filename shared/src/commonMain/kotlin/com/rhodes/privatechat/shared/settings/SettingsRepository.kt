@@ -152,16 +152,16 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putInt("impression_threshold", value.coerceIn(5, 500))
 
     var historyMessages: Int
-        get() = getInt("history_messages", 10).coerceIn(0, 200)
+        get() = getInt("history_messages", 30).coerceIn(0, 200)
         set(value) = putInt("history_messages", value.coerceIn(0, 200))
 
     var maxContextTokens: Int
-        get() = getInt("max_context_tokens", 32000).coerceIn(1000, 200000)
-        set(value) = putInt("max_context_tokens", value.coerceIn(1000, 200000))
+        get() = getInt("max_context_tokens", 32000).coerceIn(3000, 200000)
+        set(value) = putInt("max_context_tokens", value.coerceIn(3000, 200000))
 
     // === 聊天配置 ===
     var aiTemperature: Double
-        get() = getInt("ai_temperature", 80).coerceIn(0, 200).toDouble() / 100.0
+        get() = getInt("ai_temperature", 70).coerceIn(0, 200).toDouble() / 100.0
         set(value) = putInt("ai_temperature", (value.coerceIn(0.0, 2.0) * 100).toInt())
 
     var cleanDays: Int
@@ -1239,7 +1239,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
         contextMode = mode
         when (mode) {
             "economy" -> {
-                historyMessages = 6
+                historyMessages = 15
                 putInt("private_memory_extraction_threshold", 20)
                 putInt("group_memory_extraction_threshold", 20)
                 putInt("private_group_context_count", 1)
@@ -1257,7 +1257,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
                 putInt("comment_bystander_max", 1)
             }
             "standard" -> {
-                historyMessages = 10
+                historyMessages = 30
                 putInt("private_memory_extraction_threshold", 12)
                 putInt("group_memory_extraction_threshold", 12)
                 putInt("private_group_context_count", 2)
@@ -1275,7 +1275,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
                 putInt("comment_bystander_max", 3)
             }
             "full" -> {
-                historyMessages = 40
+                historyMessages = 60
                 putInt("private_memory_extraction_threshold", 8)
                 putInt("group_memory_extraction_threshold", 8)
                 putInt("private_group_context_count", 4)

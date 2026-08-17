@@ -830,6 +830,7 @@ class MemoryV2Pipeline(
             throw IllegalStateException("记忆模型返回的 JSON 不是数组", e)
         }
         val parsed = parseMemoryItems(clean, ownerType, ownerId, MemoryLevel.L1, sourceKind, sourceRefId, sessionId)
+        DebugLogger.log("Memory/Parse", "记忆内容解析完成：模型返回=${objects.size}条，有效记忆=${parsed.size}条")
         if (objects.isNotEmpty() && parsed.isEmpty()) {
             throw IllegalStateException("记忆模型返回了内容，但没有可用记忆项")
         }
@@ -938,13 +939,19 @@ class MemoryV2Pipeline(
                 content = item.content
             )
             if (existing != null) return@forEach
-            val id = repository.insertMemoryItem(item)
+            val id = try {
+                repository.insertMemoryItem(item)
+            } catch (e: Exception) {
+                DebugLogger.log("Memory/SaveError", "记忆保存失败：${e::class.simpleName}，原因=${e.message?.take(160) ?: "未知原因"}")
+                throw e
+            }
             if (id > 0) {
                 val withId = item.copy(id = id)
                 saveMemoryItemToVector(id, withId)
                 saved += withId
             }
         }
+        DebugLogger.log("Memory/Save", "记忆保存完成：新增=${saved.size}条，输入=${items.size}条")
         return saved
     }
 

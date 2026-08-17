@@ -2,6 +2,7 @@ package com.rhodes.privatechat.data.backup
 
 import com.rhodes.privatechat.data.OperatorExport
 import com.rhodes.privatechat.data.RelationshipExport
+import com.rhodes.privatechat.data.ExportHelper
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -96,6 +97,25 @@ class OperatorPackageReader {
         if ((payload.avatar == null) != !manifest.mediaIncluded) throw BackupFormatException("角色包头像清单不一致")
         payload.avatar?.let { avatar -> if (entries[avatar.archivePath] == null) throw BackupFormatException("角色包缺少头像文件") }
         return OperatorPackage(manifest, payload, payload.avatar?.let { entries[it.archivePath] })
+    }
+
+    /** Accepts the current signed role-card archive and the old one-operator JSON export. */
+    fun readCompatible(input: InputStream): OperatorPackage {
+        val bytes = input.readBytes()
+        return runCatching { read(bytes.inputStream()) }.getOrElse { packageError ->
+            val legacy = ExportHelper.importFromString(bytes.decodeToString()) ?: throw packageError
+            val operators = legacy.operators.orEmpty()
+            require(legacy.type == "operators" && operators.size == 1) {
+                "请选择新版角色包，或仅包含一个角色的旧版角色 JSON 文件"
+            }
+            val operator = operators.single()
+            val output = java.io.ByteArrayOutputStream()
+            OperatorPackageWriter("legacy-json").write(
+                output,
+                OperatorPackagePayload(operator, legacy.relationships.orEmpty().filter { it.operatorId == operator.id }),
+            )
+            read(output.toByteArray().inputStream())
+        }
     }
 
     private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }

@@ -233,7 +233,12 @@ fun ChatScreen(
     val importOperatorCard = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
-            runCatching { withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri)?.use { OperatorPackageReader().read(it) } ?: error("无法读取所选文件") } }
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    context.contentResolver.openInputStream(uri)?.use { OperatorPackageReader().readCompatible(it) }
+                        ?: error("无法读取所选文件")
+                }
+            }
                 .onSuccess {
                     selectedCardForImport = it
                     relationshipMappings = emptyMap()
@@ -437,7 +442,7 @@ fun ChatScreen(
                     ChatDropdownMenuItem(
                         text = { Text("导入角色设定") },
                         leadingIcon = { Icon(Icons.Default.FileUpload, null, tint = TextPrimary) },
-                        onClick = { importOperatorCard.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) }
+                        onClick = { importOperatorCard.launch(arrayOf("application/zip", "application/json", "application/octet-stream", "*/*")) }
                     )
                     ChatDropdownMenuItem(
                         text = { Text("更换背景图") },

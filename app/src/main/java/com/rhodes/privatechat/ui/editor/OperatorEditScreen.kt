@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -533,9 +535,15 @@ fun OperatorEditScreen(
             onDismissRequest = { showKnowledgeBasePicker = false },
             title = { Text("关联知识库") },
             text = {
-                Column(modifier = Modifier.verticalScroll(rememberScrollState()).heightIn(max = 360.dp)) {
-                    if (knowledgeBases.isEmpty()) Text("尚无知识库，请先在设置 > 知识库中创建或导入。", color = TextSecondary)
-                    knowledgeBases.forEach { book ->
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 360.dp)
+                ) {
+                    if (knowledgeBases.isEmpty()) {
+                        item { Text("尚无知识库，请先在设置 > 知识库中创建或导入。", color = TextSecondary) }
+                    }
+                    items(knowledgeBases, key = { it.id }) { book ->
                         Row(Modifier.fillMaxWidth().clickable {
                             selectedKnowledgeBaseIds = selectedKnowledgeBaseIds.toCollection(LinkedHashSet()).also {
                                 if (!it.add(book.id)) it.remove(book.id)

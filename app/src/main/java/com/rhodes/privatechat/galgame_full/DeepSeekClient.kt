@@ -13,7 +13,7 @@ object DeepSeekClient {
         val requestLog = "System prompt:\n$systemPrompt\n\nRuntime context:\n$runtimeContext"
         var rawResponse = ""
         return runCatching {
-            val raw = withTimeout(45_000) { GalgameHostBridge.chat(listOf(AiMessage("system", systemPrompt), AiMessage("user", runtimeContext)), 2_400, 0.8, "GalgameStory") }
+            val raw = withTimeout(45_000) { GalgameHostBridge.chat(listOf(AiMessage("system", systemPrompt), AiMessage("user", runtimeContext)), 2_400, 0.7, "GalgameStory") }
             rawResponse = raw
             parse(raw, state, assets).also { DebugLog.add(DebugLogEntry("剧情生成", startedAt, System.currentTimeMillis() - startedAt, requestLog, raw, "解析成功")) }
         }.onFailure { error -> DebugLog.add(DebugLogEntry("剧情生成", startedAt, System.currentTimeMillis() - startedAt, requestLog, rawResponse, "已切换保底剧情", error.message)) }

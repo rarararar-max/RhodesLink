@@ -89,6 +89,22 @@ object DebugLogger {
         })
     }
 
+    /** Records a privacy-safe context count without storing memory or knowledge-base text. */
+    fun contextUsed(surface: String, memoryCount: Int = 0, knowledgeCount: Int = 0, injectedCount: Int? = null) {
+        log("Context/$surface", buildString {
+            append("记忆或知识库：${memoryCount + knowledgeCount} 条")
+            if (memoryCount > 0) append("，记忆=$memoryCount 条")
+            if (knowledgeCount > 0) append("，知识库=$knowledgeCount 条")
+            if (injectedCount != null) append("，最终注入=$injectedCount 条")
+        })
+    }
+
+    fun countContextBlocks(context: String): Int = context
+        .lineSequence()
+        .count { it.trimStart().startsWith("-") || it.trimStart().startsWith("•") }
+        .takeIf { it > 0 }
+        ?: if (context.isNotBlank() && context != "无") 1 else 0
+
     /** Human-readable lifecycle records for one private or group reply round. */
     fun startConversationRound(surface: String, target: String, mode: String): String {
         val id = "${System.currentTimeMillis().toString(36)}-${roundCounter.incrementAndGet()}"

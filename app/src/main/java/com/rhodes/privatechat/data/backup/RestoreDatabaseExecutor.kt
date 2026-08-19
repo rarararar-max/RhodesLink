@@ -41,7 +41,7 @@ class RestoreDatabaseExecutor(private val repository: ChatRepository) {
                 operatorsQueries.insertAllOperators(op.id, op.name, op.title, op.description, op.gender, op.avatarUri, op.location, op.activity, op.emotion, op.intimacy.toLong(), op.privatePrompt, op.groupPrompt, op.memoryInjection, op.userRelation, op.lmb.toLong(), op.attack.toDouble(), op.defense.toDouble(), op.meldPref, op.activityLevel.toDouble(), op.voiceName, op.voiceSpeed, op.voicePitch)
             }
             payload.content.knowledgeBases.orEmpty().forEach { book ->
-                knowledgeBasesQueries.insertKnowledgeBase(book.id, book.name, book.rawContent, book.sourceFileName, book.sourceFormat, book.chunkingMode, "pending", "", book.createdAt, book.updatedAt)
+                knowledgeBasesQueries.insertKnowledgeBase(book.id, book.name, book.rawContent, book.sourceFileName, book.sourceFormat, book.sourceType, book.chunkingMode, "pending", "", book.createdAt, book.updatedAt)
             }
             payload.content.knowledgeBaseChunks.orEmpty().forEach { chunk ->
                 knowledgeBasesQueries.insertKnowledgeBaseChunk(chunk.id, chunk.knowledgeBaseId, chunk.ordinal.toLong(), chunk.sourceHeading, chunk.content, chunk.userKeywords, if (chunk.enabled) 1 else 0, 0L, "", chunk.createdAt, chunk.updatedAt)

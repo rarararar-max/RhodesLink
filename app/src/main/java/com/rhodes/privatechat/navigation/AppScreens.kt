@@ -881,3 +881,11 @@ data object DebugLogRoute : Screen {
         com.rhodes.privatechat.ui.settings.DebugLogScreen(onBack = { navigator.pop() })
     }
 }
+
+data object AiSupportRoute : Screen {
+    @Composable
+    override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        com.rhodes.privatechat.ui.support.AiSupportScreen(onBack = { navigator.pop() })
+    }
+}

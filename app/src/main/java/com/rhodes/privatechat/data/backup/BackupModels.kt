@@ -64,10 +64,23 @@ data class BackupMediaSource(
 data class BackupArchive(
     val manifest: BackupManifest,
     val payload: BackupPayload,
+    val issues: List<BackupIssue> = emptyList(),
+)
+
+data class BackupRestoreOptions(
+    val skipIssueCodes: Set<String> = emptySet(),
+)
+
+data class BackupIssue(
+    val code: String,
+    val title: String,
+    val detail: String,
+    val count: Int,
+    val skippable: Boolean = true,
 )
 
 sealed interface BackupValidationResult {
-    data class Valid(val manifest: BackupManifest) : BackupValidationResult
+    data class Valid(val manifest: BackupManifest, val issues: List<BackupIssue> = emptyList()) : BackupValidationResult
     data class Invalid(val reason: String) : BackupValidationResult
 }
 

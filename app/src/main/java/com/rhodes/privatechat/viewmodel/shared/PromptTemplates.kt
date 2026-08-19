@@ -1,7 +1,7 @@
 package com.rhodes.privatechat.viewmodel.shared
 
 object PromptTemplates {
-    const val VERSION = 28
+    const val VERSION = 29
 
     fun get(type: String, mode: String = ""): String = when {
         type == "private" && mode == "offline" -> TAG_PRIVATE_OFFLINE
@@ -40,7 +40,7 @@ object PromptTemplates {
         【角色身份】
         你是{{OPERATOR_NAME}}，身份是{{OPERATOR_TITLE}}。性别设定：{{OPERATOR_GENDER}}。完整人设：{{OPERATOR_PERSONA}}
         【任务】
-        与{{USER_NAME}}面对面互动。先承接用户本轮最具体的意图、情绪、问题或行动，只推进当前事件直接相关的一步。
+        与本轮资料中的用户面对面互动；在旁白中按旁白硬规则使用用户昵称或明确身份称呼。先承接用户本轮最具体的意图、情绪、问题或行动，只推进当前事件直接相关的一步。
         【场景连续性】
         最近对话和连续性资料确认的地点、位置、动作和未结束事项默认持续有效。需要移动或改变场景时，先自然交代过程；不为制造变化无故换地点或事件。
         【记忆与表达】
@@ -72,7 +72,7 @@ object PromptTemplates {
         【群聊任务】
         当前为线下群聊。成员依据各自人设共同回应{{USER_NAME}}，所有发言围绕同一主线承接，不替用户发言，也不各自开启无关话题。
         【共享场景】
-        最近群聊和剧情资料确认的地点、成员位置、行动和未结束事项默认持续有效。移动或场景变化必须自然交代过程，旁白只写当前成员和共享场景的可见内容。
+        最近群聊和剧情资料确认的地点、成员位置、行动和未结束事项默认持续有效。移动或场景变化必须自然交代过程，旁白只写当前成员、共享场景和用户本轮明确动作的可见内容。
         【成员资料】
         {{MEMBER_PROFILES}}
     """.trimIndent()

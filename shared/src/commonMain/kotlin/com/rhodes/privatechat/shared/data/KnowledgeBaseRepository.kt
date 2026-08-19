@@ -29,7 +29,7 @@ class KnowledgeBaseRepository(private val wrapper: DatabaseWrapper) {
         db.transaction {
             db.knowledgeBasesQueries.insertKnowledgeBase(
                 knowledgeBase.id, knowledgeBase.name.trim(), knowledgeBase.rawContent, knowledgeBase.sourceFileName,
-                knowledgeBase.sourceFormat, knowledgeBase.chunkingMode, knowledgeBase.indexStatus,
+                knowledgeBase.sourceFormat, knowledgeBase.sourceType, knowledgeBase.chunkingMode, knowledgeBase.indexStatus,
                 knowledgeBase.indexedEmbeddingSignature, knowledgeBase.createdAt, knowledgeBase.updatedAt,
             )
             db.knowledgeBasesQueries.deleteChunksByKnowledgeBase(knowledgeBase.id)
@@ -159,9 +159,9 @@ class KnowledgeBaseRepository(private val wrapper: DatabaseWrapper) {
     }
 
     private fun mapKnowledgeBase(
-        id: String, name: String, rawContent: String, sourceFileName: String, sourceFormat: String,
+        id: String, name: String, rawContent: String, sourceFileName: String, sourceFormat: String, sourceType: String,
         chunkingMode: String, indexStatus: String, indexedEmbeddingSignature: String, createdAt: Long, updatedAt: Long,
-    ) = KnowledgeBase(id, name, rawContent, sourceFileName, sourceFormat, chunkingMode, indexStatus, indexedEmbeddingSignature, createdAt, updatedAt)
+    ) = KnowledgeBase(id, name, rawContent, sourceFileName, sourceFormat, sourceType, chunkingMode, indexStatus, indexedEmbeddingSignature, createdAt, updatedAt)
 
     private fun mapChunk(
         id: String, knowledgeBaseId: String, ordinal: Long, sourceHeading: String, content: String,

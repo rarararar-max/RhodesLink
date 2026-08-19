@@ -43,6 +43,7 @@ import com.rhodes.privatechat.ui.theme.TextPrimary
 import com.rhodes.privatechat.ui.theme.TextSecondary
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.koin.compose.koinInject
@@ -58,22 +59,49 @@ fun KnowledgeBasesScreen(onBack: () -> Unit, onOpen: (String) -> Unit, modifier:
     var bookStats by remember { mutableStateOf<Map<String, Triple<Int, Int, Int>>>(emptyMap()) }
     var loading by remember { mutableStateOf(true) }
     var creating by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
     var remoteConfirm by remember { mutableStateOf<KnowledgeBase?>(null) }
     var remoteChunkCount by remember { mutableStateOf(0) }
+    var deferredRemoteConfirmationIds by remember { mutableStateOf(emptySet<String>()) }
     var message by remember { mutableStateOf("") }
 
-    fun refresh() = scope.launch {
-        loading = true
-        books = runCatching { viewModel.getKnowledgeBases() }.getOrElse { emptyList() }
+    suspend fun refresh(initial: Boolean = false) {
+        if (initial) loading = true
+        val refreshedBooks = runCatching { viewModel.getKnowledgeBases() }
+            .getOrElse { emptyList() }
+            // The support manual is a system record. Never infer this from its display name.
+            .filterNot { it.sourceType == "system_support" || it.id == settings.supportKnowledgeBaseId }
+        books = refreshedBooks
+        books.filter { it.indexStatus == "processing" }.forEach { viewModel.resumeKnowledgeBaseProcessing(it) }
         bookStats = books.associate { book ->
             val chunks = viewModel.getKnowledgeBaseChunks(book.id)
             val roles = viewModel.getKnowledgeBaseAssignmentsForBook(book.id).count { it.enabled }
             val surfaces = listOf("private_chat", "group_chat", "moment", "comment", "diary").count { settings.isKnowledgeBaseEnabledForBook(book.id, it) }
             book.id to Triple(chunks.size, roles, surfaces)
         }
-        loading = false
+        if (settings.vectorProviderMode == "third_party" && remoteConfirm == null) {
+            books.firstOrNull { it.indexStatus == "pending_confirm" && it.id !in deferredRemoteConfirmationIds }?.let { pending ->
+                runCatching { viewModel.planKnowledgeBaseIndex(pending.id).chunkCount }
+                    .onSuccess { remoteChunkCount = it; remoteConfirm = pending }
+            }
+        }
+        if (initial) loading = false
     }
-    androidx.compose.runtime.LaunchedEffect(Unit) { refresh() }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        refresh(initial = true)
+        while (true) {
+            val hasActiveWork = books.any {
+                it.indexStatus == "processing" || it.indexStatus == "pending_confirm" ||
+                    it.indexStatus == "indexing" || it.indexStatus.startsWith("indexing:")
+            }
+            if (hasActiveWork) {
+                delay(1_000)
+                refresh()
+            } else {
+                delay(5_000)
+            }
+        }
+    }
 
     fun startIndex(book: KnowledgeBase, confirmed: Boolean) = scope.launch {
         message = "正在索引《${book.name}》…"
@@ -118,10 +146,10 @@ fun KnowledgeBasesScreen(onBack: () -> Unit, onOpen: (String) -> Unit, modifier:
                 message = "导入失败：${it.message?.take(120) ?: "未知错误"}"
                 return@launch
             }
-            if (settings.vectorProviderMode == "third_party") {
+        if (settings.vectorProviderMode == "third_party") {
                 remoteChunkCount = viewModel.planKnowledgeBaseIndex(book.id).chunkCount
                 remoteConfirm = book
-            } else message = "已导入《${book.name}》，正在后台建立本地索引"
+        } else message = "已导入《${book.name}》，正在后台建立本地索引"
             refresh()
         }
     }
@@ -160,28 +188,30 @@ fun KnowledgeBasesScreen(onBack: () -> Unit, onOpen: (String) -> Unit, modifier:
     }
 
     if (creating) KnowledgeBaseTextDialog(
-        onDismiss = { creating = false },
+        saving = saving,
+        onDismiss = { if (!saving) creating = false },
         onSave = { name, content ->
+            if (saving) return@KnowledgeBaseTextDialog
+            saving = true
             scope.launch {
-                val book = runCatching { viewModel.saveKnowledgeBaseText(name, content) }.getOrElse {
+                val book = runCatching { viewModel.saveKnowledgeBaseTextInBackground(name, content) }.getOrElse {
                     message = "保存失败：${it.message?.take(120) ?: "未知错误"}"
+                    saving = false
                     return@launch
                 }
                 creating = false
-                if (settings.vectorProviderMode == "third_party") {
-                    remoteChunkCount = viewModel.planKnowledgeBaseIndex(book.id).chunkCount
-                    remoteConfirm = book
-                } else message = "已保存《${book.name}》，正在后台建立本地索引"
+                saving = false
+                message = "已保存《${book.name}》，正在后台分段"
                 refresh()
             }
         }
     )
     remoteConfirm?.let { book -> AlertDialog(
-        onDismissRequest = { remoteConfirm = null },
+        onDismissRequest = { deferredRemoteConfirmationIds = deferredRemoteConfirmationIds + book.id; remoteConfirm = null },
         title = { Text("确认远程向量化") },
         text = { Text("《${book.name}》预计会发起 $remoteChunkCount 次 Embedding 请求，可能产生服务商费用。") },
         confirmButton = { TextButton(onClick = { remoteConfirm = null; startIndex(book, true) }) { Text("确认并索引", color = Primary) } },
-        dismissButton = { TextButton(onClick = { remoteConfirm = null }) { Text("稍后") } },
+        dismissButton = { TextButton(onClick = { deferredRemoteConfirmationIds = deferredRemoteConfirmationIds + book.id; remoteConfirm = null }) { Text("稍后") } },
     ) }
 }
 
@@ -190,6 +220,7 @@ private fun KnowledgeBaseTextDialog(
     initialName: String = "",
     initialContent: String = "",
     title: String = "新建知识库",
+    saving: Boolean = false,
     onDismiss: () -> Unit,
     onSave: (String, String) -> Unit,
 ) {
@@ -199,15 +230,19 @@ private fun KnowledgeBaseTextDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = { Column { OutlinedTextField(name, { name = it }, label = { Text("名称") }); OutlinedTextField(content, { content = it }, label = { Text("正文") }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp), minLines = 6) } },
-        confirmButton = { TextButton(onClick = { onSave(name, content) }) { Text("保存") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+        confirmButton = { TextButton(enabled = !saving, onClick = { onSave(name, content) }) { Text(if (saving) "处理中…" else "保存") } },
+        dismissButton = { TextButton(enabled = !saving, onClick = onDismiss) { Text("取消") } },
     )
 }
 
 fun indexStatusText(status: String): String = when (status) {
     "ready" -> "索引完成"
+    "processing" -> "处理中：正在分段"
+    "pending_confirm" -> "已分段，等待确认索引"
     "indexing" -> "索引中"
+    else -> if (status.startsWith("indexing:")) "索引中：${status.removePrefix("indexing:")}" else when (status) {
     "partial_failed" -> "部分失败，可点此重建"
     "failed" -> "索引失败，可点此重建"
     else -> "等待索引"
+    }
 }

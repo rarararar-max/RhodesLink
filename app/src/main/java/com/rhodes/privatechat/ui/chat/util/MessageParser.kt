@@ -62,7 +62,7 @@ object MessageParser {
                 result
             } catch (e: Exception) {
                 ChatTrace.e("Parser", "ERROR id=${msg.id} type=${msg.type} sender=${msg.senderName} contentLength=${msg.content.length} err=${e.message}", e)
-                listOf(ChatUiMessage(msg.id, msg.senderName.ifBlank { "系统" }, Gray100, msg.content.ifBlank { "[消息解析失败]" }, msg.timestamp, isSystem = msg.type == "system", originalMessageId = msg.id))
+                listOf(ChatUiMessage(msg.id, msg.senderName.ifBlank { "系统" }, Gray100, sanitizeVisibleSegmentContent(msg.content).ifBlank { "[消息解析失败]" }, msg.timestamp, isSystem = msg.type == "system", originalMessageId = msg.id))
             }
         }
         ChatTrace.d("Parser", "done isGroup=$isGroup resultCount=${parsed.size} ids=${ChatTrace.ids(parsed.map { it.id })}")
@@ -139,7 +139,7 @@ object MessageParser {
                 val rawContent = obj["message"]?.jsonPrimitive?.content ?: obj["content"]?.jsonPrimitive?.content ?: obj["text"]?.jsonPrimitive?.content ?: return@mapIndexedNotNull null
                 val msgType = if (rawName == "旁白" || obj["type"]?.jsonPrimitive?.content.equals("narration", true)) "narration" else "dialogue"
                 val name = if (msgType == "narration") "旁白" else rawName
-                val content = stripLeakedSegmentLabel(rawContent)
+                val content = sanitizeVisibleSegmentContent(rawContent)
                 if (content.isBlank()) return@mapIndexedNotNull null
                 if (isOnline && (msgType == "narration" || name == "旁白")) return@mapIndexedNotNull null
                 val uid = msg.id * 1000 + idx
@@ -168,7 +168,7 @@ object MessageParser {
     ): List<ChatUiMessage> {
         val (emotion, segments) = parsePrivateJson(msg.content)
         if (emotion == null || segments.isEmpty()) {
-            return listOf(ChatUiMessage(msg.id, aiName, Primary, safeDisplayText(msg.content), msg.timestamp,
+            return listOf(ChatUiMessage(msg.id, aiName, Primary, sanitizeVisibleSegmentContent(safeDisplayText(msg.content)), msg.timestamp,
                 avatarUri = aiAvatarUri, mode = msg.mode, emotion = msg.emotion,
                 activity = msg.activity, location = msg.location, isArchived = isArchived(msg, restartAt), originalMessageId = msg.id))
         }
@@ -180,7 +180,7 @@ object MessageParser {
         }
         for ((segIdx, seg) in segments.withIndex()) {
             if (isPrivateSegmentRecalled(msg.content, segIdx)) continue
-            val displayContent = stripLeakedSegmentLabel(seg.content)
+            val displayContent = sanitizeVisibleSegmentContent(seg.content)
             if (displayContent.isBlank()) continue
             if (seg.type == "narration") {
                 if (!isOnline) {
@@ -290,11 +290,11 @@ object MessageParser {
 
     private fun safeDisplayText(content: String): String {
         val parsed = parsePrivateJson(content)
-        parsed.second.firstOrNull { it.type == "dialogue" }?.content?.takeIf { it.isNotBlank() }?.let { return it }
-        parsed.second.firstOrNull()?.content?.takeIf { it.isNotBlank() }?.let { return it }
-        extractStringFieldLenient(content, "dialogue")?.takeIf { it.isNotBlank() && !looksLikeJson(it) }?.let { return it }
-        extractStringFieldLenient(content, "content")?.takeIf { it.isNotBlank() && !looksLikeJson(it) }?.let { return it }
-        extractStringFieldLenient(content, "message")?.takeIf { it.isNotBlank() && !looksLikeJson(it) }?.let { return it }
+        parsed.second.firstOrNull { it.type == "dialogue" }?.content?.takeIf { it.isNotBlank() }?.let { return sanitizeVisibleSegmentContent(it) }
+        parsed.second.firstOrNull()?.content?.takeIf { it.isNotBlank() }?.let { return sanitizeVisibleSegmentContent(it) }
+        extractStringFieldLenient(content, "dialogue")?.takeIf { it.isNotBlank() && !looksLikeJson(it) }?.let { return sanitizeVisibleSegmentContent(it) }
+        extractStringFieldLenient(content, "content")?.takeIf { it.isNotBlank() && !looksLikeJson(it) }?.let { return sanitizeVisibleSegmentContent(it) }
+        extractStringFieldLenient(content, "message")?.takeIf { it.isNotBlank() && !looksLikeJson(it) }?.let { return sanitizeVisibleSegmentContent(it) }
         return if (looksLikeJson(content)) "[消息格式异常，已隐藏原始结构]" else content.ifBlank { "[消息解析失败]" }
     }
 
@@ -303,10 +303,16 @@ object MessageParser {
         segments.getOrNull(index)?.jsonObject?.get("recalled")?.jsonPrimitive?.content.equals("true", true)
     }.getOrDefault(false)
 
-    /** Removes only the exact structural labels leaked at the start of a model segment. */
-    private fun stripLeakedSegmentLabel(content: String): String = content.trimStart()
-        .replaceFirst(Regex("^【(?:旁白|台词|台詞)(?:[：:])?】\\s*"), "")
-        .trimStart()
+    private fun sanitizeVisibleSegmentContent(content: String): String {
+        var result = content
+        result = result.replace(
+            Regex("[【\\[［](?:上一轮状态|当前对话进展|本轮参考资料|用户发言意图分析)[】\\]］][\\s\\S]*?(?=[【\\[［](?:状态|心情|位置|本轮简述|旁白|台词|台詞)[】\\]］]|$)"),
+            " "
+        )
+        result = result.replace(Regex("[【\\[［](?:状态|心情|位置|本轮简述)[】\\]］][^\\n]*\\n?"), "")
+        result = result.replaceFirst(Regex("^\\s*[【\\[［](?:旁白|台词|台詞)(?:[：:])?[】\\]］]\\s*"), "")
+        return result.trim()
+    }
 
     private fun looksLikeJson(content: String): Boolean {
         val t = content.trim()

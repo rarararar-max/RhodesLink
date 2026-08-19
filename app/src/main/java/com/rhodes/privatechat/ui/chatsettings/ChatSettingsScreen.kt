@@ -225,6 +225,8 @@ private fun GeneralTab(settings: SettingsRepository, onPromptEditor: () -> Unit 
     Spacer(modifier = Modifier.height(12.dp))
     HistoryRoundsSlider(settings, contextMode) { contextMode = "custom" }
     Spacer(modifier = Modifier.height(12.dp))
+    ContextWindowSetting(settings)
+    Spacer(modifier = Modifier.height(12.dp))
     SectionTitle("生成风格")
      ParamSlider(settings, "ai_temperature", "创意程度", 70, 0f..200f, step = 5f, tip = "角色说话风格。建议60-90。太低（低于30）说话非常死板重复，像机器人；太高（超过120）容易跑偏，说话前言不搭后语。当前值÷100就是实际使用的数值。")
     Spacer(modifier = Modifier.height(12.dp))
@@ -267,6 +269,50 @@ private fun HistoryRoundsSlider(settings: SettingsRepository, contextMode: Strin
         Text("私聊与群聊共用。手动调整只影响本轮请求带入的近期互动，不改变滚动摘要、记忆提取或自动内容设置。", fontSize = 11.sp, color = TextSecondary)
     }
     Spacer(Modifier.height(4.dp))
+}
+
+@Composable
+private fun ContextWindowSetting(settings: SettingsRepository) {
+    var automatic by remember { mutableStateOf(settings.automaticContextWindow) }
+    var manualLimit by remember { mutableFloatStateOf(settings.maxContextTokens.coerceIn(5_000, 1_000_000).toFloat()) }
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Card).padding(12.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("自动上下文", fontSize = 13.sp, color = TextPrimary)
+                Text(
+                    if (automatic) "优先发送历史；服务端提示超限后自动裁剪较早回合并重试。"
+                    else "使用手动上限预先裁剪历史，适合已知上下文较小的中转服务。",
+                    fontSize = 11.sp, color = TextSecondary
+                )
+            }
+            Switch(checked = automatic, onCheckedChange = {
+                automatic = it
+                settings.automaticContextWindow = it
+                DebugLogger.log("Settings/Param", "参数调整: 自动上下文=$it")
+            }, colors = SwitchDefaults.colors(checkedThumbColor = Blue400, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
+        }
+        if (!automatic) {
+            Spacer(Modifier.height(10.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("上下文长度上限", fontSize = 13.sp, color = TextPrimary)
+                HelpButton("单次请求允许的输入与输出总容量。数值必须不超过当前模型或中转服务实际支持的上限。手动模式会预先裁剪较早历史。")
+                Spacer(Modifier.weight(1f))
+                Text("${manualLimit.toInt()} token", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Blue400)
+            }
+            Slider(
+                value = manualLimit,
+                onValueChange = { manualLimit = it },
+                onValueChangeFinished = {
+                    val previous = settings.maxContextTokens
+                    settings.maxContextTokens = manualLimit.toInt()
+                    DebugLogger.log("Settings/Param", "参数调整: 上下文长度上限(max_context_tokens) $previous -> ${settings.maxContextTokens}")
+                },
+                valueRange = 5_000f..1_000_000f,
+                steps = 199,
+                colors = SliderDefaults.colors(thumbColor = Blue400, activeTrackColor = Blue400)
+            )
+        }
+    }
 }
 
 @Composable

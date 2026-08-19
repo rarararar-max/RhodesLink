@@ -106,7 +106,8 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                     emotion = nested.emotion.ifBlank { response.emotion },
                     state = nested.state.ifBlank { response.state },
                     location = nested.location.ifBlank { response.location },
-                    affection_mod = nested.affection_mod.takeIf { it != 0 } ?: response.affection_mod
+                    affection_mod = nested.affection_mod.takeIf { it != 0 } ?: response.affection_mod,
+                    userIntentAnalysis = nested.userIntentAnalysis.ifBlank { response.userIntentAnalysis }
                 )
             }
         }
@@ -123,12 +124,13 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         // Models occasionally emit HTML line-break tags between segments; they are formatting
         // noise, not user-visible content.
         val normalizedRaw = raw.replace(Regex("(?i)</?br\\s*/?>"), "\n")
-        val tagPattern = Regex("""[【\[［]\s*(状态|情绪|心情|位置|本轮简述|旁白|台词|台詞)\s*(?:[：:]\s*([^】\]］]*))?[】\]］]""")
+        val tagPattern = Regex("""[【\[［]\s*(状态|情绪|心情|位置|本轮简述|用户发言意图分析|旁白|台词|台詞)\s*(?:[：:]\s*([^】\]］]*))?[】\]］]""")
         val segments = mutableListOf<Segment>()
         var emotion = ""
         var location = ""
         var state = ""
         var continuity = ""
+        var userIntentAnalysis = ""
         val matches = tagPattern.findAll(normalizedRaw).toList()
         val leadingText = matches.firstOrNull()?.let { normalizedRaw.substring(0, it.range.first).trim() }.orEmpty()
         matches.forEachIndexed { index, match ->
@@ -141,6 +143,7 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                 "情绪", "心情" -> if (emotion.isBlank()) emotion = text.take(10)
                 "位置" -> if (location.isBlank()) location = text.take(30)
                 "本轮简述" -> if (continuity.isBlank()) continuity = text.take(160)
+                "用户发言意图分析" -> if (userIntentAnalysis.isBlank()) userIntentAnalysis = text.take(800)
                 "旁白" -> if (text.isNotBlank()) segments += Segment(type = "narration", content = text)
                 "台词", "台詞" -> if (text.isNotBlank()) segments += Segment(type = "dialogue", content = text)
             }
@@ -163,7 +166,7 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                 }
             }
         }
-        return OfflineModeResponse(emotion = emotion, location = location, state = state, continuity = continuity, segments = segments.ifEmpty { null })
+        return OfflineModeResponse(emotion = emotion, location = location, state = state, continuity = continuity, userIntentAnalysis = userIntentAnalysis, segments = segments.ifEmpty { null })
     }
 
     private fun parseSegmentsLenient(raw: String): List<Segment> {

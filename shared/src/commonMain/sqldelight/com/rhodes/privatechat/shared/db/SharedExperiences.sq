@@ -45,6 +45,9 @@ DELETE FROM shared_experiences WHERE sourceKind = ? AND sourceRefId = ?;
 deleteSharedExperienceParticipantsBySource:
 DELETE FROM shared_experience_participants WHERE experienceId IN (SELECT id FROM shared_experiences WHERE sourceKind = ? AND sourceRefId = ?);
 
+deleteSharedExperienceParticipantsByOperator:
+DELETE FROM shared_experience_participants WHERE operatorId = ?;
+
 deleteAllSharedExperienceParticipants:
 DELETE FROM shared_experience_participants;
 

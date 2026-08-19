@@ -12,11 +12,16 @@ fun createVisionGateway(provider: String, endpoint: String, apiKey: String, mode
         when (provider) {
             "ali" -> AliyunQwenVlGateway(endpoint, apiKey, modelName)
             "anthropic" -> AnthropicVisionGateway(endpoint, apiKey, modelName)
-            "xiaomi" -> OpenAiCompatVisionGateway(endpoint, apiKey, modelName, useApiKeyHeader = true)
-            "doubao", "openai" -> OpenAiCompatVisionGateway(endpoint, apiKey, modelName)
-            else -> OpenAiCompatVisionGateway(endpoint, apiKey, modelName)
+            "xiaomi" -> OpenAiCompatVisionGateway(normalizeOpenAiChatEndpoint(endpoint), apiKey, modelName, useApiKeyHeader = true)
+            "doubao", "openai", "siliconflow" -> OpenAiCompatVisionGateway(normalizeOpenAiChatEndpoint(endpoint), apiKey, modelName)
+            else -> OpenAiCompatVisionGateway(normalizeOpenAiChatEndpoint(endpoint), apiKey, modelName)
         }
     } else {
         DisabledVisionGateway()
     }
+}
+
+fun normalizeOpenAiChatEndpoint(raw: String): String {
+    val endpoint = raw.trim().trimEnd('/')
+    return if (endpoint.endsWith("/chat/completions")) endpoint else "$endpoint/chat/completions"
 }

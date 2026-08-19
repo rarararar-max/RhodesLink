@@ -101,7 +101,7 @@ class KnowledgeBaseIndexService(
             it.enabled && it.content.isNotBlank() && (rebuildAll || it.indexError.isNotBlank())
         }
         val signature = vectorService.currentEmbeddingSignature()
-        repository.updateIndexStatus(knowledgeBaseId, "indexing", signature)
+        repository.updateIndexStatus(knowledgeBaseId, "indexing:0/${chunks.size}", signature)
         if (rebuildAll) {
             repository.clearChunkIndexes(knowledgeBaseId)
             vectorService.clearOwnerMemory(OWNER_TYPE, knowledgeBaseId)
@@ -146,6 +146,7 @@ class KnowledgeBaseIndexService(
                 repository.updateChunkIndex(chunk.id, 0L, message)
             }
             onProgress(index + 1, chunks.size)
+            repository.updateIndexStatus(knowledgeBaseId, "indexing:${index + 1}/${chunks.size}", signature)
         }
         val status = when {
             failed == 0 -> "ready"

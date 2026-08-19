@@ -20,6 +20,8 @@ import com.rhodes.privatechat.data.RelationshipExport
 import com.rhodes.privatechat.shared.model.ChatMessage
 import com.rhodes.privatechat.shared.data.BackupChatDisplayEvent
 import com.rhodes.privatechat.shared.model.DispatchRecord
+import com.rhodes.privatechat.shared.model.Memory
+import com.rhodes.privatechat.shared.model.MemoryType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -198,6 +200,77 @@ class BackupFileContainerTest {
         BackupFileWriter("1.13.1", 24).writeFullBackup(output, payload)
 
         assertTrue(BackupFileReader().validate(ByteArrayInputStream(output.toByteArray())) is BackupValidationResult.Invalid)
+    }
+
+    @Test
+    fun acceptsFullBackupContainingGroupSession() {
+        val payload = BackupPayload(
+            ExportPayload(
+                type = "full_backup",
+                operators = listOf(OperatorExport("amiya", "阿米娅")),
+                sessions = listOf(
+                    com.rhodes.privatechat.data.SessionExport(
+                        id = "group_test", operatorId = "group_test", operatorName = "测试群", members = "amiya"
+                    )
+                )
+            )
+        )
+        val output = ByteArrayOutputStream()
+        BackupFileWriter("1.13.1", 24).writeFullBackup(output, payload)
+
+        assertTrue(BackupFileReader().validate(ByteArrayInputStream(output.toByteArray())) is BackupValidationResult.Valid)
+    }
+
+    @Test
+    fun rejectsGroupSessionWithMissingMember() {
+        val payload = BackupPayload(
+            ExportPayload(
+                type = "full_backup",
+                operators = listOf(OperatorExport("amiya", "阿米娅")),
+                sessions = listOf(
+                    com.rhodes.privatechat.data.SessionExport(
+                        id = "group_test", operatorId = "group_test", operatorName = "测试群", members = "missing"
+                    )
+                )
+            )
+        )
+        val output = ByteArrayOutputStream()
+        BackupFileWriter("1.13.1", 24).writeFullBackup(output, payload)
+
+        assertTrue(BackupFileReader().validate(ByteArrayInputStream(output.toByteArray())) is BackupValidationResult.Invalid)
+    }
+
+    @Test
+    fun reportsOrphanMemoryAsSkippableIssue() {
+        val payload = BackupPayload(
+            ExportPayload(
+                type = "full_backup",
+                operators = listOf(OperatorExport("amiya", "阿米娅")),
+                memories = listOf(Memory(sessionId = "missing_session", operatorId = "amiya", type = MemoryType.SHORT_TERM, content = "旧记忆")),
+            )
+        )
+        val output = ByteArrayOutputStream()
+        BackupFileWriter("1.13.1", 24).writeFullBackup(output, payload)
+
+        val result = BackupFileReader().validate(ByteArrayInputStream(output.toByteArray()))
+        assertTrue(result is BackupValidationResult.Valid)
+        assertTrue((result as BackupValidationResult.Valid).issues.any { it.code == "ORPHAN_MEMORY" && it.count == 1 })
+    }
+
+    @Test
+    fun acceptsGlobalDailySummaryWithoutSessionOrOperator() {
+        val payload = BackupPayload(
+            ExportPayload(
+                type = "full_backup",
+                memories = listOf(Memory(sessionId = "daily_2026年08月18日", operatorId = "daily", type = MemoryType.DAILY, content = "每日摘要")),
+            )
+        )
+        val output = ByteArrayOutputStream()
+        BackupFileWriter("1.13.1", 24).writeFullBackup(output, payload)
+
+        val result = BackupFileReader().validate(ByteArrayInputStream(output.toByteArray()))
+        assertTrue(result is BackupValidationResult.Valid)
+        assertTrue((result as BackupValidationResult.Valid).issues.none { it.code == "ORPHAN_MEMORY" })
     }
 
     @Test

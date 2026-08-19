@@ -156,8 +156,37 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putInt("history_messages", value.coerceIn(0, 200))
 
     var maxContextTokens: Int
-        get() = getInt("max_context_tokens", 32000).coerceIn(3000, 200000)
-        set(value) = putInt("max_context_tokens", value.coerceIn(3000, 200000))
+        get() = getInt("max_context_tokens", 32000).coerceIn(5000, 1_000_000)
+        set(value) = putInt("max_context_tokens", value.coerceIn(5000, 1_000_000))
+
+    /** When enabled, the provider enforces its actual context capacity before local trimming. */
+    var automaticContextWindow: Boolean
+        get() = getBoolean("automatic_context_window", true)
+        set(value) = putBoolean("automatic_context_window", value)
+
+    var supportKnowledgeBaseId: String
+        get() = getString("support_knowledge_base_id", "")
+        set(value) = putString("support_knowledge_base_id", value)
+
+    var supportRemoteEmbeddingConfirmedSignature: String
+        get() = getString("support_remote_embedding_confirmed_signature", "")
+        set(value) = putString("support_remote_embedding_confirmed_signature", value)
+
+    var supportManualContentHash: String
+        get() = getString("support_manual_content_hash", "")
+        set(value) = putString("support_manual_content_hash", value)
+
+    var supportRemoteVectorEnabled: Boolean
+        get() = getBoolean("support_remote_vector_enabled", false)
+        set(value) = putBoolean("support_remote_vector_enabled", value)
+
+    var supportPersistConversation: Boolean
+        get() = getBoolean("support_persist_conversation", false)
+        set(value) = putBoolean("support_persist_conversation", value)
+
+    var supportConversation: String
+        get() = getString("support_conversation", "")
+        set(value) = putString("support_conversation", value)
 
     // === 聊天配置 ===
     var aiTemperature: Double

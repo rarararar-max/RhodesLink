@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS knowledge_bases (
     rawContent TEXT NOT NULL DEFAULT '',
     sourceFileName TEXT NOT NULL DEFAULT '',
     sourceFormat TEXT NOT NULL DEFAULT '',
+    sourceType TEXT NOT NULL DEFAULT 'user',
     chunkingMode TEXT NOT NULL DEFAULT 'smart',
     indexStatus TEXT NOT NULL DEFAULT 'pending',
     indexedEmbeddingSignature TEXT NOT NULL DEFAULT '',
@@ -50,12 +51,12 @@ getKnowledgeBaseCount:
 SELECT COUNT(*) FROM knowledge_bases;
 
 insertKnowledgeBase:
-INSERT OR REPLACE INTO knowledge_bases(id, name, rawContent, sourceFileName, sourceFormat, chunkingMode, indexStatus, indexedEmbeddingSignature, createdAt, updatedAt)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO knowledge_bases(id, name, rawContent, sourceFileName, sourceFormat, sourceType, chunkingMode, indexStatus, indexedEmbeddingSignature, createdAt, updatedAt)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 updateKnowledgeBaseContent:
 UPDATE knowledge_bases
-SET name = ?, rawContent = ?, sourceFileName = ?, sourceFormat = ?, chunkingMode = ?, indexStatus = ?, indexedEmbeddingSignature = ?, updatedAt = ?
+SET name = ?, rawContent = ?, sourceFileName = ?, sourceFormat = ?, sourceType = ?, chunkingMode = ?, indexStatus = ?, indexedEmbeddingSignature = ?, updatedAt = ?
 WHERE id = ?;
 
 updateKnowledgeBaseIndexStatus:

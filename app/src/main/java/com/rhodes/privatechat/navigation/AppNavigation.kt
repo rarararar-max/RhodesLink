@@ -252,6 +252,7 @@ private fun SettingsTabContent(navigator: Navigator) {
         onPermissions = { navigator.push(PermissionsRoute) },
         onCredits = { navigator.push(CreditsRoute) },
         onDebugLog = { navigator.push(DebugLogRoute) }
+        ,onAiSupport = { navigator.push(AiSupportRoute) }
     )
 }
 

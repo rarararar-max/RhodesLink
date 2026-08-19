@@ -411,6 +411,27 @@ class SharedUtils(
             if (anchors.size > 8) sb.append("... +").append(anchors.size - 8).append(" more\n")
         }
         DebugLogger.log("Memory/Context", sb.toString().take(2500))
+        if (DebugLogger.allowSensitiveTrace) {
+            DebugLogger.trace("Memory/ContextDetail", buildString {
+                append("【取用范围】\n")
+                append("界面：").append(surface).append('\n')
+                append("对象：").append(title).append("\n\n")
+                append("【实际提供给 AI 的记忆、知识库和背景资料】\n")
+                placeholders.forEach { (key, value) ->
+                    if (value.isNotBlank() && value != "无" && value != "暂无") {
+                        append("\n【").append(key).append("】\n")
+                        append(value.take(4_000)).append('\n')
+                    }
+                }
+                if (anchors.isNotEmpty()) {
+                    append("\n【关联锚点】\n")
+                    anchors.forEachIndexed { index, anchor ->
+                        append(index + 1).append(". ").append(anchor.type.name).append("：")
+                            .append(anchor.content.take(500)).append('\n')
+                    }
+                }
+            })
+        }
     }
 
     fun trackTokens(category: String, prompt: String, response: String) {

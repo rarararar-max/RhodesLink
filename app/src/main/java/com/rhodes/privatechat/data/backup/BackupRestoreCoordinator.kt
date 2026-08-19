@@ -51,7 +51,7 @@ class BackupRestoreCoordinator(
 
     suspend fun inspect(input: InputStream): BackupValidationResult = fileReader.validate(input)
 
-    suspend fun restore(openInput: () -> InputStream, onProgress: (BackupRestoreProgress) -> Unit): BackupRestoreResult = mutex.withLock {
+    suspend fun restore(openInput: () -> InputStream, onProgress: (BackupRestoreProgress) -> Unit, options: BackupRestoreOptions = BackupRestoreOptions()): BackupRestoreResult = mutex.withLock {
         var safetyBackup: File? = null
         var manifest: BackupManifest? = null
         var previousSettings: Map<String, String>? = null
@@ -82,7 +82,7 @@ class BackupRestoreCoordinator(
             val stagedMedia = if (archive.payload.media.isEmpty()) emptyMap() else {
                 verifiedInput.inputStream().use { BackupMediaStager().extract(it, archive.payload, mediaDirectory) }
             }
-            val restoredPayload = BackupRestorePayloadRewriter.rewriteMediaUris(archive.payload, stagedMedia)
+            val restoredPayload = BackupRestorePayloadRewriter.rewriteMediaUris(archive.payload, stagedMedia).filterIssues(options.skipIssueCodes)
 
             onProgress(BackupRestoreProgress(BackupRestoreStage.RESTORING_DATABASE, "正在恢复结构化数据"))
             try {
@@ -118,6 +118,28 @@ class BackupRestoreCoordinator(
         } finally {
             restoreInput?.delete()
         }
+    }
+
+    private fun BackupPayload.filterIssues(skipCodes: Set<String>): BackupPayload {
+        val operatorIds = content.operators.orEmpty().map { it.id }.toSet()
+        val sessionIds = content.sessions.orEmpty().map { it.id }.toSet()
+        val momentIds = content.moments.orEmpty().map { it.id }.toSet()
+        val commentIds = content.momentComments.orEmpty().map { it.id }.toSet()
+        val experienceIds = sharedExperiences.map { it.id }.toSet()
+        return copy(
+            content = content.copy(
+                memories = if ("ORPHAN_MEMORY" in skipCodes) content.memories.orEmpty().filter {
+                    (it.type == com.rhodes.privatechat.shared.model.MemoryType.DAILY && it.operatorId == "daily" && it.sessionId.startsWith("daily_")) ||
+                        (it.operatorId in operatorIds && it.sessionId in sessionIds)
+                } else content.memories,
+                anchors = if ("ORPHAN_ANCHOR" in skipCodes) content.anchors.orEmpty().filter { it.operatorId in operatorIds && it.sessionId in sessionIds } else content.anchors,
+                momentComments = if ("ORPHAN_MOMENT_COMMENT" in skipCodes) content.momentComments.orEmpty().filter { it.momentId in momentIds && (it.parentCommentId == 0L || it.parentCommentId in commentIds) } else content.momentComments,
+                momentLikes = if ("ORPHAN_MOMENT_LIKE" in skipCodes) content.momentLikes.orEmpty().filter { it.momentId in momentIds } else content.momentLikes,
+            ),
+            sharedExperienceParticipants = if ("ORPHAN_SHARED_EXPERIENCE_PARTICIPANT" in skipCodes) {
+                sharedExperienceParticipants.filter { it.experienceId in experienceIds && it.operatorId in operatorIds }
+            } else sharedExperienceParticipants,
+        )
     }
 
     private fun copyRestoreInput(openInput: () -> InputStream): File {

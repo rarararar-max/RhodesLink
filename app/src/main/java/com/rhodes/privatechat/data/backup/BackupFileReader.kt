@@ -14,9 +14,9 @@ class BackupFileReader(
     private val json = Json { ignoreUnknownKeys = true }
 
     fun validate(input: InputStream): BackupValidationResult = runCatching {
-        read(input).manifest
-    }.fold(
-        onSuccess = { BackupValidationResult.Valid(it) },
+        read(input)
+        }.fold(
+        onSuccess = { archive -> BackupValidationResult.Valid(archive.manifest, archive.issues) },
         onFailure = { BackupValidationResult.Invalid(it.message ?: "备份文件无效") },
     )
 
@@ -77,17 +77,18 @@ class BackupFileReader(
             .getOrElse { throw BackupFormatException("data/backup.json 无法解析") }
         if (payload.content.type != "full_backup") throw BackupFormatException("备份内容不是完整备份")
         if (manifest.mediaIncluded != payload.media.isNotEmpty()) throw BackupFormatException("备份媒体清单与标记不一致")
-        validateReferences(payload)
+        val issues = validateReferences(payload)
         if (payload.media.map { it.archivePath }.distinct().size != payload.media.size) {
             throw BackupFormatException("媒体清单存在重复路径")
         }
         if (payload.media.map { it.archivePath }.toSet() != entries.keys.filter { it.startsWith("media/") }.toSet()) {
             throw BackupFormatException("媒体清单与 ZIP 内容不一致")
         }
-        return BackupArchive(manifest, payload)
+        return BackupArchive(manifest, payload, issues)
     }
 
-    private fun validateReferences(payload: BackupPayload) {
+    private fun validateReferences(payload: BackupPayload): List<BackupIssue> {
+        val issues = mutableListOf<BackupIssue>()
         val operatorIds = payload.content.operators.orEmpty().map { it.id }.toSet()
         val sessionIds = payload.content.sessions.orEmpty().map { it.id }.toSet()
         val momentIds = payload.content.moments.orEmpty().map { it.id }.toSet()
@@ -110,7 +111,15 @@ class BackupFileReader(
             if (relationship.operatorId !in operatorIds || relationship.relatedOperatorId !in operatorIds) throw BackupFormatException("角色关系引用了不存在的角色")
         }
         payload.content.sessions.orEmpty().forEach { session ->
-            if (session.operatorId !in operatorIds) throw BackupFormatException("会话引用了不存在的角色")
+            if (session.operatorId.startsWith("group_")) {
+                session.members.split(',')
+                    .map(String::trim)
+                    .filter(String::isNotBlank)
+                    .firstOrNull { it !in operatorIds }
+                    ?.let { missing -> throw BackupFormatException("群聊成员引用了不存在的角色：$missing") }
+            } else if (session.operatorId !in operatorIds) {
+                throw BackupFormatException("私聊会话引用了不存在的角色：${session.operatorId}")
+            }
         }
         payload.content.messages.orEmpty().forEach { message ->
             if (message.sessionId !in sessionIds) throw BackupFormatException("聊天消息引用了不存在的会话")
@@ -126,29 +135,25 @@ class BackupFileReader(
         payload.giftRecords.forEach { gift ->
             if (gift.operatorId !in operatorIds) throw BackupFormatException("礼物记录引用了不存在的角色")
         }
-        payload.content.memories.orEmpty().forEach { memory ->
-            if (memory.operatorId !in operatorIds || memory.sessionId !in sessionIds) {
-                throw BackupFormatException("记忆引用不完整")
-            }
+        val orphanMemories = payload.content.memories.orEmpty().count { memory ->
+            !memory.isGlobalDailySummary() && (memory.operatorId !in operatorIds || memory.sessionId !in sessionIds)
         }
-        payload.content.anchors.orEmpty().forEach { anchor ->
-            if (anchor.operatorId !in operatorIds || anchor.sessionId !in sessionIds) {
-                throw BackupFormatException("记忆锚点引用不完整")
-            }
-        }
-        payload.content.momentComments.orEmpty().forEach { comment ->
-            if (comment.momentId !in momentIds || (comment.parentCommentId != 0L && comment.parentCommentId !in commentIds)) throw BackupFormatException("动态评论引用不完整")
-        }
-        payload.content.momentLikes.orEmpty().forEach { like ->
-            if (like.momentId !in momentIds) throw BackupFormatException("动态点赞引用不完整")
-        }
+        if (orphanMemories > 0) issues += BackupIssue("ORPHAN_MEMORY", "孤立记忆", "部分记忆引用了不存在的角色或会话；跳过后不影响角色、聊天和人设恢复。", orphanMemories)
+        val orphanAnchors = payload.content.anchors.orEmpty().count { it.operatorId !in operatorIds || it.sessionId !in sessionIds }
+        if (orphanAnchors > 0) issues += BackupIssue("ORPHAN_ANCHOR", "孤立记忆锚点", "部分记忆锚点引用了不存在的角色或会话；跳过后不影响其他数据恢复。", orphanAnchors)
+        val orphanComments = payload.content.momentComments.orEmpty().count { it.momentId !in momentIds || (it.parentCommentId != 0L && it.parentCommentId !in commentIds) }
+        if (orphanComments > 0) issues += BackupIssue("ORPHAN_MOMENT_COMMENT", "孤立动态评论", "部分评论找不到所属动态或父评论；跳过后不影响其他动态恢复。", orphanComments)
+        val orphanLikes = payload.content.momentLikes.orEmpty().count { it.momentId !in momentIds }
+        if (orphanLikes > 0) issues += BackupIssue("ORPHAN_MOMENT_LIKE", "孤立动态点赞", "部分点赞找不到所属动态；跳过后不影响其他动态恢复。", orphanLikes)
         val experienceIds = payload.sharedExperiences.map { it.id }.toSet()
-        payload.sharedExperienceParticipants.forEach { participant ->
-            if (participant.experienceId !in experienceIds || participant.operatorId !in operatorIds) {
-                throw BackupFormatException("共同经历参与者引用不完整")
-            }
-        }
+        val orphanParticipants = payload.sharedExperienceParticipants.count { it.experienceId !in experienceIds || it.operatorId !in operatorIds }
+        if (orphanParticipants > 0) issues += BackupIssue("ORPHAN_SHARED_EXPERIENCE_PARTICIPANT", "孤立共同经历参与者", "部分共同经历参与者找不到对应角色或经历；跳过后不影响其他共同经历恢复。", orphanParticipants)
+        return issues
     }
+
+    private fun com.rhodes.privatechat.shared.model.Memory.isGlobalDailySummary(): Boolean =
+        type == com.rhodes.privatechat.shared.model.MemoryType.DAILY &&
+            operatorId == "daily" && sessionId.startsWith("daily_")
 
     private fun readLimited(input: InputStream, limit: Long, capture: Boolean, onRead: (Long) -> Unit): EntryDigest {
         val output = if (capture) java.io.ByteArrayOutputStream() else null

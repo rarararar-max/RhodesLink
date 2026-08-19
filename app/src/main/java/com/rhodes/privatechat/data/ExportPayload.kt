@@ -38,7 +38,7 @@ data class ExportPayload(
     val settings: Map<String, String>? = null
 )
 
-@Serializable data class KnowledgeBaseExport(val id: String, val name: String, val rawContent: String, val sourceFileName: String = "", val sourceFormat: String = "", val chunkingMode: String = "smart", val createdAt: Long, val updatedAt: Long)
+@Serializable data class KnowledgeBaseExport(val id: String, val name: String, val rawContent: String, val sourceFileName: String = "", val sourceFormat: String = "", val sourceType: String = "user", val chunkingMode: String = "smart", val createdAt: Long, val updatedAt: Long)
 @Serializable data class KnowledgeBaseChunkExport(val id: String, val knowledgeBaseId: String, val ordinal: Int, val sourceHeading: String = "", val content: String, val userKeywords: String = "", val enabled: Boolean = true, val createdAt: Long, val updatedAt: Long)
 @Serializable data class OperatorKnowledgeBaseAssignmentExport(val operatorId: String, val knowledgeBaseId: String, val enabled: Boolean = true, val sortOrder: Int = 0)
 

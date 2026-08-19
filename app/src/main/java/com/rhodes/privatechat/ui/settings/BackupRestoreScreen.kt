@@ -85,7 +85,7 @@ private sealed interface BackupUiState {
     data class Working(val detail: String) : BackupUiState
     data class Success(val title: String, val detail: String) : BackupUiState
     data class Preview(val manifest: com.rhodes.privatechat.data.backup.BackupManifest) : BackupUiState
-    data class RestoreReady(val uri: Uri?, val safetyFile: java.io.File?, val manifest: com.rhodes.privatechat.data.backup.BackupManifest) : BackupUiState
+    data class RestoreReady(val uri: Uri?, val safetyFile: java.io.File?, val manifest: com.rhodes.privatechat.data.backup.BackupManifest, val issues: List<com.rhodes.privatechat.data.backup.BackupIssue> = emptyList()) : BackupUiState
     data class Error(val detail: String) : BackupUiState
 }
 
@@ -97,9 +97,14 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     val mainViewModel: MainViewModel = koinInject()
     val scope = rememberCoroutineScope()
     var state by remember { mutableStateOf<BackupUiState>(BackupUiState.Idle) }
+    var resultDialog by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var progressDialog by remember { mutableStateOf<String?>(null) }
+    var restoreOptions by remember { mutableStateOf(com.rhodes.privatechat.data.backup.BackupRestoreOptions()) }
+    var showIssueDialog by remember { mutableStateOf(false) }
     var showOperatorPicker by remember { mutableStateOf(false) }
     var pendingOperatorCard by remember { mutableStateOf<OperatorPackage?>(null) }
     var selectingUpdateTarget by remember { mutableStateOf(false) }
+    var operatorImportMode by remember { mutableStateOf(OperatorImportMode.FULL_REPLACE) }
     var includeBackupMedia by remember { mutableStateOf(true) }
     var pendingSafetyExport by remember { mutableStateOf<java.io.File?>(null) }
     val writer = remember { BackupFileWriter(appVersion(context), schemaVersion = 1) }
@@ -109,6 +114,7 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
             state = BackupUiState.Working("正在整理数据和图片")
+            progressDialog = "正在整理数据和图片"
             runCatching {
                 withContext(Dispatchers.IO) {
                     val snapshot = BackupSnapshotBuilder(repository, settings).build()
@@ -123,10 +129,13 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                         if (media.skippedUris.isNotEmpty()) append("。另有 ${media.skippedUris.size} 个外部图片未包含，换机后可能无法显示")
                     }
                 }
-            }.onSuccess { state = BackupUiState.Success("备份已保存", it) }
+            }.onSuccess { state = BackupUiState.Success("备份已保存", it); progressDialog = null; resultDialog = "备份已保存" to it }
                 .onFailure {
                     runCatching { context.contentResolver.delete(uri, null, null) }
-                    state = BackupUiState.Error(it.message ?: "创建备份失败")
+                    val detail = it.message ?: "创建备份失败"
+                    state = BackupUiState.Error(detail)
+                    progressDialog = null
+                    resultDialog = "备份失败" to detail
                 }
         }
     }
@@ -134,15 +143,20 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
             state = BackupUiState.Working("正在校验备份文件")
+            progressDialog = "正在校验备份文件"
             val next = withContext(Dispatchers.IO) {
                 context.contentResolver.openInputStream(uri)?.use { input ->
                     when (val result = reader.validate(input)) {
-                        is BackupValidationResult.Valid -> BackupUiState.RestoreReady(uri, null, result.manifest)
+                        is BackupValidationResult.Valid -> BackupUiState.RestoreReady(uri, null, result.manifest, result.issues)
                         is BackupValidationResult.Invalid -> BackupUiState.Error(result.reason)
                     }
                 } ?: BackupUiState.Error("无法读取所选文件")
             }
             state = next
+            progressDialog = null
+            restoreOptions = com.rhodes.privatechat.data.backup.BackupRestoreOptions()
+            if (next is BackupUiState.RestoreReady && next.issues.isNotEmpty()) showIssueDialog = true
+            if (next is BackupUiState.Error) resultDialog = "备份文件无法导入" to next.detail
         }
     }
     var selectedOperatorId by remember { mutableStateOf<String?>(null) }
@@ -161,6 +175,7 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         if (uri == null || operatorId == null) return@rememberLauncherForActivityResult
         scope.launch {
             state = BackupUiState.Working("正在创建角色卡")
+            progressDialog = "正在创建角色卡"
             runCatching {
                 withContext(Dispatchers.IO) {
                     val (payload, avatar) = OperatorPackageService(repository, settings).exportCard(context, operatorId)
@@ -169,10 +184,13 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                     } ?: error("无法写入所选位置")
                     "角色卡已保存：${payload.operator.name}"
                 }
-            }.onSuccess { state = BackupUiState.Success("角色设定卡已保存", it) }
+            }.onSuccess { state = BackupUiState.Success("角色设定卡已保存", it); progressDialog = null; resultDialog = "角色设定卡已保存" to it }
                 .onFailure {
                     runCatching { context.contentResolver.delete(uri, null, null) }
-                    state = BackupUiState.Error(it.message ?: "创建角色设定卡失败")
+                    val detail = it.message ?: "创建角色设定卡失败"
+                    state = BackupUiState.Error(detail)
+                    progressDialog = null
+                    resultDialog = "角色设定卡导出失败" to detail
                 }
         }
     }
@@ -180,10 +198,16 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
             state = BackupUiState.Working("正在校验角色卡")
+            progressDialog = "正在校验角色卡"
             runCatching {
                 withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri)?.use { OperatorPackageReader().readCompatible(it) } ?: error("无法读取所选文件") }
-            }.onSuccess { pendingOperatorCard = it; state = BackupUiState.Idle }
-                .onFailure { state = BackupUiState.Error(it.message ?: "角色卡无效") }
+            }.onSuccess { pendingOperatorCard = it; state = BackupUiState.Idle; progressDialog = null }
+                .onFailure {
+                    val detail = it.message ?: "角色卡无效"
+                    state = BackupUiState.Error(detail)
+                    progressDialog = null
+                    resultDialog = "角色卡无法导入" to detail
+                }
         }
     }
     val createReadableChat = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
@@ -192,6 +216,7 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         if (uri == null || session == null) return@rememberLauncherForActivityResult
         scope.launch {
             state = BackupUiState.Working("正在导出可阅读聊天记录")
+            progressDialog = "正在导出可阅读聊天记录"
             runCatching {
                 withContext(Dispatchers.IO) {
                     val messages = repository.getMessagesSync(session.id)
@@ -201,10 +226,13 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                     context.contentResolver.openOutputStream(uri, "w")?.bufferedWriter()?.use { it.write(content) } ?: error("无法写入所选位置")
                     "聊天记录已导出：${messages.size} 条消息"
                 }
-            }.onSuccess { state = BackupUiState.Success("聊天记录已保存", it) }
+            }.onSuccess { state = BackupUiState.Success("聊天记录已保存", it); progressDialog = null; resultDialog = "聊天记录已保存" to it }
                 .onFailure {
                     runCatching { context.contentResolver.delete(uri, null, null) }
-                    state = BackupUiState.Error(it.message ?: "导出聊天记录失败")
+                    val detail = it.message ?: "导出聊天记录失败"
+                    state = BackupUiState.Error(detail)
+                    progressDialog = null
+                    resultDialog = "聊天记录导出失败" to detail
                 }
         }
     }
@@ -214,13 +242,19 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         if (uri == null || source == null) return@rememberLauncherForActivityResult
         scope.launch {
             state = BackupUiState.Working("正在导出恢复前备份")
+            progressDialog = "正在导出恢复前备份"
             runCatching {
                 withContext(Dispatchers.IO) {
                     context.contentResolver.openOutputStream(uri, "w")?.use { output -> source.inputStream().use { it.copyTo(output) } }
                         ?: error("无法写入所选位置")
                 }
-            }.onSuccess { state = BackupUiState.Success("恢复前备份已导出", source.name) }
-                .onFailure { state = BackupUiState.Error(it.message ?: "导出恢复前备份失败") }
+            }.onSuccess { state = BackupUiState.Success("恢复前备份已导出", source.name); progressDialog = null; resultDialog = "恢复前备份已导出" to source.name }
+                .onFailure {
+                    val detail = it.message ?: "导出恢复前备份失败"
+                    state = BackupUiState.Error(detail)
+                    progressDialog = null
+                    resultDialog = "恢复前备份导出失败" to detail
+                }
         }
     }
     fun refreshSafetyBackups(): List<java.io.File> =
@@ -273,14 +307,17 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                         TextButton(onClick = {
                             scope.launch {
                                 state = BackupUiState.Working("正在校验恢复前备份")
+                                progressDialog = "正在校验恢复前备份"
                                 state = withContext(Dispatchers.IO) {
                                     backup.inputStream().use { input ->
                                         when (val result = reader.validate(input)) {
-                                            is BackupValidationResult.Valid -> BackupUiState.RestoreReady(null, backup, result.manifest)
+                                            is BackupValidationResult.Valid -> BackupUiState.RestoreReady(null, backup, result.manifest, result.issues)
                                             is BackupValidationResult.Invalid -> BackupUiState.Error(result.reason)
                                         }
                                     }
                                 }
+                                progressDialog = null
+                                if (state is BackupUiState.Error) resultDialog = "恢复前备份无法导入" to (state as BackupUiState.Error).detail
                             }
                         }) { Text("恢复") }
                     }
@@ -301,15 +338,9 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 title = "使用说明",
                 description = "导入完整备份会替换当前所有数据，开始前会自动保存当前数据。外部图片可能无法迁移；换手机后需要重新填写模型服务信息。",
             ) {}
-            when (val current = state) {
-                is BackupUiState.Working -> Text(current.detail, color = Primary, fontWeight = FontWeight.Medium)
-                is BackupUiState.Success -> ResultCard(current.title, current.detail)
-                is BackupUiState.Error -> ResultCard("操作失败", current.detail, error = true)
-                else -> Unit
-            }
         }
     }
-    if (state is BackupUiState.RestoreReady) {
+    if (state is BackupUiState.RestoreReady && !showIssueDialog) {
         val ready = state as BackupUiState.RestoreReady
         val manifest = ready.manifest
         AlertDialog(
@@ -328,7 +359,7 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 scope.launch {
                     val coordinator = BackupRestoreCoordinator(
                         context, repository, settings, BackupSnapshotBuilder(repository, settings), writer,
-                        restoreExecutor = { payload, progress -> RestoreDatabaseExecutor(repository).restore(payload) },
+                            restoreExecutor = { payload, progress -> RestoreDatabaseExecutor(repository).restore(payload) },
                     )
                     val result = withContext(Dispatchers.IO) {
                         coordinator.restore(
@@ -337,18 +368,61 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                                     ?: ready.uri?.let { context.contentResolver.openInputStream(it) }
                                     ?: error("无法再次读取备份文件")
                             },
-                            onProgress = { progress: BackupRestoreProgress -> state = BackupUiState.Working(progress.detail) },
+                            onProgress = { progress: BackupRestoreProgress -> state = BackupUiState.Working(progress.detail); progressDialog = progress.detail },
+                            options = restoreOptions,
                         )
                     }
                     if (result.success) {
                         state = BackupUiState.Working("正在重建记忆检索索引")
+                        progressDialog = "正在重建记忆检索索引"
                         val indexResult = withContext(Dispatchers.IO) { mainViewModel.rebuildAllMemoryIndexes() }
                         safetyBackups = refreshSafetyBackups()
-                        state = BackupUiState.Success("恢复完成", "已恢复备份中的数据。记忆索引：成功 ${indexResult.succeeded}，失败 ${indexResult.failed}。恢复前安全备份：${result.safetyBackup?.name ?: "已创建"}，可在本页导出或再次恢复。请重新配置模型服务。")
-                    } else state = BackupUiState.Error(result.reason)
+                        val detail = "已恢复备份中的数据。记忆索引：成功 ${indexResult.succeeded}，失败 ${indexResult.failed}。恢复前安全备份：${result.safetyBackup?.name ?: "已创建"}，可在本页导出或再次恢复。请重新配置模型服务。"
+                        state = BackupUiState.Success("恢复完成", detail)
+                        progressDialog = null
+                        resultDialog = "恢复完成" to detail
+                    } else {
+                        state = BackupUiState.Error(result.reason)
+                        progressDialog = null
+                        resultDialog = "恢复失败" to result.reason
+                    }
                 }
             }) { Text("清空并恢复") } },
             dismissButton = { TextButton(onClick = { state = BackupUiState.Idle }) { Text("取消") } },
+        )
+    }
+    resultDialog?.let { (title, detail) ->
+        AlertDialog(
+            onDismissRequest = { resultDialog = null },
+            title = { Text(title) },
+            text = { Text(detail, color = TextSecondary) },
+            confirmButton = { TextButton(onClick = { resultDialog = null }) { Text("知道了") } },
+        )
+    }
+    progressDialog?.let { detail ->
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("正在处理") },
+            text = { Text(detail, color = TextSecondary) },
+            confirmButton = {},
+        )
+    }
+    if (showIssueDialog && state is BackupUiState.RestoreReady) {
+        val ready = state as BackupUiState.RestoreReady
+        AlertDialog(
+            onDismissRequest = { showIssueDialog = false; state = BackupUiState.Idle },
+            title = { Text("备份存在可跳过的问题") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("备份文件本身完整，但部分附属数据引用不完整。你可以跳过这些记录，继续恢复角色和聊天。", color = TextSecondary)
+                    ready.issues.forEach { issue -> Text("${issue.title}：${issue.count} 条\n${issue.detail}", fontSize = 12.sp) }
+                }
+            },
+            confirmButton = { TextButton(onClick = {
+                restoreOptions = com.rhodes.privatechat.data.backup.BackupRestoreOptions(ready.issues.filter { it.skippable }.map { it.code }.toSet())
+                showIssueDialog = false
+            }) { Text("跳过问题并继续") } },
+            dismissButton = { TextButton(onClick = { showIssueDialog = false; state = BackupUiState.Idle }) { Text("取消导入") } },
         )
     }
     if (showOperatorPicker) {
@@ -369,15 +443,24 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             confirmButton = { TextButton(onClick = { showOperatorPicker = false }) { Text("取消") } },
         )
     }
-    pendingOperatorCard?.let { card ->
+    pendingOperatorCard?.takeIf { !selectingUpdateTarget }?.let { card ->
         AlertDialog(
             onDismissRequest = { pendingOperatorCard = null },
             title = { Text("角色设定卡：${card.payload.operator.name}") },
-            text = { Text("包含角色资料、1/2/3 号私聊和群聊人设槽、${card.payload.relationships.size} 条关系${if (card.avatarBytes != null) "和头像" else "（未包含头像）"}。不会导入私聊、记忆、日记、动态、评论、聊天背景、角色音量或权限开关。关系仅按角色 ID 匹配；其余会跳过。") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("包含角色资料、1/2/3 号私聊和群聊人设槽、${card.payload.relationships.size} 条关系${if (card.avatarBytes != null) "和头像" else "（未包含头像）"}。不会导入私聊、记忆、日记、动态、评论、聊天背景、角色音量或权限开关。关系仅按角色 ID 匹配；其余会跳过。")
+                    TextButton(onClick = {
+                        operatorImportMode = OperatorImportMode.PERSONA_AND_APPEARANCE
+                        selectingUpdateTarget = true
+                    }) { Text("仅更新现有角色的人设与头像") }
+                }
+            },
             confirmButton = { TextButton(onClick = {
                 scope.launch { val result = withContext(Dispatchers.IO) { OperatorPackageService(repository, settings).importCard(context, card, OperatorImportMode.NEW) }; availableOperators = withContext(Dispatchers.IO) { repository.getAllOperatorsSync() }; state = BackupUiState.Success("角色已导入", "已创建新角色；已导入 1/2/3 号私聊和群聊人设槽；导入关系 ${result.importedRelationships} 条，跳过 ${result.skippedRelationships} 条。"); pendingOperatorCard = null }
             }) { Text("创建副本") } },
             dismissButton = { TextButton(onClick = {
+                operatorImportMode = OperatorImportMode.FULL_REPLACE
                 selectingUpdateTarget = true
             }) { Text("覆盖现有角色") } },
         )
@@ -387,16 +470,18 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         val targets = card?.let { availableOperators }.orEmpty()
         AlertDialog(
             onDismissRequest = { selectingUpdateTarget = false },
-            title = { Text("选择要覆盖的角色") },
+            title = { Text(if (operatorImportMode == OperatorImportMode.PERSONA_AND_APPEARANCE) "选择要更新人设的角色" else "选择要覆盖的角色") },
             text = {
                 LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
                     items(targets, key = { it.id }) { target ->
                         TextButton(onClick = {
                             val source = pendingOperatorCard ?: return@TextButton
                             scope.launch {
-                                val result = withContext(Dispatchers.IO) { OperatorPackageService(repository, settings).importCard(context, source, OperatorImportMode.FULL_REPLACE, target.id) }
+                                val result = withContext(Dispatchers.IO) { OperatorPackageService(repository, settings).importCard(context, source, operatorImportMode, target.id) }
                                 availableOperators = withContext(Dispatchers.IO) { repository.getAllOperatorsSync() }
-                                state = BackupUiState.Success("角色资料已覆盖", "已覆盖 ${target.name} 的人设、状态、好感度、关系、语音和角色数值；导入关系 ${result.importedRelationships} 条，跳过 ${result.skippedRelationships} 条。聊天和共同经历没有改动。")
+                                state = if (operatorImportMode == OperatorImportMode.PERSONA_AND_APPEARANCE) {
+                                    BackupUiState.Success("角色人设已更新", "已更新 ${target.name} 的名称、外观、人设和语音，不修改聊天、记忆、关系和角色数值。")
+                                } else BackupUiState.Success("角色资料已覆盖", "已覆盖 ${target.name} 的人设、状态、好感度、关系、语音和角色数值；导入关系 ${result.importedRelationships} 条，跳过 ${result.skippedRelationships} 条。聊天和共同经历没有改动。")
                                 selectingUpdateTarget = false
                                 pendingOperatorCard = null
                             }

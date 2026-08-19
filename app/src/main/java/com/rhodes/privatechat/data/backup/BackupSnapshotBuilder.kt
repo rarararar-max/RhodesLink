@@ -25,6 +25,13 @@ class BackupSnapshotBuilder(
         val knowledgeBases = repository.knowledgeBases.getAll()
         val knowledgeBaseChunks = repository.knowledgeBases.getAllChunksForBackup()
         val knowledgeBaseAssignments = repository.knowledgeBases.getAllAssignmentsForBackup()
+        val operatorIds = snapshotOperators.mapTo(mutableSetOf()) { it.id }
+        val sessionIds = sessions.mapTo(mutableSetOf()) { it.id }
+        val memories = repository.getAllMemoriesForBackup().filter { memory ->
+            (memory.type == com.rhodes.privatechat.shared.model.MemoryType.DAILY && memory.operatorId == "daily" && memory.sessionId.startsWith("daily_")) ||
+                (memory.operatorId in operatorIds && memory.sessionId in sessionIds)
+        }
+        val anchors = repository.getAllAnchorsForBackup().filter { it.operatorId in operatorIds && it.sessionId in sessionIds }
         return BackupPayload(
             content = ExportPayload(
                 version = 5,
@@ -33,14 +40,14 @@ class BackupSnapshotBuilder(
                 relationships = relationships.map(RelationshipExport::fromEntity),
                 sessions = sessions.map(SessionExport::fromEntity),
                 messages = messages.map(MessageExport::fromEntity),
-                memories = repository.getAllMemoriesForBackup(),
-                anchors = repository.getAllAnchorsForBackup(),
+                memories = memories,
+                anchors = anchors,
                 moments = repository.getAllMomentsSync(),
                 momentLikes = repository.getAllLikesForBackup(),
                 momentComments = repository.getAllCommentsForBackup(),
                 diaries = repository.getAllDiariesForBackup(),
                 memoryItems = repository.getAllMemoryItems().map { it.copy(vectorId = "") },
-                knowledgeBases = knowledgeBases.map { KnowledgeBaseExport(it.id, it.name, it.rawContent, it.sourceFileName, it.sourceFormat, it.chunkingMode, it.createdAt, it.updatedAt) },
+                knowledgeBases = knowledgeBases.map { KnowledgeBaseExport(it.id, it.name, it.rawContent, it.sourceFileName, it.sourceFormat, it.sourceType, it.chunkingMode, it.createdAt, it.updatedAt) },
                 knowledgeBaseChunks = knowledgeBaseChunks.map { KnowledgeBaseChunkExport(it.id, it.knowledgeBaseId, it.ordinal, it.sourceHeading, it.content, it.userKeywords, it.enabled, it.createdAt, it.updatedAt) },
                 operatorKnowledgeBaseAssignments = knowledgeBaseAssignments.map { OperatorKnowledgeBaseAssignmentExport(it.operatorId, it.knowledgeBaseId, it.enabled, it.sortOrder) },
                 settings = PortableSettings.snapshot(repository, settings),

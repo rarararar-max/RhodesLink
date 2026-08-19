@@ -6,6 +6,7 @@ data class KnowledgeBase(
     val rawContent: String,
     val sourceFileName: String = "",
     val sourceFormat: String = "",
+    val sourceType: String = "user",
     val chunkingMode: String = "smart",
     val indexStatus: String = "pending",
     val indexedEmbeddingSignature: String = "",

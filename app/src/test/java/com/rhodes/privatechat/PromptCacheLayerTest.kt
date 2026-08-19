@@ -21,6 +21,56 @@ class PromptCacheLayerTest {
         assertTrue(template.contains("不要 JSON"))
         assertTrue(!template.contains("\"segments\""))
     }
+
+    @Test
+    fun privateProtocolKeepsIntentAnalysisInternal() {
+        val protocol = com.rhodes.privatechat.viewmodel.PromptModuleDefaults.outputProtocol("private", "online")
+        assertTrue(protocol.contains("【用户发言意图分析】"))
+        assertTrue(protocol.contains("补全后的完整语义"))
+        assertTrue(protocol.contains("深层真实的意图"))
+        assertTrue(protocol.contains("期望回应"))
+        assertTrue(protocol.contains("不得在【旁白】、【台词】"))
+        assertTrue(protocol.contains("【输出格式示例"))
+        assertTrue(protocol.contains("【本轮简述】用户提出想去角色房间"))
+    }
+
+    @Test
+    fun privateBehaviorDoesNotTreatIntentGuessAsUserFact() {
+        val behavior = com.rhodes.privatechat.viewmodel.PromptModuleDefaults.behavior("private", "online")
+        assertTrue(behavior.contains("不得把推测伪装成用户明确说过的话"))
+        assertTrue(behavior.contains("用户本轮明确原话始终优先"))
+        assertTrue(behavior.contains("【本轮增量】"))
+        assertTrue(behavior.contains("连续性不等于重复"))
+        assertTrue(behavior.contains("【期望回应】只写本轮需要完成的新回应目标"))
+    }
+
+    @Test
+    fun privateHypnosisRulesRequireVisibleAlteredBehavior() {
+        val behavior = com.rhodes.privatechat.viewmodel.PromptModuleDefaults.behavior("private", "offline")
+        assertTrue(behavior.contains("【本轮强制角色状态】"))
+        assertTrue(behavior.contains("不能抵消正在生效的状态"))
+    }
+
+    @Test
+    fun offlineNarrationProtocolKeepsUserActionsAndNarrationBoundaries() {
+        val protocol = com.rhodes.privatechat.viewmodel.PromptModuleDefaults.narrationProtocol("offline")
+
+        assertTrue(protocol.contains("不得使用“用户”"))
+        assertTrue(protocol.contains("用户昵称"))
+        assertTrue(protocol.contains("第一人称"))
+        assertTrue(protocol.contains("用户发言意图分析只是内部推断"))
+        assertTrue(protocol.contains("旁白】与紧接的【台词】不得表达同一信息"))
+        assertTrue(protocol.contains("同义重复"))
+        assertEquals("", com.rhodes.privatechat.viewmodel.PromptModuleDefaults.narrationProtocol("online"))
+    }
+
+    @Test
+    fun offlineTemplateKeepsTheUserReferenceInRuntimeContext() {
+        val template = PromptTemplates.get("private", "offline")
+
+        assertTrue(template.contains("与本轮资料中的用户面对面互动"))
+        assertFalse(template.contains("与{{USER_NAME}}面对面互动"))
+    }
     private fun layers(replacements: Map<String, String>): SharedUtils.CachePromptLayers {
         val template = """
             【规则】你是{{OPERATOR_NAME}}。
@@ -241,7 +291,7 @@ class PromptCacheLayerTest {
 
     @Test
     fun promptTemplateVersionAdvancesForTheCurrentPromptRevision() {
-        assertEquals(28, PromptTemplates.VERSION)
+        assertEquals(29, PromptTemplates.VERSION)
     }
 
     @Test

@@ -33,36 +33,24 @@ import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.util.DebugLogger
 import com.rhodes.privatechat.util.DebugLogger.LogEntry
 import com.rhodes.privatechat.shared.settings.SettingsRepository
-import com.rhodes.privatechat.shared.data.ChatRepository
-import com.rhodes.privatechat.viewmodel.shared.AppStateHolder
-import com.rhodes.privatechat.viewmodel.shared.SharedUtils
-import com.rhodes.privatechat.util.ProblemChecker
 import org.koin.compose.koinInject
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import android.os.SystemClock
 import java.util.LinkedHashMap
 
 private enum class LogCategory(val label: String) {
-    ALL("全部"), CHAT("聊天问题"), OTHER_AI("其他AI问题"), MEMORY("记忆与知识库"), OTHER("其他问题")
+    ALL("全部"), PRIVATE("私聊"), GROUP("群聊"), CONTENT("动态与其他 AI"), MEMORY("记忆与知识库"), SPECIAL("特殊")
 }
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun DebugLogScreen(onBack: () -> Unit) {
     val settings: SettingsRepository = koinInject()
-    val repository: ChatRepository = koinInject()
-    val appState: AppStateHolder = koinInject()
-    val sharedUtils: SharedUtils = koinInject()
     var logs by remember { mutableStateOf(DebugLogger.getLogs()) }
     var selectedGroup by remember { mutableStateOf<LogGroup?>(null) }
     var loggingEnabled by remember { mutableStateOf(settings.debugLogEnabled) }
     var payloadsEnabled by remember { mutableStateOf(settings.debugLogPayloadsEnabled) }
     var category by remember { mutableStateOf(LogCategory.ALL) }
     var statusFilter by remember { mutableStateOf("全部") }
-    var checking by remember { mutableStateOf(false) }
-    var problemReport by remember { mutableStateOf("") }
-    val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
@@ -80,49 +68,11 @@ fun DebugLogScreen(onBack: () -> Unit) {
                 title = {
                     Column {
                         Text("调试日志", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                        Text("可按对话轮次查看私聊/群聊的完整处理结果", fontSize = 11.sp, color = TextTertiary)
+                        Text("只显示可定位问题的 AI、聊天、记忆与知识库记录", fontSize = 11.sp, color = TextTertiary)
                     }
                 },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) } },
                 actions = {
-                    TextButton(enabled = !checking, onClick = {
-                        checking = true
-                        problemReport = "RHODES_PROBLEM_CHECK\nreportVersion=7\nstatus=running\nmessage=检查已启动，界面看门狗不会等待后台探针"
-                        scope.launch {
-                            val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
-                            val checkId = ProblemChecker.start(
-                                context = context,
-                                repository = repository,
-                                sharedUtils = sharedUtils,
-                                appState = appState,
-                                versionName = packageInfo.versionName ?: "unknown",
-                                versionCode = packageInfo.longVersionCode.toInt()
-                            )
-                            val deadline = SystemClock.elapsedRealtime() + 120_000L
-                            while (checking && SystemClock.elapsedRealtime() < deadline) {
-                                problemReport = ProblemChecker.report(
-                                    packageInfo.versionName ?: "unknown",
-                                    packageInfo.longVersionCode.toInt()
-                                ).report
-                                val snapshot = ProblemChecker.progress()
-                                if (snapshot.checkId == checkId && snapshot.finishedAt != 0L) break
-                                delay(250L)
-                            }
-                            ProblemChecker.abandon(checkId)
-                            problemReport = ProblemChecker.report(
-                                packageInfo.versionName ?: "unknown",
-                                packageInfo.longVersionCode.toInt()
-                            ).report
-                            checking = false
-                            logs = DebugLogger.getLogs()
-                        }
-                    }) { Text(if (checking) "检测中" else "问题检查", color = Primary, fontSize = 12.sp) }
-                    if (problemReport.isNotBlank()) {
-                        IconButton(onClick = {
-                            clipboardManager.setText(AnnotatedString(problemReport))
-                            Toast.makeText(context, "检查报告已复制", Toast.LENGTH_SHORT).show()
-                        }) { Icon(Icons.Default.ContentCopy, "复制检查报告", tint = Primary) }
-                    }
                     Switch(checked = loggingEnabled, onCheckedChange = {
                         loggingEnabled = it
                         settings.debugLogEnabled = it
@@ -144,21 +94,15 @@ fun DebugLogScreen(onBack: () -> Unit) {
     ) { padding ->
         val filteredLogs = logs.asReversed().filter { entry ->
                 isUsefulLog(entry) &&
-                (category == LogCategory.ALL || logCategory(entry.tag) == category) &&
+                (category == LogCategory.ALL || logCategory(entry.tag) == category || (category == LogCategory.SPECIAL && isSpecial(entry))) &&
                 (statusFilter == "全部" || (statusFilter == "失败" && isFailure(entry)) || (statusFilter == "成功" && isSuccess(entry)))
         }
         val groupedLogs = buildLogGroups(filteredLogs)
         Column(Modifier.fillMaxSize().padding(padding)) {
             Column(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 12.dp, vertical = 8.dp)) {
-                Text("状态：${if (loggingEnabled) "正在记录" else "常规日志关闭，关键诊断仍保留"}  |  当前缓存 ${logs.size}/500 条", fontSize = 12.sp, color = if (loggingEnabled) AccentGreen else AccentOrange)
-                Text("按问题类型显示重要记录。点击卡片查看处理过程，长按可复制诊断信息。", fontSize = 11.sp, color = TextSecondary)
-                if (problemReport.isNotBlank()) {
-                    Text("最近一次问题检查报告", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Primary)
-                    SelectionContainer {
-                        Text(problemReport, fontSize = 10.sp, color = TextSecondary, fontFamily = FontFamily.Monospace, modifier = Modifier.heightIn(max = 180.dp).verticalScroll(rememberScrollState()))
-                    }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("状态：${if (loggingEnabled) "正在记录" else "常规记录已关闭，仅保留关键失败"}  |  当前缓存 ${logs.size}/500 条", fontSize = 12.sp, color = if (loggingEnabled) AccentGreen else AccentOrange)
+                Text("卡片按一次功能处理聚合。点击查看请求、原始返回、最终保存结果和上下文取用。", fontSize = 11.sp, color = TextSecondary)
+                          Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("记录完整模型输入与输出", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.weight(1f))
                     Switch(checked = payloadsEnabled, enabled = loggingEnabled, onCheckedChange = {
                         payloadsEnabled = it
@@ -207,28 +151,28 @@ fun DebugLogScreen(onBack: () -> Unit) {
                          Row(verticalAlignment = Alignment.CenterVertically) {
                              Text(group.time, fontSize = 10.sp, color = TextTertiary, fontFamily = FontFamily.Monospace)
                              Spacer(Modifier.width(6.dp))
-                              Text(group.title, fontSize = 13.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
+                              Text(group.title, fontSize = 13.sp, color = tagColor, fontWeight = FontWeight.Bold)
                              if (group.isModelCall) {
                                  Spacer(Modifier.width(6.dp))
                                  Text(group.status, fontSize = 10.sp, color = group.statusColor, fontWeight = FontWeight.Bold)
                              }
                          }
-                          Text(group.description, fontSize = 12.sp, color = TextSecondary)
+                          Text(group.description, fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 2.dp))
                           if (group.status == "失败") {
                               val failure = group.entries.firstOrNull(::isFailure) ?: group.primary
                               Text(readableMessage(failure), fontSize = 12.sp, color = ErrorRed, modifier = Modifier.padding(top = 3.dp))
                           }
                           if (group.isModelCall) {
                              Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 4.dp)) {
-                                 StageChip("请求", group.request != null)
-                                 StageChip("返回", group.response != null)
-                                 StageChip("保存", group.saved != null)
-                                 if (group.related.isNotEmpty()) StageChip("流程 ${group.related.size}", true)
+                                  StageChip("请求内容", group.request != null)
+                                  StageChip("原始返回", group.response != null)
+                                  StageChip("最终保存", group.saved != null)
+                                  if (group.contextEntries.isNotEmpty()) StageChip("上下文 ${group.contextEntries.size}", true)
                              }
                          } else {
                               Text(logPreview(readableMessage(entry)), fontSize = 12.sp, color = if (isFailure(entry)) ErrorRed else TextPrimary)
                          }
-                         Text("点击查看完整内容，长按复制整组", fontSize = 10.sp, color = TextTertiary)
+                          Text("点击查看详情，长按复制本次完整记录", fontSize = 10.sp, color = TextTertiary)
                      }
                  }
             }
@@ -240,17 +184,7 @@ fun DebugLogScreen(onBack: () -> Unit) {
         AlertDialog(
             onDismissRequest = { selectedGroup = null },
             title = { Text(group.title) },
-            text = {
-                SelectionContainer {
-                    Text(
-                        formatGroup(group),
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState()),
-                        fontSize = 12.sp,
-                        color = TextPrimary,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
-            },
+            text = { LogGroupDetails(group) },
             confirmButton = {
                  TextButton(onClick = {
                      clipboardManager.setText(AnnotatedString(formatGroup(group)))
@@ -266,17 +200,56 @@ private fun formatEntry(entry: LogEntry): String =
     "[${entry.formattedTime}] ${logTitle(entry.tag)}\n${logDescription(entry.tag)}\n\n${entry.message}"
 
 private fun logCategory(tag: String): LogCategory = when {
+    tag.startsWith("Diagnostic/HistoryReply/") || tag.startsWith("Diagnostic/Context/History/") -> LogCategory.SPECIAL
     tag.startsWith("Memory/") || tag.startsWith("MemoryV2") || tag.startsWith("Context/") || tag.contains("Memory", true) || tag.startsWith("Vector/") -> LogCategory.MEMORY
-    tag.startsWith("PrivateChat/") || tag.startsWith("GroupChat/") || tag.startsWith("Chat/") || tag.startsWith("ChatEvent/") || tag.startsWith("Round/") || tag.startsWith("AI/Chat") || tag.startsWith("AI/GroupChat") -> LogCategory.CHAT
-    tag.startsWith("AI/") || tag.startsWith("Vision") || tag.startsWith("RHODES_VISION") || tag.startsWith("Dispatch/AI") || tag.startsWith("Galgame") -> LogCategory.OTHER_AI
-    else -> LogCategory.OTHER
+    tag.contains("Group", true) || tag.startsWith("GroupChat/") -> LogCategory.GROUP
+    tag.contains("Chat", true) || tag.startsWith("PrivateChat/") || tag.startsWith("ChatEvent/") || tag.startsWith("Round/") -> LogCategory.PRIVATE
+    tag.startsWith("AI/") || tag.startsWith("Vision") || tag.startsWith("RHODES_VISION") || tag.startsWith("Dispatch/AI") || tag.startsWith("Galgame") || tag.startsWith("Moment") || tag.startsWith("Diary") -> LogCategory.CONTENT
+    else -> LogCategory.ALL
+}
+
+@Composable
+private fun LogGroupDetails(group: LogGroup) {
+    Column(Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState())) {
+        Text(group.description, fontSize = 12.sp, color = TextSecondary)
+        DetailSummary("处理状态", group.status, group.statusColor)
+        group.request?.let { DetailSection("实际发送给 AI 的请求", "系统提示词、历史消息、参考资料和本轮输入", it.message) }
+        group.response?.let { DetailSection("AI 返回的原始内容", "未经解析、过滤或保存处理的模型原文", it.message) }
+        group.saved?.let { DetailSection("最终保存/展示内容", "应用清洗、解析和格式处理后写入聊天记录的内容", it.message) }
+        group.contextEntries.forEach { entry -> DetailSection("记忆、向量或知识库取用", logDescription(entry.tag), entry.message) }
+        group.related.filterNot { it in group.contextEntries }.forEach { entry ->
+            DetailSection(logTitle(entry.tag), logDescription(entry.tag), entry.message)
+        }
+    }
+}
+
+@Composable
+private fun DetailSummary(label: String, value: String, color: Color) {
+    Surface(color = color.copy(alpha = 0.12f), shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth().padding(top = 10.dp)) {
+        Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(label, fontSize = 12.sp, color = TextSecondary, modifier = Modifier.weight(1f))
+            Text(value, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = color)
+        }
+    }
+}
+
+@Composable
+private fun DetailSection(title: String, subtitle: String, content: String) {
+    Column(Modifier.fillMaxWidth().padding(top = 10.dp).background(Surface, RoundedCornerShape(8.dp)).padding(10.dp)) {
+        Text(title, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Primary)
+        Text(subtitle, fontSize = 10.sp, color = TextTertiary, modifier = Modifier.padding(top = 2.dp))
+        SelectionContainer {
+            Text(content.ifBlank { "本次未记录完整内容。请开启“记录完整模型输入与输出”后复现问题。" }, fontSize = 11.sp, color = TextPrimary, fontFamily = FontFamily.Monospace, modifier = Modifier.padding(top = 7.dp))
+        }
+    }
 }
 
 private fun categoryColor(category: LogCategory) = when (category) {
-    LogCategory.CHAT -> Blue400
-    LogCategory.OTHER_AI -> Color(0xFFB388FF)
+    LogCategory.PRIVATE -> Blue400
+    LogCategory.GROUP -> Color(0xFFB388FF)
+    LogCategory.CONTENT -> Color(0xFFB388FF)
     LogCategory.MEMORY -> AccentGreen
-    LogCategory.OTHER -> AccentOrange
+    LogCategory.SPECIAL -> ErrorRed
     LogCategory.ALL -> TextSecondary
 }
 
@@ -284,14 +257,21 @@ private fun isFailure(entry: LogEntry): Boolean =
     entry.tag.endsWith("/错误") || entry.tag.contains("Error", true) || entry.tag.contains("Failed", true) ||
         entry.tag.endsWith("/失败") || entry.tag.endsWith("失败") || entry.tag.startsWith("Vector/Save")
 
+private fun isSpecial(entry: LogEntry): Boolean =
+    entry.tag.startsWith("Diagnostic/HistoryReply/") || entry.tag.startsWith("Diagnostic/Context/History/")
+
 private fun isSuccess(entry: LogEntry): Boolean =
     !isFailure(entry) && (entry.tag.contains("成功") || entry.tag.endsWith("响应") || entry.tag.endsWith("/已保存") || entry.tag.startsWith("Context/"))
 
 private fun isUsefulLog(entry: LogEntry): Boolean {
     if (entry.tag.endsWith("/思维链") || entry.tag.endsWith("/思维链状态")) return false
-    if (entry.tag.startsWith("Data/Cleanup") && !isFailure(entry)) return false
-    if (entry.tag.contains("Updated") || entry.tag.endsWith("/启动") || entry.tag.endsWith("/开始") && !entry.tag.startsWith("Round/")) return false
-    return true
+    if (isFailure(entry) || isSpecial(entry)) return true
+    return entry.tag.startsWith("Round/") || entry.tag.startsWith("ChatEvent/") ||
+        entry.tag.startsWith("AI/") || entry.tag.startsWith("Memory/") ||
+        entry.tag.startsWith("MemoryV2") || entry.tag.startsWith("Context/") ||
+        entry.tag.startsWith("Vector/") || entry.tag.startsWith("Vision") ||
+        entry.tag.startsWith("RHODES_VISION") || entry.tag.startsWith("Dispatch/AI") ||
+        entry.tag.startsWith("Moment") || entry.tag.startsWith("Diary")
 }
 
 private fun readableMessage(entry: LogEntry): String {
@@ -317,6 +297,8 @@ private fun logPreview(message: String): String =
     if (message.length <= 800) message else "${message.take(800)}\n… 已省略列表预览，点击查看完整内容"
 
 private fun logDescription(tag: String): String = when {
+    tag.startsWith("Diagnostic/HistoryReply/") -> "历史 AI 回复无法重新解析为上下文。该条会被占位文本替代，后续模型不会获得其原始回复内容。"
+    tag.startsWith("Diagnostic/Context/History/") -> "模型服务拒绝了过长上下文。应用已保留较近回合并裁剪较早历史后自动重试。"
     tag.startsWith("Round/") -> "对话轮次：按顺序记录本轮用户消息、模型请求、返回解析、内容重试、格式补全、保存与本轮总览。完整内容仅在“记录完整模型输入与输出”开启时可用。"
     tag.endsWith("/请求") -> "正在向 AI 发送请求。"
     tag.endsWith("/响应") -> "AI 已返回结果。"
@@ -336,6 +318,7 @@ private fun logDescription(tag: String): String = when {
     tag == "GroupChat/Error" -> "群聊请求失败：网络、API 配置、额度或服务端异常的具体原因。"
     tag == "GroupChat/Decision" -> "群聊处理决策：本轮解析、格式修复、重试和最终展示的结果。"
     tag == "GroupChat/Token" -> "群聊上下文长度：本轮发送给模型的 token 估算及截断情况。"
+    tag == "Memory/ContextDetail" -> "实际取用内容：仅在开启完整模型输入与输出后记录。"
     tag.startsWith("Memory/") -> "记忆处理：本轮聊天使用、写入或清理记忆的情况。"
     tag.startsWith("Context/") -> "本次请求使用的记忆或知识库数量。"
     tag.startsWith("GroupChat/DB") -> "群聊本地存储：消息已写入本机数据库。"
@@ -344,10 +327,13 @@ private fun logDescription(tag: String): String = when {
     tag.startsWith("AI/→") -> "最终请求载荷：实际发给大模型的完整消息列表。"
     tag.startsWith("AI/←") -> "原始模型返回：未经应用解析或保存处理的模型输出。"
     tag.startsWith("AI/") -> "大模型处理过程：格式修复、内容重试或解析诊断信息。"
-    else -> "应用调试信息：${tag}。"
+    else -> "此记录用于定位本次功能处理结果。"
 }
 
 private fun logTitle(tag: String): String = when {
+    tag.startsWith("Diagnostic/HistoryReply/Private") -> "私聊 · 历史回复无法用于上下文"
+    tag.startsWith("Diagnostic/HistoryReply/Group") -> "群聊 · 历史回复无法用于上下文"
+    tag.startsWith("Diagnostic/Context/History/") -> "聊天 · 上下文超限自动裁剪"
     tag.startsWith("Round/") -> roundTitle(tag)
     tag.startsWith("ChatEvent/") -> "聊天流程"
     tag.startsWith("AI/→GroupChat") -> "群聊 · 发送给 AI 的完整内容"
@@ -364,6 +350,7 @@ private fun logTitle(tag: String): String = when {
     tag.startsWith("AI/") && tag.endsWith("/响应") -> aiOperationTitle(tag, "AI 回复")
     tag.startsWith("AI/") && tag.endsWith("/错误") -> aiOperationTitle(tag, "AI 请求失败")
     tag.startsWith("AI/") -> "AI 处理"
+    tag == "Memory/ContextDetail" -> "实际取用的记忆与知识库内容"
     tag == "Memory/Parse" -> "记忆解析"
     tag == "Memory/Save" -> "保存记忆"
     tag == "Memory/SaveError" -> "保存记忆失败"
@@ -378,7 +365,7 @@ private fun logTitle(tag: String): String = when {
     tag.startsWith("Diagnostic/AppState") -> "应用数据加载问题"
     tag.startsWith("Operator/") -> "角色设置问题"
     tag.startsWith("Data/") -> "数据管理"
-    else -> "其他问题"
+    else -> "功能处理失败"
 }
 
 private data class LogGroup(
@@ -391,6 +378,7 @@ private data class LogGroup(
     val related: List<LogEntry>,
     val isModelCall: Boolean,
 ) {
+    val contextEntries: List<LogEntry> get() = entries.filter { it.tag.startsWith("Context/") || it.tag.startsWith("Memory/Context") || it.tag.startsWith("Vector/") }
     val targetName: String get() = entries.asSequence().mapNotNull { entry ->
         Regex("对象=([^，,\\n]+)").find(entry.message)?.groupValues?.getOrNull(1)
             ?: Regex("群=([^，,\\n]+)").find(entry.message)?.groupValues?.getOrNull(1)
@@ -502,7 +490,10 @@ private fun modelGroupKey(tag: String): String? {
     if (!tag.startsWith("AI/")) return null
     val value = tag.removePrefix("AI/")
     val marker = value.indexOfAny(charArrayOf('→', '←', '✓'))
-    if (marker < 0) return null
+    if (marker < 0) {
+        val round = value.substringBefore('/').substringAfter('#', "")
+        return round.takeIf { it.isNotBlank() }?.let { "round:$it" }
+    }
     val normalized = value.substring(marker + 1)
         .substringBeforeLast("/思维链")
         .replace("私聊#", "Chat#")

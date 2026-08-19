@@ -44,5 +44,8 @@ ORDER BY id DESC LIMIT 1;
 deleteOldDiaries:
 DELETE FROM diaries WHERE createdAt < ?;
 
+deleteDiariesByOperator:
+DELETE FROM diaries WHERE operatorId = ?;
+
 deleteAllDiaries:
 DELETE FROM diaries;

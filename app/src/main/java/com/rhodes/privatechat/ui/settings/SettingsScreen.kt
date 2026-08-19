@@ -70,14 +70,20 @@ fun SettingsScreen(
     onChatParams: () -> Unit = {}, onMemory: () -> Unit = {}, onDataManage: () -> Unit = {},
     onPermissions: () -> Unit = {}, onCredits: () -> Unit = {},
     onAppearance: () -> Unit = {}, onStory: () -> Unit = {}, onDailyContent: () -> Unit = {}, onKnowledgeBases: () -> Unit = {},
-    onDebugLog: () -> Unit = {},
+    onDebugLog: () -> Unit = {}, onAiSupport: () -> Unit = {},
     userNickname: String = "博士", userGender: String = "", userAvatarUri: String = "", modifier: Modifier = Modifier
 ) {
     val settings: SettingsRepository = koinInject()
     val balance by settings.lmbFlow.collectAsState(initial = settings.lmb)
     var debugLogEnabled by remember { mutableStateOf(settings.debugLogEnabled) }
     Column(modifier = modifier.fillMaxSize().background(BG)) {
-        WechatTopBar("我")
+        WechatTopBar("我", actions = {
+            androidx.compose.material3.TextButton(onClick = onAiSupport) {
+                Icon(Icons.Default.SmartToy, contentDescription = "AI客服", tint = Primary)
+                Spacer(Modifier.width(4.dp))
+                Text("AI客服", color = Primary, fontSize = 13.sp)
+            }
+        })
         Row(modifier = Modifier.fillMaxWidth().background(Surface).clickable(onClick = onProfile).padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
             if (userAvatarUri.isNotBlank()) {
                 AsyncImage(model = userAvatarUri, contentDescription = null, modifier = Modifier.size(58.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)

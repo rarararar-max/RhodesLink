@@ -80,6 +80,7 @@ data class OfflineModeResponse(
     val state: String = "",
     val location: String = "",
     val continuity: String = "",
+    @SerialName("user_intent_analysis") val userIntentAnalysis: String = "",
     val narration: String = "",
     val dialogue: String = "",
     val affection_mod: Int = 0,
@@ -173,6 +174,7 @@ data class PrivateTurnState(
     val currentTopic: String = "当前话题未明确",
     val unresolvedThread: String = "无",
     val pendingAction: String = "无"
+    ,val userIntentAnalysis: String = ""
 )
 
 @Serializable

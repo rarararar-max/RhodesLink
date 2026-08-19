@@ -13,6 +13,7 @@ import kotlinx.coroutines.SupervisorJob
 import org.koin.android.ext.koin.androidApplication
 import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
+import com.rhodes.privatechat.viewmodel.AiSupportViewModel
 
 val appModule = module {
 
@@ -35,4 +36,5 @@ val appModule = module {
     viewModel {
         MainViewModel(get(), get(), get<SettingsRepository>(), get(), get(), get())
     }
+    viewModel { AiSupportViewModel(androidApplication(), get(), get(), get(), get(), get(), get(), get()) }
 }

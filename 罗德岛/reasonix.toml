@@ -1,0 +1,5 @@
+[permissions]
+allow = []
+
+[sandbox]
+allow_write = ["D:\\anzhuo\\mingrifangzhou\\mingrifangzhoutest2\\app\\src\\main\\assets\\support"]

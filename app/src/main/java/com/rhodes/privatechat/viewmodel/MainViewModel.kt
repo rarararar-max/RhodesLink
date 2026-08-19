@@ -193,9 +193,16 @@ class MainViewModel(
         requireNotNull(knowledgeBaseImportService) { "知识库服务不可用" }.importFile(fileName, bytes, name)
     suspend fun saveKnowledgeBaseText(name: String, content: String): KnowledgeBase =
         requireNotNull(knowledgeBaseImportService) { "知识库服务不可用" }.saveText(name, content)
+    suspend fun saveKnowledgeBaseTextInBackground(name: String, content: String): KnowledgeBase =
+        requireNotNull(knowledgeBaseImportService) { "知识库服务不可用" }.saveTextInBackground(name, content)
+    suspend fun resumeKnowledgeBaseProcessing(book: KnowledgeBase) =
+        knowledgeBaseImportService?.resumeBackgroundProcessing(book)
     suspend fun updateKnowledgeBaseText(existing: KnowledgeBase, name: String, content: String): KnowledgeBase =
-        requireNotNull(knowledgeBaseImportService) { "知识库服务不可用" }.updateText(existing, name, content)
+        requireNotNull(knowledgeBaseImportService) { "知识库服务不可用" }.also {
+            it.cancelBackgroundProcessing(existing.id)
+        }.updateText(existing, name, content)
     suspend fun deleteKnowledgeBase(id: String) {
+        knowledgeBaseImportService?.cancelBackgroundProcessing(id)
         knowledgeBaseIndexService?.cancelAndRemove(id)
         repository.knowledgeBases.delete(id)
         settings.clearKnowledgeBaseSurfaceSettings(id)

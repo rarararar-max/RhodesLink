@@ -108,9 +108,8 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun insertPresetOperators() = operators.insertPresetOperators()
     suspend fun ensurePresetOperators(excludedIds: Set<String> = emptySet()) = operators.ensurePresetOperators(excludedIds)
     fun isPresetOperatorId(id: String) = operators.isPresetOperatorId(id)
-    suspend fun deleteOperator(id: String) = withContext(Dispatchers.Default) {
-        knowledgeBases.deleteAssignmentsForOperator(id)
-        operators.deleteOperator(id)
+    suspend fun deleteOperator(id: String) {
+        deleteOperatorWithPrivateData(id)
     }
     suspend fun updateOperator(op: Operator) = operators.updateOperator(op)
     suspend fun updateIntimacy(id: String, intimacy: Int) = operators.updateIntimacy(id, intimacy)
@@ -122,7 +121,10 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun getSession(id: String) = sessions.getSession(id)
     suspend fun insertSession(session: ChatSession) = sessions.insertSession(session)
     suspend fun updatePinned(sessionId: String, pinned: Boolean) = sessions.updatePinned(sessionId, pinned)
-    suspend fun deleteSession(id: String) = sessions.deleteSession(id)
+    suspend fun deleteSession(id: String) = withContext(Dispatchers.Default) {
+        purgeSessionData(id)
+        sessions.deleteSession(id)
+    }
     suspend fun updateSessionMode(sessionId: String, mode: String) = sessions.updateSessionMode(sessionId, mode)
     suspend fun markAllRead() = sessions.markAllRead()
     suspend fun markSessionRead(sessionId: String) = sessions.markSessionRead(sessionId)
@@ -451,6 +453,9 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
         db.transaction {
             db.memoriesQueries.deleteMemoriesByOperator(operatorId)
             db.memoryAnchorsQueries.deleteAnchorsByOperator(operatorId)
+            db.diariesQueries.deleteDiariesByOperator(operatorId)
+            db.giftRecordsQueries.deleteByOperator(operatorId)
+            db.sharedExperiencesQueries.deleteSharedExperienceParticipantsByOperator(operatorId)
             db.memoryItemsQueries.deleteMemoryItemsByOwner("operator", operatorId)
             db.memoryBatchesQueries.deleteMemoryBatchesByOwner("operator", operatorId)
             db.memorySourceQueueQueries.deleteMemorySourcesByOwner("operator", operatorId)

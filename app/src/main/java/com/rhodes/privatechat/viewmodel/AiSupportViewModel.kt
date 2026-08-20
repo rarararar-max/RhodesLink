@@ -108,6 +108,7 @@ class AiSupportViewModel(
 
     fun dismissRemoteEmbedding() {
         _remoteConfirmation.value = false
+        settings.supportRemoteEmbeddingConfirmedSignature = currentEmbeddingSignature()
         _notice.value = "已继续使用本地章节检索。"
     }
 

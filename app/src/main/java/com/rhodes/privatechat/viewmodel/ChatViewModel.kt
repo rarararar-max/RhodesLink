@@ -2514,7 +2514,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
                  |禁止在同一个【台词】标签下用空行、换行或多个自然段来凑段数。
                  |正确格式示例（2段）：【台词】第一段内容。【台词】第二段内容。
                  |""".trimMargin() else """
-                |【线下/导演段落数量、标签与编排规则】
+                |【段落数量、标签与编排规则】
                 |本轮必须输出${settings.narSegMin}~${settings.narSegMax}段【旁白】，每段${settings.narMin}~${settings.narMax}字；还必须输出${settings.diaSegMin}~${settings.diaSegMax}段【台词】，每段${settings.diaMin}~${settings.diaMax}字。
                 |每一段【旁白】或【台词】都是应用中的一个独立展示段。每段前必须单独写对应标签；有N段旁白就写N次【旁白】，有D段台词就写D次【台词】。每个标签后只能写一段正文，禁止用空行、换行、编号或多个自然段伪装成多段。
                 |先满足本轮设置的旁白数量和台词数量，再安排顺序。第一段应为【旁白】，最后一段必须为【台词】。

@@ -116,10 +116,10 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         ttsProvider != settings.ttsProvider || ttsBaseUrl.trim() != settings.ttsBaseUrl || ttsModelName.trim() != settings.ttsModelName || ttsApiKey.trim() != settings.ttsApiKey
 
     fun validateSettings(): String? {
-        fun hasScheme(value: String, vararg schemes: String): Boolean = runCatching {
-            val scheme = java.net.URI(value.trim()).scheme?.lowercase()
-            scheme != null && scheme in schemes
-        }.getOrDefault(false)
+        fun hasHttpScheme(value: String): Boolean {
+            val v = value.trim()
+            return v.startsWith("http://", ignoreCase = true) || v.startsWith("https://", ignoreCase = true)
+        }
         val modelName = if (isCustom || selectedModelIdx >= currentConfig.models.size) {
             customModelName.trim()
         } else {
@@ -130,11 +130,8 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         if (isCustom) {
             val url = customUrl.trim()
             if (url.isBlank()) return "请填写 API 地址"
-            if (!hasScheme(url, "http", "https")) return "API 地址需以 http:// 或 https:// 开头"
+            if (!hasHttpScheme(url)) return "API 地址需以 http:// 或 https:// 开头"
         }
-        if (visionBaseUrl.isNotBlank() && !hasScheme(visionBaseUrl, "http", "https")) return "识图 API 地址需以 http:// 或 https:// 开头"
-        if (vectorProviderMode == "third_party" && vectorBaseUrl.isNotBlank() && !hasScheme(vectorBaseUrl, "http", "https")) return "向量 API 地址需以 http:// 或 https:// 开头"
-        if (asrBaseUrl.isNotBlank() && if (asrProvider == "xiaomi") !hasScheme(asrBaseUrl, "http", "https") else !hasScheme(asrBaseUrl, "ws", "wss")) return if (asrProvider == "xiaomi") "小米语音识别地址需以 http:// 或 https:// 开头" else "语音识别地址需以 ws:// 或 wss:// 开头"
         return null
     }
 
@@ -142,6 +139,10 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         didSave = false
         // Saving is independent from connecting. Users must be able to configure providers
         // incrementally, while the individual test buttons validate the required fields.
+        val prevVectorMode = settings.vectorProviderMode
+        val prevVectorProvider = settings.vectorProvider
+        val prevVectorUrl = settings.vectorBaseUrl
+        val prevVectorModel = settings.vectorModelName
         val modelName = currentModelName
         settings.saveModelConfiguration(
                 provider = currentProviderId,
@@ -167,12 +168,10 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 ttsApiKey = ttsApiKey.trim(),
         )
         val newVectorSignature = if (vectorProviderMode == "local") "local-hash-384-v1" else "${vectorProvider}:${vectorBaseUrl.trim()}:${vectorModelName.trim()}"
-        val previousVectorSignature = settings.vectorIndexSignature
-        val vectorSignatureChanged = previousVectorSignature.isNotBlank() && previousVectorSignature != newVectorSignature
-        if (previousVectorSignature.isBlank()) {
-            // First configuration has no prior index to clear or rebuild.
-            settings.vectorIndexSignature = newVectorSignature
-        }
+        val previousVectorSignature = if (prevVectorMode == "local") "local-hash-384-v1" else "${prevVectorProvider}:${prevVectorUrl.trim()}:${prevVectorModel.trim()}"
+        val firstTime = settings.vectorIndexSignature.isBlank()
+        val vectorSignatureChanged = !firstTime && previousVectorSignature != newVectorSignature
+        if (firstTime) settings.vectorIndexSignature = newVectorSignature
         if (vectorSignatureChanged) {
             pendingVectorSignature = newVectorSignature
             vectorIndexFlowPending = true

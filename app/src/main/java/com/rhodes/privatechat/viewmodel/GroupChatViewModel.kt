@@ -957,7 +957,7 @@ class GroupChatViewModel(
                   val narrationProtocol = PromptModuleDefaults.narrationProtocol(mode)
                   val systemWithCustomProtocol = listOf(
                       finalSystemPrompt,
-                      "【用户可编辑输出协议】\n$groupProtocol",
+                      groupProtocol,
                       narrationProtocol
                   ).filter { it.isNotBlank() }.joinToString("\n\n")
                 val historyLimit = settings.historyMessages

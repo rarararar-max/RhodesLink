@@ -126,9 +126,9 @@ object PromptModuleDefaults {
           【台词】第一段内容。
           【台词】第二段内容。
         """ else """
-        【线下/导演段落规则】
-        - 本轮输出 {{NAR_SEG_MIN}} 到 {{NAR_SEG_MAX}} 段【旁白】，每段 {{NAR_MIN}} 到 {{NAR_MAX}} 字。
-        - 本轮输出 {{DIA_SEG_MIN}} 到 {{DIA_SEG_MAX}} 段【台词】，每段 {{DIA_MIN}} 到 {{DIA_MAX}} 字。
+        【段落数量、标签与编排规则】
+        - 本轮必须输出 {{NAR_SEG_MIN}} 到 {{NAR_SEG_MAX}} 段【旁白】，每段 {{NAR_MIN}} 到 {{NAR_MAX}} 字。
+        - 本轮必须输出 {{DIA_SEG_MIN}} 到 {{DIA_SEG_MAX}} 段【台词】，每段 {{DIA_MIN}} 到 {{DIA_MAX}} 字。
         - 每段旁白或台词前都要单独写对应标签；一个标签后只能写一段正文。
         - 第一段建议为【旁白】，最后一段建议为【台词】；旁白和台词应围绕同一个即时事件。
         - 不得用空行、换行、编号或多个自然段伪造多段。
@@ -158,7 +158,7 @@ object PromptModuleDefaults {
         ${if (mode == "online") """
         - 线上模式禁止【旁白】；只输出成员台词。
         """ else """
-        - 线下/导演模式可以输出 {{GROUP_NAR_SEG_MIN}} 到 {{GROUP_NAR_SEG_MAX}} 段【旁白】，每段 {{GROUP_NAR_MIN}} 到 {{GROUP_NAR_MAX}} 字。
+        - 本轮必须输出 {{GROUP_NAR_SEG_MIN}} 到 {{GROUP_NAR_SEG_MAX}} 段【旁白】，每段 {{GROUP_NAR_MIN}} 到 {{GROUP_NAR_MAX}} 字。
         - 旁白必须使用单独一行【旁白】，下一行才写旁白内容。
         """}
 
@@ -194,7 +194,9 @@ object PromptModuleDefaults {
 【最近聊天进展】
 {{SHORT_TERM_SUMMARY}}
 
-【相关记忆】
+【相关记忆（过去信息，仅作背景参考）】
+以下是从历史私聊、群聊、动态、评论等检索到的过去信息，可能只是旧事或传闻，不一定与当前话题相关；不得当作当前正在发生的事实，不得因此改变当前场景、人物状态或主线，不得跑题。只有与用户本轮话题明显相关时才可自然承接，承接后仍须回到当前话题。
+
 {{MEMORY_V2_CONTEXT}}
 
 【群聊背景】
@@ -217,7 +219,9 @@ object PromptModuleDefaults {
 【关系背景】
 {{RELATION_HINTS}}
 
-【相关记忆】
+【相关记忆（过去信息，仅作背景参考）】
+以下是从历史私聊、群聊、动态、评论等检索到的过去信息，可能只是旧事或传闻，不一定与当前话题相关；不得当作当前正在发生的事实，不得因此改变当前场景、人物状态或主线，不得跑题。只有与用户本轮话题明显相关时才可自然承接，承接后仍须回到当前话题。
+
 {{MEMORY_V2_CONTEXT}}
 
 【近期公开动态】

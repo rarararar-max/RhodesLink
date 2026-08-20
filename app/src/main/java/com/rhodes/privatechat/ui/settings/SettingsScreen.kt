@@ -79,9 +79,9 @@ fun SettingsScreen(
     Column(modifier = modifier.fillMaxSize().background(BG)) {
         WechatTopBar("我", actions = {
             androidx.compose.material3.TextButton(onClick = onAiSupport) {
-                Icon(Icons.Default.SmartToy, contentDescription = "AI客服", tint = Primary)
+                Icon(Icons.Default.SmartToy, contentDescription = "客服求助", tint = Primary)
                 Spacer(Modifier.width(4.dp))
-                Text("AI客服", color = Primary, fontSize = 13.sp)
+                Text("客服求助", color = Primary, fontSize = 13.sp)
             }
         })
         Row(modifier = Modifier.fillMaxWidth().background(Surface).clickable(onClick = onProfile).padding(20.dp), verticalAlignment = Alignment.CenterVertically) {

@@ -188,6 +188,14 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = getString("support_conversation", "")
         set(value) = putString("support_conversation", value)
 
+    var supportAgentId: String
+        get() = getString("support_agent_id", AgentProfiles.defaultId)
+        set(value) = putString("support_agent_id", value)
+
+    var supportConversationContextStartId: Long
+        get() = getLong("support_conversation_context_start_id", 0L)
+        set(value) = putLong("support_conversation_context_start_id", value.coerceAtLeast(0L))
+
     // === 聊天配置 ===
     var aiTemperature: Double
         get() = getInt("ai_temperature", 70).coerceIn(0, 200).toDouble() / 100.0

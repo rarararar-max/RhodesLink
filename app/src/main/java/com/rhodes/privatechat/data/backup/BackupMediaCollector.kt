@@ -50,6 +50,10 @@ class BackupMediaCollector(private val context: Context) {
                 yield(match.groupValues[1].replace("\\\"", "\"").replace("\\\\", "\\"))
             }
         }
+        decodePortableString(payload.content.settings?.get("support_conversation").orEmpty())
+            .replace("\\\"", "\"").let { conversation ->
+                for (match in imageUriPattern.findAll(conversation)) yield(match.groupValues[1].replace("\\\\", "\\"))
+            }
     }
 
     private fun ownedImageFile(value: String): File? {

@@ -1,12 +1,13 @@
 package com.rhodes.privatechat.ui.support
 
 import com.rhodes.privatechat.shared.model.AiMessage
+import com.rhodes.privatechat.viewmodel.AiSupportMessage
 
 object AiSupportContract {
     const val noMatch = "未找到与当前问题直接相关的产品说明章节。"
     const val temperature = 0.3
     const val maxOutputTokens = 700
-    private const val maxHistoryChars = 3_000
+    private const val maxHistoryChars = 12_000
     private const val maxReferenceChars = 4_000
 
     private val traditionalToSimplified = mapOf(
@@ -48,13 +49,25 @@ object AiSupportContract {
 
     fun recentHistory(messages: List<AiMessage>): List<AiMessage> {
         var remaining = maxHistoryChars
-        return messages.takeLast(8).asReversed().mapNotNull { message ->
+        return messages.takeLast(40).asReversed().mapNotNull { message ->
             if (remaining <= 0) return@mapNotNull null
             val text = message.content.take(remaining)
             remaining -= text.length
             message.copy(content = text)
         }.asReversed()
     }
+
+    fun historyAfter(messages: List<AiSupportMessage>, contextStartId: Long): List<AiMessage> =
+        recentHistory(messages.asSequence()
+            .filter { it.id > contextStartId }
+            .map {
+                val content = if (it.imageSummary.isBlank()) it.text else buildString {
+                    append(it.text)
+                    append("\n【用户发送的图片摘要】").append(it.imageSummary)
+                }
+                AiMessage(if (it.role == "assistant") "assistant" else "user", content)
+            }
+            .toList())
 
     fun sources(reference: String): List<String> = reference.lineSequence()
         .filter { it.startsWith("章节：") || it.startsWith("- [章节：") || it.startsWith("- [知识库：") }

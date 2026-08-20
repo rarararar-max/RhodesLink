@@ -28,10 +28,13 @@ class PromptCacheLayerTest {
         assertTrue(protocol.contains("【用户发言意图分析】"))
         assertTrue(protocol.contains("补全后的完整语义"))
         assertTrue(protocol.contains("深层真实的意图"))
-        assertTrue(protocol.contains("期望回应"))
+        assertTrue(protocol.contains("回复建议"))
+        assertTrue(protocol.contains("2 到 4 条带编号"))
+        assertTrue(protocol.contains("当前用户昵称与当前角色名"))
+        assertFalse(protocol.contains("期望回应"))
         assertTrue(protocol.contains("不得在【旁白】、【台词】"))
         assertTrue(protocol.contains("【输出格式示例"))
-        assertTrue(protocol.contains("【本轮简述】用户提出想去角色房间"))
+        assertTrue(protocol.contains("【本轮简述】博士提出和阿米娅一起前往宿舍拿东西"))
     }
 
     @Test
@@ -41,7 +44,9 @@ class PromptCacheLayerTest {
         assertTrue(behavior.contains("用户本轮明确原话始终优先"))
         assertTrue(behavior.contains("【本轮增量】"))
         assertTrue(behavior.contains("连续性不等于重复"))
-        assertTrue(behavior.contains("【期望回应】只写本轮需要完成的新回应目标"))
+        assertTrue(behavior.contains("【回复建议】是供角色生成本轮回复时执行的内部步骤"))
+        assertTrue(behavior.contains("写 2 到 4 个循序渐进的步骤"))
+        assertTrue(behavior.contains("当前用户昵称与当前角色名"))
     }
 
     @Test

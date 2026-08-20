@@ -16,6 +16,10 @@ object BackupRestorePayloadRewriter {
                     this["user_avatar_uri"] = this["user_avatar_uri"]?.let { value ->
                         if (value.startsWith("s:")) "s:${uri(value.removePrefix("s:"))}" else uri(value)
                     }.orEmpty()
+                    this["support_conversation"] = this["support_conversation"]?.let { value ->
+                        val prefix = if (value.startsWith("s:")) "s:" else ""
+                        prefix + content(value.removePrefix("s:"))
+                    }.orEmpty()
                 },
             ),
             giftRecords = payload.giftRecords.map { it.copy(imageUri = uri(it.imageUri)) },

@@ -10,6 +10,7 @@ object PortableSettings {
         "memory_recall_mode", "personal_memory_reference_style", "context_mode",
         "status_location_pool", "status_activity_pool", "status_emotion_pool",
         "sleep_fixed_wake_text", "sleep_wake_text_mode",
+        "support_conversation",
     )
     private val booleanKeys = setOf(
         "dark_mode", "source_aware_memory_enabled", "distinguish_private_memory", "unified_memory_enabled",

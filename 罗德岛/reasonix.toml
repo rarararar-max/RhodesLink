@@ -1,5 +1,5 @@
 [permissions]
-allow = []
+allow = ["Bash=cd \"D:\\anzhuo\\mingrifangzhou\\mingrifangzhoutest2\" && echo \"===纯 Kotlin 行数===\" && find app/src/main/java shared/src -name \"*.kt\" | xargs wc -l 2>/dev/null | tail -1 && echo \"===sqldelight===\" && ls shared/src/commonMain/sqldelight/com/rhodes/privatechat/shared/db && echo \"===知识库===\" && find shared/src/commonMain/kotlin -path \"*knowledge*\" -name \"*.kt\" && echo \"===voice/vector===\" && ls shared/src/commonMain/kotlin/com/rhodes/privatechat/shared/voice shared/src/commonMain/kotlin/com/rhodes/privatechat/shared/vector 2>/dev/null"]
 
 [sandbox]
-allow_write = ["D:\\anzhuo\\mingrifangzhou\\mingrifangzhoutest2\\app\\src\\main\\assets\\support"]
+allow_write = ["D:\\anzhuo\\mingrifangzhou\\mingrifangzhoutest2\\app\\src\\main\\assets\\support", "D:\\anzhuo\\mingrifangzhou\\mingrifangzhoutest2\\app\\src\\main\\java\\com\\rhodes\\privatechat\\ui\\support", "D:\\anzhuo\\mingrifangzhou\\mingrifangzhoutest2\\shared\\src\\commonMain\\kotlin\\com\\rhodes\\privatechat\\shared\\settings", "D:\\anzhuo\\mingrifangzhou\\mingrifangzhoutest2\\app\\src\\main\\java\\com\\rhodes\\privatechat\\viewmodel", "D:\\anzhuo\\mingrifangzhou\\mingrifangzhoutest2"]

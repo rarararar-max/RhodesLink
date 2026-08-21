@@ -84,6 +84,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
     var inputText by rememberSaveable(groupId) { mutableStateOf("") }
     var pendingImageUri by rememberSaveable(groupId) { mutableStateOf("") }
     var imageSending by rememberSaveable(groupId) { mutableStateOf(false) }
+    var messageSaving by rememberSaveable(groupId) { mutableStateOf(false) }
     var forceScrollThroughMessageCount by remember(groupId) { mutableStateOf(0) }
     var recordingVoice by rememberSaveable(groupId) { mutableStateOf(false) }
     val audioController = remember { LocalAudioController(ctx) }
@@ -290,6 +291,9 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                 )
 
                 val groupLoading by viewModel.groupLoading.collectAsState()
+                if (messageSaving) {
+                    Text("正在保存消息…", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+                }
                 if (pendingImageUri.isNotBlank()) {
                     Row(modifier = Modifier.fillMaxWidth().background(ElevatedSurface.copy(alpha = 0.96f)).padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         AsyncImage(model = pendingImageUri, contentDescription = "待发送图片", modifier = Modifier.size(72.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(10.dp)), contentScale = ContentScale.Crop)
@@ -316,12 +320,15 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                         } else if (text.isNotBlank() && groupId.isNotBlank()) {
                             // Keep the local user bubble and the following AI segments in view.
                             forceScrollThroughMessageCount = groupMessages.size + 2
-                            viewModel.sendGroupMessage(groupId, groupName, text, currentMode) {
-                                inputText = ""
-                            }
+                            messageSaving = true
+                            viewModel.groupChatViewModel.sendGroupMessage(
+                                groupId, groupName, text, currentMode,
+                                onMessageSent = { inputText = ""; messageSaving = false },
+                                onResponseComplete = { messageSaving = false }
+                            )
                         }
                     },
-                    enabled = !imageSending,
+                    enabled = !imageSending && !messageSaving && groupId.isNotBlank(),
                     forceSendEnabled = pendingImageUri.isNotBlank(),
                     currentMode = currentMode,
                     onModeChange = { currentMode = it; viewModel.setGroupMode(groupId, it) },

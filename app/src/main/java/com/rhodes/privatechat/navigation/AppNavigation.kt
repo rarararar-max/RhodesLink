@@ -167,7 +167,9 @@ private fun ChatTabContent(navigator: Navigator) {
     com.rhodes.privatechat.ui.sessions.SessionListScreen(
         viewModel = viewModel,
         onSessionClick = { s ->
-            if (s.operatorId.startsWith("group_")) {
+            if (s.id.startsWith("session___probe_") || s.id.startsWith("group___probe_") || s.operatorId.startsWith("__probe_")) {
+                com.rhodes.privatechat.util.DebugLogger.diagnostic("Navigation/DiagnosticSession", "sessionId=${s.id},operatorId=${s.operatorId}")
+            } else if (s.operatorId.startsWith("group_")) {
                 navigator.push(GroupChatRoute(s.operatorName.ifBlank { "群聊" }, s.id))
             } else {
                 val op = viewModel.operators.value.find { it.id == s.operatorId }

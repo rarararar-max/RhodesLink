@@ -55,7 +55,10 @@ fun DataManagementScreen(
     var cleaningUp by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    LaunchedEffect(refreshKey) { stats = viewModel.getDataStats() }
+    LaunchedEffect(refreshKey) {
+        settings.normalizeDataManagementRetentionValues()
+        stats = viewModel.getDataStats()
+    }
 
     val items = remember(stats) {
         listOf(
@@ -108,7 +111,14 @@ fun DataManagementScreen(
             }
             Spacer(Modifier.height(8.dp))
             items.forEach { item ->
-                val current = settings.getInt(item.prefKey, item.defaultDays)
+                val current = when (item.prefKey) {
+                    "clean_days_anchors" -> settings.cleanDaysAnchors
+                    "clean_days_messages" -> settings.cleanDaysMessages
+                    "clean_days_diaries" -> settings.cleanDaysDiaries
+                    "clean_days_moments" -> settings.cleanDaysMoments
+                    "clean_days_dispatches" -> settings.cleanDaysDispatches
+                    else -> item.defaultDays
+                }
                 Spacer(Modifier.height(8.dp))
                 Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Card).padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {

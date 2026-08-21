@@ -2128,7 +2128,12 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     }
 
     /** 为指定干员同步生成 1 条动态（不含点赞评论），返回 momentId */
-    private suspend fun generateOneForOpSync(op: Operator, triggerType: MomentTriggerType = MomentTriggerType.MANUAL): Long? {
+    private suspend fun generateOneForOpSync(
+        op: Operator,
+        triggerType: MomentTriggerType = MomentTriggerType.MANUAL,
+        debugOperationId: String = "",
+        onModelResult: (SharedUtils.ChatCallResult) -> Unit = {},
+    ): Long? {
         Log.d("RHODES_MOMENT", "generateOneForOpSync: 开始 op=${op.name} triggerType=$triggerType")
         return try {
             val profile = getUserProfile()
@@ -2192,7 +2197,12 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                         "user",
                         "【重试要求】上一版输出无法作为动态正文保存。请只输出符合字数要求的动态纯文本，不要 JSON、Markdown、解释、前缀或占位符。"
                     )
-                    val raw = withTimeout(15_000) { chat(attemptMessages, if (attempt == 0) "Moment" else "MomentContentRetry") }
+                    val result = withTimeout(15_000) { sharedUtils.chatResult(attemptMessages, if (attempt == 0) "Moment" else "MomentContentRetry") }
+                    val raw = result.content
+                    onModelResult(result)
+                    if (debugOperationId.isNotBlank()) {
+                        DebugLogger.attachOperationModule(debugOperationId, "模型用量", "输入Token=${result.inputTokens}\n输出Token=${result.outputTokens}\n提示词缓存=${result.cacheSummary()}")
+                    }
                     Log.d("RHODES_MOMENT", "generateOneForOpSync: AI调用 attempt=$attempt 长度=${raw.length} op=${op.name}")
                     sharedUtils.trackTokens("moment", attemptMessages, raw)
                     content = cleanGeneratedContent(raw, settings.momentMinChars, settings.momentMaxChars)
@@ -2702,6 +2712,9 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         appScope.launch {
             try {
                 var generated = 0
+                var cacheHitTokens = 0
+                var cacheMissTokens = 0
+                var cacheStatisticsUnavailable = 0
                 val candidates = _operators.value.filter {
                     settings.getOperatorDynPermission(it.id)
                 }.shuffled()
@@ -2711,24 +2724,36 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 for (op in candidates) {
                     _momentGenerateStatus.value = MomentGenerateStatus(running = true, msg = "${op.name}发布中...")
                     Log.d("RHODES_MOMENT", "forceGenerateMoments: 正在生成 op=${op.name}")
+                    val roleOperationId = DebugLogger.beginOperation("动态催发", op.name, "手动单角色")
+                    DebugLogger.conversationStep(roleOperationId, "动态催发", "开始生成", "进行中", "角色=${op.name}")
                     try {
-                        val momentId = generateOneForOpSync(op, MomentTriggerType.MANUAL)
+                        val momentId = generateOneForOpSync(op, MomentTriggerType.MANUAL, roleOperationId) { result ->
+                            if (result.promptCacheHitTokens == null && result.promptCacheMissTokens == null) {
+                                cacheStatisticsUnavailable++
+                            } else {
+                                cacheHitTokens += result.promptCacheHitTokens ?: 0
+                                cacheMissTokens += result.promptCacheMissTokens ?: 0
+                            }
+                        }
                         if (momentId != null) {
                             generated++
                             Log.d("RHODES_MOMENT", "forceGenerateMoments: 生成成功 op=${op.name} id=${momentId}")
                             generateLikesAndComments(momentId, op)
                             refreshMomentsNow()
                             repository.getMoment(momentId)?.content?.let { saved ->
-                                DebugLogger.attachOperationModule(debugOperationId, "${op.name}最终保存", saved, sensitive = true)
+                                DebugLogger.attachOperationModule(roleOperationId, "最终保存", saved, sensitive = true)
                             }
-                            DebugLogger.conversationStep(debugOperationId, "动态催发", op.name, "成功", "已生成动态")
+                            DebugLogger.conversationStep(roleOperationId, "动态催发", "动态生成", "成功", "已生成动态，互动已开始生成")
+                            DebugLogger.finishOperation(roleOperationId, "成功", "已生成动态，互动在后台补充")
                         } else {
                             Log.w("RHODES_MOMENT", "forceGenerateMoments: 生成失败 op=${op.name} (返回null)")
-                            DebugLogger.conversationStep(debugOperationId, "动态催发", op.name, "失败", "模型未返回可保存动态")
+                            DebugLogger.conversationStep(roleOperationId, "动态催发", "动态生成", "失败", "模型未返回可保存动态")
+                            DebugLogger.finishOperation(roleOperationId, "失败", "模型未返回可保存动态")
                         }
                     } catch (e: Exception) {
                         Log.e("RHODES_MOMENT", "forceGenerateMoments: 生成异常 op=${op.name} ${e.message}", e)
-                        DebugLogger.conversationStep(debugOperationId, "动态催发", op.name, "失败", e.message?.take(120).orEmpty())
+                        DebugLogger.conversationStep(roleOperationId, "动态催发", "动态生成", "失败", e.message?.take(120).orEmpty())
+                        DebugLogger.finishOperation(roleOperationId, "失败", e.message?.take(120) ?: "动态生成异常")
                     }
                 }
                 Log.d("RHODES_MOMENT", "forceGenerateMoments: 完成 generated=$generated")
@@ -2736,7 +2761,10 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                     running = false,
                     msg = if (generated > 0) "生成完成（${generated}条）" else "无可用干员"
                 )
-                DebugLogger.finishOperation(debugOperationId, if (generated == candidates.size) "成功" else "部分完成", "已生成 $generated 条动态，跳过未开权限 $skipped 名")
+                val cacheTotal = cacheHitTokens + cacheMissTokens
+                val cacheSummary = if (cacheTotal > 0) "命中率=${cacheHitTokens * 100 / cacheTotal}%" else if (cacheStatisticsUnavailable > 0) "服务端未返回统计" else "无模型调用"
+                DebugLogger.attachOperationModule(debugOperationId, "缓存统计", "命中=$cacheHitTokens\n未命中=$cacheMissTokens\n$cacheSummary\n未返回统计调用=$cacheStatisticsUnavailable")
+                DebugLogger.finishOperation(debugOperationId, if (generated == candidates.size) "成功" else "部分完成", "角色=${candidates.size}，成功=$generated，失败=${candidates.size - generated}，缓存$cacheSummary")
                 refreshMomentsNow()
             } catch (e: Exception) {
                 Log.e("RHODES_MOMENT", "forceGenerateMoments: 整体异常 ${e.message}", e)

@@ -166,25 +166,29 @@ fun DebugLogScreen(onBack: () -> Unit) {
     if (showProblemReport) {
         val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
         val report = ProblemChecker.report(packageInfo.versionName ?: "未知", packageInfo.versionCode)
-        ProblemReportDialog(report.report, problemProgress, onDismiss = { showProblemReport = false }, onCopy = { clipboard.setText(AnnotatedString(report.report)); Toast.makeText(context, "已复制自检报告", Toast.LENGTH_SHORT).show() })
+        ProblemReportDialog(report.summary, report.report, problemProgress, onDismiss = { showProblemReport = false }, onCopySummary = { clipboard.setText(AnnotatedString(report.summary)); Toast.makeText(context, "已复制自检摘要", Toast.LENGTH_SHORT).show() }, onCopyTechnical = { clipboard.setText(AnnotatedString(report.report)); Toast.makeText(context, "已复制技术报告", Toast.LENGTH_SHORT).show() })
     }
 }
 
 @Composable
-private fun ProblemReportDialog(report: String, progress: com.rhodes.privatechat.util.ProblemCheckProgress, onDismiss: () -> Unit, onCopy: () -> Unit) {
+private fun ProblemReportDialog(summary: String, report: String, progress: com.rhodes.privatechat.util.ProblemCheckProgress, onDismiss: () -> Unit, onCopySummary: () -> Unit, onCopyTechnical: () -> Unit) {
+    var showTechnicalDetails by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (progress.finishedAt > 0L) "一键自检报告" else "正在一键自检") },
         text = {
             Column(Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState())) {
-                Text(if (progress.finishedAt > 0L) "检查完成。报告会标明本地数据库、私聊消息、群聊消息和模型探针的结果。" else "请保持应用在前台。正在检查：${progress.currentStage}", fontSize = 12.sp, color = TextSecondary)
-                progress.stages.forEach { (name, stage) ->
-                    Text("${stageLabel(name)}：${stage.status.name.lowercase()}${stage.detail.takeIf { it.isNotBlank() }?.let { "\n$it" }.orEmpty()}", fontSize = 11.sp, color = if (stage.status.name in setOf("FAILED", "TIMEOUT", "ABANDONED")) ErrorRed else TextPrimary, modifier = Modifier.padding(top = 7.dp))
+                SelectionContainer { Text(summary, fontSize = 12.sp, color = TextPrimary) }
+                TextButton(onClick = { showTechnicalDetails = !showTechnicalDetails }) { Text(if (showTechnicalDetails) "隐藏技术详情" else "查看技术详情", fontSize = 12.sp, color = Primary) }
+                if (showTechnicalDetails) {
+                    progress.stages.forEach { (name, stage) ->
+                        Text("${stageLabel(name)}：${stage.status.name.lowercase()}${stage.detail.takeIf { it.isNotBlank() }?.let { "\n$it" }.orEmpty()}", fontSize = 11.sp, color = if (stage.status.name in setOf("FAILED", "TIMEOUT", "ABANDONED")) ErrorRed else TextPrimary, modifier = Modifier.padding(top = 7.dp))
+                    }
+                    SelectionContainer { Text(report, fontSize = 10.sp, color = TextTertiary, modifier = Modifier.padding(top = 12.dp)) }
                 }
-                SelectionContainer { Text(report, fontSize = 10.sp, color = TextTertiary, modifier = Modifier.padding(top = 12.dp)) }
             }
         },
-        confirmButton = { TextButton(onClick = onCopy) { Text("复制报告", color = Primary) } },
+        confirmButton = { Row { TextButton(onClick = onCopySummary) { Text("复制摘要", color = Primary) }; TextButton(onClick = onCopyTechnical) { Text("复制技术报告", color = Primary) } } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("关闭") } }
     )
 }
@@ -194,6 +198,16 @@ private fun stageLabel(name: String): String = when (name) {
     "group_message_probe" -> "群聊消息写入与读取"
     "private_ai_probe" -> "私聊结构化模型回复"
     "group_ai_probe" -> "群聊模型回复"
+    "private_pipeline_history" -> "私聊会话与历史读取"
+    "private_pipeline_context" -> "私聊角色、记忆、知识库与提示词前置条件"
+    "private_pipeline_reply_parse" -> "私聊已保存 AI 回复解析与读回"
+    "private_pipeline_last_state" -> "最近真实私聊管线状态"
+    "group_pipeline_roster_history" -> "群聊成员与历史读取"
+    "group_pipeline_context" -> "群聊成员、记忆、知识库与提示词前置条件"
+    "group_pipeline_reply_parse" -> "群聊已保存 AI 回复解析与读回"
+    "vector_embedding_probe" -> "固定诊断文本向量化与本地检索"
+    "support_manual_probe" -> "客服说明书与本地检索"
+    "support_transcript_probe" -> "客服会话持久化与配置"
     "database_open" -> "数据库打开"
     "database_schema" -> "数据库结构"
     "database_copy_write_test" -> "数据库复制写入"

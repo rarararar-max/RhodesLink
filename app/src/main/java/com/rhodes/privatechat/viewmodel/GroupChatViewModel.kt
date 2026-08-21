@@ -593,6 +593,7 @@ class GroupChatViewModel(
             sharedUtils.chatConfigurationError()?.let { error ->
                 _lastSendError.value = error
                 DebugLogger.diagnostic("ChatConfig/GroupBlocked", "groupId=$groupSessionId, provider=${sharedUtils.getProvider()}, apiKeyPresent=${sharedUtils.getApiKey().isNotBlank()}, modelPresent=${sharedUtils.getModelName().isNotBlank()}, customUrlPresent=${sharedUtils.getCustomUrl().isNotBlank()}, reason=$error")
+                onResponseComplete(false)
                 return
             }
         }
@@ -603,6 +604,7 @@ class GroupChatViewModel(
             var userMessageId: Long? = null
             var failureMessageId: Long? = retryMessageId ?: sourceMessageId
             val debugRoundId = DebugLogger.startConversationRound("群聊", groupName, mode)
+            val cacheUsage = SharedUtils.ChatUsageSummary()
             try {
                 restartCleanupJobs[groupSessionId]?.join()
             // 步骤1: 用户消息立即插入（不持锁），消息即时显示
@@ -635,11 +637,14 @@ class GroupChatViewModel(
                     .onFailure { DebugLogger.diagnostic("GroupChat/UnhideFailed", "groupId=$groupSessionId, error=${it.javaClass.simpleName}:${it.message?.take(120)}") }
             }
             } catch (e: kotlinx.coroutines.CancellationException) {
+                DebugLogger.finishOperation(debugRoundId, "失败", "群消息保存已取消")
+                onResponseComplete(false)
                 throw e
             } catch (e: Exception) {
                 val timeout = e is kotlinx.coroutines.TimeoutCancellationException
                 val error = if (timeout) "群消息保存超时，请稍后重试" else "群消息保存失败，请重试"
                 DebugLogger.diagnostic("GroupChat/UserMessageWriteFailed", "groupId=$groupSessionId, timeout=$timeout, error=${e.javaClass.simpleName}:${e.message?.take(160)}")
+                DebugLogger.finishOperation(debugRoundId, "失败", if (timeout) "群消息保存超时" else "群消息保存失败：${e.javaClass.simpleName}")
                 _lastSendError.value = error
                 onResponseComplete(false)
                 return@launch
@@ -1078,7 +1083,7 @@ class GroupChatViewModel(
                 val replyStartedAt = TimeSource.Monotonic.markNow()
                 fun remainingReplyBudget(): Long = (GROUP_REPLY_TIMEOUT_MS - replyStartedAt.elapsedNow().inWholeMilliseconds).coerceAtLeast(1L)
                 suspend fun generateGroupReply(messages: List<AiMessage>, tag: String): String {
-                    return withTimeout(remainingReplyBudget()) { sharedUtils.chat(messages, tag) }.trim()
+                    return withTimeout(remainingReplyBudget()) { sharedUtils.chatResult(messages, tag).also(cacheUsage::record).content }.trim()
                         .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
                 }
                 fun normalizeReply(raw: String): List<GroupMsgResult> {
@@ -1159,7 +1164,7 @@ class GroupChatViewModel(
                     DebugLogger.chatEvent("群聊", "结构补全", "开始", "保留可读内容并补齐旁白或成员")
                     DebugLogger.conversationStep(debugRoundId, "群聊", "格式补全", "开始", groupStructureGap(filtered, activeMembers.map { it.name }.toSet(), mode) + "；温度=0.5，超时=20秒")
                     val repaired = runCatching {
-                        completeGroupStructure(filtered, activeMembers, mode)
+                        completeGroupStructure(filtered, activeMembers, mode, onChatResult = cacheUsage::record)
                     }.getOrElse { emptyList() }
                     if (repaired.isNotEmpty()) {
                         filtered = mergeGroupSupplements(filtered, repaired, activeMembers.map { it.name }.toSet(), mode)
@@ -1176,7 +1181,8 @@ class GroupChatViewModel(
                     DebugLogger.log("GroupChat/InvalidResponse", "模型返回内容无法解析为有效群聊, rawChars=${rawBase.length}")
                     DebugLogger.chatEvent("群聊", "返回解析", "失败", "无法得到可展示消息")
                     DebugLogger.conversationStep(debugRoundId, "群聊", "本轮结果", "失败", groupReplyFailureReason(rawBase, activeMembers, groupName, mode))
-                    DebugLogger.conversationStep(debugRoundId, "群聊", "本轮总览", "失败", "模式=$mode，成员=${activeMembers.size}，自动=$isAuto，请求消息=${apiMessages.size}条，原始输出=${rawBase.length}字，原因=${groupReplyFailureReason(rawBase, activeMembers, groupName, mode)}")
+                    DebugLogger.attachOperationModule(debugRoundId, "模型用量", cacheUsage.summary())
+                    DebugLogger.conversationStep(debugRoundId, "群聊", "本轮总览", "失败", "模式=$mode，成员=${activeMembers.size}，自动=$isAuto，请求消息=${apiMessages.size}条，原始输出=${rawBase.length}字，原因=${groupReplyFailureReason(rawBase, activeMembers, groupName, mode)}，缓存=${cacheUsage.summary()}")
                     markGroupMessagesUndelivered(groupSessionId, if (batchIds.isNotEmpty()) batchIds else failureMessageId?.let(::setOf).orEmpty(), groupName)
                 } else {
                     val dialogueCount = filtered.count { it.type == "dialogue" }
@@ -1217,7 +1223,8 @@ class GroupChatViewModel(
                     }
                     DebugLogger.chatEvent("群聊", "回复落库", "成功", "群=$groupName，条目=${filtered.size}")
                     DebugLogger.conversationStep(debugRoundId, "群聊", "本轮结果", "成功", "已保存${filtered.size}条群聊内容")
-                    DebugLogger.conversationStep(debugRoundId, "群聊", "本轮总览", "成功", "模式=$mode，成员=${activeMembers.size}，自动=$isAuto，请求消息=${apiMessages.size}条，台词=${filtered.count { it.type == "dialogue" }}，旁白=${filtered.count { it.type == "narration" }}，内容重试=${if (contentRetried) "已执行" else "未执行"}，AI消息ID=$aiMsgId")
+                    DebugLogger.attachOperationModule(debugRoundId, "模型用量", cacheUsage.summary())
+                    DebugLogger.conversationStep(debugRoundId, "群聊", "本轮总览", "成功", "模式=$mode，成员=${activeMembers.size}，自动=$isAuto，请求消息=${apiMessages.size}条，台词=${filtered.count { it.type == "dialogue" }}，旁白=${filtered.count { it.type == "narration" }}，内容重试=${if (contentRetried) "已执行" else "未执行"}，AI消息ID=$aiMsgId，缓存=${cacheUsage.summary()}")
                     // Auto messages and replies can arrive while the group is open, so unread-based
                     // restoration alone is insufficient after the user removed it from the home page.
                     unhideSession(groupSessionId)
@@ -1254,7 +1261,8 @@ class GroupChatViewModel(
                 DebugLogger.log("GroupChat/Error", "AI 响应超时：${e.message ?: "超过90秒"}")
                 DebugLogger.chatEvent("群聊", "请求模型", "超时", "群=$groupName")
                 DebugLogger.conversationStep(debugRoundId, "群聊", "本轮结果", "失败", "模型请求超时")
-                DebugLogger.conversationStep(debugRoundId, "群聊", "本轮总览", "失败", "模式=$mode，自动=$isAuto，原因=模型请求超时")
+                DebugLogger.attachOperationModule(debugRoundId, "模型用量", cacheUsage.summary())
+                DebugLogger.conversationStep(debugRoundId, "群聊", "本轮总览", "失败", "模式=$mode，自动=$isAuto，原因=模型请求超时，缓存=${cacheUsage.summary()}")
                 markGroupMessagesUndelivered(groupSessionId, if (batchIds.isNotEmpty()) batchIds else failureMessageId?.let(::setOf).orEmpty(), groupName)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 markGroupMessagesUndelivered(groupSessionId, if (batchIds.isNotEmpty()) batchIds else failureMessageId?.let(::setOf).orEmpty(), groupName)
@@ -1267,7 +1275,8 @@ class GroupChatViewModel(
                 DebugLogger.log("GroupChat/Error", "发送失败: $errMsg")
                 DebugLogger.chatEvent("群聊", "请求模型", "失败", errMsg)
                 DebugLogger.conversationStep(debugRoundId, "群聊", "本轮结果", "失败", "模型错误：$errMsg")
-                DebugLogger.conversationStep(debugRoundId, "群聊", "本轮总览", "失败", "模式=$mode，自动=$isAuto，错误=${e.javaClass.simpleName}")
+                DebugLogger.attachOperationModule(debugRoundId, "模型用量", cacheUsage.summary())
+                DebugLogger.conversationStep(debugRoundId, "群聊", "本轮总览", "失败", "模式=$mode，自动=$isAuto，错误=${e.javaClass.simpleName}，缓存=${cacheUsage.summary()}")
                 markGroupMessagesUndelivered(groupSessionId, if (batchIds.isNotEmpty()) batchIds else failureMessageId?.let(::setOf).orEmpty(), groupName)
                 _lastSendError.value = errMsg
             } finally {
@@ -1512,7 +1521,8 @@ class GroupChatViewModel(
         existing: List<GroupMsgResult>,
         activeMembers: List<Operator>,
         mode: String,
-        timeoutMillis: Long = GROUP_FORMAT_REPAIR_TIMEOUT_MS
+        timeoutMillis: Long = GROUP_FORMAT_REPAIR_TIMEOUT_MS,
+        onChatResult: (SharedUtils.ChatCallResult) -> Unit = {},
     ): List<GroupMsgResult> {
         if (existing.isEmpty()) return emptyList()
         val existingSpeakers = existing.filter { it.type == "dialogue" }.map { it.speaker }.toSet()
@@ -1548,11 +1558,11 @@ $members
         - 旁白必须使用 speaker="旁白" 和 type="narration"；成员说出口的话使用 type="dialogue"。
         - 必须输出可被标准 JSON 解析的数组；不需要补充时输出 []。"""
         val repaired = withTimeout(timeoutMillis) {
-            sharedUtils.chat(
+            sharedUtils.chatResult(
                 listOf(AiMessage("system", prompt), AiMessage("user", untrustedGroupRepairInput(json.encodeToString(existing)))),
                 "GroupFormatRepair",
                 temperature = 0.5
-            )
+            ).also(onChatResult).content
         }
         DebugLogger.trace("AI/GroupFormatRepair", "FORMAT_REPAIR_REQUEST\n$prompt\n\nFORMAT_REPAIR_RESPONSE\n$repaired")
         val allowed = activeMembers.map { it.name }.toSet() + "旁白"

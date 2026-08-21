@@ -184,12 +184,12 @@ fun ChatInputBar(
             }
             IconButton(
                 onClick = { onSend(tfValue.text) },
-                enabled = enabled && (text.isNotBlank() || forceSendEnabled),
+                enabled = enabled && (tfValue.text.isNotBlank() || forceSendEnabled),
                 modifier = Modifier.size(terminal.let { if (it) 42.dp else 36.dp }).clip(if (terminal) TerminalPanelShape else CircleShape)
-                    .background(if ((text.isNotBlank() || forceSendEnabled) && enabled) Brush.linearGradient(listOf(Primary, Blue400)) else Brush.linearGradient(listOf(Color.Transparent, Color.Transparent)))
+                    .background(if ((tfValue.text.isNotBlank() || forceSendEnabled) && enabled) Brush.linearGradient(listOf(Primary, Blue400)) else Brush.linearGradient(listOf(Color.Transparent, Color.Transparent)))
             ) {
                 Icon(Icons.AutoMirrored.Filled.Send, if (terminal) "发送通讯" else "发送",
-                    tint = if ((text.isNotBlank() || forceSendEnabled) && enabled) OnPrimary else TextSecondary,
+                    tint = if ((tfValue.text.isNotBlank() || forceSendEnabled) && enabled) OnPrimary else TextSecondary,
                     modifier = Modifier.size(18.dp))
             }
         }

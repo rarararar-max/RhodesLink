@@ -273,13 +273,61 @@ class SharedUtils(
 
     // === AI 调用 ===
 
-    /** 非流式聊天：发送请求，等待完整响应后返回 */
-    suspend fun chat(
+    data class ChatCallResult(
+        val content: String,
+        val inputTokens: Int,
+        val outputTokens: Int,
+        val promptCacheHitTokens: Int?,
+        val promptCacheMissTokens: Int?,
+    ) {
+        fun cacheSummary(): String = when {
+            promptCacheHitTokens == null && promptCacheMissTokens == null -> "服务端未返回缓存统计"
+            promptCacheHitTokens == null || promptCacheMissTokens == null -> "服务端返回的提示词缓存统计不完整"
+            else -> {
+                val hit = promptCacheHitTokens
+                val miss = promptCacheMissTokens
+                val total = hit + miss
+                "提示词缓存Token：命中=$hit，未命中=$miss，命中率=${if (total > 0) hit * 100 / total else 0}%"
+            }
+        }
+    }
+
+    class ChatUsageSummary {
+        private var callsWithUsage = 0L
+        private var callsWithoutUsage = 0L
+        private var callsWithIncompleteUsage = 0L
+        private var hitTokens = 0L
+        private var missTokens = 0L
+
+        fun record(result: ChatCallResult) {
+            if (result.promptCacheHitTokens == null && result.promptCacheMissTokens == null) {
+                callsWithoutUsage++
+            } else if (result.promptCacheHitTokens == null || result.promptCacheMissTokens == null) {
+                callsWithIncompleteUsage++
+            } else {
+                callsWithUsage++
+                hitTokens += result.promptCacheHitTokens.toLong()
+                missTokens += result.promptCacheMissTokens.toLong()
+            }
+        }
+
+        fun summary(): String {
+            val total = hitTokens + missTokens
+            return when {
+                callsWithUsage == 0L && callsWithoutUsage == 0L && callsWithIncompleteUsage == 0L -> "本轮未收到模型用量"
+                callsWithUsage == 0L -> "成功返回调用=${callsWithoutUsage + callsWithIncompleteUsage}；服务端未返回完整提示词缓存统计"
+                else -> "本轮成功返回调用：完整统计=$callsWithUsage；未返回=$callsWithoutUsage；不完整=$callsWithIncompleteUsage；提示词缓存Token：命中=$hitTokens；未命中=$missTokens；命中率=${if (total > 0) hitTokens * 100 / total else 0}%（含重试/补全；超时或失败请求未计入）"
+            }
+        }
+    }
+
+    /** Non-streaming chat retaining safe usage metrics for operation diagnostics. */
+    suspend fun chatResult(
         messages: List<AiMessage>,
         logTag: String = "Chat",
         maxOutputTokens: Int? = null,
         temperature: Double? = null
-    ): String {
+    ): ChatCallResult {
         validateChatConfiguration()
         val temp = temperature ?: settings.aiTemperature
         val startedAt = TimeSource.Monotonic.markNow()
@@ -290,24 +338,25 @@ class SharedUtils(
                 settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl,
                 temperature = temp, maxOutputTokens = maxOutputTokens, requestType = logTag
             )
-            val cacheSummary = when {
-                result.promptCacheHitTokens == null && result.promptCacheMissTokens == null -> "服务端未返回缓存统计"
-                else -> {
-                    val hit = result.promptCacheHitTokens ?: 0
-                    val miss = result.promptCacheMissTokens ?: 0
-                    val total = hit + miss
-                    "命中=$hit，未命中=$miss，命中率=${if (total > 0) hit * 100 / total else 0}%"
-                }
-            }
+            val callResult = ChatCallResult(result.content, result.inputTokens, result.outputTokens, result.promptCacheHitTokens, result.promptCacheMissTokens)
+            val cacheSummary = callResult.cacheSummary()
             DebugLogger.log("AI/$logTag/响应", "模型请求成功\n耗时=${startedAt.elapsedNow().inWholeMilliseconds}ms\n输入Token=${result.inputTokens}\n输出Token=${result.outputTokens}\n输出字符=${result.content.length}\n提示词缓存=$cacheSummary")
             logDeepSeekReasoning(logTag, result)
             logAiResponse(logTag, result.content)
-            result.content
+            callResult
         } catch (e: Exception) {
             DebugLogger.log("AI/$logTag/错误", "模型请求失败\n耗时=${startedAt.elapsedNow().inWholeMilliseconds}ms\n异常=${e::class.simpleName}\n原因=${e.message ?: "未知错误"}")
             throw e
         }
     }
+
+    /** 非流式聊天：发送请求，等待完整响应后返回 */
+    suspend fun chat(
+        messages: List<AiMessage>,
+        logTag: String = "Chat",
+        maxOutputTokens: Int? = null,
+        temperature: Double? = null
+    ): String = chatResult(messages, logTag, maxOutputTokens, temperature).content
 
     /** Non-streaming chat with one content regeneration and one format repair when needed. */
     suspend fun chatWithRetry(messages: List<AiMessage>, logTag: String = "Chat", mode: String = ""): com.rhodes.privatechat.shared.model.OfflineModeResponse {

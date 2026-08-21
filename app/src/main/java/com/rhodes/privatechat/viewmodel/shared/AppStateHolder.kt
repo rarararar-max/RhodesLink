@@ -161,9 +161,18 @@ class AppStateHolder(
     }
 
     fun refreshAllSessions(all: List<ChatSession>, hiddenIds: Set<String>) {
-        _allSessions.value = all
-        _sessions.value = all.filter { it.id !in hiddenIds }
+        // Diagnostic sessions are transient implementation details. Never expose an orphaned
+        // probe row to normal session UI, even if its best-effort cleanup was interrupted.
+        val userSessions = all.filterNot(::isDiagnosticSession)
+        _allSessions.value = userSessions
+        _sessions.value = userSessions.filter { it.id !in hiddenIds }
     }
+
+    private fun isDiagnosticSession(session: ChatSession): Boolean =
+        session.id.startsWith("session___probe_") ||
+            session.id.startsWith("group___probe_") ||
+            session.operatorId.startsWith("__probe_") ||
+            session.operatorId.startsWith("group___probe_")
 
     fun refreshMoments(moments: List<Moment>) {
         _moments.value = moments

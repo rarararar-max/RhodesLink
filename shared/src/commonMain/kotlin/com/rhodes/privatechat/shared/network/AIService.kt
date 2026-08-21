@@ -327,20 +327,20 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         elapsedMs: Long,
         inputTokens: Int,
         outputTokens: Int,
-        cacheHitTokens: Int = 0,
-        cacheMissTokens: Int = 0,
+        cacheHitTokens: Int? = null,
+        cacheMissTokens: Int? = null,
         requestType: String,
         outcome: String
     ) {
         val system = messages.filter { it.role == "system" }.joinToString("\n\n") { it.content }
-        val cacheTotal = cacheHitTokens + cacheMissTokens
-        val cacheRate = if (cacheTotal > 0) cacheHitTokens * 100 / cacheTotal else -1
+        val cacheTotal = if (cacheHitTokens != null && cacheMissTokens != null) cacheHitTokens + cacheMissTokens else null
+        val cacheRate = cacheTotal?.takeIf { it > 0 }?.let { cacheHitTokens!! * 100 / it }
         println(
             "RHODES_AI_METRIC requestType=$requestType provider=$providerId model=$modelName outcome=$outcome " +
                 "messages=${messages.size} systemChars=${system.length} " +
                 "systemFingerprint=${systemFingerprint(system)} inputTokens=$inputTokens " +
-                "outputTokens=$outputTokens cacheHitTokens=$cacheHitTokens " +
-                "cacheMissTokens=$cacheMissTokens cacheHitRate=$cacheRate elapsedMs=$elapsedMs"
+                "outputTokens=$outputTokens promptCacheHitTokens=${cacheHitTokens ?: "unavailable"} " +
+                "promptCacheMissTokens=${cacheMissTokens ?: "unavailable"} promptCacheTokenHitRate=${cacheRate ?: "unavailable"} elapsedMs=$elapsedMs"
         )
     }
 
@@ -407,8 +407,8 @@ class AIService(private val client: HttpClient = createHttpClient()) {
             val content = if (rawContent.isBlank() || rawContent.all { it.isWhitespace() }) "" else rawContent
             val inputTokens = completion.usage?.promptTokens ?: 0
             val outputTokens = completion.usage?.completionTokens ?: 0
-            val cacheHit = completion.usage?.promptCacheHitTokens ?: 0
-            val cacheMiss = completion.usage?.promptCacheMissTokens ?: 0
+            val cacheHit = completion.usage?.promptCacheHitTokens
+            val cacheMiss = completion.usage?.promptCacheMissTokens
             logRequestMetrics(
                 providerId = config.id,
                 modelName = model,

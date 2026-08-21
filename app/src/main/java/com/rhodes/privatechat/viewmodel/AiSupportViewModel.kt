@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -97,6 +98,21 @@ class AiSupportViewModel(
             manual = getApplication<Application>().assets.open("support/product_manual_zh.md").bufferedReader().use { it.readText() }
             manualSections = manual.split(Regex("(?m)(?=^##\\s+)")).map { it.trim() }.filter { it.isNotBlank() }
             manualHash = manual.hashCode().toString()
+            _manualReady.value = true
+            _notice.value = "客服说明已就绪，正在优化检索资料。"
+            prepareKnowledgeBase()
+        } catch (error: Exception) {
+            // Keep the send path available even if the shipped asset cannot be opened.
+            manualSections = listOf("## 客服说明\n\n当前无法读取内置说明书。请描述问题、页面名称和看到的提示，我们会根据现有信息协助排查。")
+            _manualReady.value = true
+            _notice.value = "客服说明书准备失败，已使用基础说明继续服务。"
+            DebugLogger.diagnostic("AiSupport/Manual", "status=failed,errorClass=${error.javaClass.simpleName}")
+        }
+    }
+
+    /** The local manual is sufficient for support. Database indexing must never block sending. */
+    private suspend fun prepareKnowledgeBase() {
+        try {
             val existing = settings.supportKnowledgeBaseId
             val existingBook = if (existing.isNotBlank()) knowledgeBases.get(existing) else null
             if (existingBook == null) {
@@ -114,11 +130,12 @@ class AiSupportViewModel(
             if (settings.vectorProviderMode == "third_party" && settings.supportRemoteVectorEnabled && settings.supportRemoteEmbeddingConfirmedSignature != currentEmbeddingSignature()) {
                 _remoteConfirmation.value = true
                 _notice.value = "检测到第三方向量模型，可用于提升客服说明检索的同义问题匹配。"
+            } else {
+                _notice.value = "客服说明已就绪。"
             }
-            _manualReady.value = true
         } catch (error: Exception) {
-            _notice.value = "客服说明书准备失败，将使用内置章节检索：${error.message?.take(100).orEmpty()}"
-            _manualReady.value = true
+            _notice.value = "客服说明已就绪，知识库同步失败，继续使用本地章节检索。"
+            DebugLogger.diagnostic("AiSupport/KnowledgeBase", "status=failed,errorClass=${error.javaClass.simpleName}")
         }
     }
 
@@ -167,22 +184,30 @@ class AiSupportViewModel(
         _remoteConfirmation.value = true
     }
 
-    fun ask(question: String, imageUri: String = "", imageForModel: String? = null) {
+    fun ask(question: String, imageUri: String = "", imageForModel: String? = null): Boolean {
         val trimmed = question.trim()
-        if ((trimmed.isBlank() && imageUri.isBlank()) || _busy.value) return
+        if ((trimmed.isBlank() && imageUri.isBlank()) || _busy.value) return false
         if (!_manualReady.value) {
             _notice.value = "正在准备客服说明，请稍候…"
-            return
+            return false
         }
         val agent = _currentAgent.value
+        _busy.value = true
         val userMessageId = ++nextMessageId
         val debugOperationId = DebugLogger.beginOperation("客服", agent.name, "文字聊天")
-        DebugLogger.conversationStep(debugOperationId, "客服", "用户消息", "已保存", "消息ID=$userMessageId")
+        DebugLogger.conversationStep(debugOperationId, "客服", "发送入口", "已接收", "消息ID=$userMessageId")
         _messages.value = _messages.value + AiSupportMessage(userMessageId, "user", trimmed, agentId = agent.id, imageUri = imageUri)
-        persistConversation()
+        runCatching { persistConversation() }.onFailure { error ->
+            _busy.value = false
+            _messages.value = _messages.value.dropLast(1)
+            _notice.value = "客服记录保存失败，请检查设备存储后重试。"
+            DebugLogger.diagnostic("AiSupport/Persist", "stage=user_message,status=failed,errorClass=${error.javaClass.simpleName}")
+            DebugLogger.finishOperation(debugOperationId, "失败", "用户消息保存失败")
+            return false
+        }
         requestJob = viewModelScope.launch {
-            _busy.value = true
             try {
+                _notice.value = "正在检索说明并请求客服回复…"
                 sharedUtils.chatConfigurationError()?.let { throw IllegalStateException(it) }
                 val imageSummary = if (imageUri.isBlank()) "" else analyzeImage(imageForModel)
                 if (imageSummary.isNotBlank()) {
@@ -231,7 +256,9 @@ class AiSupportViewModel(
                 val requestMessages = listOf(AiMessage("system", prompt)) + recent + AiMessage("user", context)
                 DebugLogger.attachOperationModule(debugOperationId, "完整请求", sharedUtils.logAiCallText(requestMessages), sensitive = true)
                 DebugLogger.attachOperationModule(debugOperationId, "产品资料", reference, sensitive = true)
-                val raw = aiService.chat(settings.apiKey, requestMessages, settings.provider, settings.modelName, settings.customUrl, AiSupportContract.temperature, maxOutputTokens = AiSupportContract.maxOutputTokens, requestType = "AiSupport").content
+                val raw = withTimeoutOrNull(45_000L) {
+                    aiService.chat(settings.apiKey, requestMessages, settings.provider, settings.modelName, settings.customUrl, AiSupportContract.temperature, maxOutputTokens = AiSupportContract.maxOutputTokens, requestType = "AiSupport").content
+                } ?: throw java.net.SocketTimeoutException("客服请求超过45秒未完成")
                 DebugLogger.attachOperationModule(debugOperationId, "AI原始返回", raw, sensitive = true)
                 DebugLogger.conversationStep(debugOperationId, "客服", "模型请求", "成功", "已收到客服回复")
                 val sources = AiSupportContract.sources(reference)
@@ -247,6 +274,7 @@ class AiSupportViewModel(
                 persistConversation()
                 DebugLogger.attachOperationModule(debugOperationId, "最终保存", visibleReply + if (packetAmount > 0) "\n红包：$packetAmount 龙门币" else "", sensitive = true)
                 DebugLogger.finishOperation(debugOperationId, "成功", "已回复${if (packetAmount > 0) "，并发送 $packetAmount 龙门币红包" else ""}")
+                _notice.value = ""
             } catch (error: Exception) {
                 if (error is kotlinx.coroutines.CancellationException) {
                     _notice.value = AiSupportContract.userError(error)
@@ -258,6 +286,7 @@ class AiSupportViewModel(
                 }
             } finally { _busy.value = false; requestJob = null }
         }
+        return true
     }
 
     fun cancelRequest() { requestJob?.cancel() }

@@ -852,24 +852,42 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putInt("sleep_snooze_minutes", value.coerceIn(1, 30))
 
     // === 清理设置 ===
+    // -1 is the only permanent-retention sentinel. Old builds could persist 0 even though it
+    // was not a selectable rule; normalize it here without touching the legacy clean_days key.
+    private fun cleanupRetentionDays(key: String, defaultDays: Int): Int =
+        settings.getInt(key, defaultDays).coerceIn(-1, 3650).let { if (it == 0) -1 else it }
+
+    /** Migrates only Data Management's historical unsupported zero values to the permanent sentinel. */
+    fun normalizeDataManagementRetentionValues() {
+        listOf(
+            "clean_days_messages" to 30,
+            "clean_days_anchors" to 7,
+            "clean_days_diaries" to 30,
+            "clean_days_moments" to 7,
+            "clean_days_dispatches" to 30,
+        ).forEach { (key, defaultDays) ->
+            if (settings.getInt(key, defaultDays) == 0) settings.putInt(key, -1)
+        }
+    }
+
     var cleanDaysMessages: Int
-        get() = settings.getInt("clean_days_messages", 30).coerceIn(-1, 3650)
+        get() = cleanupRetentionDays("clean_days_messages", 30)
         set(value) = settings.putInt("clean_days_messages", value.coerceIn(-1, 3650))
 
     var cleanDaysAnchors: Int
-        get() = settings.getInt("clean_days_anchors", 7).coerceIn(-1, 3650)
+        get() = cleanupRetentionDays("clean_days_anchors", 7)
         set(value) = settings.putInt("clean_days_anchors", value.coerceIn(-1, 3650))
 
     var cleanDaysDiaries: Int
-        get() = settings.getInt("clean_days_diaries", 30).coerceIn(-1, 3650)
+        get() = cleanupRetentionDays("clean_days_diaries", 30)
         set(value) = settings.putInt("clean_days_diaries", value.coerceIn(-1, 3650))
 
     var cleanDaysMoments: Int
-        get() = settings.getInt("clean_days_moments", 7).coerceIn(-1, 3650)
+        get() = cleanupRetentionDays("clean_days_moments", 7)
         set(value) = settings.putInt("clean_days_moments", value.coerceIn(-1, 3650))
 
     var cleanDaysDispatches: Int
-        get() = settings.getInt("clean_days_dispatches", 30).coerceIn(-1, 3650)
+        get() = cleanupRetentionDays("clean_days_dispatches", 30)
         set(value) = settings.putInt("clean_days_dispatches", value.coerceIn(-1, 3650))
 
     // === 催眠设置 ===

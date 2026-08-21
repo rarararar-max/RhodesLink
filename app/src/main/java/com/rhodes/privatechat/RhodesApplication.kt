@@ -12,6 +12,7 @@ import com.rhodes.privatechat.shared.settings.AndroidSettingsFactory
 import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.util.DebugLogger
+import com.rhodes.privatechat.util.ProblemChecker
 import org.koin.android.ext.koin.androidContext
 import org.koin.android.ext.koin.androidLogger
 import org.koin.core.context.startKoin
@@ -50,6 +51,10 @@ class RhodesApplication : Application() {
         )
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             repository.repairAiSessionPreviews()
+            // A previous diagnostic may have been interrupted while deleting its temporary data.
+            // Recovery is best-effort and never delays app startup or normal session rendering.
+            runCatching { ProblemChecker.cleanupStaleChatProbes(repository) }
+                .onFailure { DebugLogger.diagnostic("Startup/ProbeCleanupFailed", "errorClass=${it.javaClass.simpleName}") }
         }
     }
     

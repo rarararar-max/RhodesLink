@@ -43,6 +43,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Scaffold
@@ -82,6 +83,7 @@ fun AiSupportScreen(onBack: () -> Unit, viewModel: AiSupportViewModel = koinView
     val messages by viewModel.messages.collectAsState()
     val busy by viewModel.busy.collectAsState()
     val manualReady by viewModel.manualReady.collectAsState()
+    val notice by viewModel.notice.collectAsState()
     val remote by viewModel.remoteConfirmation.collectAsState()
     val currentAgent by viewModel.currentAgent.collectAsState()
     val settings: SettingsRepository = koinInject()
@@ -134,16 +136,33 @@ fun AiSupportScreen(onBack: () -> Unit, viewModel: AiSupportViewModel = koinView
                     }
                 }
             }
+            if (notice.isNotBlank()) {
+                Row(
+                    Modifier.fillMaxWidth().background(ElevatedSurface).padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (busy || !manualReady) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Primary)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(notice, fontSize = 12.sp, color = TextSecondary)
+                    if (busy) {
+                        Spacer(Modifier.weight(1f))
+                        TextButton(onClick = viewModel::cancelRequest) { Text("取消", fontSize = 12.sp, color = ErrorRed) }
+                    }
+                }
+            }
             if (pendingImageUri.isNotBlank()) Row(Modifier.fillMaxWidth().background(ElevatedSurface).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 AsyncImage(model = pendingImageUri, contentDescription = "待发送图片", modifier = Modifier.size(64.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
                 Text("图片待发送", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
                 TextButton(onClick = { pendingImageUri = "" }) { Text("移除", color = ErrorRed) }
             }
-            AiSupportInput(input = input, hasPendingImage = pendingImageUri.isNotBlank(), busy = busy || !manualReady, onInputChange = { input = it }, onSubmit = { question ->
+            AiSupportInput(input = input, hasPendingImage = pendingImageUri.isNotBlank(), busy = busy, enabled = manualReady, onInputChange = { input = it }, onSubmit = { question ->
                 val imageUri = pendingImageUri
-                pendingImageUri = ""
-                viewModel.ask(question, imageUri, imageUri.takeIf { it.isNotBlank() }?.let(MainActivity::imageForModel))
-                input = ""
+                if (viewModel.ask(question, imageUri, imageUri.takeIf { it.isNotBlank() }?.let(MainActivity::imageForModel))) {
+                    pendingImageUri = ""
+                    input = ""
+                }
             }, onPickImage = {
                 MainActivity.pickImage { pendingImageUri = it }
             }, onTakePhoto = {
@@ -227,15 +246,15 @@ private fun agentColor(id: String): Color = when (id) {
 }
 
 @Composable
-fun AiSupportInput(input: String, hasPendingImage: Boolean = false, busy: Boolean, onInputChange: (String) -> Unit, onSubmit: (String) -> Unit, onPickImage: () -> Unit = {}, onTakePhoto: () -> Unit = {}) {
+fun AiSupportInput(input: String, hasPendingImage: Boolean = false, busy: Boolean, enabled: Boolean = true, onInputChange: (String) -> Unit, onSubmit: (String) -> Unit, onPickImage: () -> Unit = {}, onTakePhoto: () -> Unit = {}) {
     fun submit() {
-        if (!busy && (input.isNotBlank() || hasPendingImage)) onSubmit(input)
+        if (!busy && enabled && (input.isNotBlank() || hasPendingImage)) onSubmit(input)
     }
     Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.Bottom) {
-        IconButton(onClick = onPickImage, enabled = !busy) { Icon(Icons.Default.Image, "从相册选择图片", tint = if (busy) TextTertiary else Primary) }
-        IconButton(onClick = onTakePhoto, enabled = !busy) { Icon(Icons.Default.PhotoCamera, "拍照", tint = if (busy) TextTertiary else Primary) }
-        OutlinedTextField(value = input, onValueChange = onInputChange, modifier = Modifier.weight(1f), placeholder = { Text("输入问题或发送截图…") }, maxLines = 4, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send), keyboardActions = KeyboardActions(onSend = { submit() }))
-        IconButton(onClick = ::submit, enabled = !busy && (input.isNotBlank() || hasPendingImage)) { Icon(Icons.AutoMirrored.Filled.Send, "发送", tint = if (!busy && (input.isNotBlank() || hasPendingImage)) Primary else TextTertiary) }
+        IconButton(onClick = onPickImage, enabled = !busy && enabled) { Icon(Icons.Default.Image, "从相册选择图片", tint = if (busy || !enabled) TextTertiary else Primary) }
+        IconButton(onClick = onTakePhoto, enabled = !busy && enabled) { Icon(Icons.Default.PhotoCamera, "拍照", tint = if (busy || !enabled) TextTertiary else Primary) }
+        OutlinedTextField(value = input, onValueChange = onInputChange, enabled = enabled, modifier = Modifier.weight(1f), placeholder = { Text(if (enabled) "输入问题或发送截图…" else "正在准备客服说明…") }, maxLines = 4, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send), keyboardActions = KeyboardActions(onSend = { submit() }))
+        IconButton(onClick = ::submit, enabled = !busy && enabled && (input.isNotBlank() || hasPendingImage)) { Icon(Icons.AutoMirrored.Filled.Send, "发送", tint = if (!busy && enabled && (input.isNotBlank() || hasPendingImage)) Primary else TextTertiary) }
     }
 }
 

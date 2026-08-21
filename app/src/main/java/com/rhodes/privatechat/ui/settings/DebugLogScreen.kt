@@ -197,6 +197,9 @@ private fun stageLabel(name: String): String = when (name) {
     "database_open" -> "数据库打开"
     "database_schema" -> "数据库结构"
     "database_copy_write_test" -> "数据库复制写入"
+    "persistent_state_probe" -> "持久化设置、状态与旧提示词"
+    "backup_snapshot_probe" -> "完整备份快照构建"
+    "backup_file_probe" -> "备份文件写入与回读校验"
     "session_integrity" -> "会话完整性"
     "contacts_recovery" -> "角色与会话恢复"
     else -> name

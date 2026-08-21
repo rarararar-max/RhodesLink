@@ -9,6 +9,15 @@ import com.rhodes.privatechat.shared.model.ChatMessage
 import com.rhodes.privatechat.shared.model.ChatSession
 import com.rhodes.privatechat.shared.model.Operator
 import com.rhodes.privatechat.shared.data.ChatRepository
+import com.rhodes.privatechat.data.backup.BackupContentFilter
+import com.rhodes.privatechat.data.backup.BackupContentSelection
+import com.rhodes.privatechat.data.backup.BackupFileReader
+import com.rhodes.privatechat.data.backup.BackupFileWriter
+import com.rhodes.privatechat.data.backup.BackupMediaCollector
+import com.rhodes.privatechat.data.backup.BackupSnapshotBuilder
+import com.rhodes.privatechat.viewmodel.shared.PromptTemplates
+import com.rhodes.privatechat.viewmodel.AiSupportMessage
+import kotlinx.serialization.json.Json
 import com.rhodes.privatechat.viewmodel.shared.AppStateHolder
 import com.rhodes.privatechat.viewmodel.shared.SharedUtils
 import kotlinx.coroutines.CoroutineScope
@@ -76,7 +85,7 @@ object ProblemChecker {
         val checkId = UUID.randomUUID().toString().replace("-", "").take(8)
         if (!active.compareAndSet(null, checkId)) return active.get() ?: checkId
         val now = System.currentTimeMillis()
-        val names = listOf("cleanup_previous_probe", "database_open", "database_schema", "database_counts", "session_integrity", "session_message_audit", "contacts_recovery", "database_copy_write_test", "private_message_probe", "group_message_probe", "private_ai_probe", "group_ai_probe", "cleanup")
+        val names = listOf("cleanup_previous_probe", "database_open", "database_schema", "database_counts", "persistent_state_probe", "session_integrity", "session_message_audit", "contacts_recovery", "database_copy_write_test", "backup_snapshot_probe", "backup_file_probe", "private_message_probe", "group_message_probe", "private_ai_probe", "group_ai_probe", "cleanup")
         current.set(ProblemCheckProgress(checkId, now, now + TOTAL_TIMEOUT_MS, currentStage = "starting", stages = names.associateWith { StageProgress() }))
         scope.launch {
             // Cleanup used to run alongside the copy/write probe and could delete the probe's
@@ -89,9 +98,12 @@ object ProblemChecker {
             launchProbe(checkId, "database_open", LOCAL_TIMEOUT_MS) { databaseOpen(context) }
             launchProbe(checkId, "database_schema", LOCAL_TIMEOUT_MS) { databaseSchema(context) }
             launchProbe(checkId, "database_counts", LOCAL_TIMEOUT_MS) { databaseCounts(context) }
+            launchProbe(checkId, "persistent_state_probe", LOCAL_TIMEOUT_MS) { persistentStateProbe(context, repository) }
             launchProbe(checkId, "session_integrity", LOCAL_TIMEOUT_MS) { sessionIntegrity(context) }
             launchProbe(checkId, "session_message_audit", LOCAL_TIMEOUT_MS) { sessionMessageAudit(repository) }
             launchProbe(checkId, "contacts_recovery", LOCAL_TIMEOUT_MS) { recoverContacts(repository, appState) }
+            launchProbe(checkId, "backup_snapshot_probe", COPY_TIMEOUT_MS) { backupSnapshotProbe(repository, appState) }
+            launchProbe(checkId, "backup_file_probe", COPY_TIMEOUT_MS) { backupFileProbe(context, repository, appState, versionName) }
             launchProbe(checkId, "private_message_probe", LOCAL_TIMEOUT_MS) { privateChatProbe(repository, appState) }
             launchProbe(checkId, "group_message_probe", LOCAL_TIMEOUT_MS) { groupChatProbe(repository, appState) }
             startDetachedStructuredPrivateAiProbe(checkId, sharedUtils)
@@ -240,6 +252,9 @@ object ProblemChecker {
         p.stages["group_message_probe"]?.status != ProblemStageStatus.SUCCESS -> "GROUP_MESSAGE_PIPELINE_FAILED"
         p.stages["private_ai_probe"]?.status != ProblemStageStatus.SUCCESS -> "PRIVATE_AI_RESPONSE_FAILED"
         p.stages["group_ai_probe"]?.status != ProblemStageStatus.SUCCESS -> "GROUP_AI_RESPONSE_FAILED"
+        p.stages["persistent_state_probe"]?.status != ProblemStageStatus.SUCCESS -> "PERSISTENT_STATE_FAILED"
+        p.stages["backup_snapshot_probe"]?.status != ProblemStageStatus.SUCCESS -> "BACKUP_SNAPSHOT_FAILED"
+        p.stages["backup_file_probe"]?.status != ProblemStageStatus.SUCCESS -> "BACKUP_FILE_VALIDATION_FAILED"
         p.stages["session_integrity"]?.status == ProblemStageStatus.SUCCESS && p.stages["session_integrity"]?.detail?.let { detail ->
             !detail.contains("orphanPrivateSessions=0") ||
                 !detail.contains("duplicatePrivateOperators=0") ||
@@ -255,6 +270,62 @@ object ProblemChecker {
         org.koin.java.KoinJavaComponent.get<com.rhodes.privatechat.shared.settings.SettingsRepository>(com.rhodes.privatechat.shared.settings.SettingsRepository::class.java)
             .getString("private_reply_pipeline_last", "none")
     } catch (_: Exception) { "unavailable" }
+
+    /** Verifies all data categories can be read into the same in-memory payload used by backup export. */
+    private suspend fun backupSnapshotProbe(repository: ChatRepository, appState: AppStateHolder): String {
+        val payload = BackupContentFilter.apply(BackupSnapshotBuilder(repository, settingsForProbe()).build(), BackupContentSelection.All)
+        val content = payload.content
+        return "operators=${content.operators.orEmpty().size},sessions=${content.sessions.orEmpty().size},messages=${content.messages.orEmpty().size},moments=${content.moments.orEmpty().size},comments=${content.momentComments.orEmpty().size},diaries=${content.diaries.orEmpty().size},knowledgeBases=${content.knowledgeBases.orEmpty().size},memoryItems=${content.memoryItems.orEmpty().size}"
+    }
+
+    /** Writes the real backup format to cache and reads it back, without media or a system file picker. */
+    private suspend fun backupFileProbe(context: Context, repository: ChatRepository, appState: AppStateHolder, versionName: String): String {
+        val snapshot = BackupContentFilter.apply(BackupSnapshotBuilder(repository, settingsForProbe()).build(), BackupContentSelection.All)
+        val (payload, media) = BackupMediaCollector(context).attachCollectedMedia(snapshot)
+        val file = File(context.cacheDir, "problem-probe/backup_${System.currentTimeMillis()}.rbackup")
+        file.parentFile?.mkdirs()
+        try {
+            file.outputStream().use { BackupFileWriter(versionName, schemaVersion = 1).writeFullBackup(it, payload, media.sources, media.sources.isNotEmpty()) }
+            val validation = file.inputStream().use { BackupFileReader().validate(it) }
+            if (validation !is com.rhodes.privatechat.data.backup.BackupValidationResult.Valid) {
+                throw IllegalStateException((validation as com.rhodes.privatechat.data.backup.BackupValidationResult.Invalid).reason)
+            }
+            return "bytes=${file.length()},operators=${validation.manifest.recordCounts["operators"] ?: 0},messages=${validation.manifest.recordCounts["messages"] ?: 0},media=${media.items.size},skippedExternalMedia=${media.skippedUris.size},issues=${validation.issues.size}"
+        } finally {
+            file.delete()
+        }
+    }
+
+    private fun settingsForProbe(): com.rhodes.privatechat.shared.settings.SettingsRepository =
+        org.koin.java.KoinJavaComponent.get(com.rhodes.privatechat.shared.settings.SettingsRepository::class.java)
+
+    private suspend fun persistentStateProbe(context: Context, repository: ChatRepository): String {
+        val settings = settingsForProbe()
+        val sessions = repository.getAllSessionsSync()
+        val malformedPrivate = sessions.count { session ->
+            val raw = settings.getString("private_turn_state_${session.id}", "")
+            raw.isNotBlank() && !session.operatorId.startsWith("group_") && settings.getPrivateTurnState(session.id) == null
+        }
+        val malformedGroup = sessions.count { session ->
+            val raw = settings.getString("group_turn_state_${session.id}", "")
+            raw.isNotBlank() && session.operatorId.startsWith("group_") && settings.getGroupTurnState(session.id) == null
+        }
+        val prefs = context.getSharedPreferences("rhodes_settings", Context.MODE_PRIVATE).all
+        val legacyCustomProtocols = prefs.keys.count { key ->
+            key.startsWith("prompt_protocol_group") && key.endsWith("_custom") && prefs[key] == true
+        }
+        val supportRaw = settings.supportConversation
+        val supportConversationValid = supportRaw.isBlank() || runCatching {
+            Json.decodeFromString<List<AiSupportMessage>>(supportRaw)
+        }.isSuccess
+        val stalePromptVersions = prefs.keys.count { key ->
+            key.startsWith("prompt_") && key.endsWith("_version") && (prefs[key] as? Int ?: 0) < PromptTemplates.VERSION
+        }
+        if (malformedPrivate > 0 || malformedGroup > 0 || !supportConversationValid) {
+            throw IllegalStateException("malformedPrivateStates=$malformedPrivate,malformedGroupStates=$malformedGroup,supportConversationValid=$supportConversationValid")
+        }
+        return "privateStatesValid=true,groupStatesValid=true,supportConversationValid=true,legacyCustomGroupProtocols=$legacyCustomProtocols,stalePromptVersions=$stalePromptVersions"
+    }
 
     /** Uses the same structured response shape required by a real private reply. */
     private fun startDetachedStructuredPrivateAiProbe(checkId: String, sharedUtils: SharedUtils) {

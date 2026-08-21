@@ -299,7 +299,7 @@ class PromptCacheLayerTest {
 
     @Test
     fun promptTemplateVersionAdvancesForTheCurrentPromptRevision() {
-        assertEquals(32, PromptTemplates.VERSION)
+        assertEquals(33, PromptTemplates.VERSION)
     }
 
     @Test

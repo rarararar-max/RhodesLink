@@ -971,7 +971,14 @@ class GroupChatViewModel(
                     |- 错误格式，不得使用：amiya：台词；阿米娅：台词；【成员1amiya】台词；【发言人：阿米娅】台词。
                     |- 不要输出任何未定义标签或标签外解释。
                   """.trimMargin() */
-                 val groupProtocol = sharedUtils.applyTemplate(getPromptModule("protocol", "group", templateMode), grpReplacements)
+                 val customGroupProtocol = settings.getCustomPromptModuleOrNull("protocol", "group", templateMode)
+                     ?.let { sharedUtils.applyTemplate(it, grpReplacements) }
+                 val requiredGroupProtocol = sharedUtils.applyTemplate(PromptModuleDefaults.outputProtocol("group", mode), grpReplacements)
+                 // Shipped protocol changes must reach existing installs even when a legacy
+                 // protocol module was saved before the current tagged group format existed.
+                 val groupProtocol = customGroupProtocol?.let {
+                     "【用户自定义表达补充】\n$it\n\n【应用固定输出协议，必须优先遵守】\n$requiredGroupProtocol"
+                 } ?: requiredGroupProtocol
                   val narrationProtocol = PromptModuleDefaults.narrationProtocol(mode)
                   val systemWithCustomProtocol = listOf(
                       finalSystemPrompt,

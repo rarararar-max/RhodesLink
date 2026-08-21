@@ -322,6 +322,8 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                                     }
                                 }
                                 progressDialog = null
+                                restoreSelection = BackupContentSelection.All
+                                restoreOptions = com.rhodes.privatechat.data.backup.BackupRestoreOptions()
                                 if (state is BackupUiState.Error) resultDialog = "恢复前备份无法导入" to (state as BackupUiState.Error).detail
                             }
                         }) { Text("恢复") }
@@ -383,7 +385,7 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         val ready = state as BackupUiState.RestoreReady
         BackupSelectionDialog(
             title = "选择要恢复的内容",
-            description = "只替换勾选的内容，未勾选的当前数据会保留。恢复前会自动保存当前数据。",
+            description = "只替换勾选的内容，未勾选的当前数据会保留。只恢复角色时，会更新同 ID 的角色资料，不会删除现有聊天。恢复前会自动保存当前数据。",
             selection = restoreSelection,
             onSelectionChange = { restoreSelection = it },
             confirmLabel = "开始恢复",
@@ -626,7 +628,7 @@ private fun BackupSelectionDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(description, color = TextSecondary, fontSize = 12.sp)
                 TextButton(onClick = { onSelectionChange(BackupContentSelection.All) }) { Text("全部选择") }
                 items.forEachIndexed { index, (label, detail) ->

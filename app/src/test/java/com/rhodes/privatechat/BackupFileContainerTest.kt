@@ -309,7 +309,7 @@ class BackupFileContainerTest {
         assertTrue(filtered.content.sessions.isNullOrEmpty())
         assertTrue(filtered.content.messages.isNullOrEmpty())
         assertTrue(filtered.content.moments.isNullOrEmpty())
-        assertTrue(filtered.content.settings.isNullOrEmpty())
+        assertTrue("user_name" !in filtered.content.settings.orEmpty())
     }
 
     @Test
@@ -319,6 +319,29 @@ class BackupFileContainerTest {
         assertTrue(normalized.roles)
         assertTrue(normalized.chats)
         assertTrue(normalized.memories)
+    }
+
+    @Test
+    fun roleOnlyRestoreRetainsRoleLocalSettingsWithoutGlobalSettings() {
+        val payload = BackupPayload(
+            content = ExportPayload(
+                type = "full_backup",
+                operators = listOf(OperatorExport("amiya", "阿米娅")),
+                settings = mapOf(
+                    "user_name" to "s:博士",
+                    "operator_prompt_slot_amiya_private_1" to "s:私聊人设",
+                    "bg_amiya" to "s:file:///avatar.jpg",
+                ),
+            ),
+        )
+
+        val filtered = BackupContentFilter.apply(
+            payload,
+            BackupContentSelection(chats = false, memories = false, social = false, knowledgeBases = false, extras = false, settings = false, media = false),
+        )
+
+        assertEquals("s:私聊人设", filtered.content.settings?.get("operator_prompt_slot_amiya_private_1"))
+        assertTrue("user_name" !in filtered.content.settings.orEmpty())
     }
 
     private fun zipOf(vararg entries: Pair<String, ByteArray>): ByteArray = ByteArrayOutputStream().use { output ->

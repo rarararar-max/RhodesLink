@@ -95,8 +95,10 @@ class BackupRestoreCoordinator(
                 if (options.contentSelection.normalized().settings) {
                     previousSettings = PortableSettings.snapshot(repository, settings)
                     PortableSettings.clearForRestore(repository, settings)
-                    applySettings(restoredPayload.content.settings.orEmpty())
                 }
+                // Role prompt slots and similar role-local preferences travel with the role
+                // category even when the user keeps their current global app settings.
+                applySettings(restoredPayload.content.settings.orEmpty())
                 restoreExecutor(restoredPayload, onProgress)
             } catch (e: Exception) {
                 mediaDirectory.deleteRecursively()

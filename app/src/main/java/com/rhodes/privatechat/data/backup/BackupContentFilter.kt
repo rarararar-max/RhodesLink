@@ -21,7 +21,13 @@ object BackupContentFilter {
                 knowledgeBases = content.knowledgeBases.takeIf { selection.knowledgeBases },
                 knowledgeBaseChunks = content.knowledgeBaseChunks.takeIf { selection.knowledgeBases },
                 operatorKnowledgeBaseAssignments = content.operatorKnowledgeBaseAssignments.takeIf { selection.knowledgeBases },
-                settings = content.settings.takeIf { selection.settings },
+                settings = content.settings?.let { values ->
+                    when {
+                        selection.settings -> values
+                        selection.roles -> values.filterKeys(::isRoleSetting)
+                        else -> null
+                    }
+                },
             ),
             displayEvents = payload.displayEvents.takeIf { selection.chats }.orEmpty(),
             chatArchives = payload.chatArchives.takeIf { selection.chats }.orEmpty(),
@@ -47,9 +53,23 @@ object BackupContentFilter {
                 sessions = content.sessions?.map { it.copy(avatarUri = portableUri(it.avatarUri)) },
                 settings = content.settings?.toMutableMap()?.apply {
                     this["user_avatar_uri"] = this["user_avatar_uri"]?.let(::settingUri).orEmpty()
+                    keys.filter { it.startsWith("bg_") || it.startsWith("gbg_") }.toList().forEach { key ->
+                        this[key] = this[key]?.let(::settingUri).orEmpty()
+                    }
                 },
             ),
             giftRecords = giftRecords.map { it.copy(imageUri = portableUri(it.imageUri)) },
         )
     }
+
+    private fun isRoleSetting(key: String): Boolean =
+        key.startsWith("operator_prompt_slot_") ||
+            key.startsWith("msg_") ||
+            key.startsWith("dyn_") ||
+            key.startsWith("voice_volume_") ||
+            key.startsWith("chat_tts_") ||
+            key.startsWith("bg_") ||
+            key.startsWith("diary_read_at_") ||
+            key.startsWith("last_mode_") ||
+            key.startsWith("gbg_")
 }

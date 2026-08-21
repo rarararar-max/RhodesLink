@@ -54,6 +54,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.shared.settings.SettingsRepository
+import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.ui.theme.AccentBlue
 import com.rhodes.privatechat.ui.theme.AccentGreen
 import com.rhodes.privatechat.ui.theme.AccentOrange
@@ -66,6 +67,9 @@ import com.rhodes.privatechat.ui.theme.TextSecondary
 import com.rhodes.privatechat.ui.theme.TextTertiary
 import com.rhodes.privatechat.util.DebugLogger
 import com.rhodes.privatechat.util.DebugLogger.DebugOperation
+import com.rhodes.privatechat.util.ProblemChecker
+import com.rhodes.privatechat.viewmodel.shared.AppStateHolder
+import com.rhodes.privatechat.viewmodel.shared.SharedUtils
 import kotlinx.coroutines.delay
 import org.koin.compose.koinInject
 
@@ -77,18 +81,24 @@ private enum class OperationFilter(val label: String) {
 @Composable
 fun DebugLogScreen(onBack: () -> Unit) {
     val settings: SettingsRepository = koinInject()
+    val repository: ChatRepository = koinInject()
+    val sharedUtils: SharedUtils = koinInject()
+    val appState: AppStateHolder = koinInject()
     var operations by remember { mutableStateOf(DebugLogger.getOperations()) }
     var selected by remember { mutableStateOf<DebugOperation?>(null) }
     var loggingEnabled by remember { mutableStateOf(settings.debugLogEnabled) }
     var payloadsEnabled by remember { mutableStateOf(settings.debugLogPayloadsEnabled) }
     var filter by remember { mutableStateOf(OperationFilter.ALL) }
     var resultFilter by remember { mutableStateOf("全部") }
+    var problemProgress by remember { mutableStateOf(ProblemChecker.progress()) }
+    var showProblemReport by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
 
     LaunchedEffect(Unit) {
         while (true) {
             operations = DebugLogger.getOperations().asReversed()
+            problemProgress = ProblemChecker.progress()
             delay(800)
         }
     }
@@ -129,6 +139,19 @@ fun DebugLogScreen(onBack: () -> Unit) {
                     Text("记录完整模型请求和返回", fontSize = 11.sp, color = TextSecondary, modifier = Modifier.weight(1f))
                     Switch(checked = payloadsEnabled, enabled = loggingEnabled, onCheckedChange = { payloadsEnabled = it; settings.debugLogPayloadsEnabled = it; DebugLogger.allowSensitiveTrace = loggingEnabled && it })
                 }
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                    TextButton(onClick = {
+                        val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+                        ProblemChecker.start(context, repository, sharedUtils, appState, packageInfo.versionName ?: "未知", packageInfo.versionCode)
+                        showProblemReport = true
+                    }, enabled = problemProgress.checkId.isBlank() || problemProgress.finishedAt > 0L) { Text("一键自检", color = Primary) }
+                    if (problemProgress.checkId.isNotBlank()) {
+                        TextButton(onClick = { showProblemReport = true }) { Text(if (problemProgress.finishedAt > 0L) "查看报告" else "检查中…", color = TextSecondary) }
+                    }
+                    if (problemProgress.checkId.isNotBlank() && problemProgress.finishedAt == 0L) {
+                        Text("当前：${problemProgress.currentStage}", fontSize = 10.sp, color = AccentOrange)
+                    }
+                }
             }
             if (filtered.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("暂无最终结果记录\n完成一次聊天、客服、动态或记忆操作后会显示在这里", fontSize = 14.sp, color = TextTertiary) }
@@ -140,6 +163,43 @@ fun DebugLogScreen(onBack: () -> Unit) {
         }
     }
     selected?.let { OperationDetails(it, onDismiss = { selected = null }, onCopy = { clipboard.setText(AnnotatedString(formatOperation(it))); Toast.makeText(context, "已复制本次诊断", Toast.LENGTH_SHORT).show() }) }
+    if (showProblemReport) {
+        val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+        val report = ProblemChecker.report(packageInfo.versionName ?: "未知", packageInfo.versionCode)
+        ProblemReportDialog(report.report, problemProgress, onDismiss = { showProblemReport = false }, onCopy = { clipboard.setText(AnnotatedString(report.report)); Toast.makeText(context, "已复制自检报告", Toast.LENGTH_SHORT).show() })
+    }
+}
+
+@Composable
+private fun ProblemReportDialog(report: String, progress: com.rhodes.privatechat.util.ProblemCheckProgress, onDismiss: () -> Unit, onCopy: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (progress.finishedAt > 0L) "一键自检报告" else "正在一键自检") },
+        text = {
+            Column(Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState())) {
+                Text(if (progress.finishedAt > 0L) "检查完成。报告会标明本地数据库、私聊消息、群聊消息和模型探针的结果。" else "请保持应用在前台。正在检查：${progress.currentStage}", fontSize = 12.sp, color = TextSecondary)
+                progress.stages.forEach { (name, stage) ->
+                    Text("${stageLabel(name)}：${stage.status.name.lowercase()}${stage.detail.takeIf { it.isNotBlank() }?.let { "\n$it" }.orEmpty()}", fontSize = 11.sp, color = if (stage.status.name in setOf("FAILED", "TIMEOUT", "ABANDONED")) ErrorRed else TextPrimary, modifier = Modifier.padding(top = 7.dp))
+                }
+                SelectionContainer { Text(report, fontSize = 10.sp, color = TextTertiary, modifier = Modifier.padding(top = 12.dp)) }
+            }
+        },
+        confirmButton = { TextButton(onClick = onCopy) { Text("复制报告", color = Primary) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("关闭") } }
+    )
+}
+
+private fun stageLabel(name: String): String = when (name) {
+    "private_message_probe" -> "私聊消息写入与读取"
+    "group_message_probe" -> "群聊消息写入与读取"
+    "private_ai_probe" -> "私聊结构化模型回复"
+    "group_ai_probe" -> "群聊模型回复"
+    "database_open" -> "数据库打开"
+    "database_schema" -> "数据库结构"
+    "database_copy_write_test" -> "数据库复制写入"
+    "session_integrity" -> "会话完整性"
+    "contacts_recovery" -> "角色与会话恢复"
+    else -> name
 }
 
 @Composable

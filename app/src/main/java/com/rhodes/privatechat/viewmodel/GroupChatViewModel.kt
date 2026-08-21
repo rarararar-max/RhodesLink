@@ -687,12 +687,20 @@ class GroupChatViewModel(
                 setGroupLoading(groupSessionId, true)
                 val session = repository.getSession(groupSessionId) ?: run {
                     DebugLogger.log("GroupChat", "⚠️ 群session不存在: $groupSessionId")
+                    _lastSendError.value = "群聊尚未保存完成，请返回后重新进入群聊再发送"
+                    DebugLogger.diagnostic("GroupChat/SessionUnavailable", "groupId=$groupSessionId, reason=session_not_found")
                     setGroupLoading(groupSessionId, false); if (mutexLocked) { mutexFor(groupSessionId).unlock(); mutexLocked = false }; return@launch
                 }
                 DebugLogger.log("GroupChat", "群session加载成功: ${session.operatorName}, members=${session.members}")
                 val memberIds = session.members.split(",").map { it.trim() }.filter { it.isNotBlank() }
-                // A Worker can cold-start before AppStateHolder's flow emits; the repository is authoritative.
-                val allOps = appState.operators.value.ifEmpty { repository.getAllOperatorsSync() }
+                // A newly created group can render before AppState observes its saved member list.
+                // Fall back to the database whenever the in-memory roster cannot resolve everyone.
+                val stateOperators = appState.operators.value
+                val allOps = if (memberIds.all { id -> stateOperators.any { it.id == id || it.name == id } }) {
+                    stateOperators
+                } else {
+                    repository.getAllOperatorsSync()
+                }
                 val opsById = allOps.associateBy { it.id }
                 val opsByName = allOps.associateBy { it.name }
                 val members = memberIds.mapNotNull { id -> opsById[id] ?: opsByName[id] }
@@ -701,6 +709,8 @@ class GroupChatViewModel(
 
                 // 全员禁言时直接返回，不调用 AI
                 if (activeMembers.isEmpty()) {
+                    _lastSendError.value = if (members.isEmpty()) "群成员资料尚未同步，请返回群列表后重新进入再发送" else "所有群成员已被禁言，无法回复"
+                    DebugLogger.diagnostic("GroupChat/NoActiveMembers", "groupId=$groupSessionId, stored=${memberIds.size}, resolved=${members.size}, muted=${mutedIds.size}, source=${if (allOps === stateOperators) "app_state" else "database"}")
                     repository.sendMessage(groupSessionId, ChatMessage(
                         id = repository.getNextMessageId(), sessionId = groupSessionId,
                         senderName = "系统", content = "所有成员已被禁言，无法回复",

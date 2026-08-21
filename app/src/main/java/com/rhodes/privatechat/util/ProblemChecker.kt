@@ -76,7 +76,7 @@ object ProblemChecker {
         val checkId = UUID.randomUUID().toString().replace("-", "").take(8)
         if (!active.compareAndSet(null, checkId)) return active.get() ?: checkId
         val now = System.currentTimeMillis()
-        val names = listOf("cleanup_previous_probe", "database_open", "database_schema", "database_counts", "session_integrity", "session_message_audit", "contacts_recovery", "database_copy_write_test", "private_ai_probe", "group_ai_probe", "cleanup")
+        val names = listOf("cleanup_previous_probe", "database_open", "database_schema", "database_counts", "session_integrity", "session_message_audit", "contacts_recovery", "database_copy_write_test", "private_message_probe", "group_message_probe", "private_ai_probe", "group_ai_probe", "cleanup")
         current.set(ProblemCheckProgress(checkId, now, now + TOTAL_TIMEOUT_MS, currentStage = "starting", stages = names.associateWith { StageProgress() }))
         scope.launch {
             // Cleanup used to run alongside the copy/write probe and could delete the probe's
@@ -92,6 +92,8 @@ object ProblemChecker {
             launchProbe(checkId, "session_integrity", LOCAL_TIMEOUT_MS) { sessionIntegrity(context) }
             launchProbe(checkId, "session_message_audit", LOCAL_TIMEOUT_MS) { sessionMessageAudit(repository) }
             launchProbe(checkId, "contacts_recovery", LOCAL_TIMEOUT_MS) { recoverContacts(repository, appState) }
+            launchProbe(checkId, "private_message_probe", LOCAL_TIMEOUT_MS) { privateChatProbe(repository, appState) }
+            launchProbe(checkId, "group_message_probe", LOCAL_TIMEOUT_MS) { groupChatProbe(repository, appState) }
             startDetachedStructuredPrivateAiProbe(checkId, sharedUtils)
             startDetachedAiProbe(checkId, "group_ai_probe", sharedUtils, "ProblemCheckGroup")
             launchProbe(checkId, "database_copy_write_test", COPY_TIMEOUT_MS) { databaseCopyWrite(context, checkId) }
@@ -234,6 +236,8 @@ object ProblemChecker {
         p.stages["session_message_audit"]?.status == ProblemStageStatus.SUCCESS &&
             p.stages["session_message_audit"]?.detail?.contains("issues=") == true &&
             !p.stages["session_message_audit"]!!.detail.contains("issues=0") -> "SESSION_MESSAGE_MAPPING_FAILED"
+        p.stages["private_message_probe"]?.status != ProblemStageStatus.SUCCESS -> "PRIVATE_MESSAGE_PIPELINE_FAILED"
+        p.stages["group_message_probe"]?.status != ProblemStageStatus.SUCCESS -> "GROUP_MESSAGE_PIPELINE_FAILED"
         p.stages["private_ai_probe"]?.status != ProblemStageStatus.SUCCESS -> "PRIVATE_AI_RESPONSE_FAILED"
         p.stages["group_ai_probe"]?.status != ProblemStageStatus.SUCCESS -> "GROUP_AI_RESPONSE_FAILED"
         p.stages["session_integrity"]?.status == ProblemStageStatus.SUCCESS && p.stages["session_integrity"]?.detail?.let { detail ->
@@ -336,52 +340,34 @@ object ProblemChecker {
         return "sessions=${sessions.size},issues=$severeIssues,emptySessions=$emptySessions\n" + rows.joinToString("\n")
     }
 
-    private suspend fun privateChatProbe(repository: ChatRepository, appState: AppStateHolder, checkId: String): String {
-        val operatorId = "__probe_private_$checkId"
-        val sessionId = "session_$operatorId"
+    private suspend fun privateChatProbe(repository: ChatRepository, appState: AppStateHolder): String {
+        val session = repository.getAllSessionsSync().firstOrNull { !it.operatorId.startsWith("group_") }
+            ?: return "skipped=no_existing_private_session"
+        val messageId = repository.getNextMessageId()
         try {
-            repository.insertOperator(Operator(id = operatorId, name = "检测角色", description = "问题检测临时角色"))
-            repository.insertSession(ChatSession(id = sessionId, operatorId = operatorId, operatorName = "检测角色", lastTime = System.currentTimeMillis()))
-            if (!appState.reloadFromDatabase("problem_check_private_create")) throw IllegalStateException("private contact state refresh failed")
-            if (appState.operators.value.none { it.id == operatorId } || appState.allSessions.value.none { it.id == sessionId }) {
-                throw IllegalStateException("created private contact is not visible in UI state")
-            }
-            val userId = repository.getNextMessageId()
-            repository.sendMessage(sessionId, ChatMessage(id = userId, sessionId = sessionId, senderName = "我", content = "问题检测私聊", isMe = true, timestamp = System.currentTimeMillis()))
-            val userReadBack = repository.getMessagesSync(sessionId).any { it.id == userId && it.isMe }
+            repository.sendMessage(session.id, ChatMessage(id = messageId, sessionId = session.id, senderName = "我", content = "[本地自检消息]", type = "system", isMe = true, timestamp = System.currentTimeMillis()))
+            val userReadBack = repository.getMessagesSync(session.id).any { it.id == messageId && it.isMe }
             if (!userReadBack) throw IllegalStateException("private user message was not readable after save")
-            return "contactCreate=true,contactVisible=true,userMessageSave=true,userMessageVisible=true"
+            return "session=${session.id},operator=${session.operatorName},userMessageSave=true,userMessageVisible=true"
         } finally {
-            runCatching { withTimeout(1_500L) { repository.deleteSessionMessages(sessionId) } }
-            runCatching { withTimeout(1_500L) { repository.deleteSession(sessionId) } }
-            runCatching { withTimeout(1_500L) { repository.deleteRelationshipByOperator(operatorId) } }
-            runCatching { withTimeout(1_500L) { repository.deleteOperator(operatorId) } }
-            runCatching {
-                appState.reloadFromDatabase("problem_check_private_cleanup")
-            }
+            runCatching { withTimeout(1_500L) { repository.deleteMessage(messageId) } }
+            runCatching { appState.reloadFromDatabase("problem_check_private_existing_cleanup") }
         }
     }
 
-    private suspend fun groupChatProbe(repository: ChatRepository, appState: AppStateHolder, checkId: String): String {
-        val operatorId = "__probe_group_member_$checkId"
-        val groupId = "group___probe_$checkId"
+    private suspend fun groupChatProbe(repository: ChatRepository, appState: AppStateHolder): String {
+        val group = repository.getAllSessionsSync().firstOrNull { it.operatorId.startsWith("group_") }
+            ?: return "skipped=no_existing_group_session"
+        val memberCount = group.members.split(",").count { it.trim().isNotBlank() }
+        if (memberCount == 0) throw IllegalStateException("group has no members")
+        val messageId = repository.getNextMessageId()
         try {
-            repository.insertOperator(Operator(id = operatorId, name = "检测群成员", description = "问题检测临时成员"))
-            repository.insertSession(ChatSession(id = groupId, operatorId = groupId, operatorName = "检测群聊", members = operatorId, lastTime = System.currentTimeMillis()))
-            if (!appState.reloadFromDatabase("problem_check_group_create")) throw IllegalStateException("group state refresh failed")
-            if (appState.allSessions.value.none { it.id == groupId }) throw IllegalStateException("created group is not visible in UI state")
-            val userId = repository.getNextMessageId()
-            repository.sendMessage(groupId, ChatMessage(id = userId, sessionId = groupId, senderName = "我", content = "问题检测群聊", isMe = true, timestamp = System.currentTimeMillis()))
-            if (repository.getMessagesSync(groupId).none { it.id == userId && it.isMe }) throw IllegalStateException("group user message was not readable after save")
-            return "groupCreate=true,groupVisible=true,userMessageSave=true,userMessageVisible=true"
+            repository.sendMessage(group.id, ChatMessage(id = messageId, sessionId = group.id, senderName = "我", content = "[本地自检消息]", type = "system", isMe = true, timestamp = System.currentTimeMillis()))
+            if (repository.getMessagesSync(group.id).none { it.id == messageId && it.isMe }) throw IllegalStateException("group user message was not readable after save")
+            return "group=${group.operatorName},members=$memberCount,userMessageSave=true,userMessageVisible=true"
         } finally {
-            runCatching { withTimeout(1_500L) { repository.deleteSessionMessages(groupId) } }
-            runCatching { withTimeout(1_500L) { repository.deleteSession(groupId) } }
-            runCatching { withTimeout(1_500L) { repository.deleteRelationshipByOperator(operatorId) } }
-            runCatching { withTimeout(1_500L) { repository.deleteOperator(operatorId) } }
-            runCatching {
-                appState.reloadFromDatabase("problem_check_group_cleanup")
-            }
+            runCatching { withTimeout(1_500L) { repository.deleteMessage(messageId) } }
+            runCatching { appState.reloadFromDatabase("problem_check_group_existing_cleanup") }
         }
     }
 

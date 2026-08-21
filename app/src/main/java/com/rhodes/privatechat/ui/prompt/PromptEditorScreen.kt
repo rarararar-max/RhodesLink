@@ -929,7 +929,7 @@ private fun promptStructurePreview(type: String, mode: String): List<Triple<Stri
     }
     val output = when {
         type == "private" -> "【状态】...\n【心情】...\n【位置】...\n【本轮简述】...\n【台词】...\n（线下/导演模式还会要求【旁白】）"
-        type == "group" -> "【本轮剧情简述】...\n【发言人: operator_id】\n角色台词\n（线下/导演模式可有【旁白】）"
+        type == "group" -> "【群聊回合状态】\n【当前主线】...\n【用户本轮作用】确认\n【本轮承接】...\n【本轮新增推进】...\n【主线状态】继续\n【下轮焦点】...\n【发言人: operator_id】\n角色台词\n（线下/导演模式可有【旁白】）"
         type == "moment" -> "动态纯文本"
         type == "moment_comment" -> "评论纯文本"
         type == "diary" -> "第一人称日记纯文本"

@@ -35,15 +35,15 @@ class PlainGeneratedContentNormalizerTest {
     }
 
     @Test
-    fun enforcesLengthAndUsesSentenceBoundaryWhenTruncating() {
-        assertNull(PlainGeneratedContentNormalizer.normalize("太短", 3, 20))
-        assertEquals("第一句已经结束。", PlainGeneratedContentNormalizer.normalize("第一句已经结束。第二句不应保留", 3, 8))
+    fun preservesShortAndLongGeneratedTextWithoutCodeLengthClipping() {
+        assertEquals("太短", PlainGeneratedContentNormalizer.normalize("太短", 3, 20))
+        assertEquals("第一句已经结束。第二句不应保留", PlainGeneratedContentNormalizer.normalize("第一句已经结束。第二句不应保留", 3, 8))
     }
 
     @Test
-    fun usesCodePointsConsistentlyAndRejectsNonStringJsonValues() {
+    fun preservesCodePointsAndRejectsNonStringJsonValues() {
         assertEquals("😀😀", PlainGeneratedContentNormalizer.normalize("😀😀", 2, 2))
-        assertNull(PlainGeneratedContentNormalizer.normalize("😀😀", 3, 4))
+        assertEquals("😀😀", PlainGeneratedContentNormalizer.normalize("😀😀", 3, 4))
         assertNull(PlainGeneratedContentNormalizer.normalize("{\"content\":12345}", 2, 40))
         assertNull(PlainGeneratedContentNormalizer.normalize("{\"content\":true}", 2, 40))
     }

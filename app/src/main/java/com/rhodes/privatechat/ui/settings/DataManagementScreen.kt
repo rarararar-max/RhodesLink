@@ -25,6 +25,7 @@ import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import com.rhodes.privatechat.viewmodel.DataViewModel
+import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
 data class CleanupItem(
@@ -51,6 +52,8 @@ fun DataManagementScreen(
     var refreshKey by remember { mutableIntStateOf(0) }
     val context = LocalContext.current
     var showCleanupConfirm by remember { mutableStateOf(false) }
+    var cleaningUp by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(refreshKey) { stats = viewModel.getDataStats() }
 
@@ -154,8 +157,23 @@ fun DataManagementScreen(
             onDismissRequest = { showCleanupConfirm = false },
             title = { Text("确认清理过期数据", color = TextPrimary) },
             text = { Text("将立即清理所有已超过当前保留期限的数据，此操作无法恢复。", color = TextSecondary) },
-            confirmButton = { TextButton(onClick = { viewModel.cleanupAllExpired(); refreshKey++; showCleanupConfirm = false; android.widget.Toast.makeText(context, "已清理所有过期数据", android.widget.Toast.LENGTH_SHORT).show() }) { Text("确认清理", color = ErrorRed) } },
+            confirmButton = { TextButton(onClick = {
+                showCleanupConfirm = false
+                cleaningUp = true
+                scope.launch {
+                    runCatching { viewModel.cleanupAllExpired() }
+                        .onSuccess {
+                            refreshKey++
+                            android.widget.Toast.makeText(context, "已按当前规则清理过期数据", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                        .onFailure { android.widget.Toast.makeText(context, "清理失败：${it.message ?: "请稍后重试"}", android.widget.Toast.LENGTH_LONG).show() }
+                    cleaningUp = false
+                }
+            }) { Text("确认清理", color = ErrorRed) } },
             dismissButton = { TextButton(onClick = { showCleanupConfirm = false }) { Text("取消", color = TextSecondary) } }
         )
+    }
+    if (cleaningUp) {
+        AlertDialog(onDismissRequest = {}, title = { Text("正在清理") }, text = { Text("正在按当前保留规则清理过期数据，请稍候。", color = TextSecondary) }, confirmButton = {})
     }
 }

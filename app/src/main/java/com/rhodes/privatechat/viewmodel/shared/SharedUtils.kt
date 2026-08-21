@@ -87,13 +87,24 @@ class SharedUtils(
 ) {
     data class CachePromptLayers(val system: String, val runtimeContext: String)
 
+    fun logAiCallText(messages: List<AiMessage>): String = buildString {
+        append("【发送给 AI 的完整内容】\n消息数=${messages.size}\n")
+        messages.forEachIndexed { index, message ->
+            append("\n[${index + 1}] ${message.role} | ${message.content.length}字\n")
+            append(message.content)
+            append('\n')
+        }
+    }
+
     /**
      * Builds the application-owned runtime context that must not depend on a user template
      * mentioning a particular placeholder. Values stay after the reusable system prefix so
      * current time, summaries, recall results, and knowledge-base hits do not reset that prefix.
      */
     fun buildNaturalRuntimeContext(type: String, replacements: Map<String, String>): String {
-        fun value(key: String): String = replacements[key].orEmpty().trim()
+        // Some optional Java/platform values arrive as the literal text "null". It is not
+        // meaningful prompt context and must not compete with actual conversation facts.
+        fun value(key: String): String = replacements[key].orEmpty().trim().takeUnless { it.equals("null", ignoreCase = true) }.orEmpty()
         fun block(title: String, body: String, empty: String = "暂无相关内容。"): String =
             "【$title】\n${body.ifBlank { empty }}"
         fun addIfRelevant(target: MutableList<String>, title: String, key: String, empty: String = "暂无相关内容。") {

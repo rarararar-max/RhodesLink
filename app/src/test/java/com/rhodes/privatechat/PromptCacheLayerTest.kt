@@ -23,30 +23,33 @@ class PromptCacheLayerTest {
     }
 
     @Test
-    fun privateProtocolKeepsIntentAnalysisInternal() {
+    fun privateProtocolKeepsTurnStateInternal() {
         val protocol = com.rhodes.privatechat.viewmodel.PromptModuleDefaults.outputProtocol("private", "online")
-        assertTrue(protocol.contains("【用户发言意图分析】"))
-        assertTrue(protocol.contains("补全后的完整语义"))
-        assertTrue(protocol.contains("深层真实的意图"))
-        assertTrue(protocol.contains("回复建议"))
-        assertTrue(protocol.contains("2 到 4 条带编号"))
-        assertTrue(protocol.contains("当前用户昵称与当前角色名"))
-        assertFalse(protocol.contains("期望回应"))
+        assertTrue(protocol.contains("【私聊回合状态】"))
+        assertTrue(protocol.contains("【当前主线】"))
+        assertTrue(protocol.contains("【用户本轮作用】"))
+        assertTrue(protocol.contains("【本轮新增推进】"))
+        assertTrue(protocol.contains("【未收束事项】"))
         assertTrue(protocol.contains("不得在【旁白】、【台词】"))
+        assertTrue(protocol.contains("第一行必须是【状态】"))
+        assertTrue(protocol.contains("历史中的角色台词只用于理解对话内容"))
+        assertTrue(protocol.contains("亲密邀约"))
+        assertTrue(protocol.contains("成人互动请求"))
+        assertTrue(protocol.contains("必须在本轮【旁白】或【台词】中有直接对应"))
         assertTrue(protocol.contains("【输出格式示例"))
-        assertTrue(protocol.contains("【本轮简述】博士提出和阿米娅一起前往宿舍拿东西"))
+        assertTrue(protocol.contains("【当前主线】博士邀请阿米娅一同前往宿舍拿东西"))
     }
 
     @Test
     fun privateBehaviorDoesNotTreatIntentGuessAsUserFact() {
         val behavior = com.rhodes.privatechat.viewmodel.PromptModuleDefaults.behavior("private", "online")
-        assertTrue(behavior.contains("不得把推测伪装成用户明确说过的话"))
-        assertTrue(behavior.contains("用户本轮明确原话始终优先"))
+        assertTrue(behavior.contains("不得把推测伪装成事实"))
+        assertTrue(behavior.contains("【私聊回合状态】"))
         assertTrue(behavior.contains("【本轮增量】"))
         assertTrue(behavior.contains("连续性不等于重复"))
-        assertTrue(behavior.contains("【回复建议】是供角色生成本轮回复时执行的内部步骤"))
-        assertTrue(behavior.contains("写 2 到 4 个循序渐进的步骤"))
-        assertTrue(behavior.contains("当前用户昵称与当前角色名"))
+        assertTrue(behavior.contains("【未收束事项】"))
+        assertTrue(behavior.contains("【亲密互动】"))
+        assertTrue(behavior.contains("不得只换词重复"))
     }
 
     @Test
@@ -63,7 +66,7 @@ class PromptCacheLayerTest {
         assertTrue(protocol.contains("不得使用“用户”"))
         assertTrue(protocol.contains("用户昵称"))
         assertTrue(protocol.contains("第一人称"))
-        assertTrue(protocol.contains("用户发言意图分析只是内部推断"))
+        assertTrue(protocol.contains("内部推断"))
         assertTrue(protocol.contains("旁白】与紧接的【台词】不得表达同一信息"))
         assertTrue(protocol.contains("同义重复"))
         assertEquals("", com.rhodes.privatechat.viewmodel.PromptModuleDefaults.narrationProtocol("online"))
@@ -296,7 +299,7 @@ class PromptCacheLayerTest {
 
     @Test
     fun promptTemplateVersionAdvancesForTheCurrentPromptRevision() {
-        assertEquals(29, PromptTemplates.VERSION)
+        assertEquals(32, PromptTemplates.VERSION)
     }
 
     @Test
@@ -307,6 +310,20 @@ class PromptCacheLayerTest {
             assertFalse("group/$mode must not prescribe a JSON schema", template.contains("speaker="))
             assertFalse("group/$mode must not include retired planner guidance", template.contains("{{GROUP_TURN_GUIDANCE}}"))
         }
+    }
+
+    @Test
+    fun groupProtocolKeepsTurnStateAndIntimateTopicsInternal() {
+        val protocol = com.rhodes.privatechat.viewmodel.PromptModuleDefaults.outputProtocol("group", "offline")
+        val behavior = com.rhodes.privatechat.viewmodel.PromptModuleDefaults.behavior("group", "offline")
+
+        assertTrue(protocol.contains("【群聊回合状态】"))
+        assertTrue(protocol.contains("亲密邀约"))
+        assertTrue(protocol.contains("成人互动请求"))
+        assertTrue(protocol.contains("成员台词或旁白中有直接依据"))
+        assertTrue(behavior.contains("【群聊亲密互动】"))
+        assertTrue(behavior.contains("不得让所有成员只重复"))
+        assertTrue(behavior.contains("未确认现场无人"))
     }
 
     @Test

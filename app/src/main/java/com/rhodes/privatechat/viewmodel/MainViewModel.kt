@@ -388,8 +388,8 @@ class MainViewModel(
             .distinct().sorted()
             .map { "{{$it}} 当前不会自动替换，发送给 AI 时会保留原样。" }
         val reserved = when (type) {
-            "private" -> setOf("状态", "心情", "位置", "本轮简述", "旁白", "台词", "台詞")
-            "group" -> setOf("本轮剧情简述", "旁白", "发言人", "台词", "台詞")
+            "private" -> setOf("状态", "心情", "位置", "私聊回合状态", "当前主线", "用户本轮作用", "本轮承接", "本轮新增推进", "主线状态", "未收束事项", "本轮简述", "旁白", "台词", "台詞")
+            "group" -> setOf("群聊回合状态", "当前主线", "用户本轮作用", "本轮承接", "本轮新增推进", "主线状态", "下轮焦点", "本轮剧情简述", "旁白", "发言人", "台词", "台詞")
             else -> emptySet()
         }
         val usedReserved = Regex("[【\\[［]\\s*([^】\\]］:：]+)").findAll(template)
@@ -2688,7 +2688,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
 
     // === Data delegation ===
     suspend fun getDataStats(): DataViewModel.DataStats = dataViewModel.getDataStats(_operators.value.size, _moments.value.size)
-    fun cleanupAllExpired() = dataViewModel.cleanupAllExpired()
+    suspend fun cleanupAllExpired() = dataViewModel.cleanupAllExpired()
     suspend fun getMessageRanking(): List<SenderCount> = dataViewModel.getMessageRanking()
     suspend fun getDailyRanking(): List<SenderCount> = dataViewModel.getDailyRanking()
     fun forceGenerateMoments() {
@@ -2697,6 +2697,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             return
         }
         Log.d("RHODES_MOMENT", "forceGenerateMoments: 开始 operators.size=${_operators.value.size}")
+        val debugOperationId = DebugLogger.beginOperation("动态催发", "手动", "批量生成")
         _momentGenerateStatus.value = MomentGenerateStatus(running = true, msg = "开始生成...")
         appScope.launch {
             try {
@@ -2704,6 +2705,8 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 val candidates = _operators.value.filter {
                     settings.getOperatorDynPermission(it.id)
                 }.shuffled()
+                val skipped = _operators.value.size - candidates.size
+                DebugLogger.conversationStep(debugOperationId, "动态催发", "筛选角色", "完成", "候选 ${candidates.size} 名，跳过未开动态权限 ${skipped} 名")
                 Log.d("RHODES_MOMENT", "forceGenerateMoments: 候选干员 ${candidates.size}人")
                 for (op in candidates) {
                     _momentGenerateStatus.value = MomentGenerateStatus(running = true, msg = "${op.name}发布中...")
@@ -2715,11 +2718,17 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                             Log.d("RHODES_MOMENT", "forceGenerateMoments: 生成成功 op=${op.name} id=${momentId}")
                             generateLikesAndComments(momentId, op)
                             refreshMomentsNow()
+                            repository.getMoment(momentId)?.content?.let { saved ->
+                                DebugLogger.attachOperationModule(debugOperationId, "${op.name}最终保存", saved, sensitive = true)
+                            }
+                            DebugLogger.conversationStep(debugOperationId, "动态催发", op.name, "成功", "已生成动态")
                         } else {
                             Log.w("RHODES_MOMENT", "forceGenerateMoments: 生成失败 op=${op.name} (返回null)")
+                            DebugLogger.conversationStep(debugOperationId, "动态催发", op.name, "失败", "模型未返回可保存动态")
                         }
                     } catch (e: Exception) {
                         Log.e("RHODES_MOMENT", "forceGenerateMoments: 生成异常 op=${op.name} ${e.message}", e)
+                        DebugLogger.conversationStep(debugOperationId, "动态催发", op.name, "失败", e.message?.take(120).orEmpty())
                     }
                 }
                 Log.d("RHODES_MOMENT", "forceGenerateMoments: 完成 generated=$generated")
@@ -2727,10 +2736,12 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                     running = false,
                     msg = if (generated > 0) "生成完成（${generated}条）" else "无可用干员"
                 )
+                DebugLogger.finishOperation(debugOperationId, if (generated == candidates.size) "成功" else "部分完成", "已生成 $generated 条动态，跳过未开权限 $skipped 名")
                 refreshMomentsNow()
             } catch (e: Exception) {
                 Log.e("RHODES_MOMENT", "forceGenerateMoments: 整体异常 ${e.message}", e)
                 _momentGenerateStatus.value = MomentGenerateStatus(running = false, msg = "生成失败")
+                DebugLogger.finishOperation(debugOperationId, "失败", e.message?.take(120) ?: "动态催发失败")
             } finally {
                 forceGenerating.set(false)
             }
@@ -2826,6 +2837,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
             DebugLogger.log("Diary", "干员不存在: $operatorId")
             return null
         }
+            val debugOperationId = DebugLogger.beginOperation("日记", op.name, if (auto) "自动生成" else "手动生成")
             val profile = getUserProfile()
             try {
                 DebugLogger.log("Diary", "开始生成日记: ${op.name}")
@@ -2936,6 +2948,8 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                     )
                 )
                 val diaryMessages = buildContentGenerationMessages("diary", diaryTpl, dReplacements)
+                DebugLogger.conversationStep(debugOperationId, "日记", "准备资料", "完成", "已准备日记上下文")
+                DebugLogger.attachOperationModule(debugOperationId, "完整请求", sharedUtils.logAiCallText(diaryMessages), sensitive = true)
                 Log.d("RHODES_DIARY", "请求消息数=${diaryMessages.size}")
                 var text = try {
                     withTimeout(25_000) { sharedUtils.chat(diaryMessages) }.trim()
@@ -2944,12 +2958,14 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                     throw e
                 }
                 Log.d("RHODES_DIARY", "日记生成返回 length=${text.length}")
+                DebugLogger.attachOperationModule(debugOperationId, "AI原始返回", text, sensitive = true)
                 text = PlainGeneratedContentNormalizer.normalize(
                     raw = text,
                     minChars = settings.diaryMinChars,
                     maxChars = settings.diaryMaxChars
                 ).orEmpty()
                 if (text.isNotBlank() && looksThirdPersonDiary(text, op)) {
+                    DebugLogger.conversationStep(debugOperationId, "日记", "格式检查", "重试", "首次内容不是第一人称日记")
                     val rewriteInstruction = "【重写要求】上一版像第三人称记录，不像日记。请改写成${op.name}本人第一人称日记，全篇用“我”，不要用角色名、她、他或这名干员称呼自己。直接输出日记文本。"
                     val retryMessages = diaryMessages + AiMessage("user", rewriteInstruction)
                     text = PlainGeneratedContentNormalizer.normalize(
@@ -2966,12 +2982,16 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                         memoryV2Pipeline.ingestDiary(operatorId, op.name, "diary_$now", text)
                     }
                     DebugLogger.log("Diary", "日记生成成功: ${text.take(50)}")
+                    DebugLogger.attachOperationModule(debugOperationId, "最终保存", text, sensitive = true)
+                    DebugLogger.finishOperation(debugOperationId, "成功", "已生成并保存日记")
                     return diary
-                } else { DebugLogger.log("Diary", "日记生成为空"); return null }
+                } else { DebugLogger.log("Diary", "日记生成为空"); DebugLogger.finishOperation(debugOperationId, "失败", "模型没有返回可保存日记"); return null }
             } catch (e: CancellationException) {
+                DebugLogger.finishOperation(debugOperationId, "失败", "日记生成已取消")
                 throw e
             } catch (e: Exception) {
                 DebugLogger.log("Diary", "日记生成异常: ${e.message?.take(100)}")
+                DebugLogger.finishOperation(debugOperationId, "失败", e.message?.take(120) ?: "日记生成失败")
                 return null
             }
     }

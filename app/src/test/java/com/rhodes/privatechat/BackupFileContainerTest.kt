@@ -2,6 +2,7 @@ package com.rhodes.privatechat
 
 import com.rhodes.privatechat.data.ExportPayload
 import com.rhodes.privatechat.data.ExportHelper
+import com.rhodes.privatechat.data.MessageExport
 import com.rhodes.privatechat.data.backup.BackupFileReader
 import com.rhodes.privatechat.data.backup.BackupFileWriter
 import com.rhodes.privatechat.data.backup.BackupMediaItem
@@ -15,6 +16,8 @@ import com.rhodes.privatechat.data.backup.OperatorPackageWriter
 import com.rhodes.privatechat.data.backup.OperatorPromptSlots
 import com.rhodes.privatechat.data.backup.ReadableChatExporter
 import com.rhodes.privatechat.data.backup.BackupRestorePayloadRewriter
+import com.rhodes.privatechat.data.backup.BackupContentFilter
+import com.rhodes.privatechat.data.backup.BackupContentSelection
 import com.rhodes.privatechat.data.OperatorExport
 import com.rhodes.privatechat.data.RelationshipExport
 import com.rhodes.privatechat.shared.model.ChatMessage
@@ -282,6 +285,40 @@ class BackupFileContainerTest {
         )
 
         assertTrue(content.contains("\\# 不是标题 \\[链接\\]"))
+    }
+
+    @Test
+    fun filtersDeselectedBackupCategoriesAndKeepsRequiredRoleParents() {
+        val payload = BackupPayload(
+            content = ExportPayload(
+                type = "full_backup",
+                operators = listOf(OperatorExport("amiya", "阿米娅")),
+                sessions = listOf(com.rhodes.privatechat.data.SessionExport("session_amiya", "amiya", "阿米娅")),
+                messages = listOf(MessageExport(1, "session_amiya", senderName = "阿米娅", content = "你好", isMe = false)),
+                moments = emptyList(),
+                settings = mapOf("user_name" to "s:博士"),
+            ),
+        )
+
+        val filtered = BackupContentFilter.apply(
+            payload,
+            BackupContentSelection(chats = false, memories = false, social = false, knowledgeBases = false, extras = false, settings = false, media = false),
+        )
+
+        assertEquals(1, filtered.content.operators.orEmpty().size)
+        assertTrue(filtered.content.sessions.isNullOrEmpty())
+        assertTrue(filtered.content.messages.isNullOrEmpty())
+        assertTrue(filtered.content.moments.isNullOrEmpty())
+        assertTrue(filtered.content.settings.isNullOrEmpty())
+    }
+
+    @Test
+    fun selectingMemoriesAlsoSelectsRequiredChatsAndRoles() {
+        val normalized = BackupContentSelection(roles = false, chats = false, memories = true).normalized()
+
+        assertTrue(normalized.roles)
+        assertTrue(normalized.chats)
+        assertTrue(normalized.memories)
     }
 
     private fun zipOf(vararg entries: Pair<String, ByteArray>): ByteArray = ByteArrayOutputStream().use { output ->

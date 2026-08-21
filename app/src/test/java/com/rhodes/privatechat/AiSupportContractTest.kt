@@ -64,4 +64,17 @@ class AiSupportContractTest {
 
         assertTrue(history.single().content.contains("设置页面显示识图模型未配置"))
     }
+
+    @Test
+    fun redPacketMarkerIsExtractedAndNeverLeaksIntoVisibleReply() {
+        val raw = "谢谢你愿意耐心说明。\n【客服红包:120】"
+
+        assertEquals(120, AiSupportContract.extractRedPacket(raw))
+        assertEquals("谢谢你愿意耐心说明。", AiSupportContract.removeRedPacketMarker(raw))
+        assertEquals(88, AiSupportContract.extractRedPacket("[[LMB_RED_PACKET:88]]"))
+        assertEquals(66, AiSupportContract.extractRedPacket("今天打工赚的钱，收下吧。\n【红包金额:66】"))
+        assertTrue(AiSupportContract.looksLikeRedPacketPromise("给你个小红包，拿去喝杯奶茶吧。"))
+        assertFalse(AiSupportContract.looksLikeRedPacketPromise("今天没有红包可以送。"))
+        assertEquals(null, AiSupportContract.extractRedPacket("今天打工的钱已经送完啦。"))
+    }
 }

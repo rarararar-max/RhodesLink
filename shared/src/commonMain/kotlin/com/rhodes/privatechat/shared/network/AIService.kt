@@ -107,7 +107,12 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                     state = nested.state.ifBlank { response.state },
                     location = nested.location.ifBlank { response.location },
                     affection_mod = nested.affection_mod.takeIf { it != 0 } ?: response.affection_mod,
-                    userIntentAnalysis = nested.userIntentAnalysis.ifBlank { response.userIntentAnalysis }
+                    userIntentAnalysis = nested.userIntentAnalysis.ifBlank { response.userIntentAnalysis },
+                    turnUserType = nested.turnUserType.ifBlank { response.turnUserType },
+                    turnAnchor = nested.turnAnchor.ifBlank { response.turnAnchor },
+                    turnAdvance = nested.turnAdvance.ifBlank { response.turnAdvance },
+                    turnStatus = nested.turnStatus.ifBlank { response.turnStatus },
+                    turnUnresolved = nested.turnUnresolved.ifBlank { response.turnUnresolved }
                 )
             }
         }
@@ -124,13 +129,18 @@ class AIService(private val client: HttpClient = createHttpClient()) {
         // Models occasionally emit HTML line-break tags between segments; they are formatting
         // noise, not user-visible content.
         val normalizedRaw = raw.replace(Regex("(?i)</?br\\s*/?>"), "\n")
-        val tagPattern = Regex("""[【\[［]\s*(状态|情绪|心情|位置|本轮简述|用户发言意图分析|旁白|台词|台詞)\s*(?:[：:]\s*([^】\]］]*))?[】\]］]""")
+        val tagPattern = Regex("""[【\[［]\s*(状态|情绪|心情|位置|本轮简述|用户发言意图分析|私聊回合状态|当前主线|用户本轮作用|本轮承接|本轮新增推进|主线状态|未收束事项|旁白|台词|台詞)\s*(?:[：:]\s*([^】\]］]*))?[】\]］]""")
         val segments = mutableListOf<Segment>()
         var emotion = ""
         var location = ""
         var state = ""
         var continuity = ""
         var userIntentAnalysis = ""
+        var turnUserType = ""
+        var turnAnchor = ""
+        var turnAdvance = ""
+        var turnStatus = ""
+        var turnUnresolved = ""
         val matches = tagPattern.findAll(normalizedRaw).toList()
         val leadingText = matches.firstOrNull()?.let { normalizedRaw.substring(0, it.range.first).trim() }.orEmpty()
         matches.forEachIndexed { index, match ->
@@ -139,11 +149,18 @@ class AIService(private val client: HttpClient = createHttpClient()) {
             val following = normalizedRaw.substring(match.range.last + 1, matches.getOrNull(index + 1)?.range?.first ?: normalizedRaw.length).trim()
             val text = if (inline.isNotBlank()) inline else following
             when (label) {
+                "私聊回合状态" -> Unit
                 "状态" -> if (state.isBlank()) state = text.take(20)
                 "情绪", "心情" -> if (emotion.isBlank()) emotion = text.take(10)
                 "位置" -> if (location.isBlank()) location = text.take(30)
                 "本轮简述" -> if (continuity.isBlank()) continuity = text.take(160)
                 "用户发言意图分析" -> if (userIntentAnalysis.isBlank()) userIntentAnalysis = text.take(800)
+                "当前主线" -> if (continuity.isBlank()) continuity = text.take(160)
+                "用户本轮作用" -> if (turnUserType.isBlank()) turnUserType = text.take(16)
+                "本轮承接" -> if (turnAnchor.isBlank()) turnAnchor = text.take(160)
+                "本轮新增推进" -> if (turnAdvance.isBlank()) turnAdvance = text.take(160)
+                "主线状态" -> if (turnStatus.isBlank()) turnStatus = text.take(16)
+                "未收束事项" -> if (turnUnresolved.isBlank()) turnUnresolved = text.take(160)
                 "旁白" -> if (text.isNotBlank()) segments += Segment(type = "narration", content = text)
                 "台词", "台詞" -> if (text.isNotBlank()) segments += Segment(type = "dialogue", content = text)
             }
@@ -166,7 +183,7 @@ class AIService(private val client: HttpClient = createHttpClient()) {
                 }
             }
         }
-        return OfflineModeResponse(emotion = emotion, location = location, state = state, continuity = continuity, userIntentAnalysis = userIntentAnalysis, segments = segments.ifEmpty { null })
+        return OfflineModeResponse(emotion = emotion, location = location, state = state, continuity = continuity, userIntentAnalysis = userIntentAnalysis, turnUserType = turnUserType, turnAnchor = turnAnchor, turnAdvance = turnAdvance, turnStatus = turnStatus, turnUnresolved = turnUnresolved, segments = segments.ifEmpty { null })
     }
 
     private fun parseSegmentsLenient(raw: String): List<Segment> {

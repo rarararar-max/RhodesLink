@@ -306,10 +306,10 @@ object MessageParser {
     private fun sanitizeVisibleSegmentContent(content: String): String {
         var result = content
         result = result.replace(
-            Regex("[【\\[［](?:上一轮状态|当前对话进展|本轮参考资料|用户发言意图分析)[】\\]］][\\s\\S]*?(?=[【\\[［](?:状态|心情|位置|本轮简述|旁白|台词|台詞)[】\\]］]|$)"),
+            Regex("[【\\[［](?:上一轮状态|当前对话进展|已验证的连续性状态|本轮参考资料|私聊回合状态|当前主线|用户本轮作用|本轮承接|本轮新增推进|主线状态|未收束事项|用户发言意图分析)[】\\]］][\\s\\S]*?(?=[【\\[［](?:状态|心情|位置|本轮简述|旁白|台词|台詞)[】\\]］]|$)"),
             " "
         )
-        result = result.replace(Regex("[【\\[［](?:状态|心情|位置|本轮简述)[】\\]］][^\\n]*\\n?"), "")
+        result = result.replace(Regex("[【\\[［](?:状态|心情|位置|本轮简述|私聊回合状态|当前主线|用户本轮作用|本轮承接|本轮新增推进|主线状态|未收束事项)[】\\]］][^\\n]*\\n?"), "")
         result = result.replaceFirst(Regex("^\\s*[【\\[［](?:旁白|台词|台詞)(?:[：:])?[】\\]］]\\s*"), "")
         return result.trim()
     }

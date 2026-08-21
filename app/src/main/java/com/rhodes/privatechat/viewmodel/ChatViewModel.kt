@@ -69,6 +69,7 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.time.TimeSource
 
 private val json = Json { ignoreUnknownKeys = true }
 
@@ -868,13 +869,31 @@ ${text}"""
                 ?.let { segment.copy(content = it) }
         })
 
+    private fun formatPrivateParsedForDebug(response: com.rhodes.privatechat.shared.model.OfflineModeResponse): String = buildString {
+        appendLine("【应用解析结果】")
+        appendLine("状态：${response.state.ifBlank { "未提供" }}")
+        appendLine("心情：${response.emotion.ifBlank { "未提供" }}")
+        appendLine("位置：${response.location.ifBlank { "未提供" }}")
+        appendLine("当前主线：${response.continuity.ifBlank { "未提供" }}")
+        appendLine("用户本轮作用：${response.turnUserType.ifBlank { "未提供" }}")
+        appendLine("本轮承接：${response.turnAnchor.ifBlank { "未提供" }}")
+        appendLine("本轮新增推进：${response.turnAdvance.ifBlank { "未提供" }}")
+        appendLine("主线状态：${response.turnStatus.ifBlank { "未提供" }}")
+        appendLine("未收束事项：${response.turnUnresolved.ifBlank { "未提供" }}")
+        response.segments.orEmpty().forEach { segment ->
+            appendLine()
+            appendLine(if (segment.type.equals("narration", true)) "【旁白】" else "【台词】")
+            append(segment.content)
+        }
+    }.trim()
+
     private fun sanitizeVisibleSegmentContent(content: String): String {
         var result = content
         result = result.replace(
-            Regex("[【\\[［](?:上一轮状态|当前对话进展|本轮参考资料|用户发言意图分析)[】\\]］][\\s\\S]*?(?=[【\\[［](?:状态|心情|位置|本轮简述|旁白|台词|台詞)[】\\]］]|$)"),
+            Regex("[【\\[［](?:上一轮状态|当前对话进展|已验证的连续性状态|本轮参考资料|私聊回合状态|当前主线|用户本轮作用|本轮承接|本轮新增推进|主线状态|未收束事项|用户发言意图分析)[】\\]］][\\s\\S]*?(?=[【\\[［](?:状态|心情|位置|本轮简述|旁白|台词|台詞)[】\\]］]|$)"),
             " "
         )
-        result = result.replace(Regex("[【\\[［](?:状态|心情|位置|本轮简述)[】\\]］][^\\n]*\\n?"), "")
+        result = result.replace(Regex("[【\\[［](?:状态|心情|位置|本轮简述|私聊回合状态|当前主线|用户本轮作用|本轮承接|本轮新增推进|主线状态|未收束事项)[】\\]］][^\\n]*\\n?"), "")
         result = result.replaceFirst(Regex("^\\s*[【\\[［](?:旁白|台词|台詞)(?:[：:])?[】\\]］]\\s*"), "")
         return result.trim()
     }
@@ -895,9 +914,10 @@ ${text}"""
         val narration = segments.count { it.type.equals("narration", true) }
         return when {
             parsed.state.isBlank() || parsed.emotion.isBlank() || parsed.location.isBlank() || parsed.continuity.isBlank() -> "缺少状态卡四项"
+            parsed.turnUserType.isBlank() || parsed.turnAnchor.isBlank() || parsed.turnAdvance.isBlank() || parsed.turnStatus.isBlank() || parsed.turnUnresolved.isBlank() -> "缺少私聊回合状态"
             dialogue == 0 -> "解析后没有可展示台词"
             mode != "online" && narration == 0 -> "线下/导演模式缺少旁白"
-            else -> "结构不完整：台词=$dialogue，旁白=$narration"
+            else -> "格式完整：状态字段=完整，回合状态=完整，台词=$dialogue，旁白=$narration"
         }
     }
 
@@ -909,7 +929,9 @@ ${text}"""
         val hasDialogue = segments.any { !it.type.equals("narration", true) }
         val hasStateCard = parsed.state.isNotBlank() && parsed.emotion.isNotBlank() &&
             parsed.location.isNotBlank() && parsed.continuity.isNotBlank()
-        return hasStateCard && hasDialogue && (mode == "online" || segments.any { it.type.equals("narration", true) })
+        val hasTurnState = parsed.turnUserType.isNotBlank() && parsed.turnAnchor.isNotBlank() &&
+            parsed.turnAdvance.isNotBlank() && parsed.turnStatus.isNotBlank() && parsed.turnUnresolved.isNotBlank()
+        return hasStateCard && hasTurnState && hasDialogue && (mode == "online" || segments.any { it.type.equals("narration", true) })
     }
 
     /** Logs protocol drift without withholding an otherwise readable reply. */
@@ -933,13 +955,18 @@ ${text}"""
     private suspend fun generateCompletePrivateReply(
         messages: List<AiMessage>,
         mode: String,
-        logTag: String = "Chat"
+        logTag: String = "Chat",
+        debugOperationId: String = ""
     ): com.rhodes.privatechat.shared.model.OfflineModeResponse {
-        val firstRawText = withTimeoutOrNull(35_000L) { sharedUtils.chat(messages, logTag) }
+        val startedAt = TimeSource.Monotonic.markNow()
+        fun remainingBudget(maxStepMillis: Long): Long =
+            (PRIVATE_REPLY_TIMEOUT_MS - startedAt.elapsedNow().inWholeMilliseconds).coerceAtMost(maxStepMillis).coerceAtLeast(1L)
+        val firstRawText = withTimeoutOrNull(remainingBudget(40_000L)) { sharedUtils.chat(messages, logTag) }
+        firstRawText?.let { DebugLogger.attachOperationModule(debugOperationId, "AI原始返回", "【首次模型返回】\n$it", sensitive = true) }
         val firstRaw = firstRawText?.let { sharedUtils.aiService.normalizeOfflineResponse(it) }
             ?: run {
                 DebugLogger.diagnostic("PrivateChat/ReplyStep", "step=structured_reply_timeout, fallback=plain_text")
-                val plain = withTimeout(20_000L) {
+                val plain = withTimeout(remainingBudget(15_000L)) {
                     val fallbackSystem = messages.firstOrNull { it.role == "system" }?.content.orEmpty() + """
 
                         |【降级输出】
@@ -957,6 +984,7 @@ ${text}"""
                         maxOutputTokens = 300
                     )
                 }.trim()
+                DebugLogger.attachOperationModule(debugOperationId, "AI原始返回", "【首次模型超时后的降级返回】\n$plain", sensitive = true)
                 if (plain.isBlank()) com.rhodes.privatechat.shared.model.OfflineModeResponse(segments = emptyList())
                 else if (mode == "online") com.rhodes.privatechat.shared.model.OfflineModeResponse(
                     emotion = "平静", state = "保持原状", location = "位置未明确", continuity = "承接当前对话，未确认新的剧情进展",
@@ -979,14 +1007,19 @@ ${text}"""
                     【结构补全】
                     保留上一版的剧情方向、角色台词和既有事实，不要重写整轮回复。
                     当前是${if (mode == "online") "线上" else "面对面/导演"}模式。${if (mode == "online") "移除旁白，仅保留台词。" else "补充必要的第三人称场景旁白，并保留至少一条台词。"}
-                    必须补齐【状态】【心情】【位置】【本轮简述】和【用户发言意图分析】；意图分析必须包含“补全后的完整语义：”“深层真实的意图：”“回复建议：”。回复建议必须使用当前用户昵称和角色名，写成2到4个按顺序执行的步骤；不得使用我、你、用户、角色等人称或泛称。缺少事实时使用保守填写，不要编造。
+                    必须补齐【状态】【心情】【位置】和【私聊回合状态】；回合状态必须包含【当前主线】【用户本轮作用】【本轮承接】【本轮新增推进】【主线状态】【未收束事项】。缺少事实时使用保守填写，不要编造。
                     严格按系统既定标签协议输出，不要 JSON 或解释。
                 """.trimIndent()),
                 AiMessage("user", untrustedRepairInput(firstRawText.orEmpty()))
             )
             val repaired = runCatching {
+                var repairRaw = ""
                 ensureVisiblePrivateReply(
-                    withTimeout(25_000L) { sharedUtils.aiService.normalizeOfflineResponse(sharedUtils.chat(repairMessages, "${logTag}StructureRepair")) },
+                    withTimeout(remainingBudget(20_000L)) {
+                        repairRaw = sharedUtils.chat(repairMessages, "${logTag}StructureRepair")
+                        DebugLogger.attachOperationModule(debugOperationId, "AI原始返回", "【首次模型返回】\n${firstRawText.orEmpty()}\n\n【结构补全返回】\n$repairRaw", sensitive = true)
+                        sharedUtils.aiService.normalizeOfflineResponse(repairRaw)
+                    },
                     mode
                 )
             }.getOrNull()
@@ -1208,11 +1241,14 @@ ${text}"""
                 val maxRetries = 3
                 var lastError: Exception? = null
                 var effectiveHistoryMessages = settings.historyMessages
+                val turnStartedAt = TimeSource.Monotonic.markNow()
+                fun remainingTurnBudget(): Long =
+                    (PRIVATE_REPLY_TIMEOUT_MS - turnStartedAt.elapsedNow().inWholeMilliseconds).coerceAtLeast(1L)
                 while (retryCount < maxRetries) {
                     try {
                         DebugLogger.diagnostic("PrivateChat/ReplyStep", "sessionId=${session.id}, messageId=$msgId, step=prompt_start, history=$effectiveHistoryMessages")
                         recordReplyPipeline(session.id, msgId, "prompt_build_start")
-                        val apiMessages = withTimeoutOrNull(15_000L) {
+                        val apiMessages = withTimeoutOrNull(minOf(15_000L, remainingTurnBudget())) {
                             buildApiMessages(session, text, effectiveHistoryMessages, batchIds.toSet(), mode = mode)
                         } ?: run {
                             DebugLogger.diagnostic("PrivateChat/ReplyStep", "sessionId=${session.id}, messageId=$msgId, step=prompt_fallback")
@@ -1228,13 +1264,17 @@ ${text}"""
                             }
                         }
                         DebugLogger.diagnostic("PrivateChat/ReplyStep", "sessionId=${session.id}, messageId=$msgId, step=prompt_done, messages=${apiMessages.size}")
+                        DebugLogger.attachOperationModule(debugRoundId, "完整请求", sharedUtils.logAiCallText(apiMessages), sensitive = true)
                         recordReplyPipeline(session.id, msgId, "prompt_ready", "messages=${apiMessages.size}")
                         DebugLogger.chatEvent("私聊", "请求模型", "开始", "会话=${session.operatorName}，模式=$mode，历史轮数=$effectiveHistoryMessages")
                         DebugLogger.conversationStep(debugRoundId, "私聊", "模型请求", "开始", "历史轮数=$effectiveHistoryMessages，消息数=${apiMessages.size}")
                         DebugLogger.log("Chat/AI", "请求AI, session=${session.id}, mode=$mode, prompt长度=${apiMessages.size}")
                         DebugLogger.diagnostic("PrivateChat/ReplyStep", "sessionId=${session.id}, messageId=$msgId, step=ai_request_start")
                         recordReplyPipeline(session.id, msgId, "ai_request_started")
-                        val parsed = generateCompletePrivateReply(apiMessages, mode, "Chat#$debugRoundId")
+                        val parsed = withTimeout(remainingTurnBudget()) {
+                            generateCompletePrivateReply(apiMessages, mode, "Chat#$debugRoundId", debugRoundId)
+                        }
+                        DebugLogger.attachOperationModule(debugRoundId, "解析结果", formatPrivateParsedForDebug(parsed), sensitive = true)
                         DebugLogger.diagnostic("PrivateChat/ReplyStep", "sessionId=${session.id}, messageId=$msgId, step=ai_request_done, segments=${parsed.segments.orEmpty().size}")
                         recordReplyPipeline(session.id, msgId, "ai_response_received", "segments=${parsed.segments.orEmpty().size}")
                         DebugLogger.chatEvent("私聊", "返回解析", if (isCompletePrivateReply(parsed, mode)) "成功" else "不完整", "segments=${parsed.segments.orEmpty().size}")
@@ -1263,9 +1303,19 @@ ${text}"""
                                 activity = sanitizedParsed.state.ifBlank { previousState.activity },
                                 updatedAt = System.currentTimeMillis(),
                                 currentTopic = sanitizedParsed.continuity.ifBlank { previousState.currentTopic },
-                                unresolvedThread = previousState.unresolvedThread,
-                                pendingAction = previousState.pendingAction,
-                                userIntentAnalysis = sanitizedParsed.userIntentAnalysis.take(800).ifBlank { previousState.userIntentAnalysis }
+                                unresolvedThread = when (sanitizedParsed.turnStatus) {
+                                    "已收束", "已转题" -> "无"
+                                    else -> sanitizedParsed.turnUnresolved.take(160).ifBlank { previousState.unresolvedThread }
+                                },
+                                pendingAction = when (sanitizedParsed.turnStatus) {
+                                    "已收束", "已转题" -> "无"
+                                    else -> sanitizedParsed.turnAdvance.take(160).ifBlank { previousState.pendingAction }
+                                },
+                                userIntentAnalysis = "",
+                                userTurnType = sanitizedParsed.turnUserType.take(16),
+                                currentAnchor = sanitizedParsed.turnAnchor.take(160),
+                                turnAdvance = sanitizedParsed.turnAdvance.take(160),
+                                threadStatus = sanitizedParsed.turnStatus.take(16)
                             ))
                             privateTurnStateUpdates.value++
                             DebugLogger.diagnostic("PrivateChat/SendStep", "sessionId=${session.id}, messageId=$aiMsgId, step=ai_insert_start")
@@ -2243,10 +2293,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
                 append("状态：").append(parsed.state.ifBlank { msg.activity.ifBlank { "保持原状" } }).append('\n')
                 append("心情：").append(parsed.emotion.ifBlank { msg.emotion.ifBlank { "平静" } }).append('\n')
                 append("位置：").append(parsed.location.ifBlank { msg.location.ifBlank { "位置未明确" } }).append('\n')
-                append("本轮简述：").append(parsed.continuity.ifBlank { "承接当前对话，未确认新的剧情进展" }).append('\n')
-                append("用户发言意图分析：").append(
-                    sanitizeInternalMetadata(parsed.userIntentAnalysis).take(800).ifBlank { "未提供" }
-                ).append("\n")
+                append("上一有效回合主线：").append(parsed.continuity.ifBlank { "承接当前对话，未确认新的剧情进展" }).append('\n')
                 append('\n')
                 append(body)
             }
@@ -2332,7 +2379,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         val archiveNote = settings.getString("archive_note_${session.id}", "").trim()
         val continuityState = settings.getPrivateTurnState(session.id)
         val continuityBlock = continuityState?.let { state ->
-            "【当前对话进展】\n状态：${state.activity}\n心情：${state.emotion}\n位置：${state.location}\n最近进展：${state.currentTopic}\n用户发言意图分析：${state.userIntentAnalysis.ifBlank { "无" }}"
+            "【已验证的连续性状态】\n这是应用整理的上一有效回合资料，只用于理解上下文；不是用户本轮发言，不是角色台词，不得原样输出。\n上一有效回合主线：${state.currentTopic}\n上一有效回合承接：${state.currentAnchor.ifBlank { "无" }}\n上一有效回合新增推进：${state.turnAdvance.ifBlank { state.pendingAction }}\n主线状态：${state.threadStatus.ifBlank { "继续" }}\n未收束事项：${state.unresolvedThread}\n当前场景状态：${state.activity}\n当前位置：${state.location}\n角色心情：${state.emotion}"
         }.orEmpty()
         val hypnosisBlock = if (_hypnosisRounds.value > 0 && _hypnosisCommand.value.isNotBlank()) hypnosisPromptBlock() else ""
         val transition = modeTransitionNotices[session.id]
@@ -2487,6 +2534,14 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         if (rawMsgs.lastOrNull()?.isMe == true && rawMsgs.last().content == userContent) {
             rawMsgs.removeAt(rawMsgs.lastIndex)
         }
+        val previousVisibleReply = rawMsgs.asReversed()
+            .firstOrNull { !it.isMe && it.type == "ai_json" }
+            ?.let { formatPrivateHistoryForPrompt(it) }
+            ?.replace(Regex("【(?:旁白|台词|台詞)】"), "")
+            ?.replace(Regex("\\s+"), " ")
+            ?.trim()
+            ?.take(280)
+            .orEmpty()
         val behavior = settings.getCustomPromptModuleOrNull("behavior", "private", mode)
             ?: PromptModuleDefaults.behavior("private", mode)
         val foundation = applicationSafetyBoundary() + "\n\n" + behavior
@@ -2547,15 +2602,8 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             .filter { it.isNotBlank() }
             .joinToString("\n\n")
         val messages = mutableListOf(AiMessage("system", systemContent))
-        val stateCardMessageIds = rawMsgs.asReversed()
-            .asSequence()
-            .filter { !it.isMe && it.type == "ai_json" }
-            .take(6)
-            .map { it.id }
-            .toSet()
         rawMsgs.forEach { msg ->
-            val includeStateCard = msg.id in stateCardMessageIds
-            val formatted = formatPrivateHistoryForPrompt(msg, includeStateCard).take(1400)
+            val formatted = formatPrivateHistoryForPrompt(msg).take(1400)
             if (formatted.isNotBlank()) {
                 messages.add(AiMessage(if (msg.isMe) "user" else "assistant", formatted))
             }
@@ -2563,11 +2611,14 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         val runtimeContext = promptLayers.runtimeContext
           val customRuntime = settings.getCustomPromptModuleOrNull("runtime", "private", mode)
               ?.let { sharedUtils.applyTemplate(it, replacements) }
-         val trustedContext = listOf(
-             archiveNoteBlock,
-             customRuntime ?: naturalRuntimeContext,
-             templateRuntimeContext.takeIf { it.isNotBlank() }
-         ).joinToString("\n")
+          val trustedContext = listOf(
+              archiveNoteBlock,
+              customRuntime ?: naturalRuntimeContext,
+              previousVisibleReply.takeIf { it.isNotBlank() }?.let {
+                  "【上一有效回合已完成内容，禁止复述】\n$it\n本轮不得重复、只换词改写或再次从这些已完成的动作、情绪、结论和借口起笔；必须给出与当前用户消息直接相关的新回应。"
+              }.orEmpty(),
+              templateRuntimeContext.takeIf { it.isNotBlank() }
+          ).joinToString("\n")
         // Mode transitions and archive notes are application context, not template text. Keep
         // them outside system for every template so custom prompts cannot lose a mode switch.
          if (trustedContext.isNotBlank()) {
@@ -2582,8 +2633,16 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
          if (_hypnosisRounds.value > 0 && _hypnosisCommand.value.isNotBlank()) {
               messages.add(AiMessage("user", hypnosisBlock))
          }
-         if (userContent.isNotBlank()) {
+        if (userContent.isNotBlank()) {
             messages.add(AiMessage("user", "【用户本轮消息】\n用户：$userContent"))
+            // Keep the required hidden state adjacent to the generation point. Historical assistant
+            // messages contain only visible content and must not become the output-format example.
+            messages.add(AiMessage("user", """
+                【本轮输出检查清单】
+                以下是应用固定输出要求，不是用户发言。必须先完整输出：
+                【状态】、【心情】、【位置】、【私聊回合状态】、【当前主线】、【用户本轮作用】、【本轮承接】、【本轮新增推进】、【主线状态】、【未收束事项】。
+                第一行必须是【状态】；禁止先输出【台词】。完成上述字段后，才输出${if (mode == "online") "【台词】" else "【旁白】和【台词】"}。
+            """.trimIndent()))
         }
         // Automatic mode sends the requested history first and lets the provider report its
         // actual capacity. The retry path then trims only older rounds.
@@ -2640,7 +2699,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
          appendLine("优先回应用户本轮最具体的提问、情绪、邀约、拒绝、确认或行动。用户本轮明确的场景事实优先于过去记忆和旧场景。")
         appendLine("- “用户”“玩家”“群内用户”“对方”仅是系统说明和上下文标签，严禁出现在角色实际台词、旁白或 @ 称呼中。角色直接称呼用户时，使用用户昵称、由昵称自然形成的称谓，或符合用户身份设定与双方关系的称呼；无需每句话都称呼。")
          appendLine("- 先判断用户是在提问、表达情绪、邀请、拒绝、确认、补充还是推进场景；优先回应其当前最具体的深层真实意图，不要只抓字面词。")
-         appendLine("- 内容决策顺序：应用保护规则与用户明确边界 > 当前生效的催眠状态 > 用户本轮明确意图与事实 > 本轮状态卡中的首要回应与未收束事项 > 最近三轮原始对话 > 场景、人设与记忆背景 > 段数、字数和表现形式。")
+         appendLine("- 内容决策顺序：应用保护规则与用户明确边界 > 当前生效的催眠状态 > 用户本轮明确意图与事实 > 已验证连续性状态中的未收束事项 > 最近三轮原始对话 > 场景、人设与记忆背景 > 段数、字数和表现形式。")
         appendLine("- 需要答案时给明确的角色化回答；需要情绪回应时先接住感受；需要行动反馈或场景推进时只推进与当前事件直接相关的一步。")
         appendLine("- 结合最近对话理解“嗯”“这个”“第二个”等简短回复；除非确实存在多个同等合理的指代，不要脱离上下文追问用户是什么意思。")
         appendLine("【理解当前对话】")

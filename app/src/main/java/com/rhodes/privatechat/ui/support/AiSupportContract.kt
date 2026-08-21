@@ -9,6 +9,22 @@ object AiSupportContract {
     const val maxOutputTokens = 700
     private const val maxHistoryChars = 12_000
     private const val maxReferenceChars = 4_000
+    private val redPacketMarker = Regex("""\s*(?:【\s*(?:红包金额|客服红包)\s*[：:]\s*(\d{1,4})\s*】|\[\[LMB_RED_PACKET:\s*(\d{1,4})\s*]])\s*""")
+
+    fun extractRedPacket(content: String): Int? = redPacketMarker.find(content)?.let { match ->
+        match.groupValues.drop(1).firstOrNull { it.isNotBlank() }?.toIntOrNull()
+    }
+
+    fun removeRedPacketMarker(content: String): String = content.replace(redPacketMarker, "").trim()
+
+    /** Only used when a model promised a packet in natural language but omitted the required field. */
+    fun looksLikeRedPacketPromise(content: String): Boolean {
+        val compact = normalize(content)
+        return listOf(
+            "给你个红包", "给你一个红包", "给你小红包", "发个红包", "发你红包",
+            "转你", "拿去喝杯奶茶", "拿去买杯奶茶", "拿去花"
+        ).any(compact::contains)
+    }
 
     private val traditionalToSimplified = mapOf(
         '體' to '体', '問' to '问', '題' to '题', '麼' to '么', '設' to '设', '定' to '定',

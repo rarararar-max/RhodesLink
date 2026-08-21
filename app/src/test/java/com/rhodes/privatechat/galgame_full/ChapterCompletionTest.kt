@@ -31,4 +31,5 @@ class ChapterCompletionTest {
     fun chapterWithCompletedEventCanComplete() {
         assertTrue(state("key_event", setOf("key_event")).canCompleteCurrentChapter())
     }
+
 }

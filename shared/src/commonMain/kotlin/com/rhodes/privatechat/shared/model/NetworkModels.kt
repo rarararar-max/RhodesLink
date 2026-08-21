@@ -81,6 +81,11 @@ data class OfflineModeResponse(
     val location: String = "",
     val continuity: String = "",
     @SerialName("user_intent_analysis") val userIntentAnalysis: String = "",
+    @SerialName("turn_user_type") val turnUserType: String = "",
+    @SerialName("turn_anchor") val turnAnchor: String = "",
+    @SerialName("turn_advance") val turnAdvance: String = "",
+    @SerialName("turn_status") val turnStatus: String = "",
+    @SerialName("turn_unresolved") val turnUnresolved: String = "",
     val narration: String = "",
     val dialogue: String = "",
     val affection_mod: Int = 0,
@@ -173,8 +178,23 @@ data class PrivateTurnState(
     val updatedAt: Long = 0L,
     val currentTopic: String = "当前话题未明确",
     val unresolvedThread: String = "无",
-    val pendingAction: String = "无"
-    ,val userIntentAnalysis: String = ""
+    val pendingAction: String = "无",
+    val userIntentAnalysis: String = "",
+    val userTurnType: String = "",
+    val currentAnchor: String = "",
+    val turnAdvance: String = "",
+    val threadStatus: String = ""
+)
+
+@Serializable
+data class GroupTurnState(
+    val currentTopic: String = "",
+    val userTurnType: String = "",
+    val currentAnchor: String = "",
+    val turnAdvance: String = "",
+    val threadStatus: String = "",
+    val nextFocus: String = "",
+    val updatedAt: Long = 0L
 )
 
 @Serializable

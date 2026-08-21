@@ -306,7 +306,11 @@ object GameStore {
         LibraryEntry(id, state.project.title, state.project.description, state.toJson().toString(), assets.toJson().toString())
 
     fun restore(context: Context, entry: LibraryEntry) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(STATE, entry.stateJson).putString(ASSETS, entry.assetsJson).apply()
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val currentState = prefs.getString(STATE, null)
+        val currentProjectId = currentState?.let { runCatching { JSONObject(it).optString("projectId") }.getOrDefault("") }
+        if (currentProjectId == entry.id) return
+        prefs.edit().putString(STATE, entry.stateJson).putString(ASSETS, entry.assetsJson).apply()
     }
 
     fun load(context: Context): GameState = runCatching {

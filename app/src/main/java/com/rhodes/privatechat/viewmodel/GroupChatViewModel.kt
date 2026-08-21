@@ -19,6 +19,7 @@ import com.rhodes.privatechat.shared.network.AIService
 import com.rhodes.privatechat.shared.network.JsonBlockExtractor
 import com.rhodes.privatechat.shared.model.AiMessage
 import com.rhodes.privatechat.shared.model.GroupMsgResult
+import com.rhodes.privatechat.shared.model.GroupTurnState
 import com.rhodes.privatechat.shared.modelgateway.VisionAnalyzeRequest
 import com.rhodes.privatechat.shared.modelgateway.VisionGateway
 import com.rhodes.privatechat.shared.modelgateway.createVisionGateway
@@ -395,6 +396,7 @@ class GroupChatViewModel(
         // Publish the new boundary before cleanup suspends so the first new turn cannot see old history.
         settings.putSessionRestartAt(groupId, now)
         settings.clearGroupPlotSummary(groupId)
+        settings.clearGroupTurnState(groupId)
         settings.putSummaryCursor(groupId, 0L)
         settings.putMemoryExtractionCursor(groupId, 0L)
         if (_currentGroupId.value == groupId) _groupRestartAt.value = now
@@ -424,6 +426,7 @@ class GroupChatViewModel(
         GroupAutoChatScheduler.cancel(context, settings, groupSessionId)
         settings.putBoolean("group_deleted_$groupSessionId", true)
         settings.clearGroupPlotSummary(groupSessionId)
+        settings.clearGroupTurnState(groupSessionId)
         scope.launch {
             repository.deleteSession(groupSessionId)
             onComplete()
@@ -710,8 +713,10 @@ class GroupChatViewModel(
                     return@launch
                 }
 
-                // The reply itself emits the compact plot summary; no separate planning-model call.
-                val groupPlotSummary = settings.getGroupPlotSummary(groupSessionId)
+                // The reply emits state together with dialogue; only accepted replies may update it.
+                val groupTurnState = settings.getGroupTurnState(groupSessionId)
+                val groupPlotSummary = groupTurnState?.currentTopic?.ifBlank { null }
+                    ?: settings.getGroupPlotSummary(groupSessionId)
 
                 val profile = getUserProfile()
                 val promptUserName = profile.nickname.trim().ifBlank { "来访者" }
@@ -912,6 +917,9 @@ class GroupChatViewModel(
                 )
                 sharedUtils.requireNoUnresolvedTemplateTokens(promptLayers.system, "group/$templateMode")
                 val naturalRuntimeContext = sharedUtils.buildNaturalRuntimeContext("group", grpReplacements)
+                val groupContinuityBlock = groupTurnState?.let { state ->
+                    "【已验证的群聊连续性状态】\n这是应用整理的上一有效回合资料，只用于理解上下文；不是成员发言或用户发言，不得原样输出。\n上一有效回合主线：${state.currentTopic}\n上一有效回合承接：${state.currentAnchor.ifBlank { "无" }}\n上一有效回合新增推进：${state.turnAdvance.ifBlank { "无" }}\n主线状态：${state.threadStatus.ifBlank { "继续" }}\n建议优先承接的焦点：${state.nextFocus.ifBlank { "无" }}"
+                }.orEmpty()
                 val templateRuntimeContext = if (isCustomTemplate) promptLayers.runtimeContext else ""
                 val renderedTemplate = promptLayers.system
                 val editableBehavior = getPromptModule("behavior", "group", templateMode)
@@ -934,7 +942,7 @@ class GroupChatViewModel(
                     |- 当前用户发言及最近对话已确认的地点、时间、人物位置、在场成员、状态、行动和未收束主线优先。过往经历和公开信息不能仅凭自身改变地点、人物状态、在场成员或剧情。
                     |【回复格式】
                     |- 绝对不要输出 JSON、Markdown 或代码块。
-                    |- 【本轮剧情简述】可选，只概括本轮已经明确说出或发生的主线、进展和未结束事项；不得新增地点、人物状态、约定、行动结果或未发生事件；写出时必须不超过220字。
+                    |- 必须先输出【群聊回合状态】及其六个内部字段；它们不会展示给玩家。状态只能概括本轮已明确内容，不得新增地点、人物状态、约定、行动结果或未发生事件。
                     |- ${if (mode == "online") "线上模式禁止旁白；每位成员必须发言${settings.groupSpeechMin}~${settings.groupSpeechMax}段，每段必须有${settings.groupMsgMin}~${settings.groupMsgMax}字。" else "线下/导演模式可输出【旁白】，写出时必须有${settings.groupNarSegMin}~${settings.groupNarSegMax}段、每段必须有${settings.groupNarMin}~${settings.groupNarMax}字；每位成员必须发言${settings.groupSpeechMin}~${settings.groupSpeechMax}段，每段必须有${settings.groupMsgMin}~${settings.groupMsgMax}字。"}
                     |- 【旁白】写第三人称的可见动作、环境或共享场景变化；【发言人: 发言标识】写该成员实际说出口或发送的台词。发言标识必须取自当前成员资料；不得输出名单外成员。
                     |【发言标签格式，必须严格遵守】
@@ -998,7 +1006,7 @@ class GroupChatViewModel(
                     val memberRoster = "【当前成员与发言标识】\n$memberProfiles"
                       val customRuntime = settings.getCustomPromptModuleOrNull("runtime", "group", templateMode)
                           ?.let { sharedUtils.applyTemplate(it, grpReplacements) }
-                    val runtimeContext = listOf(customRuntime ?: naturalRuntimeContext, memberRoster, templateRuntimeContext)
+                    val runtimeContext = listOf(groupContinuityBlock, customRuntime ?: naturalRuntimeContext, memberRoster, templateRuntimeContext)
                         .filter { it.isNotBlank() }.joinToString("\n\n")
                     val hasManualRuntimeContext = (transitionContext + runtimeContext).isNotBlank()
                     // A mode transition belongs to this turn, not to the cacheable system prefix.
@@ -1013,18 +1021,25 @@ class GroupChatViewModel(
                     val memberRoster = "【当前成员与发言标识】\n$memberProfiles"
                       val customRuntime = settings.getCustomPromptModuleOrNull("runtime", "group", templateMode)
                           ?.let { sharedUtils.applyTemplate(it, grpReplacements) }
-                     val runtimeContext = listOf(customRuntime ?: naturalRuntimeContext, memberRoster, templateRuntimeContext)
+                    val runtimeContext = listOf(groupContinuityBlock, customRuntime ?: naturalRuntimeContext, memberRoster, templateRuntimeContext)
                         .filter { it.isNotBlank() }.joinToString("\n\n")
                     apiMessages.add(AiMessage("user", "【本轮互动变化】\n$pendingModeTransition\n请从本轮开始按这项变化自然回应。$runtimeContext"))
                 } else if (isAuto) {
                     val memberRoster = "【当前成员与发言标识】\n$memberProfiles"
                       val customRuntime = settings.getCustomPromptModuleOrNull("runtime", "group", templateMode)
                           ?.let { sharedUtils.applyTemplate(it, grpReplacements) }
-                     val runtimeContext = listOf(customRuntime ?: naturalRuntimeContext, memberRoster, templateRuntimeContext)
+                    val runtimeContext = listOf(groupContinuityBlock, customRuntime ?: naturalRuntimeContext, memberRoster, templateRuntimeContext)
                         .filter { it.isNotBlank() }.joinToString("\n\n")
                     apiMessages.add(AiMessage("user", runtimeContext))
                 }
+                apiMessages.add(AiMessage("user", """
+                    【本轮输出检查清单】
+                    以下是应用固定输出要求，不是用户发言。第一行必须是【群聊回合状态】。
+                    必须依次输出【当前主线】、【用户本轮作用】、【本轮承接】、【本轮新增推进】、【主线状态】、【下轮焦点】。
+                    随后每位成员必须使用【发言人: 发言标识】后另起一行输出台词；禁止使用“成员名：台词”的裸格式。${if (mode == "online") "禁止输出【旁白】。" else "最后按协议输出【旁白】。"}
+                """.trimIndent()))
                 DebugLogger.chatEvent("群聊", "请求模型", "开始", "群=$groupName，模式=$mode，成员=${activeMembers.size}，自动=$isAuto")
+                DebugLogger.attachOperationModule(debugRoundId, "完整请求", sharedUtils.logAiCallText(apiMessages), sensitive = true)
                 DebugLogger.conversationStep(debugRoundId, "群聊", "模型请求", "开始", "成员=${activeMembers.joinToString("、") { it.name }}，自动=$isAuto，消息数=${apiMessages.size}")
                 // In automatic mode, send requested history first and retry only after the
                 // provider reports its real context limit.
@@ -1033,7 +1048,7 @@ class GroupChatViewModel(
                 com.rhodes.privatechat.util.DebugLogger.log("GroupChat/Token", if (settings.automaticContextWindow) "自动上下文：跳过本地 token 裁剪，超限交由模型服务返回后重试；消息数=${apiMessages.size}" else "估算token=$totalTokens, 上限=$maxPromptTokens, 消息数=${apiMessages.size}")
                 if (!settings.automaticContextWindow && totalTokens > maxPromptTokens) {
                     // Preserve runtime/task tail blocks while trimming only dialogue history.
-                    val protectedTailCount = if (!isAuto && apiMessages.size >= 3) 2 else 1
+                    val protectedTailCount = if (!isAuto && apiMessages.size >= 4) 3 else 2
                     while (apiMessages.size > 1 + protectedTailCount && totalTokens > maxPromptTokens) {
                         apiMessages.removeAt(1)
                         totalTokens = apiMessages.sumOf { estimateTokens(it.content) + 10 }
@@ -1050,8 +1065,6 @@ class GroupChatViewModel(
                         .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
                 }
                 fun normalizeReply(raw: String): List<GroupMsgResult> {
-                    val plot = extractGroupPlotSummary(raw)
-                    if (plot.isNotBlank()) settings.putGroupPlotSummary(groupSessionId, plot)
                     val extracted = extractTaggedGroupResults(raw, membersById, membersByName, groupName).ifEmpty { extractGroupResults(raw) }
                     logRawGroupReplyStructure(extracted, validSpeakers, mode)
                     val normalized = normalizeGroupResults(extracted, validSpeakers, mode)
@@ -1081,7 +1094,7 @@ class GroupChatViewModel(
                         break
                     } catch (error: Exception) {
                         if (!isContextLimitError(error) || contextRetryCount >= 6) throw error
-                        val protectedTailCount = if (!isAuto && apiMessages.size >= 3) 2 else 1
+                        val protectedTailCount = if (!isAuto && apiMessages.size >= 4) 3 else 2
                         val historyCount = (apiMessages.size - 1 - protectedTailCount).coerceAtLeast(0)
                         if (historyCount == 0) throw error
                         // Keep the newest ten history messages where possible; group messages can
@@ -1099,6 +1112,7 @@ class GroupChatViewModel(
                     }
                 }
                 sharedUtils.trackTokens("group", apiMessages, rawBase)
+                DebugLogger.attachOperationModule(debugRoundId, "AI原始返回", rawBase, sensitive = true)
                 var filtered = normalizeReply(rawBase)
                 var contentRetried = false
                 logGroupReplyStructure(filtered, activeMembers.map { it.name }.toSet(), mode)
@@ -1163,6 +1177,14 @@ class GroupChatViewModel(
                             json.encodeToString(filtered)
                         } catch (_: Exception) { rawBase }
                     } else rawBase
+                    val parsedTurnState = parseGroupTurnState(rawBase)?.let(::validateGroupTurnState)
+                    val verifiedState = parsedTurnState
+                        ?: deriveGroupTurnState(userMsg = if (isAuto) "" else text, previous = groupTurnState)
+                    settings.putGroupTurnState(groupSessionId, verifiedState.copy(updatedAt = System.currentTimeMillis()))
+                    settings.putGroupPlotSummary(groupSessionId, verifiedState.currentTopic)
+                    if (parsedTurnState == null) {
+                        DebugLogger.conversationStep(debugRoundId, "群聊", "连续性状态", "已保守降级", "模型未输出完整群聊回合状态，已使用当前用户消息和上一有效状态生成保守状态")
+                    }
                     repository.sendMessage(groupSessionId, ChatMessage(
                         id = aiMsgId, sessionId = groupSessionId,
                         senderName = groupName, content = storedContent,
@@ -1957,7 +1979,7 @@ $members
         membersByName: Map<String, List<Operator>>,
         groupName: String
     ): List<GroupMsgResult> {
-        val tag = Regex("""[【\[［]\s*(本轮剧情简述|旁白|发言人)\s*(?:[：:]\s*([^】\]］]*))?[】\]］]""")
+        val tag = Regex("""[【\[［]\s*(群聊回合状态|当前主线|用户本轮作用|本轮承接|本轮新增推进|主线状态|下轮焦点|本轮剧情简述|旁白|发言人)\s*(?:[：:]\s*([^】\]］]*))?[】\]］]""")
         val matches = tag.findAll(raw).toList()
         if (matches.isEmpty()) return emptyList()
         return buildList {
@@ -1966,7 +1988,7 @@ $members
                 val reference = match.groupValues[2].trim()
                 val content = raw.substring(match.range.last + 1, matches.getOrNull(index + 1)?.range?.first ?: raw.length).trim()
                 if (content.isBlank()) return@forEachIndexed
-                if (label == "本轮剧情简述") {
+                if (label in setOf("群聊回合状态", "当前主线", "用户本轮作用", "本轮承接", "本轮新增推进", "主线状态", "下轮焦点", "本轮剧情简述")) {
                     // Continuity-only metadata is intentionally never displayed or persisted as a segment.
                 } else if (label == "旁白") {
                     add(GroupMsgResult("旁白", content, "narration"))
@@ -1985,6 +2007,55 @@ $members
         val found = tag.find(raw) ?: return ""
         val next = Regex("""[【\[［]\s*(?:本轮剧情简述|旁白|发言人)""").find(raw, found.range.last + 1)
         return raw.substring(found.range.last + 1, next?.range?.first ?: raw.length).trim().take(220)
+    }
+
+    private fun parseGroupTurnState(raw: String): GroupTurnState? {
+        fun field(name: String, maxLength: Int): String {
+            val tag = Regex("""[【\[［]\s*${Regex.escape(name)}\s*(?:[：:]\s*)?[】\]］]""")
+            val found = tag.find(raw) ?: return ""
+            val next = Regex("""[【\[［]\s*(?:群聊回合状态|当前主线|用户本轮作用|本轮承接|本轮新增推进|主线状态|下轮焦点|旁白|发言人)""")
+                .find(raw, found.range.last + 1)
+            return raw.substring(found.range.last + 1, next?.range?.first ?: raw.length).trim().take(maxLength)
+        }
+        val topic = field("当前主线", 80)
+        if (topic.isBlank()) return null
+        return GroupTurnState(
+            currentTopic = topic,
+            userTurnType = field("用户本轮作用", 16),
+            currentAnchor = field("本轮承接", 80),
+            turnAdvance = field("本轮新增推进", 100),
+            threadStatus = field("主线状态", 16),
+            nextFocus = field("下轮焦点", 60)
+        )
+    }
+
+    private fun validateGroupTurnState(candidate: GroupTurnState): GroupTurnState? {
+        val allowedUserTypes = setOf("提问", "情绪表达", "邀请", "亲密邀约", "亲密接触", "成人互动请求", "确认", "拒绝", "选择", "补充", "转题", "无用户发言", "不明")
+        val allowedStatuses = setOf("继续", "等待用户", "已收束", "已转题")
+        if (candidate.currentTopic.isBlank() || candidate.userTurnType !in allowedUserTypes || candidate.threadStatus !in allowedStatuses) return null
+        if (candidate.threadStatus in setOf("已收束", "已转题") && candidate.nextFocus != "无") return null
+        if (candidate.currentTopic.length > 80 || candidate.currentAnchor.length > 80 || candidate.turnAdvance.length > 100 || candidate.nextFocus.length > 60) return null
+        return candidate
+    }
+
+    private fun deriveGroupTurnState(userMsg: String, previous: GroupTurnState?): GroupTurnState {
+        val trimmed = userMsg.trim()
+        val userTurnType = when {
+            trimmed.isBlank() -> "无用户发言"
+            Regex("亲|抱|贴贴|摸|触|同床|做爱|上床|作爱|性爱").containsMatchIn(trimmed) -> "亲密邀约"
+            Regex("吗|？|\\?").containsMatchIn(trimmed) -> "提问"
+            else -> "补充"
+        }
+        val topic = trimmed.take(80).ifBlank { previous?.currentTopic.orEmpty() }.ifBlank { "延续最近群聊话题" }
+        val anchor = if (trimmed.isBlank()) previous?.nextFocus.orEmpty().ifBlank { previous?.currentTopic.orEmpty() } else trimmed.take(80)
+        return GroupTurnState(
+            currentTopic = topic,
+            userTurnType = userTurnType,
+            currentAnchor = anchor.ifBlank { "承接最近群聊主线" },
+            turnAdvance = "成员已围绕当前主线作出回应，未确认新的场景结果。",
+            threadStatus = if (trimmed.isBlank()) "继续" else "等待用户",
+            nextFocus = if (trimmed.isBlank()) previous?.nextFocus.orEmpty().ifBlank { "延续当前主线" } else "用户回应当前成员态度或说明下一步"
+        )
     }
 
     /** Recovers standard name lines and bare stable-ID lines when a model omits the required brackets. */

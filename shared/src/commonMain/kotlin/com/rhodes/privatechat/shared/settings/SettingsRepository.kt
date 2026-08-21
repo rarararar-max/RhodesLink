@@ -7,6 +7,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 import com.rhodes.privatechat.shared.model.PrivateTurnState
+import com.rhodes.privatechat.shared.model.GroupTurnState
 import kotlinx.coroutines.flow.map
 import kotlin.math.max
 
@@ -526,29 +527,29 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putBoolean("dispatch_fast_mode", value)
 
     var dispatchMinChars: Int
-        get() = settings.getInt("dispatch_min_chars", 50).coerceIn(20, settings.getInt("dispatch_max_chars", 300).coerceIn(20, 2000))
-        set(value) = settings.putInt("dispatch_min_chars", value.coerceIn(20, settings.getInt("dispatch_max_chars", 300).coerceIn(20, 2000)))
+        get() = settings.getInt("dispatch_min_chars", 50).coerceAtLeast(0)
+        set(value) = settings.putInt("dispatch_min_chars", value.coerceAtLeast(0))
 
     var dispatchMaxChars: Int
-        get() = settings.getInt("dispatch_max_chars", 300).coerceIn(settings.getInt("dispatch_min_chars", 50).coerceIn(20, 2000), 2000)
-        set(value) = settings.putInt("dispatch_max_chars", value.coerceIn(settings.getInt("dispatch_min_chars", 50).coerceIn(20, 2000), 2000))
+        get() = settings.getInt("dispatch_max_chars", 300).coerceAtLeast(0)
+        set(value) = settings.putInt("dispatch_max_chars", value.coerceAtLeast(0))
 
     // === 动态/日记设置 ===
     var momentMinChars: Int
-        get() = getInt("moment_min_chars", 50).coerceIn(5, getInt("moment_max_chars", 200).coerceIn(5, 2000))
-        set(value) = putInt("moment_min_chars", value.coerceIn(5, getInt("moment_max_chars", 200).coerceIn(5, 2000)))
+        get() = getInt("moment_min_chars", 50).coerceAtLeast(0)
+        set(value) = putInt("moment_min_chars", value.coerceAtLeast(0))
 
     var momentMaxChars: Int
-        get() = getInt("moment_max_chars", 200).coerceIn(getInt("moment_min_chars", 50).coerceIn(5, 2000), 2000)
-        set(value) = putInt("moment_max_chars", value.coerceIn(getInt("moment_min_chars", 50).coerceIn(5, 2000), 2000))
+        get() = getInt("moment_max_chars", 200).coerceAtLeast(0)
+        set(value) = putInt("moment_max_chars", value.coerceAtLeast(0))
 
     var diaryMinChars: Int
-        get() = settings.getInt("diary_min_chars", 50).coerceIn(20, settings.getInt("diary_max_chars", 300).coerceIn(20, 3000))
-        set(value) = settings.putInt("diary_min_chars", value.coerceIn(20, settings.getInt("diary_max_chars", 300).coerceIn(20, 3000)))
+        get() = settings.getInt("diary_min_chars", 50).coerceAtLeast(0)
+        set(value) = settings.putInt("diary_min_chars", value.coerceAtLeast(0))
 
     var diaryMaxChars: Int
-        get() = settings.getInt("diary_max_chars", 300).coerceIn(settings.getInt("diary_min_chars", 50).coerceIn(20, 3000), 3000)
-        set(value) = settings.putInt("diary_max_chars", value.coerceIn(settings.getInt("diary_min_chars", 50).coerceIn(20, 3000), 3000))
+        get() = settings.getInt("diary_max_chars", 300).coerceAtLeast(0)
+        set(value) = settings.putInt("diary_max_chars", value.coerceAtLeast(0))
 
     // === 群聊设置 ===
     var groupChatMinInterval: Int
@@ -655,6 +656,29 @@ class SettingsRepository(private val settings: ObservableSettings) {
     var rewardDate: String
         get() = settings.getString("reward_date", "")
         set(value) = settings.putString("reward_date", value)
+
+    /** Each support persona has an independent daily red-packet allowance. */
+    @Synchronized
+    fun supportLmbRemaining(agentId: String, date: String, dailyLimit: Int = 500): Int {
+        val suffix = agentId.ifBlank { "default" }
+        val limit = dailyLimit.coerceAtLeast(0)
+        if (settings.getString("support_lmb_date_$suffix", "") != date) {
+            settings.putString("support_lmb_date_$suffix", date)
+            settings.putInt("support_lmb_sent_$suffix", 0)
+        }
+        return (limit - settings.getInt("support_lmb_sent_$suffix", 0)).coerceAtLeast(0)
+    }
+
+    /** Reserves a support red-packet amount before it is displayed, so unclaimed packets cannot exceed the daily cap. */
+    @Synchronized
+    fun reserveSupportLmb(agentId: String, date: String, requestedAmount: Int, dailyLimit: Int = 500, perPacketLimit: Int = 200): Int {
+        val suffix = agentId.ifBlank { "default" }
+        val remaining = supportLmbRemaining(suffix, date, dailyLimit)
+        val amount = requestedAmount.coerceIn(0, perPacketLimit.coerceAtLeast(0)).coerceAtMost(remaining)
+        if (amount == 0) return 0
+        settings.putInt("support_lmb_sent_$suffix", settings.getInt("support_lmb_sent_$suffix", 0) + amount)
+        return amount
+    }
 
     // === 动态设置 ===
     var dailyMomentTarget: Int
@@ -920,12 +944,12 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putInt("group_nar_max", value.coerceIn(getInt("group_nar_min", 20).coerceIn(0, 2000), 2000))
 
     var commentMinChars: Int
-        get() = getInt("comment_min_chars", 10).coerceIn(1, getInt("comment_max_chars", 40).coerceIn(1, 1000))
-        set(value) = putInt("comment_min_chars", value.coerceIn(1, getInt("comment_max_chars", 40).coerceIn(1, 1000)))
+        get() = getInt("comment_min_chars", 10).coerceAtLeast(0)
+        set(value) = putInt("comment_min_chars", value.coerceAtLeast(0))
 
     var commentMaxChars: Int
-        get() = getInt("comment_max_chars", 40).coerceIn(getInt("comment_min_chars", 10).coerceIn(1, 1000), 1000)
-        set(value) = putInt("comment_max_chars", value.coerceIn(getInt("comment_min_chars", 10).coerceIn(1, 1000), 1000))
+        get() = getInt("comment_max_chars", 40).coerceAtLeast(0)
+        set(value) = putInt("comment_max_chars", value.coerceAtLeast(0))
 
     // === 动态键方法（per-operator, per-group）===
 
@@ -1244,6 +1268,16 @@ class SettingsRepository(private val settings: ObservableSettings) {
         putString("private_turn_state_$sessionId", Json.encodeToString(value))
 
     fun clearPrivateTurnState(sessionId: String) = remove("private_turn_state_$sessionId")
+
+    fun getGroupTurnState(groupId: String): GroupTurnState? {
+        val raw = getString("group_turn_state_$groupId", "")
+        return raw.takeIf { it.isNotBlank() }?.let { runCatching { Json.decodeFromString<GroupTurnState>(it) }.getOrNull() }
+    }
+
+    fun putGroupTurnState(groupId: String, value: GroupTurnState) =
+        putString("group_turn_state_$groupId", Json.encodeToString(value))
+
+    fun clearGroupTurnState(groupId: String) = remove("group_turn_state_$groupId")
 
     fun getGroupPlotSummary(groupId: String): String = getString("group_plot_summary_$groupId", "")
 

@@ -13,16 +13,14 @@ internal object PlainGeneratedContentNormalizer {
         "动态如下", "评论如下", "日记如下", "今日动态：", "发布："
     )
 
-    fun normalize(raw: String, minChars: Int, maxChars: Int): String? {
-        if (maxChars <= 0) return null
+    fun normalize(raw: String, @Suppress("UNUSED_PARAMETER") minChars: Int = 0, @Suppress("UNUSED_PARAMETER") maxChars: Int = 0): String? {
         var content = raw.trim()
         if (content.isBlank()) return null
         content = unwrapFence(content)
         content = unwrapJson(content) ?: return null
         content = unwrapQuotes(content)
         content = removeExplanationPrefix(content)
-        content = truncateAtSentence(content.trim(), minChars, maxChars)
-        if (content.codePointCount(0, content.length) < minChars) return null
+        content = content.trim()
         if (content.startsWith("作为AI") || content.startsWith("作为 AI") || content.startsWith("As an AI", true) || content.contains("{{")) return null
         return content
     }
@@ -68,12 +66,4 @@ internal object PlainGeneratedContentNormalizer {
         return listOf(remainder, remainingLines).filter { it.isNotBlank() }.joinToString("\n")
     }
 
-    private fun truncateAtSentence(text: String, minChars: Int, maxChars: Int): String {
-        if (text.codePointCount(0, text.length) <= maxChars) return text
-        val end = text.offsetByCodePoints(0, maxChars.coerceAtMost(text.codePointCount(0, text.length)))
-        val candidate = text.substring(0, end)
-        val boundary = candidate.indexOfLast { it in "。！？!?\n" }
-        val sentence = if (boundary >= candidate.length / 2) candidate.substring(0, boundary + 1).trim() else candidate.trim()
-        return if (sentence.codePointCount(0, sentence.length) >= minChars) sentence else candidate.trim()
-    }
 }

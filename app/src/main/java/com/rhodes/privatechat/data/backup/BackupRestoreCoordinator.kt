@@ -77,20 +77,26 @@ class BackupRestoreCoordinator(
             onProgress(BackupRestoreProgress(BackupRestoreStage.CREATING_SAFETY_BACKUP, "正在创建恢复前安全备份"))
             safetyBackup = createSafetyBackup()
 
+            val selection = options.contentSelection.normalized()
             onProgress(BackupRestoreProgress(BackupRestoreStage.RESTORING_MEDIA, "正在准备图片文件"))
             val mediaDirectory = File(context.filesDir, "restored_media/${archive.manifest.backupId}")
-            val stagedMedia = if (archive.payload.media.isEmpty()) emptyMap() else {
+            val stagedMedia = if (!selection.media || archive.payload.media.isEmpty()) emptyMap() else {
                 verifiedInput.inputStream().use { BackupMediaStager().extract(it, archive.payload, mediaDirectory) }
             }
-            val restoredPayload = BackupRestorePayloadRewriter.rewriteMediaUris(archive.payload, stagedMedia).filterIssues(options.skipIssueCodes)
+            val restoredPayload = BackupContentFilter.apply(
+                BackupRestorePayloadRewriter.rewriteMediaUris(archive.payload, stagedMedia).filterIssues(options.skipIssueCodes),
+                options.contentSelection,
+            )
 
             onProgress(BackupRestoreProgress(BackupRestoreStage.RESTORING_DATABASE, "正在恢复结构化数据"))
             try {
                 // Preferences are outside SQLite. Apply them before the transaction so a failed
                 // database restore can restore the old preference snapshot in the same path.
-                previousSettings = PortableSettings.snapshot(repository, settings)
-                PortableSettings.clearForRestore(repository, settings)
-                applySettings(restoredPayload.content.settings.orEmpty())
+                if (options.contentSelection.normalized().settings) {
+                    previousSettings = PortableSettings.snapshot(repository, settings)
+                    PortableSettings.clearForRestore(repository, settings)
+                    applySettings(restoredPayload.content.settings.orEmpty())
+                }
                 restoreExecutor(restoredPayload, onProgress)
             } catch (e: Exception) {
                 mediaDirectory.deleteRecursively()

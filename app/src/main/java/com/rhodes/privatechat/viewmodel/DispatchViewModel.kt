@@ -117,7 +117,7 @@ class DispatchViewModel(
                     DebugLogger.log("Dispatch/AI", "过程段丢弃: id=$dispatchId, status=${latest.status}, endTime=${latest.endTime}")
                     return false
                 }
-                val cleanResult = cleanGeneratedText(rawResult, dMx + 80)
+                val cleanResult = cleanGeneratedText(rawResult)
                 if (cleanResult.isBlank()) return false
                 val newLog = compactLogChain(latest.logChain + "\n\n【第${roundNum}轮】" + cleanResult)
                 repository.insertDispatch(latest.copy(logChain = newLog, status = "active"))
@@ -134,10 +134,9 @@ class DispatchViewModel(
         return false
     }
 
-    private fun cleanGeneratedText(raw: String, maxChars: Int): String = raw.trim()
+    private fun cleanGeneratedText(raw: String): String = raw.trim()
         .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
         .removePrefix("下面是").removePrefix("作为AI")
-        .take(maxChars)
 
     fun startDispatch(id: String, task: String, duration: Int, budget: Int, operatorIds: List<String>, onSuccess: () -> Unit = {}) {
         if (!startingLock.compareAndSet(false, true)) { Log.w(TAG, "[startDispatch] 已在启动中，忽略重复调用 id=$id"); return }

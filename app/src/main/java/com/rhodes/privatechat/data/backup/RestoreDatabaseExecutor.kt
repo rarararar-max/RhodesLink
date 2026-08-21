@@ -5,37 +5,52 @@ import com.rhodes.privatechat.shared.model.MemoryLevel
 
 /** Restores portable user data in one SQLite transaction. Runtime queues, links and vectors reset. */
 class RestoreDatabaseExecutor(private val repository: ChatRepository) {
-    suspend fun restore(payload: BackupPayload) {
+    suspend fun restore(payload: BackupPayload, requestedSelection: BackupContentSelection = BackupContentSelection.All) {
+        val selection = requestedSelection.normalized()
         repository.runRestoreTransaction {
-            // Clear children before parents. Runtime-only state is intentionally discarded.
-            dailyDeliveriesQueries.deleteAllDailyDeliveries()
-            memoryLinksQueries.deleteAllMemoryLinks()
-            memorySourceQueueQueries.deleteAllMemorySources()
-            memoryBatchesQueries.deleteAllMemoryBatches()
-            vectorMemoriesQueries.deleteAllVectorMemories()
-            memoryItemsQueries.deleteAllMemoryItems()
-            chatDisplayEventsQueries.deleteAllDisplayEvents()
-            chatArchivesQueries.deleteAllArchives()
-            chatArchivesQueries.deleteAllHistorySegments()
-            momentLikesQueries.deleteAllLikes()
-            momentCommentsQueries.deleteAllComments()
-            momentsQueries.deleteAllMoments()
-            diariesQueries.deleteAllDiaries()
-            giftRecordsQueries.deleteAllGifts()
-            dispatchRecordsQueries.deleteAllDispatches()
-            mahjongSavesQueries.deleteSave()
-            sharedExperiencesQueries.deleteAllSharedExperienceParticipants()
-            sharedExperiencesQueries.deleteAllSharedExperiences()
-            memoryAnchorsQueries.deleteAllAnchors()
-            memoriesQueries.deleteAllMemories()
-            chatMessagesQueries.deleteAllMessages()
-            chatSessionsQueries.deleteAllSessions()
-            chatSessionsQueries.deleteAllGroups()
-            relationshipsQueries.deleteAllRelationships()
-            knowledgeBasesQueries.deleteAllKnowledgeBaseAssignments()
-            knowledgeBasesQueries.deleteAllKnowledgeBaseChunks()
-            knowledgeBasesQueries.deleteAllKnowledgeBases()
-            operatorsQueries.deleteAllOperators()
+            // Clear only selected categories, with children removed before their parents.
+            if (selection.extras) {
+                dailyDeliveriesQueries.deleteAllDailyDeliveries()
+                giftRecordsQueries.deleteAllGifts()
+                dispatchRecordsQueries.deleteAllDispatches()
+                mahjongSavesQueries.deleteSave()
+            }
+            if (selection.memories) {
+                memoryLinksQueries.deleteAllMemoryLinks()
+                memorySourceQueueQueries.deleteAllMemorySources()
+                memoryBatchesQueries.deleteAllMemoryBatches()
+                vectorMemoriesQueries.deleteAllVectorMemories()
+                memoryItemsQueries.deleteAllMemoryItems()
+                memoryAnchorsQueries.deleteAllAnchors()
+                memoriesQueries.deleteAllMemories()
+            }
+            if (selection.chats) {
+                chatDisplayEventsQueries.deleteAllDisplayEvents()
+                chatArchivesQueries.deleteAllArchives()
+                chatArchivesQueries.deleteAllHistorySegments()
+                chatMessagesQueries.deleteAllMessages()
+                chatSessionsQueries.deleteAllSessions()
+                chatSessionsQueries.deleteAllGroups()
+            }
+            if (selection.social) {
+                momentLikesQueries.deleteAllLikes()
+                momentCommentsQueries.deleteAllComments()
+                momentsQueries.deleteAllMoments()
+                diariesQueries.deleteAllDiaries()
+                sharedExperiencesQueries.deleteAllSharedExperienceParticipants()
+                sharedExperiencesQueries.deleteAllSharedExperiences()
+            }
+            if (selection.knowledgeBases) {
+                knowledgeBasesQueries.deleteAllKnowledgeBaseAssignments()
+                knowledgeBasesQueries.deleteAllKnowledgeBaseChunks()
+                knowledgeBasesQueries.deleteAllKnowledgeBases()
+            }
+            // A role-only restore must preserve roles referenced by unchecked current chats.
+            // It therefore upserts imported roles; complete chat restore can safely replace them.
+            if (selection.roles && selection.chats) {
+                relationshipsQueries.deleteAllRelationships()
+                operatorsQueries.deleteAllOperators()
+            }
 
             payload.content.operators.orEmpty().forEach { op ->
                 operatorsQueries.insertAllOperators(op.id, op.name, op.title, op.description, op.gender, op.avatarUri, op.location, op.activity, op.emotion, op.intimacy.toLong(), op.privatePrompt, op.groupPrompt, op.memoryInjection, op.userRelation, op.lmb.toLong(), op.attack.toDouble(), op.defense.toDouble(), op.meldPref, op.activityLevel.toDouble(), op.voiceName, op.voiceSpeed, op.voicePitch)

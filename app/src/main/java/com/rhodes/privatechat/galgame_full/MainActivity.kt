@@ -21,6 +21,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.rememberScrollState
@@ -37,10 +38,12 @@ import androidx.compose.ui.graphics.*
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.graphics.asImageBitmap
@@ -62,6 +65,11 @@ private val FieldText = Color(0xFFF7F3FF)
 private val FieldPlaceholder = Color(0xFFBDB8D2)
 private val FieldBorder = Color(0xFF938BAF)
 private val FieldFocusedBorder = Color(0xFFFFB6CF)
+private val GameSurface = Color(0xE70E1020)
+private val GameSurfaceSoft = Color(0xD9212035)
+private val GameStroke = Color(0x667F769C)
+private val GameChoice = Color(0xDE252440)
+private val GameError = Color(0xFFFFB0A7)
 
 private fun autoSpriteScale(bitmap: android.graphics.Bitmap): Float {
     var top = bitmap.height
@@ -94,6 +102,7 @@ private fun projectIssues(project: ProjectConfig, assets: ProjectAssets): List<S
     if (project.chapters.isEmpty()) add("请至少添加一个章节。")
     project.chapters.forEach { chapter ->
         if (chapter.title.isBlank()) add("第${chapter.id}章缺少章节名称。")
+        if (chapter.goal.isBlank()) add("第${chapter.id}章缺少章节目标。")
         if (chapter.contentDescription.isBlank()) add("第${chapter.id}章缺少内容描述。")
         if (chapter.allowedCharacterIds.isEmpty()) add("第${chapter.id}章至少需要一名出场角色。")
         if (project.playerCharacterId.isNotBlank() && project.playerCharacterId !in chapter.allowedCharacterIds) add("第${chapter.id}章没有自动包含玩家角色。")
@@ -211,6 +220,7 @@ private fun fieldHelp(label: String, placeholder: String): FieldHelp {
         "背景名称" -> FieldHelp("背景名称", "给场景图起一个清楚的名字，最好包含地点和时间或天气。", "雨天的车站")
         "背景使用条件" -> FieldHelp("背景使用条件", "告诉 AI 什么时候适合切换到这个场景。写地点、时间、人物行为或氛围即可。", "放学后的雨天车站，角色和玩家等待回家或进行安静交谈时使用。")
         "章节名称" -> FieldHelp("章节名称", "给这一段故事起一个简短标题，方便你在编辑器里区分和管理。", "雨中的约定")
+        "章节目标" -> FieldHelp("章节目标", "写玩家在这一章需要达成的剧情状态。它决定 AI 应该朝哪里推进，与本章会发生什么事不同。", "与绫建立初步信任，并决定一起调查异常信号。")
         "章节内容" -> FieldHelp("章节内容", "写这一章可能发生哪些事、角色会遇到什么、玩家可以参与什么。它是 AI 推进本章剧情的主要依据。", "玩家陪绫前往医院处理伤势。途中绫几次想提起岛上的异常灯光，却又改变话题。玩家可以关心她，也可以追问信号。")
         "开场描述" -> FieldHelp("开场描述", "写进入本章时，玩家最先看到的画面或发生的情况。可以留空，AI 会根据章节内容开始。", "放学后的天空下起了雨，绫独自站在校门口，衣袖已经被雨水打湿。")
         "本章完成目标" -> FieldHelp("本章完成目标", "写故事发展到什么结果时，可以进入下一章。用自然语言写剧情结果，不要写变量、代码或数值。留空也能玩，但 AI 会更保守地判断。", "当玩家和绫建立初步信任，并决定一起调查异常灯光时，本章完成。")
@@ -229,11 +239,16 @@ private fun GamePlayScreen(state: GameState, assets: ProjectAssets, input: Strin
     val keyboardOpen = WindowInsets.isImeVisible
     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF363254), Ink)))) {
         background?.let { asset -> LoadBitmap(asset.uri)?.let { bitmap -> Image(bitmap.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, alignment = BiasAlignment(asset.focusX * 2 - 1, asset.focusY * 2 - 1)) } }
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0x5C080914), Color.Transparent, Color(0x7D080914)))))
         sprite?.let { asset -> LoadBitmap(asset.uri)?.let { bitmap -> Image(bitmap.asImageBitmap(), null, Modifier.align(Alignment.BottomCenter).fillMaxHeight(.92f).padding(bottom = 185.dp).graphicsLayer(scaleX = state.scene.spriteScale * asset.scale * assets.globalSpriteScale, scaleY = state.scene.spriteScale * asset.scale * assets.globalSpriteScale, translationX = (state.scene.spriteOffsetX + asset.offsetX + assets.globalSpriteOffsetX) * 200f, translationY = (state.scene.spriteOffsetY + asset.offsetY + assets.globalSpriteOffsetY) * 200f, clip = true), contentScale = ContentScale.Fit) } }
-        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp)) {
-            Row(Modifier.fillMaxWidth().background(Color(0xAA141522), RoundedCornerShape(14.dp)).padding(horizontal = 8.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) { Text(state.project.title, color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis); Text("第${state.chapter}章 · ${state.chapterConfig()?.title.orEmpty().take(40)}", color = Color.White.copy(alpha = .82f), fontSize = 12.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis); Text("目标：${state.goal.take(100)}", color = Color.White.copy(alpha = .72f), fontSize = 11.sp, maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) }
-                 Text("更多", color = Accent, modifier = Modifier.clickable(onClick = more).padding(8.dp))
+        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Row(Modifier.fillMaxWidth().background(GameSurface, RoundedCornerShape(18.dp)).padding(start = 14.dp, end = 6.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(state.project.title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    Text("第 ${state.chapter} 章 · ${state.chapterConfig()?.title.orEmpty().take(32)}", color = Soft, fontSize = 12.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    state.goal.takeIf(String::isNotBlank)?.let { goal -> Text("目标  $goal", color = Color(0xFFF0D9E4), fontSize = 11.sp, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, modifier = Modifier.padding(top = 3.dp)) }
+                }
+                Text("菜单", color = Accent, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.background(Color(0x29301B2A), RoundedCornerShape(12.dp)).clickable(onClick = more).padding(horizontal = 12.dp, vertical = 10.dp))
             }
             if (!keyboardOpen) Spacer(Modifier.weight(1f))
             when {
@@ -243,14 +258,20 @@ private fun GamePlayScreen(state: GameState, assets: ProjectAssets, input: Strin
                 else -> {
                     if (!keyboardOpen) {
                         DialoguePanel(state)
-                        error?.let { Text(it, color = Accent, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp)) }
+                        error?.let { Text(it, color = GameError, fontSize = 12.sp, modifier = Modifier.padding(top = 7.dp, start = 6.dp)) }
                         val choices = state.choices.ifEmpty { listOf("继续观察", "询问当前发生的事", "表达自己的想法") }
-                         if (loading) LoadingRow() else choices.forEach { choice -> Button({ play(choice) }, Modifier.fillMaxWidth().padding(top = 7.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xE6383651))) { Text(choice, color = Color.White) } }
-                         if (!loading && lastTurnAvailable(state)) OutlinedButton(undo, Modifier.fillMaxWidth().padding(top = 7.dp), colors = ButtonDefaults.outlinedButtonColors(containerColor = Color(0xE6383651), contentColor = Color.White)) { Text("撤销本回合") }
+                         if (loading) LoadingRow() else choices.forEachIndexed { index, choice ->
+                             Button({ play(choice) }, Modifier.fillMaxWidth().padding(top = 8.dp), shape = RoundedCornerShape(15.dp), colors = ButtonDefaults.buttonColors(containerColor = GameChoice, contentColor = Color.White)) {
+                                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                     Text("0${index + 1}", color = Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                     Text(choice, modifier = Modifier.padding(start = 12.dp), fontSize = 15.sp)
+                                 }
+                             }
+                         }
                     } else CompactDialoguePanel(state)
-                    Row(Modifier.fillMaxWidth().imePadding().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(input, onInput, enabled = !loading, modifier = Modifier.weight(1f).background(Color(0xEE171827), RoundedCornerShape(12.dp)), label = { Text("自由输入") }, placeholder = { Text("你想做什么？") }, minLines = 2, maxLines = 4, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send), keyboardActions = KeyboardActions(onSend = { play(input) }), colors = OutlinedTextFieldDefaults.colors(focusedTextColor = FieldText, unfocusedTextColor = FieldText, focusedContainerColor = Color(0xEE171827), unfocusedContainerColor = Color(0xEE171827), disabledContainerColor = Color(0xAA171827), cursorColor = Accent, focusedBorderColor = FieldFocusedBorder, unfocusedBorderColor = FieldBorder, focusedLabelColor = FieldFocusedBorder, unfocusedLabelColor = Soft, focusedPlaceholderColor = FieldPlaceholder, unfocusedPlaceholderColor = FieldPlaceholder))
-                        Button({ play(input) }, Modifier.padding(start = 8.dp), enabled = input.isNotBlank() && !loading, colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Ink, disabledContainerColor = Color(0xFF5C536E), disabledContentColor = Color(0xFFCBC4D8))) { Text("发送") }
+                    Row(Modifier.fillMaxWidth().imePadding().padding(top = 10.dp).background(GameSurface, RoundedCornerShape(18.dp)).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(input, onInput, enabled = !loading, modifier = Modifier.weight(1f), label = null, placeholder = { Text("自由描述你的行动…") }, minLines = 1, maxLines = 3, keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send), keyboardActions = KeyboardActions(onSend = { play(input) }), colors = OutlinedTextFieldDefaults.colors(focusedTextColor = FieldText, unfocusedTextColor = FieldText, focusedContainerColor = GameSurfaceSoft, unfocusedContainerColor = GameSurfaceSoft, disabledContainerColor = Color(0xAA171827), cursorColor = Accent, focusedBorderColor = FieldFocusedBorder, unfocusedBorderColor = GameStroke, focusedPlaceholderColor = FieldPlaceholder, unfocusedPlaceholderColor = FieldPlaceholder))
+                        Button({ play(input) }, Modifier.padding(start = 8.dp), enabled = input.isNotBlank() && !loading, shape = RoundedCornerShape(13.dp), colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Ink, disabledContainerColor = Color(0xFF5C536E), disabledContentColor = Color(0xFFCBC4D8))) { Text("发送", fontWeight = FontWeight.Bold) }
                     }
                 }
             }
@@ -277,6 +298,7 @@ fun GalgameFullScreen(context: Context, sharedUtils: SharedUtils, onExit: () -> 
     var showPlaytestGuide by remember { mutableStateOf(false) }
     var saves by remember { mutableStateOf(GameStore.loadSaves(context)) }
     var draftToRestore by remember { mutableStateOf(GameStore.loadEditorDraft(context)) }
+    var turnRequestId by remember { mutableIntStateOf(0) }
 
     fun transitionFor(next: GameState, report: ProgressReport?): StoryTransition? = when {
         report?.completion != true || next.endingShown || next.endingContinued -> null
@@ -291,6 +313,7 @@ fun GalgameFullScreen(context: Context, sharedUtils: SharedUtils, onExit: () -> 
         if (loading || value.isBlank() || state.isPlayingLines || state.endingShown || state.pendingTransition != null) return
         val normalized = value.trim().take(500)
         input = ""; loading = true; error = null
+        val requestId = ++turnRequestId
         val before = state
         lastTurn = before
         val playerState = before.copy(messages = before.messages + StoryMessage("你", normalized), choices = emptyList())
@@ -299,9 +322,12 @@ fun GalgameFullScreen(context: Context, sharedUtils: SharedUtils, onExit: () -> 
             val result = DeepSeekClient.reply(before, normalized, assets)
             val response = result.getOrElse { FallbackStory.reply(before, normalized) }
             val prepared = response.copy(chapterTurns = before.chapterTurns + 1, messages = playerState.messages + response.messages.take(1))
+            val needsIndependentJudgement = result.isSuccess && (response.chapterProgress?.completion == true || prepared.chapterTurns % 8 == 0)
+            val judgedProgress = if (needsIndependentJudgement) ProgressJudgeClient.judge(prepared, assets).getOrNull() else null
             Handler(Looper.getMainLooper()).post {
+                if (requestId != turnRequestId) return@post
                 if (result.isFailure) error = "AI 暂时不可用，已使用本地保底剧情。"
-                val progress = response.chapterProgress
+                val progress = judgedProgress ?: response.chapterProgress
                 val acceptedCompletion = progress?.completion == true && prepared.canCompleteCurrentChapter()
                 val shouldSummarize = prepared.chapterTurns % 8 == 0 || acceptedCompletion
                 val memoryAddition = progress?.takeIf { shouldSummarize }?.let {
@@ -389,12 +415,22 @@ fun GalgameFullScreen(context: Context, sharedUtils: SharedUtils, onExit: () -> 
                               )
                           }
                          GameStore.save(context, state); appPage = "workspace"
-                      }, { lastTurn?.let { state = it; lastTurn = null; GameStore.save(context, state) } }, { state = createInitialGameState(state.projectId, state.project); input = ""; lastTurn = null; GameStore.save(context, state) }, { state = state.copy(endingShown = false, endingContinued = true); GameStore.save(context, state) })
+                       }, { turnRequestId++; loading = false; lastTurn?.let { state = it; lastTurn = null; GameStore.save(context, state) } }, { turnRequestId++; loading = false; state = createInitialGameState(state.projectId, state.project); input = ""; lastTurn = null; GameStore.save(context, state) }, { state = state.copy(endingShown = false, endingContinued = true); GameStore.save(context, state) })
                 }
                  when (overlay) {
-                      "more" -> MoreOverlay({ overlay = "history" }, { overlay = "saves" }, { overlay = "debug" }, if (playtestOrigin == "library") "返回游戏库" else "返回编辑器", { if (playtestOrigin == "library") appPage = "library" else screen = "editor"; overlay = null }, { state = createInitialGameState(state.projectId, state.project); input = ""; lastTurn = null; GameStore.save(context, state); overlay = null }, { if (playtestOrigin == "library") appPage = "library" else screen = "editor"; overlay = null })
+                      "more" -> MoreOverlay(
+                          canUndo = !loading && lastTurnAvailable(state) && lastTurn != null,
+                          history = { overlay = "history" },
+                          undo = { turnRequestId++; loading = false; lastTurn?.let { state = it; lastTurn = null; GameStore.save(context, state) }; overlay = null },
+                          saves = { overlay = "saves" },
+                          debug = { overlay = "debug" },
+                          editorLabel = if (playtestOrigin == "library") "退出并返回游戏库" else "退出并返回编辑器",
+                          exit = { turnRequestId++; loading = false; GameStore.save(context, state); if (state.projectId.isNotBlank()) { GameStore.publish(context, GameStore.snapshot(context, state.projectId, state, assets)); library = GameStore.loadLibrary(context) }; if (playtestOrigin == "library") appPage = "library"; screen = "editor"; overlay = null },
+                          reset = { turnRequestId++; loading = false; state = createInitialGameState(state.projectId, state.project); input = ""; lastTurn = null; GameStore.save(context, state); overlay = null },
+                          close = { overlay = null }
+                      )
                      "history" -> HistoryOverlay(state.messages) { overlay = null }
-                     "saves" -> SaveOverlay(saves, { slot -> GameStore.saveSlot(context, slot, state, assets); saves = GameStore.loadSaves(context) }, { slot -> if (GameStore.loadSlot(context, slot, state.projectId)) { state = GameStore.load(context); assets = GameStore.loadAssets(context); lastTurn = null; input = ""; overlay = null } else { error = "该存档不属于当前 Galgame 项目，无法读取。" } }) { overlay = null }
+                      "saves" -> SaveOverlay(saves, { slot -> GameStore.saveSlot(context, slot, state, assets); saves = GameStore.loadSaves(context) }, { slot -> if (GameStore.loadSlot(context, slot, state.projectId)) { turnRequestId++; loading = false; state = GameStore.load(context); assets = GameStore.loadAssets(context); lastTurn = null; input = ""; overlay = null } else { error = "该存档不属于当前 Galgame 项目，无法读取。" } }) { overlay = null }
                     "debug" -> DebugOverlay { overlay = null }
                      "project" -> ProjectEditor(state.project, { config ->
                          val chapterStillExists = config.chapters.any { it.id == state.chapter }
@@ -447,7 +483,7 @@ fun GalgameFullScreen(context: Context, sharedUtils: SharedUtils, onExit: () -> 
         when {
             showPlaytestGuide -> showPlaytestGuide = false
             overlay != null -> overlay = null
-             screen == "game" -> if (playtestOrigin == "library") { appPage = "library"; screen = "editor" } else screen = "editor"
+             screen == "game" -> overlay = "more"
             appPage == "library" -> appPage = "home"
             appPage == "workspace" -> appPage = "home"
             appPage == "home" -> onExit()
@@ -492,6 +528,7 @@ private fun CreationWizard(context: Context, state: GameState, assets: ProjectAs
     var spriteName by remember { mutableStateOf(savedDraft?.pendingSpriteName.orEmpty()) }
     var spriteCondition by remember { mutableStateOf(savedDraft?.pendingSpriteCondition.orEmpty()) }
     var chapterTitle by remember { mutableStateOf(chapters.firstOrNull()?.title.orEmpty()) }
+    var chapterGoal by remember { mutableStateOf(chapters.firstOrNull()?.goal.orEmpty()) }
     var chapterContent by remember { mutableStateOf(chapters.firstOrNull()?.contentDescription.orEmpty()) }
     var chapterEnding by remember { mutableStateOf(chapters.firstOrNull()?.completionHint.orEmpty()) }
     var chapterRequiredFlag by remember { mutableStateOf(chapters.firstOrNull()?.requiredFlag.orEmpty()) }
@@ -513,6 +550,8 @@ private fun CreationWizard(context: Context, state: GameState, assets: ProjectAs
     var previewOffsetY by remember { mutableFloatStateOf(0f) }
     var previewSpriteId by remember { mutableStateOf<String?>(null) }
     var previewBackgroundId by remember { mutableStateOf<String?>(null) }
+    var adjustGlobally by remember { mutableStateOf(false) }
+    var previewSize by remember { mutableStateOf(IntSize.Zero) }
     var playerPicker by remember { mutableStateOf(false) }
     var draftStatus by remember { mutableStateOf("草稿已保存") }
     var showExitConfirm by remember { mutableStateOf(false) }
@@ -533,7 +572,7 @@ private fun CreationWizard(context: Context, state: GameState, assets: ProjectAs
         val currentCharacter = selectedCharacter?.let { id -> CharacterConfig(id, characterName, characterInfo, characterGoal, characterSpeech, characterRelationship, characterSecret, characterTaboos, characterSprites) }
         val draftCharacters = if (currentCharacter != null && currentCharacter.name.isNotBlank()) characters.filterNot { it.id == currentCharacter.id } + currentCharacter else characters
         val chapter = chapters.find { it.id == selectedChapter }
-        val currentChapter = chapter?.copy(title = chapterTitle, contentDescription = chapterContent, openingDescription = chapterOpening, completionHint = chapterEnding, requiredFlag = chapterRequiredFlag, atmosphere = chapterAtmosphere, notes = chapterNotes, spoilers = chapterSpoilers, allowedBackgroundIds = selectedBackgrounds)
+        val currentChapter = chapter?.copy(title = chapterTitle, goal = chapterGoal, contentDescription = chapterContent, openingDescription = chapterOpening, completionHint = chapterEnding, requiredFlag = chapterRequiredFlag, atmosphere = chapterAtmosphere, notes = chapterNotes, spoilers = chapterSpoilers, allowedBackgroundIds = selectedBackgrounds)
         val draftChapters = if (currentChapter != null) chapters.filterNot { it.id == currentChapter.id } + currentChapter else chapters
         val project = state.project.copy(title = title, description = description, style = projectStyle, restrictions = projectRestrictions, playerCharacterId = playerCharacterId, characters = draftCharacters, chapters = draftChapters)
         GameStore.saveEditorDraft(context, step, state.copy(project = project), workingAssets.copy(backgrounds = backgrounds), pendingSpriteUri?.toString().orEmpty(), pendingBackgroundUri?.toString().orEmpty(), spriteName, spriteCondition, backgroundName, backgroundCondition, selectedCharacter.orEmpty(), selectedChapter, selectedSpriteId.orEmpty(), selectedBackgroundId.orEmpty())
@@ -548,8 +587,24 @@ private fun CreationWizard(context: Context, state: GameState, assets: ProjectAs
     }
     fun commitCurrentChapter() {
         val existing = chapters.find { it.id == selectedChapter } ?: ChapterConfig(selectedChapter)
-        val value = existing.copy(title = chapterTitle.trim(), contentDescription = chapterContent.trim(), openingDescription = chapterOpening.trim(), completionHint = chapterEnding.trim(), requiredFlag = chapterRequiredFlag.trim(), atmosphere = chapterAtmosphere.trim(), notes = chapterNotes.trim(), spoilers = chapterSpoilers.trim(), allowedBackgroundIds = selectedBackgrounds)
+        val value = existing.copy(title = chapterTitle.trim(), goal = chapterGoal.trim(), contentDescription = chapterContent.trim(), openingDescription = chapterOpening.trim(), completionHint = chapterEnding.trim(), requiredFlag = chapterRequiredFlag.trim(), atmosphere = chapterAtmosphere.trim(), notes = chapterNotes.trim(), spoilers = chapterSpoilers.trim(), allowedBackgroundIds = selectedBackgrounds)
         chapters = chapters.filterNot { it.id == selectedChapter } + value
+    }
+    fun saveProjectAndContinue() {
+        val allowedIds = (chapters.find { it.id == selectedChapter }?.allowedCharacterIds.orEmpty() + playerCharacterId).filter(String::isNotBlank).distinct()
+        val value = ChapterConfig(selectedChapter, chapterTitle.trim(), chapterGoal.trim(), allowedIds, chapterEnding.trim(), requiredFlag = chapterRequiredFlag.trim(), contentDescription = chapterContent.trim(), allowedBackgroundIds = selectedBackgrounds, openingDescription = chapterOpening.trim(), atmosphere = chapterAtmosphere.trim(), notes = chapterNotes.trim(), spoilers = chapterSpoilers.trim())
+        val finalChapters = (chapters.filterNot { it.id == selectedChapter } + value).sortedBy { it.id }
+        chapters = finalChapters
+        val project = ProjectConfig(title.trim(), description.trim(), projectStyle.trim(), projectRestrictions.trim(), playerCharacterId, characters, finalChapters, state.project.variables, state.project.items, state.project.events)
+        val issues = projectIssues(project, workingAssets)
+        if (issues.isNotEmpty()) { guide = issues.first(); return }
+        draftProject = project
+        saveState(state.copy(project = project))
+        previewScale = workingAssets.globalSpriteScale
+        previewOffsetX = workingAssets.globalSpriteOffsetX
+        previewOffsetY = workingAssets.globalSpriteOffsetY
+        step = 5
+        guide = "项目已保存，请完成统一立绘适配。"
     }
     LaunchedEffect(selectedCharacter) {
         characters.firstOrNull { it.id == selectedCharacter }?.let { character ->
@@ -560,7 +615,7 @@ private fun CreationWizard(context: Context, state: GameState, assets: ProjectAs
     }
     LaunchedEffect(selectedChapter) {
         chapters.firstOrNull { it.id == selectedChapter }?.let { chapter ->
-            chapterTitle = chapter.title; chapterContent = chapter.contentDescription; chapterEnding = chapter.completionHint
+            chapterTitle = chapter.title; chapterGoal = chapter.goal; chapterContent = chapter.contentDescription; chapterEnding = chapter.completionHint
             chapterRequiredFlag = chapter.requiredFlag; chapterOpening = chapter.openingDescription
             chapterAtmosphere = chapter.atmosphere; chapterNotes = chapter.notes; chapterSpoilers = chapter.spoilers
             selectedBackgrounds = chapter.allowedBackgroundIds
@@ -571,7 +626,7 @@ private fun CreationWizard(context: Context, state: GameState, assets: ProjectAs
         if (step > 1) { saveDraftNow(); step-- }
         else requestExit()
     }
-    LaunchedEffect(title, description, projectStyle, projectRestrictions, characters, chapters, playerCharacterId, characterName, characterInfo, characterGoal, characterSpeech, characterRelationship, characterSecret, characterTaboos, characterSprites, chapterTitle, chapterContent, chapterEnding, chapterOpening, chapterAtmosphere, chapterNotes, chapterSpoilers, backgrounds, workingAssets, selectedBackgrounds, pendingSpriteUri, pendingBackgroundUri, spriteName, spriteCondition, backgroundName, backgroundCondition, step) {
+    LaunchedEffect(title, description, projectStyle, projectRestrictions, characters, chapters, playerCharacterId, characterName, characterInfo, characterGoal, characterSpeech, characterRelationship, characterSecret, characterTaboos, characterSprites, chapterTitle, chapterGoal, chapterContent, chapterEnding, chapterOpening, chapterAtmosphere, chapterNotes, chapterSpoilers, backgrounds, workingAssets, selectedBackgrounds, pendingSpriteUri, pendingBackgroundUri, spriteName, spriteCondition, backgroundName, backgroundCondition, step) {
         draftStatus = "正在保存草稿…"
         delay(800)
         saveDraftNow()
@@ -722,8 +777,9 @@ private fun CreationWizard(context: Context, state: GameState, assets: ProjectAs
             4 -> {
                 Text("4. 创建章节", color = Accent, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 Text("每一章只需要写内容、选择出场角色和描述结束条件。", color = Soft, fontSize = 13.sp, modifier = Modifier.padding(vertical = 8.dp))
-                chapters.forEach { chapter -> Text("第${chapter.id}章  ${chapter.title}", color = if (chapter.id == selectedChapter) Accent else Soft, modifier = Modifier.clickable { commitCurrentChapter(); selectedChapter = chapter.id; chapterTitle = chapter.title; chapterContent = chapter.contentDescription; chapterOpening = chapter.openingDescription; chapterEnding = chapter.completionHint; chapterRequiredFlag = chapter.requiredFlag; chapterAtmosphere = chapter.atmosphere; chapterNotes = chapter.notes; chapterSpoilers = chapter.spoilers; selectedBackgrounds = chapter.allowedBackgroundIds }.padding(vertical = 6.dp)) }
+                chapters.forEach { chapter -> Text("第${chapter.id}章  ${chapter.title}", color = if (chapter.id == selectedChapter) Accent else Soft, modifier = Modifier.clickable { commitCurrentChapter(); selectedChapter = chapter.id; chapterTitle = chapter.title; chapterGoal = chapter.goal; chapterContent = chapter.contentDescription; chapterOpening = chapter.openingDescription; chapterEnding = chapter.completionHint; chapterRequiredFlag = chapter.requiredFlag; chapterAtmosphere = chapter.atmosphere; chapterNotes = chapter.notes; chapterSpoilers = chapter.spoilers; selectedBackgrounds = chapter.allowedBackgroundIds }.padding(vertical = 6.dp)) }
                 EditorTextField(chapterTitle, { chapterTitle = it }, "章节名称（必填）", Modifier.fillMaxWidth(), true, placeholder = "例如：雨中的约定")
+                EditorTextField(chapterGoal, { chapterGoal = it }, "章节目标（必填）", Modifier.fillMaxWidth().padding(top = 8.dp), minLines = 3, placeholder = "例如：与绫建立初步信任，并决定一起调查异常信号。", suggestedLength = 500)
                 EditorTextField(chapterContent, { chapterContent = it }, "章节内容（必填）", Modifier.fillMaxWidth().padding(top = 8.dp), minLines = 7, placeholder = "例如：玩家陪绫前往医院处理伤势，途中发现她隐瞒了异常信号的事。", suggestedLength = 2000)
                 EditorTextField(chapterOpening, { chapterOpening = it }, "开场描述（非必填）", Modifier.fillMaxWidth().padding(top = 8.dp), minLines = 4, placeholder = "例如：放学后的天空下起了雨，绫站在校门口。", suggestedLength = 1000)
                 Text("本章出场角色", color = Accent, modifier = Modifier.padding(top = 12.dp))
@@ -753,25 +809,7 @@ private fun CreationWizard(context: Context, state: GameState, assets: ProjectAs
                 EditorTextField(chapterAtmosphere, { chapterAtmosphere = it }, "章节氛围（非必填）", Modifier.fillMaxWidth().padding(top = 8.dp), minLines = 2, placeholder = "例如：安静、克制，带一点暧昧和不安。", suggestedLength = 300)
                 EditorTextField(chapterNotes, { chapterNotes = it }, "本章注意事项（非必填）", Modifier.fillMaxWidth().padding(top = 8.dp), minLines = 2, placeholder = "例如：不要直接揭露信号来源，只能给出暗示。", suggestedLength = 500)
                 EditorTextField(chapterSpoilers, { chapterSpoilers = it }, "本章不可提前揭露内容（非必填）", Modifier.fillMaxWidth().padding(top = 8.dp), minLines = 2, placeholder = "例如：不要说出绫已经知道信号来源。", suggestedLength = 500)
-                Button({
-                    val allowedIds = (chapters.find { it.id == selectedChapter }?.allowedCharacterIds.orEmpty() + playerCharacterId).filter(String::isNotBlank).distinct()
-                    val value = ChapterConfig(selectedChapter, chapterTitle.trim(), chapterContent.trim(), allowedIds, chapterEnding.trim(), requiredFlag = chapterRequiredFlag.trim(), contentDescription = chapterContent.trim(), allowedBackgroundIds = selectedBackgrounds, openingDescription = chapterOpening.trim(), atmosphere = chapterAtmosphere.trim(), notes = chapterNotes.trim(), spoilers = chapterSpoilers.trim())
-                    val finalChapters = (chapters.filterNot { it.id == selectedChapter } + value).sortedBy { it.id }
-                    chapters = finalChapters
-                    val project = ProjectConfig(title.trim(), description.trim(), projectStyle.trim(), projectRestrictions.trim(), playerCharacterId, characters, finalChapters, state.project.variables, state.project.items, state.project.events)
-                    val issues = projectIssues(project, workingAssets)
-                    if (issues.isNotEmpty()) { guide = issues.first(); return@Button }
-                    val first = project.chapters.minByOrNull { it.id }
-                    val opening = first?.openingDescription?.takeIf { it.isNotBlank() } ?: first?.contentDescription?.takeIf { it.isNotBlank() } ?: "故事开始了。"
-                    draftProject = project
-                    saveState(state.copy(project = project))
-                    previewScale = workingAssets.globalSpriteScale
-                    previewOffsetX = workingAssets.globalSpriteOffsetX
-                    previewOffsetY = workingAssets.globalSpriteOffsetY
-                    step = 5
-                    guide = "项目已保存，请完成统一立绘适配。"
-                }, Modifier.fillMaxWidth().padding(top = 14.dp), colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Ink)) { Text("保存项目并继续适配", fontWeight = FontWeight.Bold) }
-                 OutlinedButton({ val id = (chapters.maxOfOrNull { it.id } ?: 0) + 1; chapters = chapters + ChapterConfig(id); selectedChapter = id; chapterTitle = ""; chapterContent = ""; chapterOpening = ""; chapterEnding = ""; chapterRequiredFlag = ""; chapterAtmosphere = ""; chapterNotes = ""; chapterSpoilers = ""; selectedBackgrounds = emptyList() }, Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("新增章节") }
+                 OutlinedButton({ val id = (chapters.maxOfOrNull { it.id } ?: 0) + 1; chapters = chapters + ChapterConfig(id); selectedChapter = id; chapterTitle = ""; chapterGoal = ""; chapterContent = ""; chapterOpening = ""; chapterEnding = ""; chapterRequiredFlag = ""; chapterAtmosphere = ""; chapterNotes = ""; chapterSpoilers = ""; selectedBackgrounds = emptyList() }, Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("新增章节") }
             }
             5 -> {
                 val availableSprites = draftProject.characters.flatMap { it.sprites }.mapNotNull { ref -> workingAssets.sprites.find { it.id == ref.assetId } }
@@ -800,28 +838,60 @@ private fun CreationWizard(context: Context, state: GameState, assets: ProjectAs
                             }
                         }
                     }
-                    Box(Modifier.fillMaxWidth().aspectRatio(9f / 16f).clipToBounds().background(Color(0xFF303044)), contentAlignment = Alignment.BottomCenter) {
+                    Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(adjustGlobally, { adjustGlobally = true }, label = { Text("全局调整") })
+                        FilterChip(!adjustGlobally, { adjustGlobally = false }, label = { Text("当前立绘") })
+                        Text(if (adjustGlobally) "拖动或双指缩放会影响全部立绘" else "拖动或双指缩放只影响当前立绘", color = Soft, fontSize = 11.sp, modifier = Modifier.weight(1f).padding(top = 8.dp))
+                    }
+                    Box(
+                        Modifier.fillMaxWidth().aspectRatio(9f / 16f).clipToBounds().background(Color(0xFF303044))
+                            .onSizeChanged { previewSize = it }
+                            .pointerInput(exampleSprite.id, adjustGlobally, previewSize) {
+                                detectTransformGestures { _, pan, zoom, _ ->
+                                    val xUnit = previewSize.width.coerceAtLeast(1) / 2f
+                                    val yUnit = previewSize.height.coerceAtLeast(1) / 2f
+                                    if (adjustGlobally) {
+                                        previewScale = (previewScale * zoom).coerceIn(.35f, 2.5f)
+                                        previewOffsetX = (previewOffsetX + pan.x / xUnit).coerceIn(-1f, 1f)
+                                        previewOffsetY = (previewOffsetY + pan.y / yUnit).coerceIn(-2f, 2f)
+                                    } else {
+                                        workingAssets = workingAssets.copy(sprites = workingAssets.sprites.map { asset ->
+                                            if (asset.id == exampleSprite.id) asset.copy(
+                                                scale = (asset.scale * zoom).coerceIn(.05f, 6f),
+                                                offsetX = (asset.offsetX + pan.x / xUnit).coerceIn(-4f, 4f),
+                                                offsetY = (asset.offsetY + pan.y / yUnit).coerceIn(-4f, 4f)
+                                            ) else asset
+                                        })
+                                    }
+                                }
+                            },
+                        contentAlignment = Alignment.BottomCenter
+                    ) {
                         exampleBackground?.let { background -> LoadBitmap(background.uri)?.let { bitmap -> Image(bitmap.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) } }
                         LoadBitmap(exampleSprite.uri)?.let { bitmap -> Image(bitmap.asImageBitmap(), null, Modifier.fillMaxHeight(.9f).graphicsLayer(scaleX = exampleSprite.scale * previewScale, scaleY = exampleSprite.scale * previewScale, translationX = (exampleSprite.offsetX + previewOffsetX) * 180f, translationY = (exampleSprite.offsetY + previewOffsetY) * 180f), contentScale = ContentScale.Fit) }
-                        Text("示例：${exampleSprite.name}", color = Color.White, fontSize = 12.sp, modifier = Modifier.align(Alignment.TopStart).padding(8.dp))
+                        Text("${if (adjustGlobally) "全局" else "当前立绘"}：拖动移动，双指缩放", color = Color.White, fontSize = 12.sp, modifier = Modifier.align(Alignment.TopStart).background(Color(0x99000000), RoundedCornerShape(8.dp)).padding(8.dp))
                     }
-                    Text("全局大小 ${"%.2f".format(previewScale)}", color = Accent, modifier = Modifier.padding(top = 14.dp))
-                    Slider(previewScale, { previewScale = it }, valueRange = .35f..2.5f)
-                    Text("全局左右位置", color = Accent)
-                    Slider(previewOffsetX, { previewOffsetX = it }, valueRange = -1f..1f)
-                    Text("全局上下位置", color = Accent)
-                    Slider(previewOffsetY, { previewOffsetY = it }, valueRange = -2f..2f)
-                    Text("当前立绘微调：${exampleSprite.name}", color = Accent, modifier = Modifier.padding(top = 12.dp))
-                    Text("当前大小 ${"%.2f".format(exampleSprite.scale)}", color = Soft)
-                    Slider(exampleSprite.scale, { value -> workingAssets = workingAssets.copy(sprites = workingAssets.sprites.map { if (it.id == exampleSprite.id) it.copy(scale = value) else it }) }, valueRange = .05f..6f)
-                    Text("当前左右位置", color = Soft)
-                    Slider(exampleSprite.offsetX, { value -> workingAssets = workingAssets.copy(sprites = workingAssets.sprites.map { if (it.id == exampleSprite.id) it.copy(offsetX = value) else it }) }, valueRange = -4f..4f)
-                    Text("当前上下位置", color = Soft)
-                    Slider(exampleSprite.offsetY, { value -> workingAssets = workingAssets.copy(sprites = workingAssets.sprites.map { if (it.id == exampleSprite.id) it.copy(offsetY = value) else it }) }, valueRange = -4f..4f)
-                    OutlinedButton({
-                        val bitmap = runCatching { context.contentResolver.openInputStream(Uri.parse(exampleSprite.uri)).use { BitmapFactory.decodeStream(it) } }.getOrNull()
-                        bitmap?.let { auto -> workingAssets = workingAssets.copy(sprites = workingAssets.sprites.map { if (it.id == exampleSprite.id) it.copy(scale = autoSpriteScale(auto), offsetX = 0f, offsetY = 0f) else it }) }
-                    }, Modifier.fillMaxWidth()) { Text("恢复当前立绘自动适配") }
+                    if (adjustGlobally) {
+                        Text("全局大小 ${"%.2f".format(previewScale)}", color = Accent, modifier = Modifier.padding(top = 14.dp))
+                        Slider(previewScale, { previewScale = it }, valueRange = .35f..2.5f)
+                        Text("全局左右位置", color = Accent)
+                        Slider(previewOffsetX, { previewOffsetX = it }, valueRange = -1f..1f)
+                        Text("全局上下位置", color = Accent)
+                        Slider(previewOffsetY, { previewOffsetY = it }, valueRange = -2f..2f)
+                        OutlinedButton({ previewScale = 1f; previewOffsetX = 0f; previewOffsetY = 0f }, Modifier.fillMaxWidth()) { Text("恢复全局默认位置") }
+                    } else {
+                        Text("当前立绘微调：${exampleSprite.name}", color = Accent, modifier = Modifier.padding(top = 12.dp))
+                        Text("当前大小 ${"%.2f".format(exampleSprite.scale)}", color = Soft)
+                        Slider(exampleSprite.scale, { value -> workingAssets = workingAssets.copy(sprites = workingAssets.sprites.map { if (it.id == exampleSprite.id) it.copy(scale = value) else it }) }, valueRange = .05f..6f)
+                        Text("当前左右位置", color = Soft)
+                        Slider(exampleSprite.offsetX, { value -> workingAssets = workingAssets.copy(sprites = workingAssets.sprites.map { if (it.id == exampleSprite.id) it.copy(offsetX = value) else it }) }, valueRange = -4f..4f)
+                        Text("当前上下位置", color = Soft)
+                        Slider(exampleSprite.offsetY, { value -> workingAssets = workingAssets.copy(sprites = workingAssets.sprites.map { if (it.id == exampleSprite.id) it.copy(offsetY = value) else it }) }, valueRange = -4f..4f)
+                        OutlinedButton({
+                            val bitmap = runCatching { context.contentResolver.openInputStream(Uri.parse(exampleSprite.uri)).use { BitmapFactory.decodeStream(it) } }.getOrNull()
+                            bitmap?.let { auto -> workingAssets = workingAssets.copy(sprites = workingAssets.sprites.map { if (it.id == exampleSprite.id) it.copy(scale = autoSpriteScale(auto), offsetX = 0f, offsetY = 0f) else it }) }
+                        }, Modifier.fillMaxWidth()) { Text("恢复当前立绘自动适配") }
+                    }
                     Button({
                          val adjustedAssets = workingAssets.copy(globalSpriteScale = previewScale, globalSpriteOffsetX = previewOffsetX, globalSpriteOffsetY = previewOffsetY)
                          workingAssets = adjustedAssets; saveAssets(adjustedAssets)
@@ -844,8 +914,9 @@ private fun CreationWizard(context: Context, state: GameState, assets: ProjectAs
                         else if (characters.isNotEmpty()) step++
                     }
                     step == 3 -> step++
+                    step == 4 -> saveProjectAndContinue()
                 }
-            }) { Text("下一步") }
+            }) { Text(if (step == 4) "保存章节并继续适配" else "下一步") }
         }
          if (playerPicker) AlertDialog(onDismissRequest = { playerPicker = false }, title = { Text("选择玩家角色") }, text = { Column { Text("请选择你要扮演的角色。该角色会自动加入每一章，AI 不会替他/她发言。"); characters.forEach { character -> Text(character.name.ifBlank { "未命名角色" }, color = Accent, modifier = Modifier.fillMaxWidth().clickable { val oldPlayerId = playerCharacterId; playerCharacterId = character.id; chapters = chapters.map { chapter -> chapter.copy(allowedCharacterIds = chapter.allowedCharacterIds.filterNot { it == oldPlayerId }.plus(character.id).distinct()) }; playerPicker = false; step++ }.padding(vertical = 10.dp)) } } }, confirmButton = {}, dismissButton = { OutlinedButton({ playerPicker = false }) { Text("取消") } })
         if (showExitConfirm) AlertDialog(
@@ -1000,26 +1071,37 @@ private fun LinePlayer(state: GameState, assets: ProjectAssets, advance: (GameSt
     }
 }
 
-@Composable private fun LoadingRow() = Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.Center) { CircularProgressIndicator(color = Accent, modifier = Modifier.size(22.dp)); Spacer(Modifier.width(10.dp)); Text("正在生成剧情……", color = Soft) }
+@Composable private fun LoadingRow() = Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) { CircularProgressIndicator(color = Accent, modifier = Modifier.size(20.dp), strokeWidth = 2.dp); Spacer(Modifier.width(10.dp)); Text("剧情正在展开…", color = Soft, fontSize = 13.sp) }
 @Composable private fun TransitionCard(transition: StoryTransition, continueAction: () -> Unit) { Column(Modifier.fillMaxWidth().background(Color(0xE63A315B), RoundedCornerShape(18.dp)).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) { Text(transition.title, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold); Text(transition.subtitle, color = Soft, modifier = Modifier.padding(vertical = 12.dp)); Button(continueAction, colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Ink)) { Text("继续") } } }
 @Composable private fun EndingCard(replay: () -> Unit, continueStory: () -> Unit) { Column(Modifier.fillMaxWidth().background(Color(0xE63A315B), RoundedCornerShape(18.dp)).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) { Text("故事已完结", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold); Text("你可以重新体验，也可以继续停留在结局之后。", color = Soft, modifier = Modifier.padding(vertical = 12.dp)); Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { Button(replay, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF383651))) { Text("重新开始") }; Button(continueStory, colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Ink)) { Text("继续游玩") } } } }
-@Composable private fun MoreOverlay(history: () -> Unit, saves: () -> Unit, debug: () -> Unit, editorLabel: String, exit: () -> Unit, reset: () -> Unit, close: () -> Unit) {
+@Composable private fun MoreOverlay(canUndo: Boolean, history: () -> Unit, undo: () -> Unit, saves: () -> Unit, debug: () -> Unit, editorLabel: String, exit: () -> Unit, reset: () -> Unit, close: () -> Unit) {
     var confirmReset by remember { mutableStateOf(false) }
-    Box(Modifier.fillMaxSize().background(Color(0xF9141522)).padding(24.dp)) {
-        Column(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(18.dp)).padding(20.dp)) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text("更多设置", color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f)); Text("关闭", color = Accent, modifier = Modifier.clickable(onClick = close).padding(8.dp)) }
-            Button({ history() }, Modifier.fillMaxWidth()) { Text("对话历史") }
-            Button({ saves() }, Modifier.fillMaxWidth()) { Text("存档与读档") }
-            Button({ exit() }, Modifier.fillMaxWidth()) { Text(editorLabel) }
-            OutlinedButton({ debug() }, Modifier.fillMaxWidth()) { Text("调试信息") }
-            OutlinedButton({ confirmReset = true }, Modifier.fillMaxWidth()) { Text("重新开始") }
+    var confirmExit by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().background(Color(0xF20B0C16)).padding(20.dp)) {
+        Column(Modifier.fillMaxWidth().align(Alignment.Center).background(Color(0xFF1B1A2B), RoundedCornerShape(24.dp)).padding(20.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("游戏菜单", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    Text("当前进度会自动保存在本机。", color = Soft, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
+                }
+                Text("关闭", color = Accent, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.clickable(onClick = close).padding(10.dp))
+            }
+            Spacer(Modifier.height(10.dp))
+            MenuAction("查看对话历史", "回顾本局已经发生的内容", history)
+            MenuAction("撤回到上回合", if (canUndo) "撤销本次玩家输入与剧情结果" else "当前没有可撤回的回合", undo, enabled = canUndo)
+            MenuAction("存档与读档", "保存当前进度或读取存档", saves)
+            MenuAction("重新开始", "清除本次游玩进度，从开场开始", { confirmReset = true }, danger = true)
+            MenuAction("查看调试信息", "查看 AI 请求、响应与解析日志", debug)
+            MenuAction(editorLabel, "退出本次试玩并保留当前进度", { confirmExit = true }, danger = true)
         }
     }
     if (confirmReset) AlertDialog(onDismissRequest = { confirmReset = false }, title = { Text("重新开始游戏？") }, text = { Text("当前游玩进度、对话和剧情状态将被清除，但项目编辑内容不会丢失。") }, confirmButton = { Button({ confirmReset = false; reset() }) { Text("重新开始") } }, dismissButton = { OutlinedButton({ confirmReset = false }) { Text("取消") } })
+    if (confirmExit) AlertDialog(onDismissRequest = { confirmExit = false }, title = { Text("退出本次试玩？") }, text = { Text("当前进度已自动保存。退出后可从对应入口继续游玩。") }, confirmButton = { Button({ confirmExit = false; exit() }) { Text("确认退出") } }, dismissButton = { OutlinedButton({ confirmExit = false }) { Text("继续游玩") } })
 }
-@Composable private fun DialoguePanel(state: GameState) = Column(Modifier.fillMaxWidth().background(Color(0xD9141522), RoundedCornerShape(18.dp)).padding(horizontal = 18.dp, vertical = 14.dp)) { state.messages.takeLast(2).forEach { Text(it.speaker, color = Accent, fontWeight = FontWeight.Bold, fontSize = 14.sp); Text(it.text, color = Color.White, fontSize = 17.sp, lineHeight = 25.sp, modifier = Modifier.padding(bottom = 7.dp)) } }
-@Composable private fun CompactDialoguePanel(state: GameState) = Column(Modifier.fillMaxWidth().heightIn(max = 150.dp).verticalScroll(rememberScrollState()).background(Color(0xD9141522), RoundedCornerShape(16.dp)).padding(horizontal = 14.dp, vertical = 10.dp)) { state.messages.takeLast(2).forEach { Text(it.speaker, color = Accent, fontWeight = FontWeight.Bold, fontSize = 12.sp); Text(it.text, color = Color.White, fontSize = 14.sp, lineHeight = 19.sp, modifier = Modifier.padding(bottom = 6.dp)) } }
-@Composable private fun HistoryOverlay(messages: List<StoryMessage>, close: () -> Unit) = Box(Modifier.fillMaxSize().background(Color(0xE9141522)).clickable(onClick = close).padding(24.dp)) { Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) { Text("对话历史", color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.Bold); Text("只显示文字记录，点击空白处关闭", color = Soft, fontSize = 12.sp, modifier = Modifier.padding(vertical = 8.dp)); messages.forEach { Text(it.speaker, color = Accent, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp)); Text(it.text, color = Color.White, lineHeight = 21.sp) } } }
+@Composable private fun MenuAction(title: String, description: String, onClick: () -> Unit, enabled: Boolean = true, danger: Boolean = false) = TextButton(onClick, Modifier.fillMaxWidth().padding(vertical = 3.dp), enabled = enabled, shape = RoundedCornerShape(16.dp), colors = ButtonDefaults.textButtonColors(contentColor = if (danger) GameError else Color.White, disabledContentColor = Soft.copy(alpha = .45f))) { Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) { Text(title, fontSize = 16.sp, fontWeight = FontWeight.SemiBold); Text(description, color = if (enabled) Soft else Soft.copy(alpha = .55f), fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp)) } }
+@Composable private fun DialoguePanel(state: GameState) = Column(Modifier.fillMaxWidth().background(GameSurface, RoundedCornerShape(20.dp)).padding(horizontal = 20.dp, vertical = 16.dp)) { state.messages.takeLast(2).forEach { Text(it.speaker, color = Accent, fontWeight = FontWeight.Bold, fontSize = 13.sp); Text(it.text, color = Color.White, fontSize = 17.sp, lineHeight = 27.sp, modifier = Modifier.padding(top = 3.dp, bottom = 11.dp)) } }
+@Composable private fun CompactDialoguePanel(state: GameState) = Column(Modifier.fillMaxWidth().heightIn(max = 150.dp).verticalScroll(rememberScrollState()).background(GameSurface, RoundedCornerShape(18.dp)).padding(horizontal = 16.dp, vertical = 12.dp)) { state.messages.takeLast(2).forEach { Text(it.speaker, color = Accent, fontWeight = FontWeight.Bold, fontSize = 12.sp); Text(it.text, color = Color.White, fontSize = 14.sp, lineHeight = 21.sp, modifier = Modifier.padding(top = 2.dp, bottom = 8.dp)) } }
+@Composable private fun HistoryOverlay(messages: List<StoryMessage>, close: () -> Unit) = Box(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().background(Color(0xF9141522)).padding(20.dp)) { Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) { Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Text("对话历史", color = Color.White, fontSize = 23.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f)); Text("关闭", color = Accent, modifier = Modifier.clickable(onClick = close).padding(8.dp)) }; Text("本局已发生的对话会保留在这里。", color = Soft, fontSize = 12.sp, modifier = Modifier.padding(vertical = 8.dp)); messages.forEach { Text(it.speaker, color = Accent, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp)); Text(it.text, color = Color.White, lineHeight = 21.sp) } } }
 
 @Composable
 private fun SaveOverlay(saves: List<SaveSlot>, save: (Int) -> Unit, load: (SaveSlot) -> Unit, close: () -> Unit) {
@@ -1113,13 +1195,14 @@ private fun ProjectEditor(config: ProjectConfig, save: (ProjectConfig) -> Unit, 
     var characterName by remember(config) { mutableStateOf("") }
     var characterText by remember(config) { mutableStateOf("") }
     var chapterTitle by remember(config) { mutableStateOf("") }
+    var chapterGoal by remember(config) { mutableStateOf("") }
     var chapterText by remember(config) { mutableStateOf("") }
     var completionText by remember(config) { mutableStateOf("") }
     var status by remember { mutableStateOf<String?>(null) }
     val selected = chapters.find { it.id == selectedChapter }
     val selectedChar = characters.find { it.id == selectedCharacter }
     LaunchedEffect(selectedChapter) {
-        chapterTitle = selected?.title.orEmpty(); chapterText = selected?.contentDescription.orEmpty(); completionText = selected?.completionHint.orEmpty()
+        chapterTitle = selected?.title.orEmpty(); chapterGoal = selected?.goal.orEmpty(); chapterText = selected?.contentDescription.orEmpty(); completionText = selected?.completionHint.orEmpty()
     }
     LaunchedEffect(selectedCharacter) { characterName = selectedChar?.name.orEmpty(); characterText = selectedChar?.personality.orEmpty() }
     Box(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding().background(Color(0xF9141522)).padding(18.dp)) {
@@ -1153,16 +1236,17 @@ private fun ProjectEditor(config: ProjectConfig, save: (ProjectConfig) -> Unit, 
             Text("章节", color = Accent, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 18.dp))
             chapters.forEach { chapter -> Text("第 ${chapter.id} 章  ${chapter.title.ifBlank { "未命名章节" }}", color = if (chapter.id == selectedChapter) Accent else Soft, modifier = Modifier.clickable { selectedChapter = chapter.id }.padding(vertical = 5.dp)) }
             EditorTextField(chapterTitle, { chapterTitle = it.take(60) }, "章节名称，例如：第一章", Modifier.fillMaxWidth().padding(top = 8.dp), singleLine = true)
+            EditorTextField(chapterGoal, { chapterGoal = it.take(500) }, "这一章的目标是什么？", Modifier.fillMaxWidth().padding(top = 8.dp), minLines = 3)
             EditorTextField(chapterText, { chapterText = it.take(1000) }, "这一章想发生什么？", Modifier.fillMaxWidth().padding(top = 8.dp), minLines = 5)
             EditorTextField(completionText, { completionText = it.take(500) }, "这一章怎样算完成？用一句话描述", Modifier.fillMaxWidth().padding(top = 8.dp), minLines = 3)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
                 Button({
                     val id = selectedChapter
                     val old = chapters.firstOrNull { it.id == id } ?: ChapterConfig(id)
-                    val value = old.copy(title = chapterTitle.trim(), goal = old.goal, contentDescription = chapterText.trim(), allowedCharacterIds = characters.map { it.id }, completionHint = completionText.trim())
+                    val value = old.copy(title = chapterTitle.trim(), goal = chapterGoal.trim(), contentDescription = chapterText.trim(), allowedCharacterIds = characters.map { it.id }, completionHint = completionText.trim())
                     chapters = (chapters.filterNot { it.id == id } + value).sortedBy { it.id }; status = "章节已保存。"
                 }) { Text("保存章节") }
-                OutlinedButton({ val id = (chapters.maxOfOrNull { it.id } ?: 0) + 1; chapters = chapters + ChapterConfig(id); selectedChapter = id; chapterTitle = ""; chapterText = ""; completionText = "" }) { Text("添加章节") }
+                OutlinedButton({ val id = (chapters.maxOfOrNull { it.id } ?: 0) + 1; chapters = chapters + ChapterConfig(id); selectedChapter = id; chapterTitle = ""; chapterGoal = ""; chapterText = ""; completionText = "" }) { Text("添加章节") }
                 OutlinedButton({ if (chapters.size > 1) { chapters = chapters.filterNot { it.id == selectedChapter }; selectedChapter = chapters.first().id; status = "章节已删除。" } else status = "至少保留一个章节。" }) { Text("删除") }
             }
             status?.let { Text(it, color = Accent, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp)) }

@@ -12,6 +12,27 @@ import com.rhodes.privatechat.shared.model.SharedExperience
 import kotlinx.serialization.Serializable
 import java.io.InputStream
 
+/** User-facing backup categories. Dependent categories are normalized before use. */
+data class BackupContentSelection(
+    val roles: Boolean = true,
+    val chats: Boolean = true,
+    val memories: Boolean = true,
+    val social: Boolean = true,
+    val knowledgeBases: Boolean = true,
+    val extras: Boolean = true,
+    val settings: Boolean = true,
+    val media: Boolean = true,
+) {
+    fun normalized(): BackupContentSelection = copy(
+        roles = roles || chats || memories || social || knowledgeBases || extras,
+        chats = chats || memories,
+    )
+
+    fun selectedCategoryCount(): Int = listOf(roles, chats, memories, social, knowledgeBases, extras, settings, media).count { it }
+
+    companion object { val All = BackupContentSelection() }
+}
+
 @Serializable
 data class BackupManifest(
     val format: String,
@@ -69,6 +90,7 @@ data class BackupArchive(
 
 data class BackupRestoreOptions(
     val skipIssueCodes: Set<String> = emptySet(),
+    val contentSelection: BackupContentSelection = BackupContentSelection.All,
 )
 
 data class BackupIssue(

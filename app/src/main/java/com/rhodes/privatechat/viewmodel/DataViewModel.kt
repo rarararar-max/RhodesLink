@@ -39,28 +39,26 @@ class DataViewModel(
         dispatches = repository.getHistoryDispatches().size
     )
 
-    fun cleanupAllExpired() {
-        scope.launch {
-            val now = System.currentTimeMillis()
-            val msgDays = settings.cleanDaysMessages
-            if (msgDays > 0) repository.deleteOldMessages(now - msgDays * 86400000L)
-            val diaryDays = settings.cleanDaysDiaries
-            if (diaryDays > 0) repository.deleteOldDiaries(now - diaryDays * 86400000L)
-            val momentDays = settings.cleanDaysMoments
-            // Moments and comments share one retention control in the current product UI.
-            if (momentDays > 0) repository.deleteExpiredSocialContent(
-                momentCutoff = if (momentDays > 0) now - momentDays * 86400000L else null,
-                commentCutoff = now - momentDays * 86400000L,
-                userName = settings.userName,
-            )
-            val dispatchDays = settings.cleanDaysDispatches
-            if (dispatchDays > 0) repository.deleteOldDispatches(now - dispatchDays * 86400000L)
-            val anchorDays = settings.cleanDaysAnchors
-            if (anchorDays > 0) repository.deleteOldAnchors(now - anchorDays * 86400000L)
-            if (now - lastCleanupLogAt > 5_000L) {
-                DebugLogger.log("Data/Cleanup", "清理过期数据: messages=${msgDays}天, anchors=${anchorDays}天, diaries=${diaryDays}天, moments=${momentDays}天, dispatches=${dispatchDays}天")
-                lastCleanupLogAt = now
-            }
+    suspend fun cleanupAllExpired() {
+        val now = System.currentTimeMillis()
+        val msgDays = settings.cleanDaysMessages
+        if (msgDays > 0) repository.deleteOldMessages(now - msgDays * 86400000L)
+        val diaryDays = settings.cleanDaysDiaries
+        if (diaryDays > 0) repository.deleteOldDiaries(now - diaryDays * 86400000L)
+        val momentDays = settings.cleanDaysMoments
+        // Moments and comments share one retention control in the current product UI.
+        if (momentDays > 0) repository.deleteExpiredSocialContent(
+            momentCutoff = now - momentDays * 86400000L,
+            commentCutoff = now - momentDays * 86400000L,
+            userName = settings.userName,
+        )
+        val dispatchDays = settings.cleanDaysDispatches
+        if (dispatchDays > 0) repository.deleteOldDispatches(now - dispatchDays * 86400000L)
+        val anchorDays = settings.cleanDaysAnchors
+        if (anchorDays > 0) repository.deleteOldAnchors(now - anchorDays * 86400000L)
+        if (now - lastCleanupLogAt > 5_000L) {
+            DebugLogger.log("Data/Cleanup", "清理过期数据: messages=${msgDays}天, anchors=${anchorDays}天, diaries=${diaryDays}天, moments=${momentDays}天, dispatches=${dispatchDays}天")
+            lastCleanupLogAt = now
         }
     }
 

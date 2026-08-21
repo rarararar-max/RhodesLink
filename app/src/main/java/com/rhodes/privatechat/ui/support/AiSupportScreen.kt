@@ -82,7 +82,6 @@ fun AiSupportScreen(onBack: () -> Unit, viewModel: AiSupportViewModel = koinView
     val messages by viewModel.messages.collectAsState()
     val busy by viewModel.busy.collectAsState()
     val manualReady by viewModel.manualReady.collectAsState()
-    val notice by viewModel.notice.collectAsState()
     val remote by viewModel.remoteConfirmation.collectAsState()
     val currentAgent by viewModel.currentAgent.collectAsState()
     val settings: SettingsRepository = koinInject()
@@ -118,7 +117,8 @@ fun AiSupportScreen(onBack: () -> Unit, viewModel: AiSupportViewModel = koinView
                                 text = viewModel.greeting()
                             ),
                             agent = currentAgent,
-                            userAvatarUri = settings.userAvatarUri
+                            userAvatarUri = settings.userAvatarUri,
+                            onClaimRedPacket = viewModel::claimRedPacket
                         )
                     }
                 }
@@ -128,22 +128,17 @@ fun AiSupportScreen(onBack: () -> Unit, viewModel: AiSupportViewModel = koinView
                         SupportBubble(
                             message = message,
                             agent = currentAgent,
-                            userAvatarUri = settings.userAvatarUri
+                            userAvatarUri = settings.userAvatarUri,
+                            onClaimRedPacket = viewModel::claimRedPacket
                         )
                     }
                 }
             }
-            if (notice.isNotBlank()) Text(notice, fontSize = 11.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp))
             if (pendingImageUri.isNotBlank()) Row(Modifier.fillMaxWidth().background(ElevatedSurface).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 AsyncImage(model = pendingImageUri, contentDescription = "待发送图片", modifier = Modifier.size(64.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
                 Text("图片待发送", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
                 TextButton(onClick = { pendingImageUri = "" }) { Text("移除", color = ErrorRed) }
             }
-            if (busy) Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = viewModel::cancelRequest) { Text("停止", color = Primary) }
-            }
-            if (busy) Text("正在检索产品说明并请求模型…", fontSize = 11.sp, color = Primary, modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp))
-            if (!manualReady) Text("正在准备客服说明，请稍候…", fontSize = 11.sp, color = Primary, modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp))
             AiSupportInput(input = input, hasPendingImage = pendingImageUri.isNotBlank(), busy = busy || !manualReady, onInputChange = { input = it }, onSubmit = { question ->
                 val imageUri = pendingImageUri
                 pendingImageUri = ""
@@ -246,7 +241,7 @@ fun AiSupportInput(input: String, hasPendingImage: Boolean = false, busy: Boolea
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun SupportBubble(message: AiSupportMessage, agent: AgentProfile, userAvatarUri: String) {
+private fun SupportBubble(message: AiSupportMessage, agent: AgentProfile, userAvatarUri: String, onClaimRedPacket: (Long) -> Int = { 0 }) {
     val isMe = message.role == "user"
     val messageAgent = AgentProfiles.byId(message.agentId.ifBlank { agent.id })
     val context = LocalContext.current
@@ -274,6 +269,10 @@ private fun SupportBubble(message: AiSupportMessage, agent: AgentProfile, userAv
                             .background(if (isMe) BubbleMine else BubbleOther, RoundedCornerShape(if (isMe) 16.dp else 16.dp, if (isMe) 4.dp else 16.dp, if (isMe) 16.dp else 16.dp, if (isMe) 16.dp else 4.dp))
                             .padding(10.dp)
                     )
+                    if (!isMe && message.redPacketAmount > 0) {
+                        Spacer(Modifier.height(6.dp))
+                        SupportRedPacket(message = message, onClaim = onClaimRedPacket)
+                    }
                     DropdownMenu(expanded = showCopyMenu, onDismissRequest = { showCopyMenu = false }) {
                         DropdownMenuItem(
                             text = { Row { Icon(Icons.Default.ContentCopy, null, tint = TextPrimary, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text("复制", color = TextPrimary) } },
@@ -286,13 +285,39 @@ private fun SupportBubble(message: AiSupportMessage, agent: AgentProfile, userAv
                         )
                     }
                 }
-                message.sources.forEach { Text(it, fontSize = 10.sp, color = TextTertiary, modifier = Modifier.padding(top = 2.dp)) }
             }
             if (isMe) {
                 Spacer(Modifier.width(8.dp))
                 UserAvatar(avatarUri = userAvatarUri)
             }
         }
+    }
+}
+
+@Composable
+private fun SupportRedPacket(message: AiSupportMessage, onClaim: (Long) -> Int) {
+    val context = LocalContext.current
+    val claimed = message.redPacketClaimed
+    Column(
+        modifier = Modifier
+            .width(210.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (claimed) Color(0xFF8B8B8B) else Color(0xFFD84A3D))
+            .clickable(enabled = !claimed) {
+                val amount = onClaim(message.id)
+                if (amount > 0) Toast.makeText(context, "获得 $amount 龙门币", Toast.LENGTH_SHORT).show()
+            }
+            .padding(14.dp)
+    ) {
+        Text(if (claimed) "已领取" else "客服的小红包", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            if (claimed) "获得 ${message.redPacketAmount} 龙门币" else "点击领取 ${message.redPacketAmount} 龙门币",
+            color = Color.White.copy(alpha = 0.9f),
+            fontSize = 13.sp
+        )
+        Spacer(Modifier.height(8.dp))
+        Text("今天打工赚的钱，分你一点。", color = Color.White.copy(alpha = 0.75f), fontSize = 11.sp)
     }
 }
 

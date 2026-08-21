@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Card as MaterialCard
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -62,6 +63,8 @@ import com.rhodes.privatechat.data.backup.OperatorImportMode
 import com.rhodes.privatechat.data.backup.ReadableChatExporter
 import com.rhodes.privatechat.data.backup.BackupRestoreCoordinator
 import com.rhodes.privatechat.data.backup.BackupRestoreProgress
+import com.rhodes.privatechat.data.backup.BackupContentFilter
+import com.rhodes.privatechat.data.backup.BackupContentSelection
 import com.rhodes.privatechat.data.backup.RestoreDatabaseExecutor
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import com.rhodes.privatechat.shared.data.ChatRepository
@@ -106,6 +109,10 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     var selectingUpdateTarget by remember { mutableStateOf(false) }
     var operatorImportMode by remember { mutableStateOf(OperatorImportMode.FULL_REPLACE) }
     var includeBackupMedia by remember { mutableStateOf(true) }
+    var backupSelection by remember { mutableStateOf(BackupContentSelection.All) }
+    var restoreSelection by remember { mutableStateOf(BackupContentSelection.All) }
+    var showBackupSelection by remember { mutableStateOf(false) }
+    var showRestoreSelection by remember { mutableStateOf(false) }
     var pendingSafetyExport by remember { mutableStateOf<java.io.File?>(null) }
     val writer = remember { BackupFileWriter(appVersion(context), schemaVersion = 1) }
     val reader = remember { BackupFileReader() }
@@ -117,7 +124,7 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             progressDialog = "正在整理数据和图片"
             runCatching {
                 withContext(Dispatchers.IO) {
-                    val snapshot = BackupSnapshotBuilder(repository, settings).build()
+                    val snapshot = BackupContentFilter.apply(BackupSnapshotBuilder(repository, settings).build(), backupSelection)
                     val (payload, media) = if (includeBackupMedia) {
                         BackupMediaCollector(context).attachCollectedMedia(snapshot)
                     } else snapshot to BackupMediaCollector.Result(emptyList(), emptyList(), emptyList())
@@ -154,6 +161,7 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             }
             state = next
             progressDialog = null
+            restoreSelection = BackupContentSelection.All
             restoreOptions = com.rhodes.privatechat.data.backup.BackupRestoreOptions()
             if (next is BackupUiState.RestoreReady && next.issues.isNotEmpty()) showIssueDialog = true
             if (next is BackupUiState.Error) resultDialog = "备份文件无法导入" to next.detail
@@ -270,13 +278,10 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             BackupSection(
                 icon = Icons.Default.Backup,
-                title = "完整备份",
-                description = "换手机、刷机前使用。保存角色、聊天、记忆、日记、动态和全部非敏感设置。不会保存账号密码或模型密钥。",
+                title = "备份我的全部数据",
+                description = "换手机、刷机或清理前使用。默认保存角色、聊天和重要资料，不会保存模型密钥。",
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                    Button(onClick = { includeBackupMedia = true; createBackup.launch("明日方舟完整备份_${timestamp()}.rbackup") }, modifier = Modifier.weight(1f)) { Text("包含本机已保存图片") }
-                    OutlinedButton(onClick = { includeBackupMedia = false; createBackup.launch("明日方舟文字备份_${timestamp()}.rbackup") }, modifier = Modifier.weight(1f)) { Text("仅文字和资料") }
-                }
+                Button(onClick = { backupSelection = BackupContentSelection.All; showBackupSelection = true }, modifier = Modifier.fillMaxWidth()) { Text("开始备份") }
             }
             BackupSection(
                 icon = Icons.Default.Description,
@@ -287,16 +292,16 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             }
             BackupSection(
                 icon = Icons.Default.FolderOpen,
-                title = "导入完整备份",
-                description = "用于迁移到新设备或恢复以前导出的完整备份。导入会完全替换当前数据。",
+                title = "恢复以前的数据",
+                description = "从以前创建的备份中找回数据。选择文件后可以先查看里面有什么。",
             ) {
                 OutlinedButton(onClick = { openBackup.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) }, modifier = Modifier.fillMaxWidth()) {
-                    Text("选择完整备份文件")
+                    Text("选择备份文件")
                 }
             }
             BackupSection(
                 icon = Icons.Default.Backup,
-                title = "恢复前备份",
+                title = "恢复前备份（保护用）",
                 description = "每次导入前自动保留当前数据。可再次恢复或导出到设备保存，最多保留最近 5 份。",
             ) {
                 if (safetyBackups.isEmpty()) Text("暂无恢复前备份", fontSize = 12.sp, color = TextSecondary)
@@ -325,8 +330,8 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             }
             BackupSection(
                 icon = Icons.Default.Description,
-                title = "角色设定分享",
-                description = "分享角色人设和头像。关系仅在接收方已有对应角色时导入；聊天、记忆、日记和动态不会包含。",
+                title = "分享或导入一个角色",
+                description = "角色设定包含人设、头像和提示词，不包含聊天、记忆、日记和动态。",
             ) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     OutlinedButton(onClick = { showOperatorPicker = true }, modifier = Modifier.weight(1f)) { Text("导出角色设定") }
@@ -336,11 +341,26 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             BackupSection(
                 icon = Icons.Default.Description,
                 title = "使用说明",
-                description = "导入完整备份会替换当前所有数据，开始前会自动保存当前数据。外部图片可能无法迁移；换手机后需要重新填写模型服务信息。",
+                description = "完整恢复会替换当前数据；选择恢复内容时，仅替换勾选类别。开始前会自动保存当前数据。外部图片可能无法迁移；换手机后需要重新填写模型服务信息。",
             ) {}
         }
     }
-    if (state is BackupUiState.RestoreReady && !showIssueDialog) {
+    if (showBackupSelection) {
+        BackupSelectionDialog(
+            title = "要备份什么",
+            description = "默认已选全部重要资料。取消不需要的内容后再保存备份。",
+            selection = backupSelection,
+            onSelectionChange = { backupSelection = it },
+            confirmLabel = "保存备份",
+            onConfirm = {
+                includeBackupMedia = backupSelection.normalized().media
+                showBackupSelection = false
+                createBackup.launch("明日方舟完整备份_${timestamp()}.rbackup")
+            },
+            onDismiss = { showBackupSelection = false },
+        )
+    }
+    if (state is BackupUiState.RestoreReady && !showIssueDialog && !showRestoreSelection) {
         val ready = state as BackupUiState.RestoreReady
         val manifest = ready.manifest
         AlertDialog(
@@ -352,14 +372,27 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                     Text("角色：${manifest.recordCounts["operators"] ?: 0}  会话：${manifest.recordCounts["sessions"] ?: 0}")
                     Text("消息：${manifest.recordCounts["messages"] ?: 0}  日记：${manifest.recordCounts["diaries"] ?: 0}")
                     Text("动态：${manifest.recordCounts["moments"] ?: 0}  图片：${manifest.recordCounts["mediaFiles"] ?: 0}")
-                    Text("继续后会清空当前角色、聊天、记忆、日记和动态，再恢复此备份。恢复前会再创建一份当前数据的安全备份，并最多保留最近 5 份；可在本页导出或再次恢复。若还需保存到设备，请先取消并使用“完整备份”。API Key 和模型密钥不会恢复。", color = TextSecondary, fontSize = 12.sp)
+                    Text("完整恢复会替换当前数据。恢复前会自动保存当前数据；模型密钥不会恢复。", color = TextSecondary, fontSize = 12.sp)
                 }
             },
-            confirmButton = { TextButton(onClick = {
+            confirmButton = { TextButton(onClick = { restoreSelection = BackupContentSelection.All; showRestoreSelection = true }) { Text("选择恢复内容") } },
+            dismissButton = { TextButton(onClick = { state = BackupUiState.Idle }) { Text("取消") } },
+        )
+    }
+    if (state is BackupUiState.RestoreReady && showRestoreSelection) {
+        val ready = state as BackupUiState.RestoreReady
+        BackupSelectionDialog(
+            title = "选择要恢复的内容",
+            description = "只替换勾选的内容，未勾选的当前数据会保留。恢复前会自动保存当前数据。",
+            selection = restoreSelection,
+            onSelectionChange = { restoreSelection = it },
+            confirmLabel = "开始恢复",
+            onConfirm = {
+                showRestoreSelection = false
                 scope.launch {
                     val coordinator = BackupRestoreCoordinator(
                         context, repository, settings, BackupSnapshotBuilder(repository, settings), writer,
-                            restoreExecutor = { payload, progress -> RestoreDatabaseExecutor(repository).restore(payload) },
+                            restoreExecutor = { payload, _ -> RestoreDatabaseExecutor(repository).restore(payload, restoreSelection) },
                     )
                     val result = withContext(Dispatchers.IO) {
                         coordinator.restore(
@@ -369,7 +402,7 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                                     ?: error("无法再次读取备份文件")
                             },
                             onProgress = { progress: BackupRestoreProgress -> state = BackupUiState.Working(progress.detail); progressDialog = progress.detail },
-                            options = restoreOptions,
+                            options = restoreOptions.copy(contentSelection = restoreSelection),
                         )
                     }
                     if (result.success) {
@@ -377,7 +410,13 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                         progressDialog = "正在重建记忆检索索引"
                         val indexResult = withContext(Dispatchers.IO) { mainViewModel.rebuildAllMemoryIndexes() }
                         safetyBackups = refreshSafetyBackups()
-                        val detail = "已恢复备份中的数据。记忆索引：成功 ${indexResult.succeeded}，失败 ${indexResult.failed}。恢复前安全备份：${result.safetyBackup?.name ?: "已创建"}，可在本页导出或再次恢复。请重新配置模型服务。"
+                        val skipped = ready.issues.filter { it.code in restoreOptions.skipIssueCodes }.sumOf { it.count }
+                        val detail = buildString {
+                            append("备份包含 ${ready.manifest.recordCounts["operators"] ?: 0} 个角色、${ready.manifest.recordCounts["sessions"] ?: 0} 个聊天、${ready.manifest.recordCounts["messages"] ?: 0} 条消息。")
+                            append("已选择 ${restoreSelection.normalized().selectedCategoryCount()} 类内容。")
+                            if (skipped > 0) append("已跳过 $skipped 条有问题的附属数据。")
+                            append("记忆索引：成功 ${indexResult.succeeded}，失败 ${indexResult.failed}。请重新配置模型服务。")
+                        }
                         state = BackupUiState.Success("恢复完成", detail)
                         progressDialog = null
                         resultDialog = "恢复完成" to detail
@@ -387,8 +426,8 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                         resultDialog = "恢复失败" to result.reason
                     }
                 }
-            }) { Text("清空并恢复") } },
-            dismissButton = { TextButton(onClick = { state = BackupUiState.Idle }) { Text("取消") } },
+            },
+            onDismiss = { showRestoreSelection = false },
         )
     }
     resultDialog?.let { (title, detail) ->
@@ -536,6 +575,74 @@ private fun BackupSection(icon: androidx.compose.ui.graphics.vector.ImageVector,
             action()
         }
     }
+}
+
+@Composable
+private fun BackupSelectionDialog(
+    title: String,
+    description: String,
+    selection: BackupContentSelection,
+    onSelectionChange: (BackupContentSelection) -> Unit,
+    confirmLabel: String,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val normalized = selection.normalized()
+    val items = listOf(
+        "角色和人设" to "角色资料、关系和角色提示词",
+        "聊天记录" to "私聊、群聊和聊天存档",
+        "记忆内容" to "记忆、锚点和重要事件",
+        "动态和日记" to "动态、评论、日记和共同经历",
+        "知识库" to "导入的资料和角色关联",
+        "其他功能数据" to "礼物、派遣和麻将存档",
+        "非敏感设置" to "昵称、外观和聊天偏好，不含模型密钥",
+        "图片和头像" to "本机保存的图片和头像，文件会更大",
+    )
+    fun isChecked(index: Int) = when (index) {
+        0 -> normalized.roles
+        1 -> normalized.chats
+        2 -> normalized.memories
+        3 -> normalized.social
+        4 -> normalized.knowledgeBases
+        5 -> normalized.extras
+        6 -> normalized.settings
+        else -> normalized.media
+    }
+    fun update(index: Int, checked: Boolean) {
+        onSelectionChange(
+            when (index) {
+                0 -> selection.copy(roles = checked, chats = if (!checked) false else selection.chats, memories = if (!checked) false else selection.memories, social = if (!checked) false else selection.social, knowledgeBases = if (!checked) false else selection.knowledgeBases, extras = if (!checked) false else selection.extras)
+                1 -> selection.copy(chats = checked, memories = if (!checked) false else selection.memories)
+                2 -> selection.copy(memories = checked, chats = if (checked) true else selection.chats)
+                3 -> selection.copy(social = checked, roles = if (checked) true else selection.roles)
+                4 -> selection.copy(knowledgeBases = checked, roles = if (checked) true else selection.roles)
+                5 -> selection.copy(extras = checked, roles = if (checked) true else selection.roles)
+                6 -> selection.copy(settings = checked)
+                else -> selection.copy(media = checked)
+            }
+        )
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(description, color = TextSecondary, fontSize = 12.sp)
+                TextButton(onClick = { onSelectionChange(BackupContentSelection.All) }) { Text("全部选择") }
+                items.forEachIndexed { index, (label, detail) ->
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Checkbox(checked = isChecked(index), onCheckedChange = { update(index, it) })
+                        Column(Modifier.weight(1f)) {
+                            Text(label, fontSize = 14.sp)
+                            Text(detail, fontSize = 11.sp, color = TextSecondary)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onConfirm, enabled = normalized.selectedCategoryCount() > 0) { Text(confirmLabel) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }
 
 @Composable

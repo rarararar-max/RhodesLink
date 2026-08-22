@@ -1,6 +1,7 @@
 package com.rhodes.privatechat.ui.settings
 
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -44,6 +45,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -71,6 +73,9 @@ import com.rhodes.privatechat.util.ProblemChecker
 import com.rhodes.privatechat.viewmodel.shared.AppStateHolder
 import com.rhodes.privatechat.viewmodel.shared.SharedUtils
 import kotlinx.coroutines.delay
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import org.koin.compose.koinInject
 
 private enum class OperationFilter(val label: String) {
@@ -92,8 +97,24 @@ fun DebugLogScreen(onBack: () -> Unit) {
     var resultFilter by remember { mutableStateOf("全部") }
     var problemProgress by remember { mutableStateOf(ProblemChecker.progress()) }
     var showProblemReport by remember { mutableStateOf(false) }
+    var pendingTechnicalReport by remember { mutableStateOf<String?>(null) }
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
+    val technicalReportExporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+        val report = pendingTechnicalReport
+        pendingTechnicalReport = null
+        if (uri == null || report == null) return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.openOutputStream(uri, "w")?.bufferedWriter(Charsets.UTF_8).use { writer ->
+                checkNotNull(writer) { "无法写入所选位置" }
+                writer.write(report)
+            }
+        }.onSuccess {
+            Toast.makeText(context, "技术报告 TXT 已导出", Toast.LENGTH_SHORT).show()
+        }.onFailure { error ->
+            Toast.makeText(context, "导出技术报告失败：${error.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
+        }
+    }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -166,12 +187,22 @@ fun DebugLogScreen(onBack: () -> Unit) {
     if (showProblemReport) {
         val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
         val report = ProblemChecker.report(packageInfo.versionName ?: "未知", packageInfo.versionCode)
-        ProblemReportDialog(report.summary, report.report, problemProgress, onDismiss = { showProblemReport = false }, onCopySummary = { clipboard.setText(AnnotatedString(report.summary)); Toast.makeText(context, "已复制自检摘要", Toast.LENGTH_SHORT).show() }, onCopyTechnical = { clipboard.setText(AnnotatedString(report.report)); Toast.makeText(context, "已复制技术报告", Toast.LENGTH_SHORT).show() })
+        ProblemReportDialog(
+            report.summary, report.report, problemProgress,
+            onDismiss = { showProblemReport = false },
+            onCopySummary = { clipboard.setText(AnnotatedString(report.summary)); Toast.makeText(context, "已复制自检摘要", Toast.LENGTH_SHORT).show() },
+            onCopyTechnical = { clipboard.setText(AnnotatedString(report.report)); Toast.makeText(context, "已复制技术报告", Toast.LENGTH_SHORT).show() },
+            onExportTechnical = {
+                pendingTechnicalReport = report.report
+                val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                technicalReportExporter.launch("rhodes_problem_check_${stamp}.txt")
+            }
+        )
     }
 }
 
 @Composable
-private fun ProblemReportDialog(summary: String, report: String, progress: com.rhodes.privatechat.util.ProblemCheckProgress, onDismiss: () -> Unit, onCopySummary: () -> Unit, onCopyTechnical: () -> Unit) {
+private fun ProblemReportDialog(summary: String, report: String, progress: com.rhodes.privatechat.util.ProblemCheckProgress, onDismiss: () -> Unit, onCopySummary: () -> Unit, onCopyTechnical: () -> Unit, onExportTechnical: () -> Unit) {
     var showTechnicalDetails by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -188,7 +219,7 @@ private fun ProblemReportDialog(summary: String, report: String, progress: com.r
                 }
             }
         },
-        confirmButton = { Row { TextButton(onClick = onCopySummary) { Text("复制摘要", color = Primary) }; TextButton(onClick = onCopyTechnical) { Text("复制技术报告", color = Primary) } } },
+        confirmButton = { Row { TextButton(onClick = onCopySummary) { Text("复制摘要", color = Primary) }; TextButton(onClick = onCopyTechnical) { Text("复制技术报告", color = Primary) }; TextButton(onClick = onExportTechnical) { Text("导出 TXT", color = Primary) } } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("关闭") } }
     )
 }

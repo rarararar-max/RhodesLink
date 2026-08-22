@@ -195,6 +195,7 @@ private fun ProblemReportDialog(summary: String, report: String, progress: com.r
 
 private fun stageLabel(name: String): String = when (name) {
     "vector_diagnostics_probe" -> "向量 SQL、解码与评分"
+    "memory_items_stats_probe" -> "Memory V2 数据量与大字段统计"
     "backup_snapshot_timing_probe" -> "备份快照读取与序列化估算"
     "db_native_read_probe" -> "原生 SQLite 基础读取"
     "db_repository_read_probe" -> "应用数据库读取"

@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS memory_items (
 CREATE INDEX IF NOT EXISTS memory_items_active_candidates
 ON memory_items(ownerType, ownerId, memoryLevel, status, expiresAt, importance DESC, createdAt DESC);
 
+CREATE INDEX IF NOT EXISTS memory_items_backup_created_at
+ON memory_items(createdAt DESC, id DESC);
+
 getMemoryItemsByOwner:
 SELECT * FROM memory_items WHERE ownerType = ? AND ownerId = ? ORDER BY createdAt DESC;
 

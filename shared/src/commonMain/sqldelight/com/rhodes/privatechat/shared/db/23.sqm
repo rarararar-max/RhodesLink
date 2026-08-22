@@ -1,0 +1,2 @@
+CREATE INDEX IF NOT EXISTS memory_items_backup_created_at
+ON memory_items(createdAt DESC, id DESC);

@@ -101,7 +101,7 @@ object ProblemChecker {
         val checkId = UUID.randomUUID().toString().replace("-", "").take(8)
         if (!active.compareAndSet(null, checkId)) return active.get() ?: checkId
         val now = System.currentTimeMillis()
-        val names = listOf("cleanup_previous_probe", "db_native_read_probe", "db_repository_read_probe", "embedding_compute_probe", "vector_diagnostics_probe", "backup_snapshot_timing_probe", "database_open", "database_schema", "database_counts", "persistent_state_probe", "prompt_template_integrity", "kb_sql_count", "kb_sql_metadata", "kb_sql_content_size", "knowledge_base_metadata", "knowledge_base_assignments", "knowledge_base_chunks", "knowledge_base_readiness", "vector_sql_count", "vector_sql_signature_size", "vector_sql_invalid_rows", "vector_config_probe", "vector_embedding_probe", "vector_local_search_probe", "support_manual_probe", "support_transcript_probe", "session_integrity", "session_message_audit", "contacts_recovery", "database_copy_write_test", "backup_roles_sessions", "backup_relationships", "backup_messages", "backup_knowledge_bases", "backup_memories", "backup_anchors", "backup_memory_items", "backup_social_diaries", "backup_archives_display", "backup_gifts_dispatches_extras", "backup_settings_snapshot", "backup_snapshot_probe", "backup_file_probe", "private_message_probe", "private_pipeline_history", "private_pipeline_context", "private_pipeline_reply_parse", "private_pipeline_last_state", "group_message_probe", "group_pipeline_roster_history", "group_pipeline_context", "group_pipeline_reply_parse", "private_ai_probe", "group_ai_probe", "cleanup")
+        val names = listOf("cleanup_previous_probe", "db_native_read_probe", "db_repository_read_probe", "embedding_compute_probe", "vector_diagnostics_probe", "memory_items_stats_probe", "backup_snapshot_timing_probe", "database_open", "database_schema", "database_counts", "persistent_state_probe", "prompt_template_integrity", "kb_sql_count", "kb_sql_metadata", "kb_sql_content_size", "knowledge_base_metadata", "knowledge_base_assignments", "knowledge_base_chunks", "knowledge_base_readiness", "vector_sql_count", "vector_sql_signature_size", "vector_sql_invalid_rows", "vector_config_probe", "vector_embedding_probe", "vector_local_search_probe", "support_manual_probe", "support_transcript_probe", "session_integrity", "session_message_audit", "contacts_recovery", "database_copy_write_test", "backup_roles_sessions", "backup_relationships", "backup_messages", "backup_knowledge_bases", "backup_memories", "backup_anchors", "backup_memory_items", "backup_social_diaries", "backup_archives_display", "backup_gifts_dispatches_extras", "backup_settings_snapshot", "backup_snapshot_probe", "backup_file_probe", "private_message_probe", "private_pipeline_history", "private_pipeline_context", "private_pipeline_reply_parse", "private_pipeline_last_state", "group_message_probe", "group_pipeline_roster_history", "group_pipeline_context", "group_pipeline_reply_parse", "private_ai_probe", "group_ai_probe", "cleanup")
         current.set(ProblemCheckProgress(checkId, now, now + TOTAL_TIMEOUT_MS, currentStage = "starting", stages = names.associateWith { StageProgress() }))
         startDetachedLocalProbe(checkId, "cleanup_previous_probe", LOCAL_TIMEOUT_MS) {
             val files = cleanupOldProbes(context)
@@ -116,6 +116,7 @@ object ProblemChecker {
         startDetachedLocalProbe(checkId, "db_repository_read_probe", LOCAL_TIMEOUT_MS) { repositoryDatabaseReadProbe(repository) }
         startDetachedLocalProbe(checkId, "embedding_compute_probe", LOCAL_TIMEOUT_MS) { localEmbeddingComputeProbe() }
         startDetachedLocalProbe(checkId, "vector_diagnostics_probe", LOCAL_TIMEOUT_MS) { vectorDiagnosticsProbe() }
+        startDetachedLocalProbe(checkId, "memory_items_stats_probe", LOCAL_TIMEOUT_MS) { memoryItemsStatsProbe(context) }
         startDetachedLocalProbe(checkId, "vector_embedding_probe", COPY_TIMEOUT_MS) { vectorEmbeddingProbe() }
         // A production-store search needs an isolated seeded vector to prove ranking semantics.
         // Do not write diagnostic vectors into user namespaces; configuration and embedding are
@@ -282,7 +283,7 @@ object ProblemChecker {
         appendPipeline(snapshot, "群聊发送与存储", listOf("group_message_probe", "group_pipeline_roster_history", "group_pipeline_reply_parse"))
         appendPipeline(snapshot, "群聊上下文与提示词前置条件", listOf("group_pipeline_context"))
         appendPipeline(snapshot, "群聊 AI 回复", listOf("group_ai_probe"))
-        appendPipeline(snapshot, "向量化与记忆检索", listOf("vector_config_probe", "embedding_compute_probe", "vector_diagnostics_probe", "vector_sql_count", "vector_sql_signature_size", "vector_sql_invalid_rows", "vector_embedding_probe"))
+        appendPipeline(snapshot, "向量化与记忆检索", listOf("vector_config_probe", "embedding_compute_probe", "vector_diagnostics_probe", "memory_items_stats_probe", "vector_sql_count", "vector_sql_signature_size", "vector_sql_invalid_rows", "vector_embedding_probe"))
         appendPipeline(snapshot, "客服本地能力", listOf("support_manual_probe", "support_transcript_probe"))
         appendPipeline(snapshot, "本地数据库与备份", listOf("database_open", "database_schema", "persistent_state_probe", "session_integrity", "database_copy_write_test", "backup_snapshot_timing_probe", "backup_roles_sessions", "backup_relationships", "backup_messages", "backup_knowledge_bases", "backup_memories", "backup_anchors", "backup_memory_items", "backup_social_diaries", "backup_archives_display", "backup_gifts_dispatches_extras", "backup_settings_snapshot", "backup_snapshot_probe"))
         if (status != "running") appendLine("建议：${when {
@@ -410,6 +411,7 @@ object ProblemChecker {
     }
 
     private fun stageDisplayName(name: String): String = when (name) {
+        "memory_items_stats_probe" -> "Memory V2 数据量与大字段统计"
         "vector_diagnostics_probe" -> "向量 SQL、解码与评分"
         "backup_snapshot_timing_probe" -> "备份快照读取与序列化估算"
         "backup_memories" -> "备份传统记忆读取"
@@ -1042,6 +1044,13 @@ object ProblemChecker {
             ownerType = "__diagnostic__", ownerId = "__diagnostic__", query = "Rhodes vector timing probe", limit = 1, candidateLimit = 1,
         ))
         return "candidateSqlMs=${metrics.sqlMs},decodeScoreMs=${metrics.decodeScoreMs},candidates=${metrics.candidateCount},decoded=${metrics.decodedCount},decodeFailures=${metrics.decodeFailures},dimensionMismatches=${metrics.dimensionMismatches},selected=${metrics.selectedCount},userContentSent=false"
+    }
+
+    private fun memoryItemsStatsProbe(context: Context): String = SQLiteDatabase.openDatabase(context.getDatabasePath(DB_NAME).path, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+        db.rawQuery("SELECT COUNT(*),COALESCE(SUM(LENGTH(content)),0),COALESCE(SUM(LENGTH(rawJson)),0),COALESCE(MAX(LENGTH(content)),0),COALESCE(MAX(LENGTH(rawJson)),0) FROM memory_items", null).use { cursor ->
+            check(cursor.moveToFirst()) { "memory_items aggregate returned no row" }
+            "items=${cursor.getLong(0)},contentChars=${cursor.getLong(1)},rawJsonChars=${cursor.getLong(2)},maxContentChars=${cursor.getLong(3)},maxRawJsonChars=${cursor.getLong(4)}"
+        }
     }
 
     private suspend fun backupSnapshotTimingProbe(repository: ChatRepository, appState: AppStateHolder): String {

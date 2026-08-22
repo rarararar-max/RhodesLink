@@ -61,6 +61,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.encodeToString
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import kotlin.time.TimeSource
 
@@ -99,6 +100,7 @@ class GroupChatViewModel(
         private const val MAX_MERGED_USER_MESSAGES = 2
         private const val MAX_MERGED_USER_CHARS = 600
         private const val GROUP_MESSAGE_WRITE_TIMEOUT_MS = 8_000L
+        private const val GROUP_RESTART_CLEANUP_WAIT_MS = 2_000L
         private const val GROUP_REPLY_TIMEOUT_MS = 100_000L
         private const val GROUP_FORMAT_REPAIR_TIMEOUT_MS = 20_000L
         private const val GROUP_RULES_MAX_CHARS = 3_000
@@ -590,6 +592,7 @@ class GroupChatViewModel(
     }
 
     fun sendGroupMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online", autoSpeak: Boolean = false, isAuto: Boolean = false, autoGeneration: Long? = null, userMessageAlreadyStored: Boolean = false, sourceMessageId: Long? = null, retryMessageId: Long? = null, replyTurnIdOverride: String? = null, replyLeaseTokenOverride: String? = null, onMessageSent: () -> Unit = {}, onResponseComplete: (Boolean) -> Unit = {}) {
+        val sendAttemptId = UUID.randomUUID().toString().take(8)
         if (!isAuto) {
             DebugLogger.diagnostic("GroupChat/SendRequested", "groupId=$groupSessionId, textLength=${text.length}, mode=$mode, alreadyStored=$userMessageAlreadyStored")
         }
@@ -614,15 +617,21 @@ class GroupChatViewModel(
             val debugRoundId = DebugLogger.startConversationRound("群聊", groupName, mode)
             val cacheUsage = SharedUtils.ChatUsageSummary()
             try {
-                restartCleanupJobs[groupSessionId]?.join()
+                val cleanup = restartCleanupJobs[groupSessionId]
+                if (cleanup != null && cleanup.isActive) {
+                    DebugLogger.diagnostic("GroupChat/SaveAttempt", "attempt=$sendAttemptId,groupId=$groupSessionId,stage=restart_cleanup_wait_begin")
+                    val finished = withTimeoutOrNull(GROUP_RESTART_CLEANUP_WAIT_MS) { cleanup.join(); true } == true
+                    DebugLogger.diagnostic("GroupChat/SaveAttempt", "attempt=$sendAttemptId,groupId=$groupSessionId,stage=restart_cleanup_wait_end,finished=$finished")
+                }
             // 步骤1: 用户消息立即插入（不持锁），消息即时显示
             if (!isAuto && !userMessageAlreadyStored && text.isNotBlank()) {
-                DebugLogger.diagnostic("GroupChat/SendStep", "groupId=$groupSessionId, step=message_id_start")
+                DebugLogger.diagnostic("GroupChat/SaveAttempt", "attempt=$sendAttemptId,groupId=$groupSessionId,stage=message_id_begin")
                 val userMsgId = withTimeout(GROUP_MESSAGE_WRITE_TIMEOUT_MS) { repository.getNextMessageId() }
+                DebugLogger.diagnostic("GroupChat/SaveAttempt", "attempt=$sendAttemptId,groupId=$groupSessionId,messageId=$userMsgId,stage=message_id_end")
                 userMessageId = userMsgId
                 failureMessageId = userMsgId
                 val userMessageTimestamp = System.currentTimeMillis()
-                DebugLogger.diagnostic("GroupChat/SendStep", "groupId=$groupSessionId, messageId=$userMsgId, step=message_insert_start")
+                DebugLogger.diagnostic("GroupChat/SaveAttempt", "attempt=$sendAttemptId,groupId=$groupSessionId,messageId=$userMsgId,stage=transaction_begin")
                 replyTurnId = "group:$groupSessionId:$userMsgId"
                 val turnNow = System.currentTimeMillis()
                 withTimeout(GROUP_MESSAGE_WRITE_TIMEOUT_MS) {
@@ -635,10 +644,11 @@ class GroupChatViewModel(
                         "pending", 0, turnNow, "", 0, null, "", turnNow, turnNow, 0,
                     ))
                 }
-                DebugLogger.diagnostic("GroupChat/SendStep", "groupId=$groupSessionId, messageId=$userMsgId, step=message_insert_done")
+                DebugLogger.diagnostic("GroupChat/SaveAttempt", "attempt=$sendAttemptId,groupId=$groupSessionId,messageId=$userMsgId,stage=transaction_end")
                 // Clear the input as soon as persistence succeeds; optional recovery scheduling
                 // must not make an already saved message look unsent.
-                onMessageSent()
+                withContext(Dispatchers.Main.immediate) { onMessageSent() }
+                DebugLogger.diagnostic("GroupChat/SaveAttempt", "attempt=$sendAttemptId,groupId=$groupSessionId,messageId=$userMsgId,stage=ui_callback_delivered")
                 runCatching { com.rhodes.privatechat.automation.ManualReplyScheduler.scheduleTurn(context, replyTurnId) }
                     .onFailure { DebugLogger.diagnostic("GroupChat/ReplyRecoveryScheduleFailed", "groupId=$groupSessionId, messageId=$userMsgId, error=${it.javaClass.simpleName}:${it.message?.take(120)}") }
                 DebugLogger.chatEvent("群聊", "发送消息", "已保存", "群=$groupName，模式=$mode")
@@ -656,7 +666,7 @@ class GroupChatViewModel(
             } catch (e: Exception) {
                 val timeout = e is kotlinx.coroutines.TimeoutCancellationException
                 val error = if (timeout) "群消息保存超时，请稍后重试" else "群消息保存失败，请重试"
-                DebugLogger.diagnostic("GroupChat/UserMessageWriteFailed", "groupId=$groupSessionId, timeout=$timeout, error=${e.javaClass.simpleName}:${e.message?.take(160)}")
+                DebugLogger.diagnostic("GroupChat/UserMessageWriteFailed", "attempt=$sendAttemptId,groupId=$groupSessionId,stage=save_failed,timeout=$timeout,error=${e.javaClass.simpleName}:${e.message?.take(160)}")
                 DebugLogger.finishOperation(debugRoundId, "失败", if (timeout) "群消息保存超时" else "群消息保存失败：${e.javaClass.simpleName}")
                 _lastSendError.value = error
                 onResponseComplete(false)

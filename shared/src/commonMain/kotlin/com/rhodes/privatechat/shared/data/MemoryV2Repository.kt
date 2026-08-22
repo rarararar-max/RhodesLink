@@ -1,6 +1,7 @@
 package com.rhodes.privatechat.shared.data
 
 import com.rhodes.privatechat.shared.db.DatabaseWrapper
+import com.rhodes.privatechat.shared.db.DatabaseDispatcher
 import com.rhodes.privatechat.shared.db.RhodesDatabase
 import com.rhodes.privatechat.shared.model.MemoryBatch
 import com.rhodes.privatechat.shared.model.MemoryItem
@@ -57,7 +58,7 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
         }.executeAsList()
     }
 
-    suspend fun getAllMemoryItems(): List<MemoryItem> = withContext(Dispatchers.Default) {
+    suspend fun getAllMemoryItems(): List<MemoryItem> = withContext(DatabaseDispatcher.dispatcher) {
         db.memoryItemsQueries.getAllMemoryItems { id, ownerType_, ownerId_, memoryLevel, memoryType, sourceKind, sourceRefId, sessionId, content, nickname, importance, privacy, unmetNeed, location, emotionValence, eventTime, createdAt, updatedAt, expiresAt, status, scheduledTime, action, careType, topicKey, sourceActor, sourceTarget, lastUsedAt, usedCount, confidence, rawJson, vectorId ->
             MemoryItem(id, ownerType_, ownerId_, try { MemoryLevel.valueOf(memoryLevel) } catch (_: Exception) { MemoryLevel.L1 }, memoryType, try { MemorySourceKind.valueOf(sourceKind) } catch (_: Exception) { MemorySourceKind.PRIVATE_CHAT }, sourceRefId, sessionId, content, nickname, importance.toInt(), privacy, unmetNeed != 0L, location, emotionValence, eventTime, createdAt, updatedAt, expiresAt, status, scheduledTime, action, careType, topicKey, sourceActor, sourceTarget, lastUsedAt, usedCount.toInt(), confidence, rawJson, vectorId)
         }.executeAsList()

@@ -9,11 +9,20 @@ CREATE TABLE IF NOT EXISTS relationships (
     note TEXT NOT NULL DEFAULT ''
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS relationships_operator_related_unique
+ON relationships(operatorId, relatedOperatorId);
+
+CREATE INDEX IF NOT EXISTS relationships_related_operator
+ON relationships(relatedOperatorId, operatorId);
+
 getRelationships:
 SELECT * FROM relationships WHERE operatorId = ? ORDER BY intimacy DESC;
 
 getRelationshipsSync:
 SELECT * FROM relationships WHERE operatorId = ? ORDER BY intimacy DESC;
+
+getAllRelationshipsForBackup:
+SELECT * FROM relationships ORDER BY operatorId ASC, relatedOperatorId ASC, id ASC;
 
 getReverseRelationshipsSync:
 SELECT * FROM relationships WHERE relatedOperatorId = ?;

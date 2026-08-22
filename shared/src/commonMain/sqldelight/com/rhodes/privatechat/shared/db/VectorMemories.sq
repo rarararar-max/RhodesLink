@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS vector_memories (
 CREATE INDEX IF NOT EXISTS vector_memories_owner_candidates
 ON vector_memories(ownerType, ownerId, expiresAt, importance DESC, createdAt DESC);
 
+CREATE INDEX IF NOT EXISTS vector_memories_owner_signature_source_candidates
+ON vector_memories(ownerType, ownerId, embeddingSignature, sourceType, expiresAt, importance DESC, createdAt DESC);
+
 getVectorMemoriesByOwner:
 SELECT * FROM vector_memories WHERE ownerType = ? AND ownerId = ? ORDER BY createdAt DESC;
 

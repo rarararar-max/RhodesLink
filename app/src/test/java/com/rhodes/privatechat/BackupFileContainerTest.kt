@@ -20,6 +20,7 @@ import com.rhodes.privatechat.data.backup.BackupContentFilter
 import com.rhodes.privatechat.data.backup.BackupContentSelection
 import com.rhodes.privatechat.data.OperatorExport
 import com.rhodes.privatechat.data.RelationshipExport
+import com.rhodes.privatechat.data.SessionExport
 import com.rhodes.privatechat.shared.model.ChatMessage
 import com.rhodes.privatechat.shared.data.BackupChatDisplayEvent
 import com.rhodes.privatechat.shared.model.DispatchRecord
@@ -27,6 +28,9 @@ import com.rhodes.privatechat.shared.model.Memory
 import com.rhodes.privatechat.shared.model.MemoryType
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
+import org.junit.Assert.fail
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -35,6 +39,54 @@ import java.util.zip.ZipOutputStream
 import java.io.File
 
 class BackupFileContainerTest {
+    @Test
+    fun writesPagedV2BackupAndReaderReassemblesPayload() {
+        val messages = (1L..501L).map { id -> MessageExport(id, "s", senderName = "我", content = "m$id", isMe = true) }
+        val output = ByteArrayOutputStream()
+        val manifest = BackupFileWriter("test", 1).writeFullBackup(output, BackupPayload(ExportPayload(type = "full_backup", sessions = listOf(SessionExport("s", "group_test", "测试")), messages = messages)))
+        assertEquals(2, manifest.formatVersion)
+        assertEquals("paged_payload", manifest.layout)
+        assertTrue(manifest.pages.count { it.category.name == "CHATS" } >= 2)
+        assertFalse(manifest.files.any { it.path == BackupFileWriter.PAYLOAD_PATH })
+        val archive = BackupFileReader().read(ByteArrayInputStream(output.toByteArray()))
+        assertEquals(501, archive.payload.content.messages?.size)
+    }
+
+    @Test
+    fun rejectsSingleRecordThatExceedsV2PageLimit() {
+        val oversized = "x".repeat(BackupFileWriter.MAX_PAGE_BYTES + 1)
+        assertThrows(IllegalArgumentException::class.java) {
+            BackupFileWriter("test", 1).writeFullBackup(
+                ByteArrayOutputStream(),
+                BackupPayload(ExportPayload(type = "full_backup", knowledgeBases = listOf(com.rhodes.privatechat.data.KnowledgeBaseExport("k", "k", oversized, createdAt = 1, updatedAt = 1)))),
+            )
+        }
+    }
+    @Test
+    fun backupWriterReportsMediaProgressAndHonorsCancellation() {
+        val item = BackupMediaItem("image", "media/images/test.bin")
+        val payload = BackupPayload(content = ExportPayload(type = "full_backup"), media = listOf(item))
+        val progress = mutableListOf<Pair<Int, Int>>()
+        BackupFileWriter("test", 1).writeFullBackup(
+            ByteArrayOutputStream(), payload,
+            listOf(BackupMediaSource(item) { ByteArrayInputStream(ByteArray(2048)) }),
+            onMediaProgress = { completed, total, _ -> progress += completed to total },
+        )
+        assertTrue(progress.isNotEmpty())
+        assertEquals(1 to 1, progress.last())
+
+        try {
+            BackupFileWriter("test", 1).writeFullBackup(
+                ByteArrayOutputStream(), payload,
+                listOf(BackupMediaSource(item) { ByteArrayInputStream(ByteArray(32)) }),
+                ensureActive = { throw java.util.concurrent.CancellationException("test") },
+            )
+            fail("writer must propagate cancellation")
+        } catch (_: java.util.concurrent.CancellationException) {
+            // Expected: callers can abandon a staged export before the destination copy begins.
+        }
+    }
+
     @Test
     fun writesAndReadsOperatorCardWithoutPrivateWorldline() {
         val output = ByteArrayOutputStream()
@@ -130,7 +182,6 @@ class BackupFileContainerTest {
         val media = BackupMediaItem("avatar/operator/amiya", "media/avatars/amiya.jpg", "image/jpeg")
         val payload = BackupPayload(
             content = ExportPayload(type = "full_backup"),
-            displayEvents = listOf(BackupChatDisplayEvent(8L, 1, "session_amiya", 2L)),
             dispatchRecords = listOf(DispatchRecord("dispatch_1", "巡逻", 1, 100)),
             media = listOf(media),
         )
@@ -148,7 +199,7 @@ class BackupFileContainerTest {
         assertEquals(manifest.backupId, archive.manifest.backupId)
         assertEquals("full_backup", archive.payload.content.type)
         assertEquals(listOf(media), archive.payload.media)
-        assertEquals("session_amiya", archive.payload.displayEvents.single().sessionId)
+        assertTrue(archive.payload.displayEvents.isEmpty())
         assertEquals("dispatch_1", archive.payload.dispatchRecords.single().id)
     }
 

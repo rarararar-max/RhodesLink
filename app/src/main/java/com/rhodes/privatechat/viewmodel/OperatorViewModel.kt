@@ -84,15 +84,15 @@ class OperatorViewModel(
                     voicePitch = voicePitch.ifBlank { existing?.voicePitch ?: "" }
                 )
                 DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=insert_start")
-                withTimeout(8_000L) { repository.insertOperator(op) }
+                withTimeout(15_000L) { repository.insertOperator(op) }
                 DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=insert_done")
                 DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=insert_readback_start")
-                val saved = withTimeout(8_000L) { repository.getOperator(id) }
+                val saved = withTimeout(15_000L) { repository.getOperator(id) }
                 if (saved?.id != id) throw IllegalStateException("角色写入后读取不到")
                 DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=insert_readback_done")
                 // Persist associations before declaring the editor save successful. Unlike prompt
                 // slot preferences, these rows change what the role can retrieve at runtime.
-                withTimeout(8_000L) { repository.knowledgeBases.replaceAssignments(id, knowledgeBaseAssignments) }
+                withTimeout(15_000L) { repository.knowledgeBases.replaceAssignments(id, knowledgeBaseAssignments) }
                 // Database readback is the success boundary. The contacts state must be refreshed
                 // before the editor callback, but optional synchronization must not delay it.
                 appState.refreshOperators(repository.getAllOperatorsSync())

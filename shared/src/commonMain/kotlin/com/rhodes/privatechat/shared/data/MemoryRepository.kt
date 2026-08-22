@@ -1,6 +1,7 @@
 package com.rhodes.privatechat.shared.data
 
 import com.rhodes.privatechat.shared.db.DatabaseWrapper
+import com.rhodes.privatechat.shared.db.DatabaseDispatcher
 import com.rhodes.privatechat.shared.db.RhodesDatabase
 import com.rhodes.privatechat.shared.model.*
 import kotlinx.coroutines.Dispatchers
@@ -55,7 +56,7 @@ class MemoryRepository(private val wrapper: DatabaseWrapper) {
         }.executeAsList()
     }
 
-    suspend fun getAllMemoriesForBackup(): List<Memory> = withContext(Dispatchers.Default) {
+    suspend fun getAllMemoriesForBackup(): List<Memory> = withContext(DatabaseDispatcher.dispatcher) {
         db.memoriesQueries.getAllMemoriesForBackup() { id, sid, opId, type, content, keywords, preferences, taboos, createdAt, expiresAt ->
             Memory(id, sid, opId, try { MemoryType.valueOf(type) } catch (_: Exception) { MemoryType.SHORT_TERM }, content, keywords, preferences, taboos, createdAt, expiresAt)
         }.executeAsList()

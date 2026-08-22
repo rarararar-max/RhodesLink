@@ -68,6 +68,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import java.util.concurrent.ConcurrentHashMap
+import java.util.UUID
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
@@ -97,6 +98,7 @@ class ChatViewModel(
         private const val MAX_MERGED_USER_CHARS = 600
         private const val PRIVATE_REPLY_TIMEOUT_MS = 90_000L
         private const val MESSAGE_WRITE_TIMEOUT_MS = 8_000L
+        private const val PRIVATE_PERSONA_MAX_CHARS = 3_000
     }
 
     // === Chat state ===
@@ -166,6 +168,7 @@ class ChatViewModel(
     private var messagesJob: Job? = null
     private val chatAiJobs = ConcurrentHashMap<String, Job>()
     private val promptBuildJobs = ConcurrentHashMap<String, Job>()
+    private val privateMaintenanceJobs = ConcurrentHashMap<String, Job>()
     private val contextCircuitUntil = ConcurrentHashMap<String, Long>()
     private val pendingUserMessageIds = ConcurrentHashMap<String, MutableSet<Long>>()
     private val retryingMessageIds = ConcurrentHashMap.newKeySet<Long>()
@@ -549,6 +552,10 @@ ${text}"""
             val initialMessages = withTimeout(8_000L) { repository.getRecentMessagesSync(session.id, pageSize) }
             if (_currentSession.value?.id != session.id) return@launch
             mergeMessagesFromDatabase(initialMessages)
+            // LazyColumn starts at its spacer while data arrives asynchronously. Explicitly target
+            // the newest persisted row so opening a restored/large conversation never remains at
+            // the first visible page because the initial layout won the race.
+            _scrollToMessageId.value = initialMessages.lastOrNull()?.id
             val databaseCount = withTimeout(8_000L) { repository.getMessagesSync(session.id).size }
             DebugLogger.diagnostic("PrivateChat/InitialMessagesLoaded", "sessionId=${session.id}, databaseCount=$databaseCount, recentCount=${initialMessages.size}, stateCount=${_messages.value.size}")
             messagesJob = viewModelScope.launch {
@@ -606,6 +613,7 @@ ${text}"""
             val initialMessages = withTimeout(8_000L) { repository.getRecentMessagesSync(session.id, pageSize) }
             if (_currentSession.value?.id != session.id) return selectionId
             mergeMessagesFromDatabase(initialMessages)
+            _scrollToMessageId.value = initialMessages.lastOrNull()?.id
             val databaseCount = withTimeout(8_000L) { repository.getMessagesSync(session.id).size }
             DebugLogger.diagnostic("PrivateChat/InitialMessagesLoaded", "sessionId=${session.id}, databaseCount=$databaseCount, recentCount=${initialMessages.size}, stateCount=${_messages.value.size}, source=sync")
             messagesJob = viewModelScope.launch {
@@ -1171,6 +1179,8 @@ ${text}"""
         persistedContentOverride: String? = null,
         retryMessageId: Long? = null,
         messageTypeOverride: String? = null,
+        replyTurnIdOverride: String? = null,
+        replyLeaseTokenOverride: String? = null,
         onResponseComplete: (Boolean) -> Unit = {}
     ) {
         if (DEBUG) dumpDebugState()
@@ -1205,6 +1215,8 @@ ${text}"""
             val cacheUsage = SharedUtils.ChatUsageSummary()
             var pipelineStage = "user_message_prepare"
             var debugRoundFinished = false
+            var replyTurnId = ""
+            var replyLeaseToken = ""
             fun finishDebugRound(result: String, summary: String) {
                 if (debugRoundFinished) return
                 val usage = cacheUsage.summary()
@@ -1232,7 +1244,14 @@ ${text}"""
                         .sortedWith(compareBy<ChatMessage> { it.timestamp }.thenBy { it.id })
                     DebugLogger.diagnostic("PrivateChat/SendStep", "sessionId=${session.id}, messageId=$msgId, step=message_insert_start")
                     pipelineStage = "user_message_write"
-                    withTimeout(MESSAGE_WRITE_TIMEOUT_MS) { repository.sendMessage(session.id, userMessage) }
+                    replyTurnId = replyTurnIdOverride ?: "private:${session.id}:$msgId"
+                    val now = System.currentTimeMillis()
+                    withTimeout(MESSAGE_WRITE_TIMEOUT_MS) {
+                        repository.sendMessageAndCreateReplyTurn(session.id, userMessage, com.rhodes.privatechat.shared.model.ReplyTurn(
+                            replyTurnId, session.id, "private", if (hiddenGift) "gift" else "manual", msgId, "", mode,
+                            "pending", 0, now, "", 0, null, "", now, now, 0,
+                        ))
+                    }
                     DebugLogger.diagnostic("PrivateChat/SendStep", "sessionId=${session.id}, messageId=$msgId, step=message_insert_done")
                     recordReplyPipeline(session.id, msgId, "user_message_stored")
                     val persisted = withTimeout(MESSAGE_WRITE_TIMEOUT_MS) {
@@ -1241,6 +1260,11 @@ ${text}"""
                     DebugLogger.diagnostic("PrivateChat/SendVerification", "sessionId=${session.id}, messageId=$msgId, databaseReadBack=$persisted, stateCount=${_messages.value.count { it.sessionId == session.id }}")
                     check(persisted) { "用户消息写入后无法从数据库读回" }
                 } else {
+                    replyTurnId = replyTurnIdOverride ?: "private:${session.id}:$msgId"
+                    if (repository.replyTurns.get(replyTurnId) == null) {
+                        val now = System.currentTimeMillis()
+                        repository.createReplyTurn(com.rhodes.privatechat.shared.model.ReplyTurn(replyTurnId, session.id, "private", if (messageTypeOverride == "gift_hidden") "gift" else "manual", msgId, "", mode, "pending", 0, now, "", 0, null, "", now, now, 0))
+                    }
                     DebugLogger.diagnostic("PrivateChat/SendStep", "sessionId=${session.id}, messageId=$msgId, step=retry_update_start")
                     withTimeout(MESSAGE_WRITE_TIMEOUT_MS) { repository.updateMessageType(msgId, messageTypeOverride ?: "text") }
                     DebugLogger.diagnostic("PrivateChat/SendStep", "sessionId=${session.id}, messageId=$msgId, step=retry_update_done")
@@ -1249,8 +1273,13 @@ ${text}"""
                     }
                 }
                 userMessagePersisted = true
+                replyLeaseToken = replyLeaseTokenOverride ?: UUID.randomUUID().toString()
+                if (replyLeaseTokenOverride == null) {
+                    val claimedTurn = repository.claimReplyTurn(replyTurnId, replyLeaseToken, System.currentTimeMillis(), System.currentTimeMillis() + PRIVATE_REPLY_TIMEOUT_MS)
+                    if (claimedTurn == null) return@launch
+                }
                 if (retryMessageId == null) {
-                    com.rhodes.privatechat.automation.ManualReplyScheduler.schedule(getApplication(), session.id, msgId, isGroup = false)
+                    com.rhodes.privatechat.automation.ManualReplyScheduler.scheduleTurn(getApplication(), replyTurnId)
                 }
                 batchIds = setOf(msgId)
                 DebugLogger.chatEvent("私聊", "发送消息", "已保存", "会话=${session.operatorName}，模式=$mode")
@@ -1269,12 +1298,12 @@ ${text}"""
                 if ((sessionGenerations[session.id] ?: 0L) != generation) return@launch
                 chatAiJobs[session.id] = coroutineContext[Job]!!
                 beginLoading(session.id, requestId)
-                // Allow a short natural follow-up before creating this response batch.
+                // Keep one durable reply turn per source message. Merging turn-owned messages
+                // would leave sibling turns pending and allow recovery to duplicate replies.
                 delay(250)
                 val pendingIds = pendingUserMessageIds[session.id].orEmpty()
                 if (msgId !in pendingIds) return@launch
-                val candidateIds = pendingIds.sorted().take(MAX_MERGED_USER_MESSAGES)
-                if (candidateIds.firstOrNull() != msgId) return@launch
+                val candidateIds = listOf(msgId)
                 val batchMessages = repository.getMessagesSync(session.id)
                     .asSequence()
                     .filter { it.id in candidateIds }
@@ -1285,10 +1314,6 @@ ${text}"""
                     }
                 batchIds = batchMessages.map { it.id }.ifEmpty { listOf(msgId) }.toSet()
                 pendingUserMessageIds[session.id]?.removeAll(batchIds.toSet())
-                if (batchIds.size > 1) {
-                    val combined = batchMessages.mapIndexed { index, message -> "[${index + 1}] ${message.content}" }.joinToString("\n")
-                    text = "用户连续补充了以下消息，请按顺序视为同一轮表达并综合回应：\n$combined"
-                }
 
                 var retryCount = 0
                 val maxRetries = 3
@@ -1359,7 +1384,7 @@ ${text}"""
                         if (hasVisibleReply) {
                             if ((sessionGenerations[session.id] ?: 0L) != generation) return@launch
                             val previousState = settings.getPrivateTurnState(session.id) ?: PrivateTurnState()
-                            settings.putPrivateTurnState(session.id, PrivateTurnState(
+                            val nextTurnState = PrivateTurnState(
                                 emotion = sanitizedParsed.emotion.ifBlank { previousState.emotion },
                                 location = sanitizedParsed.location.ifBlank { previousState.location },
                                 activity = sanitizedParsed.state.ifBlank { previousState.activity },
@@ -1378,24 +1403,26 @@ ${text}"""
                                 currentAnchor = sanitizedParsed.turnAnchor.take(160),
                                 turnAdvance = sanitizedParsed.turnAdvance.take(160),
                                 threadStatus = sanitizedParsed.turnStatus.take(16)
-                            ))
-                            privateTurnStateUpdates.value++
+                            )
                             DebugLogger.diagnostic("PrivateChat/SendStep", "sessionId=${session.id}, messageId=$aiMsgId, step=ai_insert_start")
                             pipelineStage = "ai_reply_write"
                             try {
                                 withTimeout(MESSAGE_WRITE_TIMEOUT_MS) {
-                                    repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = rawJson, type = "ai_json", mode = mode, emotion = parsed.emotion, activity = parsed.state, location = parsed.location, isMe = false))
+                                    check(repository.sendReplyAndCompleteTurn(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = rawJson, type = "ai_json", mode = mode, emotion = parsed.emotion, activity = parsed.state, location = parsed.location, isMe = false), replyTurnId, replyLeaseToken, System.currentTimeMillis())) { "reply turn lease lost" }
                                 }
                             } catch (error: Exception) {
                                 DebugLogger.diagnostic("PrivateChat/AiReplyWriteFailed", "sessionId=${session.id}, userMessageId=$msgId, aiMessageId=$aiMsgId, timeout=${error is kotlinx.coroutines.TimeoutCancellationException}, errorClass=${error.javaClass.simpleName}")
                                 recordReplyPipeline(session.id, msgId, "ai_reply_write_failed", error.javaClass.simpleName)
                                 throw error
                             }
+                            settings.putPrivateTurnState(session.id, nextTurnState)
+                            privateTurnStateUpdates.value++
                             DebugLogger.diagnostic("PrivateChat/SendStep", "sessionId=${session.id}, messageId=$aiMsgId, step=ai_insert_done")
                             DebugLogger.traceFinalSaved("私聊", debugRoundId, rawJson)
                             DebugLogger.diagnostic("PrivateChat/ReplyStep", "sessionId=${session.id}, messageId=$msgId, step=reply_stored")
                             recordReplyPipeline(session.id, msgId, "ai_reply_stored", "aiMessageId=$aiMsgId")
                             responseStored = true
+                            com.rhodes.privatechat.automation.ManualReplyScheduler.completeTurn(getApplication(), replyTurnId)
                             com.rhodes.privatechat.automation.ManualReplyScheduler.complete(getApplication(), msgId)
                              val resultStatus = if (protocolComplete) "成功" else "部分成功"
                              val resultDetail = when {
@@ -1418,12 +1445,7 @@ ${text}"""
                             operatorStateUpdater.updateOperatorIntimacy(session.operatorId, affectionMod.coerceIn(0, 4))
                             settings.grantDailyLmb(currentDate, 10)
                             decrementHypnosis(session.operatorId)
-                            val sessionCounter = settings.getSessionMessageCounter(session.id) + 1
-                            settings.putSessionMessageCounter(session.id, sessionCounter)
-                            if (sessionCounter >= shortTermThreshold && generateShortTermSummary(session)) {
-                                settings.putSessionMessageCounter(session.id, 0)
-                            }
-                            extractPrivateMemoryIfNeeded(session)
+                            schedulePrivatePostReplyMaintenance(session)
                             markUnreadIfNotCurrent(session.id, aiResponseCount)
                         } else {
                             DebugLogger.log("Chat/AI", "AI没有生成可见回复，不结算互动: session=${session.id}")
@@ -1511,6 +1533,11 @@ ${text}"""
                     markPrivateMessagesUndelivered(session.id, batchIds.ifEmpty { setOf(msgId) })
                 }
             } finally {
+                if (!responseStored && replyTurnId.isNotBlank() && replyLeaseToken.isNotBlank()) {
+                    runCatching {
+                        repository.releaseReplyTurn(replyTurnId, replyLeaseToken, System.currentTimeMillis(), System.currentTimeMillis(), "reply_not_completed")
+                    }
+                }
                 if (!debugRoundFinished) {
                     val result = if (responseStored) "成功" else "失败"
                     val reason = when {
@@ -1529,7 +1556,7 @@ ${text}"""
         }
     }
 
-    fun resumePersistedReply(sessionId: String, messageId: Long, onComplete: (Boolean) -> Unit) {
+    fun resumePersistedReply(sessionId: String, messageId: Long, onComplete: (Boolean) -> Unit, replyTurnId: String? = null, replyLeaseToken: String? = null) {
         viewModelScope.launch {
             val session = repository.getSession(sessionId)
             val message = repository.getMessagesSync(sessionId).firstOrNull { it.id == messageId && it.isMe }
@@ -1545,12 +1572,14 @@ ${text}"""
                 targetMode = message.mode,
                 retryMessageId = messageId,
                 messageTypeOverride = if (isGift) "gift_hidden" else null,
+                replyTurnIdOverride = replyTurnId,
+                replyLeaseTokenOverride = replyLeaseToken,
                 onResponseComplete = onComplete
             )
         }
     }
 
-    fun sendImageMessage(imageUri: String, imageForModel: String?, caption: String = "", onResult: (Boolean) -> Unit = {}) {
+    fun sendImageMessage(imageUri: String, imageForModel: String?, caption: String = "", existingMessageId: Long? = null, replyLeaseTokenOverride: String? = null, onResult: (Boolean) -> Unit = {}) {
         val session = _currentSession.value ?: run {
             Log.w("RHODES_DEBUG", "[Vision] sendImageMessage: session is null"); onResult(false); return
         }
@@ -1583,15 +1612,27 @@ ${text}"""
         val job = viewModelScope.launch {
             val mode = _currentMode.value
             var imageMsgId = 0L
+            var replyTurnId = ""
+            var replyLeaseToken = ""
 
             // 1. 立即保存图片消息（占位 visionSummary）
-            imageMsgId = repository.getNextMessageId()
+            imageMsgId = existingMessageId ?: repository.getNextMessageId()
             val placeholderJson = json.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), JsonObject(mapOf(
                 "imageUri" to kotlinx.serialization.json.JsonPrimitive(imageUri),
                 "caption" to kotlinx.serialization.json.JsonPrimitive(caption.trim()),
                 "visionSummary" to kotlinx.serialization.json.JsonPrimitive("")
             )))
-            repository.sendMessage(session.id, ChatMessage(id = imageMsgId, sessionId = session.id, senderName = "我", content = placeholderJson, type = "image", mode = mode, timestamp = System.currentTimeMillis(), isMe = true))
+            replyTurnId = "private:${session.id}:$imageMsgId"
+            val turnNow = System.currentTimeMillis()
+            if (existingMessageId == null) {
+                repository.sendMessageAndCreateReplyTurn(session.id, ChatMessage(id = imageMsgId, sessionId = session.id, senderName = "我", content = placeholderJson, type = "image", mode = mode, timestamp = turnNow, isMe = true), com.rhodes.privatechat.shared.model.ReplyTurn(replyTurnId, session.id, "private", "image", imageMsgId, "", mode, "pending", 0, turnNow, "", 0, null, "", turnNow, turnNow, 0))
+            } else {
+                if (repository.replyTurns.get(replyTurnId) == null) repository.createReplyTurn(com.rhodes.privatechat.shared.model.ReplyTurn(replyTurnId, session.id, "private", "image", imageMsgId, "", mode, "pending", 0, turnNow, "", 0, null, "", turnNow, turnNow, 0))
+                repository.updateMessageContent(imageMsgId, placeholderJson)
+            }
+            replyLeaseToken = replyLeaseTokenOverride ?: UUID.randomUUID().toString()
+            if (replyLeaseTokenOverride == null && repository.claimReplyTurn(replyTurnId, replyLeaseToken, System.currentTimeMillis(), System.currentTimeMillis() + PRIVATE_REPLY_TIMEOUT_MS) == null) return@launch
+            if (existingMessageId == null) com.rhodes.privatechat.automation.ManualReplyScheduler.scheduleTurn(getApplication(), replyTurnId)
             onUnhideSession(session.id)
             Log.d("RHODES_VISION", "图片占位消息已保存 id=$imageMsgId")
             // Persisting the image is enough to restore the composer. Vision/role reply continues in background.
@@ -1674,7 +1715,7 @@ ${text}"""
                 val hasVisibleReply = rawJson.isNotBlank() && isCompletePrivateReply(parsed, mode)
                 if (hasVisibleReply) {
                     if ((sessionGenerations[session.id] ?: 0L) != generation) return@launch
-                    repository.sendMessage(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = rawJson, type = "ai_json", mode = mode, isMe = false))
+                    check(repository.sendReplyAndCompleteTurn(session.id, ChatMessage(id = aiMsgId, sessionId = session.id, senderName = session.operatorName, content = rawJson, type = "ai_json", mode = mode, isMe = false), replyTurnId, replyLeaseToken, System.currentTimeMillis())) { "reply turn lease lost" }
                     onUnhideSession(session.id)
                     notifyIfBackground(session, replyPreview(parsed).ifBlank { "发来一条消息" })
                     Log.d("RHODES_VISION", "AI 回复已保存 msgId=$aiMsgId")
@@ -1699,6 +1740,9 @@ ${text}"""
                 savePrivateFailure(session.id, errId, mode, e)
                 onResult(false)
             } finally {
+                if (replyTurnId.isNotBlank() && replyLeaseToken.isNotBlank()) {
+                    runCatching { repository.releaseReplyTurn(replyTurnId, replyLeaseToken, System.currentTimeMillis(), System.currentTimeMillis(), "image_reply_not_completed") }
+                }
                 if (mutexLocked) aiMutexFor(session.id).unlock()
                 finishLoading(session.id, requestId)
                 if (chatAiJobs[session.id] == coroutineContext[Job]) chatAiJobs.remove(session.id)
@@ -2333,6 +2377,40 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             // The archive timeline now has its own recall-safe memory records. Keep global
             // timeline isolation active, but allow these newly extracted private memories.
             settings.putBoolean("archive_private_recall_ready_${session.id}", true)
+        }
+    }
+
+    /** Rebuilds an image turn from its persisted source row; never sends raw image JSON as text. */
+    fun resumeImageReply(sessionId: String, messageId: Long, onComplete: (Boolean) -> Unit, replyLeaseToken: String? = null) {
+        viewModelScope.launch {
+            val message = repository.getMessagesSync(sessionId).firstOrNull { it.id == messageId && it.isMe && it.type == "image" }
+            val image = message?.let { runCatching { json.parseToJsonElement(it.content).jsonObject }.getOrNull() }
+            val uri = image?.get("imageUri")?.jsonPrimitive?.content.orEmpty()
+            val caption = image?.get("caption")?.jsonPrimitive?.content.orEmpty()
+            if (uri.isBlank()) { onComplete(false); return@launch }
+            val imageForModel = com.rhodes.privatechat.MainActivity.imageForModel(uri)
+            if (imageForModel.isNullOrBlank()) { onComplete(false); return@launch }
+            sendImageMessage(uri, imageForModel, caption, existingMessageId = messageId, replyLeaseTokenOverride = replyLeaseToken, onResult = onComplete)
+        }
+    }
+
+    /** Maintenance must never keep the visible chat turn or its per-session lock alive. */
+    private fun schedulePrivatePostReplyMaintenance(session: ChatSession) {
+        if (privateMaintenanceJobs[session.id]?.isActive == true) return
+        viewModelScope.launch(Dispatchers.Default) {
+            privateMaintenanceJobs[session.id] = coroutineContext[Job]!!
+            runCatching {
+                val sessionCounter = settings.getSessionMessageCounter(session.id) + 1
+                settings.putSessionMessageCounter(session.id, sessionCounter)
+                if (sessionCounter >= shortTermThreshold && generateShortTermSummary(session)) {
+                    settings.putSessionMessageCounter(session.id, 0)
+                }
+                extractPrivateMemoryIfNeeded(session)
+            }.onFailure { error ->
+                DebugLogger.diagnostic("PrivateChat/PostReplyMaintenanceFailed", "sessionId=${session.id},error=${error.javaClass.simpleName}")
+            }.also {
+                if (privateMaintenanceJobs[session.id] == coroutineContext[Job]) privateMaintenanceJobs.remove(session.id)
+            }
         }
     }
 

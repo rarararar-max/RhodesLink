@@ -2,6 +2,7 @@ package com.rhodes.privatechat.shared.data
 
 import android.util.Log
 import com.rhodes.privatechat.shared.db.DatabaseWrapper
+import com.rhodes.privatechat.shared.db.DatabaseDispatcher
 import com.rhodes.privatechat.shared.db.RhodesDatabase
 import com.rhodes.privatechat.shared.memory.AnchorSourcePolicy
 import com.rhodes.privatechat.shared.model.*
@@ -147,7 +148,7 @@ class AnchorRepository(private val wrapper: DatabaseWrapper, private val setting
         }
     }
 
-    suspend fun getAllAnchorsForBackup(): List<MemoryAnchor> = withContext(Dispatchers.Default) {
+    suspend fun getAllAnchorsForBackup(): List<MemoryAnchor> = withContext(DatabaseDispatcher.dispatcher) {
         db.memoryAnchorsQueries.getAllAnchorsForBackup { id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom ->
             mapAnchor(id, sid, opId, type, content, isPrivate, createdAt, expiresAt, source, sourceName, sourceActor, sourceTarget, importance, knownFrom)
         }.executeAsList()

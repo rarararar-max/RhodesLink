@@ -30,6 +30,7 @@ import com.rhodes.privatechat.shared.vector.MemoryVectorService
 import com.rhodes.privatechat.shared.vector.VectorSearchRequest
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -75,11 +76,19 @@ object ProblemChecker {
     private const val COPY_TIMEOUT_MS = 30_000L
     private const val MODEL_PROBE_TIMEOUT_MS = 60_000L
     private const val DB_NAME = "rhodes_terminal.db"
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val checkScopes = mutableMapOf<String, CoroutineScope>()
     private val current = AtomicReference<ProblemCheckProgress>()
     private val active = AtomicReference<String?>(null)
 
     fun progress(): ProblemCheckProgress = current.get() ?: ProblemCheckProgress()
+
+    private fun checkScope(checkId: String): CoroutineScope = synchronized(checkScopes) {
+        checkScopes.getOrPut(checkId) { CoroutineScope(SupervisorJob() + Dispatchers.IO) }
+    }
+
+    private fun clearCheckScope(checkId: String) {
+        synchronized(checkScopes) { checkScopes.remove(checkId) }?.cancel("problem check finished")
+    }
 
     fun start(
         context: Context,
@@ -92,7 +101,7 @@ object ProblemChecker {
         val checkId = UUID.randomUUID().toString().replace("-", "").take(8)
         if (!active.compareAndSet(null, checkId)) return active.get() ?: checkId
         val now = System.currentTimeMillis()
-        val names = listOf("cleanup_previous_probe", "database_open", "database_schema", "database_counts", "persistent_state_probe", "prompt_template_integrity", "kb_sql_count", "kb_sql_metadata", "kb_sql_content_size", "knowledge_base_metadata", "knowledge_base_assignments", "knowledge_base_chunks", "knowledge_base_readiness", "vector_sql_count", "vector_sql_signature_size", "vector_sql_invalid_rows", "vector_config_probe", "vector_embedding_probe", "vector_local_search_probe", "support_manual_probe", "support_transcript_probe", "session_integrity", "session_message_audit", "contacts_recovery", "database_copy_write_test", "backup_roles_sessions", "backup_relationships", "backup_messages", "backup_knowledge_bases", "backup_memories_anchors", "backup_memory_items", "backup_social_diaries", "backup_archives_display", "backup_gifts_dispatches_extras", "backup_settings_snapshot", "backup_snapshot_probe", "backup_file_probe", "private_message_probe", "private_pipeline_history", "private_pipeline_context", "private_pipeline_reply_parse", "private_pipeline_last_state", "group_message_probe", "group_pipeline_roster_history", "group_pipeline_context", "group_pipeline_reply_parse", "private_ai_probe", "group_ai_probe", "cleanup")
+        val names = listOf("cleanup_previous_probe", "db_native_read_probe", "db_repository_read_probe", "embedding_compute_probe", "vector_diagnostics_probe", "backup_snapshot_timing_probe", "database_open", "database_schema", "database_counts", "persistent_state_probe", "prompt_template_integrity", "kb_sql_count", "kb_sql_metadata", "kb_sql_content_size", "knowledge_base_metadata", "knowledge_base_assignments", "knowledge_base_chunks", "knowledge_base_readiness", "vector_sql_count", "vector_sql_signature_size", "vector_sql_invalid_rows", "vector_config_probe", "vector_embedding_probe", "vector_local_search_probe", "support_manual_probe", "support_transcript_probe", "session_integrity", "session_message_audit", "contacts_recovery", "database_copy_write_test", "backup_roles_sessions", "backup_relationships", "backup_messages", "backup_knowledge_bases", "backup_memories", "backup_anchors", "backup_memory_items", "backup_social_diaries", "backup_archives_display", "backup_gifts_dispatches_extras", "backup_settings_snapshot", "backup_snapshot_probe", "backup_file_probe", "private_message_probe", "private_pipeline_history", "private_pipeline_context", "private_pipeline_reply_parse", "private_pipeline_last_state", "group_message_probe", "group_pipeline_roster_history", "group_pipeline_context", "group_pipeline_reply_parse", "private_ai_probe", "group_ai_probe", "cleanup")
         current.set(ProblemCheckProgress(checkId, now, now + TOTAL_TIMEOUT_MS, currentStage = "starting", stages = names.associateWith { StageProgress() }))
         startDetachedLocalProbe(checkId, "cleanup_previous_probe", LOCAL_TIMEOUT_MS) {
             val files = cleanupOldProbes(context)
@@ -103,6 +112,10 @@ object ProblemChecker {
         startDetachedStructuredPrivateAiProbe(checkId, sharedUtils)
         startDetachedAiProbe(checkId, "group_ai_probe", sharedUtils, "ProblemCheckGroup")
         startDetachedLocalProbe(checkId, "vector_config_probe", LOCAL_TIMEOUT_MS) { vectorConfigProbe() }
+        startDetachedLocalProbe(checkId, "db_native_read_probe", LOCAL_TIMEOUT_MS) { nativeDatabaseReadProbe(context) }
+        startDetachedLocalProbe(checkId, "db_repository_read_probe", LOCAL_TIMEOUT_MS) { repositoryDatabaseReadProbe(repository) }
+        startDetachedLocalProbe(checkId, "embedding_compute_probe", LOCAL_TIMEOUT_MS) { localEmbeddingComputeProbe() }
+        startDetachedLocalProbe(checkId, "vector_diagnostics_probe", LOCAL_TIMEOUT_MS) { vectorDiagnosticsProbe() }
         startDetachedLocalProbe(checkId, "vector_embedding_probe", COPY_TIMEOUT_MS) { vectorEmbeddingProbe() }
         // A production-store search needs an isolated seeded vector to prove ranking semantics.
         // Do not write diagnostic vectors into user namespaces; configuration and embedding are
@@ -110,8 +123,8 @@ object ProblemChecker {
         mark(checkId, "vector_local_search_probe", ProblemStageStatus.NOT_RUN, detail = "reason=requires_isolated_seeded_vector_store;production_data_not_modified")
         mark(checkId, "backup_file_probe", ProblemStageStatus.NOT_RUN, detail = "depends_on=backup_snapshot_probe;run backup export separately when snapshot check passes")
         mark(checkId, "cleanup", ProblemStageStatus.NOT_RUN, detail = "temporary chat probes clean up their own data")
-        scope.launch { runDatabaseLane(checkId, context, repository, sharedUtils, appState) }
-        scope.launch {
+        checkScope(checkId).launch { runDatabaseLane(checkId, context, repository, sharedUtils, appState) }
+        checkScope(checkId).launch {
             while (active.get() == checkId) {
                 delay(100L)
                 val snapshot = progress()
@@ -126,11 +139,12 @@ object ProblemChecker {
                 if (done) {
                     current.compareAndSet(snapshot, snapshot.copy(finishedAt = System.currentTimeMillis()))
                     active.compareAndSet(checkId, null)
+                    clearCheckScope(checkId)
                     break
                 }
             }
         }
-        scope.launch {
+        checkScope(checkId).launch {
             delay(TOTAL_TIMEOUT_MS)
             abandon(checkId)
         }
@@ -150,6 +164,7 @@ object ProblemChecker {
         }
         current.set(old.copy(finishedAt = now, currentStage = old.currentStage, stages = stages, abandoned = true))
         active.compareAndSet(checkId, null)
+        clearCheckScope(checkId)
     }
 
     private suspend fun launchProbe(checkId: String, name: String, timeoutMs: Long, block: suspend () -> Any?) {
@@ -175,7 +190,7 @@ object ProblemChecker {
         mark(checkId, name, ProblemStageStatus.RUNNING)
         val started = SystemClock.elapsedRealtime()
         val completed = java.util.concurrent.atomic.AtomicBoolean(false)
-        scope.launch {
+        checkScope(checkId).launch {
             val result = runCatching {
                 sharedUtils.chat(
                     listOf(AiMessage("system", "只回复：检测成功"), AiMessage("user", "请确认聊天模型可用。")),
@@ -195,7 +210,7 @@ object ProblemChecker {
                 }
             )
         }
-        scope.launch {
+        checkScope(checkId).launch {
             delay(MODEL_PROBE_TIMEOUT_MS)
             if (completed.compareAndSet(false, true)) {
                 mark(checkId, name, ProblemStageStatus.TIMEOUT, MODEL_PROBE_TIMEOUT_MS, "errorClass=AI_TIMEOUT,errorMessage=AI request exceeded ${MODEL_PROBE_TIMEOUT_MS / 1000}s")
@@ -267,9 +282,9 @@ object ProblemChecker {
         appendPipeline(snapshot, "群聊发送与存储", listOf("group_message_probe", "group_pipeline_roster_history", "group_pipeline_reply_parse"))
         appendPipeline(snapshot, "群聊上下文与提示词前置条件", listOf("group_pipeline_context"))
         appendPipeline(snapshot, "群聊 AI 回复", listOf("group_ai_probe"))
-        appendPipeline(snapshot, "向量化与记忆检索", listOf("vector_config_probe", "vector_sql_count", "vector_sql_signature_size", "vector_sql_invalid_rows", "vector_embedding_probe"))
+        appendPipeline(snapshot, "向量化与记忆检索", listOf("vector_config_probe", "embedding_compute_probe", "vector_diagnostics_probe", "vector_sql_count", "vector_sql_signature_size", "vector_sql_invalid_rows", "vector_embedding_probe"))
         appendPipeline(snapshot, "客服本地能力", listOf("support_manual_probe", "support_transcript_probe"))
-        appendPipeline(snapshot, "本地数据库与备份", listOf("database_open", "database_schema", "persistent_state_probe", "session_integrity", "database_copy_write_test", "backup_roles_sessions", "backup_relationships", "backup_messages", "backup_knowledge_bases", "backup_memories_anchors", "backup_memory_items", "backup_social_diaries", "backup_archives_display", "backup_gifts_dispatches_extras", "backup_settings_snapshot", "backup_snapshot_probe"))
+        appendPipeline(snapshot, "本地数据库与备份", listOf("database_open", "database_schema", "persistent_state_probe", "session_integrity", "database_copy_write_test", "backup_snapshot_timing_probe", "backup_roles_sessions", "backup_relationships", "backup_messages", "backup_knowledge_bases", "backup_memories", "backup_anchors", "backup_memory_items", "backup_social_diaries", "backup_archives_display", "backup_gifts_dispatches_extras", "backup_settings_snapshot", "backup_snapshot_probe"))
         if (status != "running") appendLine("建议：${when {
             snapshot.stages["knowledge_base_metadata"]?.status == ProblemStageStatus.TIMEOUT && snapshot.stages["kb_sql_metadata"]?.status == ProblemStageStatus.SUCCESS -> "原生 SQLite 已正常读取知识库表，但应用 SQLDelight 仓库读取超时；已定位为应用数据库调度/共享连接路径，请查看 diagnosis.detail。"
             snapshot.stages["backup_snapshot_probe"]?.status == ProblemStageStatus.TIMEOUT -> "备份快照构建超时；聊天与模型探针已独立继续执行。请查看技术详情中的备份数据分类。"
@@ -295,12 +310,12 @@ object ProblemChecker {
         }
     }
 
-    /** A blocking local call may ignore cancellation; its reporting deadline must not block later checks. */
+    /** A timed-out probe receives cancellation. Native SQLite/file calls may still need to drain. */
     private fun startDetachedLocalProbe(checkId: String, name: String, timeoutMs: Long, block: suspend () -> Any?) {
         mark(checkId, name, ProblemStageStatus.RUNNING)
         val started = SystemClock.elapsedRealtime()
         val completed = java.util.concurrent.atomic.AtomicBoolean(false)
-        scope.launch {
+        val worker = checkScope(checkId).launch {
             val result = runCatching { block() }
             if (!completed.compareAndSet(false, true)) return@launch
             val elapsed = SystemClock.elapsedRealtime() - started
@@ -309,9 +324,12 @@ object ProblemChecker {
                 onFailure = { error -> mark(checkId, name, ProblemStageStatus.FAILED, elapsed, "errorClass=${errorClass(error)},errorMessage=${error.message.orEmpty().replace('\n', ' ').take(160)}") }
             )
         }
-        scope.launch {
+        checkScope(checkId).launch {
             delay(timeoutMs)
-            if (completed.compareAndSet(false, true)) mark(checkId, name, ProblemStageStatus.TIMEOUT, timeoutMs, "errorClass=STAGE_TIMEOUT,errorMessage=stage exceeded ${timeoutMs / 1000}s;workerMayContinue=true")
+            if (completed.compareAndSet(false, true)) {
+                worker.cancel("problem check stage timeout")
+                mark(checkId, name, ProblemStageStatus.TIMEOUT, timeoutMs, "errorClass=STAGE_TIMEOUT,errorMessage=stage exceeded ${timeoutMs / 1000}s;cancellationRequested=true")
+            }
         }
     }
 
@@ -352,21 +370,22 @@ object ProblemChecker {
             Triple("session_integrity", LOCAL_TIMEOUT_MS, suspend { sessionIntegrity(context) }),
             Triple("session_message_audit", LOCAL_TIMEOUT_MS, suspend { sessionMessageAudit(repository) }),
             Triple("contacts_recovery", LOCAL_TIMEOUT_MS, suspend { recoverContacts(repository, appState) }),
-            Triple("private_message_probe", LOCAL_TIMEOUT_MS, suspend { privateChatProbe(repository, appState) }),
+            Triple("private_message_probe", COPY_TIMEOUT_MS, suspend { privateChatProbe(context, checkId) }),
             Triple("private_pipeline_history", LOCAL_TIMEOUT_MS, suspend { privatePipelineHistoryProbe(repository) }),
             Triple("private_pipeline_context", LOCAL_TIMEOUT_MS, suspend { privatePipelineContextProbe(repository) }),
             Triple("private_pipeline_reply_parse", LOCAL_TIMEOUT_MS, suspend { privatePipelineReplyParseProbe(repository, sharedUtils) }),
             Triple("private_pipeline_last_state", LOCAL_TIMEOUT_MS, suspend { privatePipelineLastStateProbe() }),
-            Triple("group_message_probe", LOCAL_TIMEOUT_MS, suspend { groupChatProbe(repository, appState) }),
+            Triple("group_message_probe", COPY_TIMEOUT_MS, suspend { groupChatProbe(context, checkId) }),
             Triple("group_pipeline_roster_history", LOCAL_TIMEOUT_MS, suspend { groupPipelineRosterHistoryProbe(repository) }),
             Triple("group_pipeline_context", LOCAL_TIMEOUT_MS, suspend { groupPipelineContextProbe(repository) }),
             Triple("group_pipeline_reply_parse", LOCAL_TIMEOUT_MS, suspend { groupPipelineReplyParseProbe(repository) }),
             Triple("database_copy_write_test", COPY_TIMEOUT_MS, suspend { databaseCopyWrite(context, checkId) }),
             Triple("backup_roles_sessions", LOCAL_TIMEOUT_MS, suspend { backupRolesSessionsProbe(repository) }),
-            Triple("backup_relationships", COPY_TIMEOUT_MS, suspend { backupRelationshipsProbe(repository) }),
+            Triple("backup_relationships", LOCAL_TIMEOUT_MS, suspend { backupRelationshipsProbe(repository) }),
             Triple("backup_messages", COPY_TIMEOUT_MS, suspend { backupMessagesProbe(repository) }),
             Triple("backup_knowledge_bases", COPY_TIMEOUT_MS, suspend { backupKnowledgeBasesProbe(repository) }),
-            Triple("backup_memories_anchors", COPY_TIMEOUT_MS, suspend { backupMemoriesAnchorsProbe(repository) }),
+            Triple("backup_memories", COPY_TIMEOUT_MS, suspend { backupMemoriesProbe(repository) }),
+            Triple("backup_anchors", COPY_TIMEOUT_MS, suspend { backupAnchorsProbe(repository) }),
             Triple("backup_memory_items", COPY_TIMEOUT_MS, suspend { backupMemoryItemsProbe(repository) }),
             Triple("backup_social_diaries", COPY_TIMEOUT_MS, suspend { backupSocialDiariesProbe(repository) }),
             Triple("backup_archives_display", COPY_TIMEOUT_MS, suspend { backupArchivesDisplayProbe(repository) }),
@@ -386,10 +405,18 @@ object ProblemChecker {
                 return
             }
         }
-        startDetachedLocalProbe(checkId, "backup_snapshot_probe", COPY_TIMEOUT_MS) { backupSnapshotProbe(repository, appState) }
+        startDetachedLocalProbe(checkId, "backup_snapshot_probe", COPY_TIMEOUT_MS) { backupSnapshotTimingProbe(repository, appState) }
+        mark(checkId, "backup_snapshot_timing_probe", ProblemStageStatus.NOT_RUN, detail = "reason=reported_by_backup_snapshot_probe;avoids_concurrent_full_snapshot")
     }
 
     private fun stageDisplayName(name: String): String = when (name) {
+        "vector_diagnostics_probe" -> "向量 SQL、解码与评分"
+        "backup_snapshot_timing_probe" -> "备份快照读取与序列化估算"
+        "backup_memories" -> "备份传统记忆读取"
+        "backup_anchors" -> "备份记忆锚点读取"
+        "db_native_read_probe" -> "原生 SQLite 基础读取"
+        "db_repository_read_probe" -> "应用数据库读取"
+        "embedding_compute_probe" -> "本地向量计算"
         "private_message_probe", "group_message_probe" -> "消息保存与 AI 回复写回"
         "private_pipeline_history" -> "会话与历史对话读取"
         "private_pipeline_context" -> "角色、记忆、知识库与提示词前置条件"
@@ -427,6 +454,8 @@ object ProblemChecker {
     private fun diagnosis(p: ProblemCheckProgress): String = when {
         p.stages.values.any { it.status == ProblemStageStatus.PENDING || it.status == ProblemStageStatus.RUNNING } -> "CHECK_RUNNING"
         p.abandoned -> "${p.currentStage.uppercase()}_PROBE_BLOCKED"
+        p.stages["db_native_read_probe"]?.status in setOf(ProblemStageStatus.FAILED, ProblemStageStatus.TIMEOUT) -> "NATIVE_DATABASE_READ_FAILED"
+        p.stages["db_repository_read_probe"]?.status in setOf(ProblemStageStatus.FAILED, ProblemStageStatus.TIMEOUT) -> "SHARED_DATABASE_DRIVER_OR_DISPATCHER_BLOCKED"
         p.stages["kb_sql_count"]?.status in setOf(ProblemStageStatus.FAILED, ProblemStageStatus.TIMEOUT) -> "KNOWLEDGE_BASE_TABLE_ACCESS_FAILED"
         p.stages["kb_sql_metadata"]?.status in setOf(ProblemStageStatus.FAILED, ProblemStageStatus.TIMEOUT) -> "KNOWLEDGE_BASE_METADATA_READ_FAILED"
         p.stages["kb_sql_content_size"]?.status in setOf(ProblemStageStatus.FAILED, ProblemStageStatus.TIMEOUT) -> "KNOWLEDGE_BASE_CONTENT_SIZE_READ_FAILED"
@@ -447,7 +476,7 @@ object ProblemChecker {
         p.stages["support_manual_probe"]?.status != ProblemStageStatus.SUCCESS -> "SUPPORT_MANUAL_FAILED"
         p.stages["support_transcript_probe"]?.status != ProblemStageStatus.SUCCESS -> "SUPPORT_TRANSCRIPT_FAILED"
         p.stages["backup_snapshot_probe"]?.status != ProblemStageStatus.SUCCESS -> "BACKUP_SNAPSHOT_FAILED"
-        p.stages["backup_file_probe"]?.status != ProblemStageStatus.SUCCESS -> "BACKUP_FILE_VALIDATION_FAILED"
+        p.stages["backup_file_probe"]?.status in setOf(ProblemStageStatus.FAILED, ProblemStageStatus.TIMEOUT, ProblemStageStatus.ABANDONED) -> "BACKUP_FILE_VALIDATION_FAILED"
         p.stages["session_integrity"]?.status == ProblemStageStatus.SUCCESS && p.stages["session_integrity"]?.detail?.let { detail ->
             !detail.contains("orphanPrivateSessions=0") ||
                 !detail.contains("duplicatePrivateOperators=0") ||
@@ -478,9 +507,8 @@ object ProblemChecker {
     }
 
     private suspend fun backupRelationshipsProbe(repository: ChatRepository): String {
-        val operators = repository.getAllOperatorsSync()
-        val relationships = operators.flatMap { repository.getRelationships(it.id) }
-        return "operators=${operators.size},queries=${operators.size},relationships=${relationships.size}"
+        val relationships = repository.getAllRelationshipsForBackup()
+        return "queries=1,relationships=${relationships.size},bulkRead=true"
     }
 
     private suspend fun backupMessagesProbe(repository: ChatRepository): String {
@@ -498,17 +526,23 @@ object ProblemChecker {
         return "books=${books.size},chunks=${chunks.size},assignments=${assignments.size},rawContentChars=${books.sumOf { it.rawContent.length }},chunkContentChars=${chunks.sumOf { it.content.length }}"
     }
 
-    private suspend fun backupMemoriesAnchorsProbe(repository: ChatRepository): String {
+    private suspend fun backupMemoriesProbe(repository: ChatRepository): String {
         val operators = repository.getAllOperatorsSync().mapTo(mutableSetOf()) { it.id }
         val sessions = repository.getAllSessionsSync().mapTo(mutableSetOf()) { it.id }
         val memories = repository.getAllMemoriesForBackup()
-        val anchors = repository.getAllAnchorsForBackup()
         val exportedMemories = memories.count { memory ->
             (memory.type == com.rhodes.privatechat.shared.model.MemoryType.DAILY && memory.operatorId == "daily" && memory.sessionId.startsWith("daily_")) ||
                 (memory.operatorId in operators && memory.sessionId in sessions)
         }
+        return "memories=${memories.size},exportedMemories=$exportedMemories"
+    }
+
+    private suspend fun backupAnchorsProbe(repository: ChatRepository): String {
+        val operators = repository.getAllOperatorsSync().mapTo(mutableSetOf()) { it.id }
+        val sessions = repository.getAllSessionsSync().mapTo(mutableSetOf()) { it.id }
+        val anchors = repository.getAllAnchorsForBackup()
         val exportedAnchors = anchors.count { it.operatorId in operators && it.sessionId in sessions }
-        return "memories=${memories.size},exportedMemories=$exportedMemories,anchors=${anchors.size},exportedAnchors=$exportedAnchors"
+        return "anchors=${anchors.size},exportedAnchors=$exportedAnchors"
     }
 
     private suspend fun backupMemoryItemsProbe(repository: ChatRepository): String {
@@ -685,7 +719,7 @@ object ProblemChecker {
         mark(checkId, "private_ai_probe", ProblemStageStatus.RUNNING)
         val started = SystemClock.elapsedRealtime()
         val completed = java.util.concurrent.atomic.AtomicBoolean(false)
-        scope.launch {
+        checkScope(checkId).launch {
             val result = runCatching {
                 val raw = sharedUtils.chat(
                     listOf(
@@ -708,7 +742,7 @@ object ProblemChecker {
                 onFailure = { error -> mark(checkId, "private_ai_probe", ProblemStageStatus.FAILED, elapsed, "errorClass=${errorClass(error)},errorMessage=${error.message.orEmpty().replace('\n', ' ').take(160)}") }
             )
         }
-        scope.launch {
+        checkScope(checkId).launch {
             delay(MODEL_PROBE_TIMEOUT_MS)
             if (completed.compareAndSet(false, true)) mark(checkId, "private_ai_probe", ProblemStageStatus.TIMEOUT, MODEL_PROBE_TIMEOUT_MS, "errorClass=AI_TIMEOUT,errorMessage=structured private reply exceeded ${MODEL_PROBE_TIMEOUT_MS / 1000}s")
         }
@@ -950,42 +984,108 @@ object ProblemChecker {
         return "memoryV2Enabled=true,embeddingRequest=true,vectorSearch=true,resultCount=${results.size},userContentSent=false"
     }
 
-    private suspend fun privateChatProbe(repository: ChatRepository, appState: AppStateHolder): String {
-        val probeId = "__probe_private_${System.currentTimeMillis()}"
-        val session = ChatSession(id = "session_$probeId", operatorId = probeId, operatorName = "私聊自检")
-        val messageId = repository.getNextMessageId()
-        val replyId = repository.getNextMessageId()
+    /** Production data remains read-only. Message persistence is validated only in a disposable DB copy. */
+    private fun privateChatProbe(context: Context, checkId: String): String = databaseCopyChatRoundTrip(context, checkId, "private")
+
+    /** Group and private probes use separate copies, so neither can leave a user-visible session behind. */
+    private fun groupChatProbe(context: Context, checkId: String): String = databaseCopyChatRoundTrip(context, checkId, "group")
+
+    private fun databaseCopyChatRoundTrip(context: Context, checkId: String, kind: String): String {
+        val source = context.getDatabasePath(DB_NAME)
+        val dir = File(context.cacheDir, "problem-probe")
+        if (!dir.exists() && !dir.mkdirs()) throw IllegalStateException("cannot create probe directory")
+        val copy = File(dir, "rhodes_${kind}_$checkId.db")
+        val sessionId = "__diagnostic_${kind}_$checkId"
+        val now = System.currentTimeMillis()
         try {
-            repository.insertSession(session)
-            repository.sendMessage(session.id, ChatMessage(id = messageId, sessionId = session.id, senderName = "我", content = "[本地自检消息]", type = "system", isMe = true, timestamp = System.currentTimeMillis()))
-            val userReadBack = repository.getMessagesSync(session.id).any { it.id == messageId && it.isMe }
-            if (!userReadBack) throw IllegalStateException("private user message was not readable after save")
-            val replyJson = probeAiReplyJson(session.operatorName)
-            repository.sendMessage(session.id, ChatMessage(id = replyId, sessionId = session.id, senderName = session.operatorName, content = replyJson, type = "ai_json", isMe = false, timestamp = System.currentTimeMillis() + 1))
-            val replyReadBack = repository.getMessagesSync(session.id).any { it.id == replyId && !it.isMe && it.type == "ai_json" && isValidProbeAiReply(it.content) }
-            if (!replyReadBack) throw IllegalStateException("private AI reply was not readable after save")
-            return "temporarySession=true,userMessageSave=true,userMessageVisible=true,aiReplySave=true,aiReplyReadBack=true"
+            // A main DB plus independently copied WAL can describe no real database state.
+            // Flush first, then copy only the checkpointed main file into the disposable probe.
+            SQLiteDatabase.openDatabase(source.path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+                db.rawQuery("PRAGMA wal_checkpoint(FULL)", null).use { checkpoint ->
+                    check(checkpoint.moveToFirst() && checkpoint.getInt(0) == 0) { "cannot checkpoint database for diagnostic copy" }
+                }
+            }
+            FileInputStream(source).use { input -> FileOutputStream(copy).use { output -> input.copyTo(output) } }
+            return SQLiteDatabase.openDatabase(copy.path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+                val maxId = db.rawQuery("SELECT COALESCE(MAX(id), 0) FROM chat_messages", null).use { cursor ->
+                    if (cursor.moveToFirst()) cursor.getLong(0) else 0L
+                }
+                val userId = maxId + 1L
+                val replyId = maxId + 2L
+                db.beginTransaction()
+                try {
+                    db.execSQL("INSERT INTO chat_sessions(id,operatorId,operatorName,lastMessage,lastTime) VALUES(?,?,?,?,?)", arrayOf(sessionId, "__diagnostic__", "诊断", "", now))
+                    db.execSQL("INSERT INTO chat_messages(id,sessionId,senderId,senderName,content,type,mode,timestamp,isMe) VALUES(?,?,?,?,?,?,?,?,?)", arrayOf(userId, sessionId, "", "我", "[diagnostic]", "system", "offline", now, 1))
+                    db.execSQL("INSERT INTO chat_messages(id,sessionId,senderId,senderName,content,type,mode,timestamp,isMe) VALUES(?,?,?,?,?,?,?,?,?)", arrayOf(replyId, sessionId, "", "诊断", probeAiReplyJson("诊断"), "ai_json", "offline", now + 1L, 0))
+                    val rows = db.rawQuery("SELECT id,type,isMe FROM chat_messages WHERE sessionId=? ORDER BY id", arrayOf(sessionId)).use { cursor ->
+                        generateSequence { if (cursor.moveToNext()) Triple(cursor.getLong(0), cursor.getString(1), cursor.getInt(2)) else null }.toList()
+                    }
+                    check(rows.size == 2 && rows[0].first == userId && rows[0].third == 1 && rows[1].first == replyId && rows[1].second == "ai_json") { "copied database message round trip failed" }
+                    db.setTransactionSuccessful()
+                    "productionDatabaseReadOnly=true,copyWrite=true,userMessageReadBack=true,aiReplyReadBack=true"
+                } finally {
+                    db.endTransaction()
+                }
+            }
         } finally {
-            runCatching { withTimeout(1_500L) { repository.deleteDiagnosticSession(session.id) } }
+            copy.delete()
         }
     }
 
-    private suspend fun groupChatProbe(repository: ChatRepository, appState: AppStateHolder): String {
-        val probeId = "group___probe_${System.currentTimeMillis()}"
-        val group = ChatSession(id = probeId, operatorId = probeId, operatorName = "群聊自检")
-        val messageId = repository.getNextMessageId()
-        val replyId = repository.getNextMessageId()
-        try {
-            repository.insertSession(group)
-            repository.sendMessage(group.id, ChatMessage(id = messageId, sessionId = group.id, senderName = "我", content = "[本地自检消息]", type = "system", isMe = true, timestamp = System.currentTimeMillis()))
-            if (repository.getMessagesSync(group.id).none { it.id == messageId && it.isMe }) throw IllegalStateException("group user message was not readable after save")
-            val replyJson = probeAiReplyJson(group.operatorName)
-            repository.sendMessage(group.id, ChatMessage(id = replyId, sessionId = group.id, senderName = group.operatorName, content = replyJson, type = "ai_json", isMe = false, timestamp = System.currentTimeMillis() + 1))
-            if (repository.getMessagesSync(group.id).none { it.id == replyId && !it.isMe && it.type == "ai_json" && isValidProbeAiReply(it.content) }) throw IllegalStateException("group AI reply was not readable after save")
-            return "temporarySession=true,userMessageSave=true,userMessageVisible=true,aiReplySave=true,aiReplyReadBack=true"
-        } finally {
-            runCatching { withTimeout(1_500L) { repository.deleteDiagnosticSession(group.id) } }
+    private suspend fun vectorDiagnosticsProbe(): String {
+        val gateway = runCatching {
+            org.koin.java.KoinJavaComponent.get<com.rhodes.privatechat.shared.vector.VectorStoreGateway>(com.rhodes.privatechat.shared.vector.VectorStoreGateway::class.java)
+        }.getOrElse { throw IllegalStateException("vector store unavailable", it) }
+        val local = gateway as? com.rhodes.privatechat.shared.vector.LocalVectorStoreGateway
+            ?: return "skipped=non_local_vector_store"
+        val metrics = local.diagnose(VectorSearchRequest(
+            ownerType = "__diagnostic__", ownerId = "__diagnostic__", query = "Rhodes vector timing probe", limit = 1, candidateLimit = 1,
+        ))
+        return "candidateSqlMs=${metrics.sqlMs},decodeScoreMs=${metrics.decodeScoreMs},candidates=${metrics.candidateCount},decoded=${metrics.decodedCount},decodeFailures=${metrics.decodeFailures},dimensionMismatches=${metrics.dimensionMismatches},selected=${metrics.selectedCount},userContentSent=false"
+    }
+
+    private suspend fun backupSnapshotTimingProbe(repository: ChatRepository, appState: AppStateHolder): String {
+        val started = SystemClock.elapsedRealtime()
+        val payload = BackupContentFilter.apply(BackupSnapshotBuilder(repository, settingsForProbe()).build(), BackupContentSelection.All)
+        val snapshotMs = SystemClock.elapsedRealtime() - started
+        // Do not serialize a second full payload during self-check: that can itself exhaust a
+        // troubled device. The estimate is deliberately conservative and content-free.
+        val textChars = payload.content.messages.orEmpty().sumOf { it.content.length.toLong() } +
+            payload.content.knowledgeBases.orEmpty().sumOf { it.rawContent.length.toLong() } +
+            payload.content.knowledgeBaseChunks.orEmpty().sumOf { it.content.length.toLong() } +
+            payload.content.memoryItems.orEmpty().sumOf { it.content.length.toLong() + it.rawJson.length.toLong() } +
+            payload.chatArchives.sumOf { it.messagesJson.length.toLong() + it.stateJson.length.toLong() } +
+            payload.chatHistorySegments.sumOf { it.messagesJson.length.toLong() }
+        val records = payload.content.messages.orEmpty().size + payload.content.knowledgeBaseChunks.orEmpty().size +
+            payload.content.memoryItems.orEmpty().size + payload.chatArchives.size + payload.chatHistorySegments.size
+        val estimatedBytes = textChars * 3L + records * 512L
+        return "snapshotMs=$snapshotMs,estimatedArchiveBytes=$estimatedBytes,textChars=$textChars,messages=${payload.content.messages.orEmpty().size},knowledgeBaseChunks=${payload.content.knowledgeBaseChunks.orEmpty().size},memoryItems=${payload.content.memoryItems.orEmpty().size}"
+    }
+
+    /** Native reads bypass SQLDelight and identify file/SQLite availability without mutating data. */
+    private fun nativeDatabaseReadProbe(context: Context): String = SQLiteDatabase.openDatabase(context.getDatabasePath(DB_NAME).path, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+        fun count(table: String): Long = db.rawQuery("SELECT COUNT(*) FROM [$table]", null).use { cursor ->
+            check(cursor.moveToFirst()) { "count query returned no row" }
+            cursor.getLong(0)
         }
+        buildString {
+            append("nativeRead=true,sessions=").append(count("chat_sessions"))
+            append(",vectors=").append(count("vector_memories"))
+        }
+    }
+
+    /** This is deliberately tiny: it distinguishes repository/driver queueing from a large export read. */
+    private suspend fun repositoryDatabaseReadProbe(repository: ChatRepository): String {
+        val sessions = repository.getAllSessionsSync()
+        val books = repository.knowledgeBases.getAll()
+        return "repositoryRead=true,sessions=${sessions.size},knowledgeBases=${books.size}"
+    }
+
+    /** Local hash embedding is CPU-only. It must remain fast even if the vector table is large. */
+    private suspend fun localEmbeddingComputeProbe(): String {
+        val started = SystemClock.elapsedRealtime()
+        val vector = com.rhodes.privatechat.shared.vector.LocalHashEmbeddingGateway().embed("Rhodes local embedding health probe")
+        return "localEmbedding=true,dimensions=${vector.size},elapsedMs=${SystemClock.elapsedRealtime() - started}"
     }
 
     private fun probeAiReplyJson(speaker: String): String = JsonObject(

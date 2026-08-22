@@ -46,6 +46,26 @@ data class BackupManifest(
     val recordCounts: Map<String, Int>,
     val files: List<BackupFileEntry>,
     val excludedCategories: List<String>,
+    val layout: String = "single_payload",
+    val pages: List<BackupPageEntry> = emptyList(),
+)
+
+@Serializable
+enum class BackupCategory { ROLES, CHATS, MEMORIES, SOCIAL, KNOWLEDGE_BASES, EXTRAS, SETTINGS }
+
+@Serializable
+data class BackupPageEntry(
+    val category: BackupCategory,
+    val pageIndex: Int,
+    val path: String,
+    val recordCount: Int,
+)
+
+@Serializable
+data class BackupPayloadPage(
+    val category: BackupCategory,
+    val pageIndex: Int,
+    val payload: BackupPayload,
 )
 
 @Serializable

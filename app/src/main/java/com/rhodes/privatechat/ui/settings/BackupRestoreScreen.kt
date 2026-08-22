@@ -78,6 +78,8 @@ import com.rhodes.privatechat.ui.theme.TextSecondary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import org.koin.compose.koinInject
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -102,6 +104,7 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     var state by remember { mutableStateOf<BackupUiState>(BackupUiState.Idle) }
     var resultDialog by remember { mutableStateOf<Pair<String, String>?>(null) }
     var progressDialog by remember { mutableStateOf<String?>(null) }
+    var exportJob by remember { mutableStateOf<Job?>(null) }
     var restoreOptions by remember { mutableStateOf(com.rhodes.privatechat.data.backup.BackupRestoreOptions()) }
     var showIssueDialog by remember { mutableStateOf(false) }
     var showOperatorPicker by remember { mutableStateOf(false) }
@@ -119,31 +122,36 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
 
     val createBackup = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
-        scope.launch {
+        exportJob = scope.launch {
             state = BackupUiState.Working("正在整理数据和图片")
             progressDialog = "正在整理数据和图片"
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    val snapshot = BackupContentFilter.apply(BackupSnapshotBuilder(repository, settings).build(), backupSelection)
-                    val (payload, media) = if (includeBackupMedia) {
-                        BackupMediaCollector(context).attachCollectedMedia(snapshot)
-                    } else snapshot to BackupMediaCollector.Result(emptyList(), emptyList(), emptyList())
-                    context.contentResolver.openOutputStream(uri, "w")?.use { output ->
-                        writer.writeFullBackup(output, payload, media.sources, media.sources.isNotEmpty())
-                    } ?: error("无法写入所选位置")
+            try {
+                val detail = withContext(Dispatchers.IO) {
+                    val result = com.rhodes.privatechat.data.backup.BackupExportCoordinator(context, repository, settings, writer, reader).export(
+                        uri, backupSelection, includeBackupMedia,
+                    ) { progress -> progressDialog = progress.detail }
                     buildString {
-                        append("备份已保存：${payload.content.operators.orEmpty().size} 个角色、${payload.content.messages.orEmpty().size} 条消息、${media.items.size} 个本机图片")
-                        if (media.skippedUris.isNotEmpty()) append("。另有 ${media.skippedUris.size} 个外部图片未包含，换机后可能无法显示")
+                        append("备份已保存：${result.payload.content.operators.orEmpty().size} 个角色、${result.payload.content.messages.orEmpty().size} 条消息、${result.media.items.size} 个本机图片")
+                        if (result.media.skippedUris.isNotEmpty()) append("。另有 ${result.media.skippedUris.size} 个外部图片未包含，换机后可能无法显示")
+                        result.stagedFile.delete()
                     }
                 }
-            }.onSuccess { state = BackupUiState.Success("备份已保存", it); progressDialog = null; resultDialog = "备份已保存" to it }
-                .onFailure {
-                    runCatching { context.contentResolver.delete(uri, null, null) }
-                    val detail = it.message ?: "创建备份失败"
-                    state = BackupUiState.Error(detail)
-                    progressDialog = null
-                    resultDialog = "备份失败" to detail
-                }
+                state = BackupUiState.Success("备份已保存", detail)
+                progressDialog = null
+                resultDialog = "备份已保存" to detail
+            }
+            catch (cancelled: CancellationException) {
+                state = BackupUiState.Idle
+                progressDialog = null
+                throw cancelled
+            } catch (error: Throwable) {
+                val detail = error.message ?: "创建备份失败"
+                state = BackupUiState.Error(detail)
+                progressDialog = null
+                resultDialog = "备份失败" to detail
+            } finally {
+                exportJob = null
+            }
         }
     }
     val openBackup = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -445,7 +453,7 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             onDismissRequest = {},
             title = { Text("正在处理") },
             text = { Text(detail, color = TextSecondary) },
-            confirmButton = {},
+            confirmButton = { if (exportJob != null) TextButton(onClick = { exportJob?.cancel() }) { Text("取消") } },
         )
     }
     if (showIssueDialog && state is BackupUiState.RestoreReady) {

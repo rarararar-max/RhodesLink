@@ -14,6 +14,7 @@ object ManualReplyScheduler {
     private const val SESSION_ID = "sessionId"
     private const val MESSAGE_ID = "messageId"
     private const val IS_GROUP = "isGroup"
+    private const val TURN_ID = "turnId"
 
     fun schedule(context: Context, sessionId: String, messageId: Long, isGroup: Boolean) {
         val request = OneTimeWorkRequestBuilder<ManualReplyWorker>()
@@ -29,7 +30,20 @@ object ManualReplyScheduler {
         )
     }
 
+    fun scheduleTurn(context: Context, turnId: String) {
+        val request = OneTimeWorkRequestBuilder<ManualReplyWorker>()
+            .setInitialDelay(5, TimeUnit.MINUTES)
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setInputData(workDataOf(TURN_ID to turnId))
+            .build()
+        WorkManager.getInstance(context).enqueueUniqueWork("reply-turn-$turnId", ExistingWorkPolicy.KEEP, request)
+    }
+
     fun complete(context: Context, messageId: Long) {
         WorkManager.getInstance(context).cancelUniqueWork("manual-reply-$messageId")
+    }
+
+    fun completeTurn(context: Context, turnId: String) {
+        WorkManager.getInstance(context).cancelUniqueWork("reply-turn-$turnId")
     }
 }

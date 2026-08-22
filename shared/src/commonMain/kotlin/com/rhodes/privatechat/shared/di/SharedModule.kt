@@ -35,6 +35,7 @@ fun sharedModule(databaseWrapper: DatabaseWrapper) = module {
     single { get<ChatRepository>().mahjong }
     single { get<ChatRepository>().cleanup }
     single { get<ChatRepository>().knowledgeBases }
+    single { get<ChatRepository>().replyTurns }
     single { KnowledgeBaseIndexService(get(), get(), get()) }
     single { KnowledgeBaseContextBuilder(get(), get()) }
     single { KnowledgeBaseImportService(get(), get(), get()) }

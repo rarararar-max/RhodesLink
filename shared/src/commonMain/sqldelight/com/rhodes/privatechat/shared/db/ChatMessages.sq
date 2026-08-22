@@ -16,11 +16,20 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     isMe INTEGER NOT NULL
 );
 
+CREATE INDEX IF NOT EXISTS chat_messages_session_timestamp_id
+ON chat_messages(sessionId, timestamp, id);
+
+CREATE INDEX IF NOT EXISTS chat_messages_timestamp_id
+ON chat_messages(timestamp, id);
+
 getMessages:
 SELECT * FROM chat_messages WHERE sessionId = ? ORDER BY timestamp ASC, id ASC;
 
 getMessagesSync:
 SELECT * FROM chat_messages WHERE sessionId = ? ORDER BY timestamp ASC, id ASC;
+
+getAllMessagesForBackup:
+SELECT * FROM chat_messages ORDER BY sessionId ASC, timestamp ASC, id ASC;
 
 getRecentMessages:
 SELECT * FROM chat_messages WHERE sessionId = ? ORDER BY timestamp DESC, id DESC LIMIT ?;

@@ -20,8 +20,8 @@ class BackupSnapshotBuilder(
     suspend fun build(operators: List<Operator>? = null): BackupPayload {
         val snapshotOperators = operators ?: repository.getAllOperatorsSync()
         val sessions = repository.getAllSessionsSync()
-        val relationships = snapshotOperators.flatMap { repository.getRelationships(it.id) }
-        val messages = sessions.flatMap { repository.getMessagesSync(it.id) }
+        val relationships = repository.getAllRelationshipsForBackup()
+        val messages = repository.getAllMessagesForBackup()
         val knowledgeBases = repository.knowledgeBases.getAll()
         val knowledgeBaseChunks = repository.knowledgeBases.getAllChunksForBackup()
         val knowledgeBaseAssignments = repository.knowledgeBases.getAllAssignmentsForBackup()
@@ -55,7 +55,7 @@ class BackupSnapshotBuilder(
             displayEvents = repository.messages.getAllDisplayEvents(),
             chatArchives = repository.archives.getAllArchives(),
             chatHistorySegments = repository.archives.getAllHistorySegments(),
-            giftRecords = snapshotOperators.flatMap { repository.getGiftsByOperator(it.id) },
+            giftRecords = repository.getAllGifts(),
             dispatchRecords = repository.dispatches.getAllDispatches(),
             mahjongSave = repository.mahjong.getMahjongSave(),
             sharedExperiences = repository.getAllSharedExperiences(),

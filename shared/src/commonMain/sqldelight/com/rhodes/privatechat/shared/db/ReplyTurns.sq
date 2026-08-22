@@ -1,0 +1,68 @@
+CREATE TABLE IF NOT EXISTS reply_turns (
+    id TEXT NOT NULL PRIMARY KEY,
+    sessionId TEXT NOT NULL,
+    surface TEXT NOT NULL,
+    triggerKind TEXT NOT NULL,
+    sourceMessageId INTEGER,
+    autoPlanToken TEXT NOT NULL DEFAULT '',
+    mode TEXT NOT NULL DEFAULT 'online',
+    status TEXT NOT NULL DEFAULT 'pending',
+    attemptCount INTEGER NOT NULL DEFAULT 0,
+    nextAttemptAt INTEGER NOT NULL DEFAULT 0,
+    leaseToken TEXT NOT NULL DEFAULT '',
+    leaseUntil INTEGER NOT NULL DEFAULT 0,
+    responseMessageId INTEGER,
+    lastError TEXT NOT NULL DEFAULT '',
+    createdAt INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL,
+    completedAt INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS reply_turns_manual_source_unique
+ON reply_turns(sessionId, sourceMessageId) WHERE sourceMessageId IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS reply_turns_group_auto_plan_unique
+ON reply_turns(sessionId, autoPlanToken) WHERE triggerKind = 'group_auto' AND autoPlanToken <> '';
+
+CREATE INDEX IF NOT EXISTS reply_turns_claimable
+ON reply_turns(status, nextAttemptAt, leaseUntil, sessionId);
+
+insertReplyTurnIfAbsent:
+INSERT OR IGNORE INTO reply_turns(id, sessionId, surface, triggerKind, sourceMessageId, autoPlanToken, mode, status, nextAttemptAt, createdAt, updatedAt)
+VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?);
+
+getReplyTurn:
+SELECT * FROM reply_turns WHERE id = ?;
+
+getReplyTurnBySource:
+SELECT * FROM reply_turns WHERE sessionId = ? AND sourceMessageId = ?;
+
+claimReplyTurn:
+UPDATE reply_turns SET status = 'running', attemptCount = attemptCount + 1, leaseToken = ?, leaseUntil = ?, updatedAt = ?, lastError = ''
+WHERE id = ? AND status IN ('pending', 'failed', 'running') AND nextAttemptAt <= ?
+AND (status != 'running' OR leaseUntil <= ?);
+
+reserveReplyResponseId:
+UPDATE reply_turns SET responseMessageId = ?, updatedAt = ?
+WHERE id = ? AND status = 'running' AND leaseToken = ? AND responseMessageId IS NULL;
+
+completeReplyTurn:
+UPDATE reply_turns SET status = 'succeeded', leaseToken = '', leaseUntil = 0, completedAt = ?, updatedAt = ?, lastError = ''
+WHERE id = ? AND status = 'running' AND leaseToken = ?;
+
+isReplyTurnOwned:
+SELECT COUNT(*) > 0 FROM reply_turns WHERE id = ? AND status = 'running' AND leaseToken = ?;
+
+releaseReplyTurn:
+UPDATE reply_turns SET status = 'pending', leaseToken = '', leaseUntil = 0, nextAttemptAt = ?, updatedAt = ?, lastError = ?
+WHERE id = ? AND status = 'running' AND leaseToken = ?;
+
+failReplyTurn:
+UPDATE reply_turns SET status = 'failed', leaseToken = '', leaseUntil = 0, updatedAt = ?, lastError = ?
+WHERE id = ? AND status = 'running' AND leaseToken = ?;
+
+deleteReplyTurnsBySession:
+DELETE FROM reply_turns WHERE sessionId = ?;
+
+deleteAllReplyTurns:
+DELETE FROM reply_turns;

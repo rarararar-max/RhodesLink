@@ -1,11 +1,6 @@
 package com.rhodes.privatechat.shared.vector
 
 import com.rhodes.privatechat.shared.settings.SettingsRepository
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -19,8 +14,6 @@ class MemoryVectorService(
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<Double>>?): Boolean = size > 32
     }
     private val embeddingCacheMutex = Mutex()
-    private val embeddingScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private val inFlightEmbeddings = mutableMapOf<String, Deferred<List<Double>>>()
 
     private fun activeGateway(): EmbeddingGateway {
         val signature = listOf(settings.vectorProviderMode, settings.vectorBaseUrl, settings.vectorModelName, settings.vectorApiKey, settings.apiKey).joinToString("|")
@@ -99,17 +92,13 @@ class MemoryVectorService(
         val gateway = activeGateway()
         val key = "$gatewaySignature:$normalized"
         embeddingCacheMutex.withLock { embeddingCache[key] }?.let { return it }
-        val request = embeddingCacheMutex.withLock {
-            embeddingCache[key]?.let { return it }
-            inFlightEmbeddings[key] ?: embeddingScope.async { gateway.embed(normalized) }.also { inFlightEmbeddings[key] = it }
+        // Embedding belongs to its caller. A prompt timeout must also cancel this work instead of
+        // leaving an application-wide request running after the reply has degraded.
+        val embedding = gateway.embed(normalized)
+        if (embedding.isUsableEmbedding()) {
+            embeddingCacheMutex.withLock { embeddingCache[key] = embedding }
         }
-        return try {
-            request.await().also { embedding -> embeddingCacheMutex.withLock { embeddingCache[key] = embedding } }
-        } finally {
-            embeddingCacheMutex.withLock {
-                if (inFlightEmbeddings[key] === request && request.isCompleted) inFlightEmbeddings.remove(key)
-            }
-        }
+        return embedding
     }
 
     private fun List<Double>.isUsableEmbedding(): Boolean = isNotEmpty() && all { it.isFinite() }

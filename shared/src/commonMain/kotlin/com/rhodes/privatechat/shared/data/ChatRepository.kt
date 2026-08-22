@@ -4,6 +4,8 @@ import com.rhodes.privatechat.shared.db.DatabaseWrapper
 import com.rhodes.privatechat.shared.db.RhodesDatabase
 import com.rhodes.privatechat.shared.model.*
 import com.rhodes.privatechat.shared.settings.SettingsRepository
+import com.rhodes.privatechat.shared.model.ReplyTurn
+import com.rhodes.privatechat.shared.model.ChatMessage
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -45,6 +47,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     val sharedExperiences = SharedExperienceRepository(wrapper)
     val archives = ChatArchiveRepository(wrapper)
     val knowledgeBases = KnowledgeBaseRepository(wrapper)
+    val replyTurns = ReplyTurnRepository(wrapper)
 
     /** Reserved for destructive restore only. Callers must validate the backup before entering it. */
     suspend fun runRestoreTransaction(block: RhodesDatabase.() -> Unit) = withContext(Dispatchers.Default) {
@@ -105,6 +108,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     val allOperators: Flow<List<Operator>> get() = operators.allOperators
     suspend fun getAllOperatorsSync() = operators.getAllOperatorsSync()
     suspend fun getOperator(id: String) = operators.getOperator(id)
+    suspend fun getAllRelationshipsForBackup() = relationships.getAllRelationshipsForBackup()
     suspend fun insertPresetOperators() = operators.insertPresetOperators()
     suspend fun ensurePresetOperators(excludedIds: Set<String> = emptySet()) = operators.ensurePresetOperators(excludedIds)
     fun isPresetOperatorId(id: String) = operators.isPresetOperatorId(id)
@@ -299,6 +303,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     fun getMessages(sessionId: String) = messages.getMessages(sessionId)
     fun getRecentMessages(sessionId: String, limit: Long = 200) = messages.getRecentMessages(sessionId, limit)
     suspend fun getMessagesSync(sessionId: String) = messages.getMessagesSync(sessionId)
+    suspend fun getAllMessagesForBackup() = messages.getAllMessagesForBackup()
     suspend fun getRecentMessagesSync(sessionId: String, limit: Long = 200) = messages.getRecentMessagesSync(sessionId, limit)
     suspend fun getMessagesBefore(sessionId: String, beforeTimestamp: Long, beforeId: Long, limit: Long = 100) = messages.getMessagesBefore(sessionId, beforeTimestamp, beforeId, limit)
     suspend fun updateMessageContent(id: Long, content: String) = messages.updateMessageContent(id, content)
@@ -312,8 +317,15 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun deleteDisplayEvent(messageId: Long, segmentIndex: Int) = messages.deleteDisplayEvent(messageId, segmentIndex)
     suspend fun deleteMessageDisplayEvents(messageId: Long) = messages.deleteMessageDisplayEvents(messageId)
     suspend fun sendMessage(sessionId: String, message: ChatMessage) = messages.sendMessage(sessionId, message)
+    suspend fun sendMessageAndCreateReplyTurn(sessionId: String, message: ChatMessage, turn: ReplyTurn) = messages.sendMessageAndCreateReplyTurn(sessionId, message, turn)
+    suspend fun sendReplyAndCompleteTurn(sessionId: String, message: ChatMessage, turnId: String, leaseToken: String, now: Long) = messages.sendReplyAndCompleteTurn(sessionId, message, turnId, leaseToken, now)
     suspend fun restoreMessage(message: ChatMessage) = messages.restoreMessage(message)
     suspend fun getNextMessageId() = messages.getNextMessageId()
+    suspend fun createReplyTurn(turn: ReplyTurn) = replyTurns.createIfAbsent(turn)
+    suspend fun claimReplyTurn(id: String, token: String, now: Long, leaseUntil: Long) = replyTurns.claim(id, token, now, leaseUntil)
+    suspend fun completeReplyTurn(id: String, token: String, now: Long) = replyTurns.complete(id, token, now)
+    suspend fun releaseReplyTurn(id: String, token: String, retryAt: Long, now: Long, error: String) = replyTurns.release(id, token, retryAt, now, error)
+
     suspend fun deleteSessionMessages(sessionId: String) = messages.deleteSessionMessages(sessionId)
     suspend fun deleteMessage(id: Long) = messages.deleteMessage(id)
     suspend fun getMessageCount() = messages.getMessageCount()
@@ -430,6 +442,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
         val db = wrapper.database
         memoryV2.invalidateDerivedBySession(sessionId)
         db.transaction {
+            db.replyTurnsQueries.deleteReplyTurnsBySession(sessionId)
             db.chatDisplayEventsQueries.deleteSessionDisplayEvents(sessionId)
             db.chatMessagesQueries.deleteSessionMessages(sessionId)
             db.memoriesQueries.deleteMemoriesBySession(sessionId)

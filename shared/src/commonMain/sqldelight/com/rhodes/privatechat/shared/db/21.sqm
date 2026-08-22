@@ -1,0 +1,19 @@
+CREATE INDEX IF NOT EXISTS chat_messages_session_timestamp_id
+ON chat_messages(sessionId, timestamp, id);
+
+CREATE INDEX IF NOT EXISTS chat_messages_timestamp_id
+ON chat_messages(timestamp, id);
+
+DELETE FROM relationships
+WHERE id NOT IN (
+  SELECT MAX(id) FROM relationships GROUP BY operatorId, relatedOperatorId
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS relationships_operator_related_unique
+ON relationships(operatorId, relatedOperatorId);
+
+CREATE INDEX IF NOT EXISTS relationships_related_operator
+ON relationships(relatedOperatorId, operatorId);
+
+CREATE INDEX IF NOT EXISTS vector_memories_owner_signature_source_candidates
+ON vector_memories(ownerType, ownerId, embeddingSignature, sourceType, expiresAt, importance DESC, createdAt DESC);

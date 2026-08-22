@@ -1,6 +1,7 @@
 package com.rhodes.privatechat.shared.data
 
 import com.rhodes.privatechat.shared.db.DatabaseWrapper
+import com.rhodes.privatechat.shared.db.DatabaseDispatcher
 import com.rhodes.privatechat.shared.db.RhodesDatabase
 import com.rhodes.privatechat.shared.memory.AnchorSourcePolicy
 import com.rhodes.privatechat.shared.model.*
@@ -27,6 +28,12 @@ class RelationshipRepository(private val wrapper: DatabaseWrapper) {
 
     suspend fun getRelationships(operatorId: String): List<Relationship> = withContext(Dispatchers.Default) {
         db.relationshipsQueries.getRelationshipsSync(operatorId) { id, opId, relOpId, relOpName, type, intimacy, isPreset, note ->
+            mapRelationship(id, opId, relOpId, relOpName, type, intimacy, isPreset, note)
+        }.executeAsList()
+    }
+
+    suspend fun getAllRelationshipsForBackup(): List<Relationship> = withContext(DatabaseDispatcher.dispatcher) {
+        db.relationshipsQueries.getAllRelationshipsForBackup { id, opId, relOpId, relOpName, type, intimacy, isPreset, note ->
             mapRelationship(id, opId, relOpId, relOpName, type, intimacy, isPreset, note)
         }.executeAsList()
     }

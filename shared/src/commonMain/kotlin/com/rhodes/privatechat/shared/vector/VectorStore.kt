@@ -39,7 +39,7 @@ data class VectorSearchRequest(
      * Bounds JSON decoding and cosine work after exact SQL scope filtering.  A value of
      * zero keeps the legacy unbounded behavior and should only be used by maintenance UI.
      */
-    val candidateLimit: Int = 300,
+    val candidateLimit: Int = 160,
     val minCreatedAt: Long = 0L,
     val minImportance: Double = 0.0,
     val embeddingSignature: String = "",

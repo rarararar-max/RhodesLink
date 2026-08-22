@@ -25,6 +25,7 @@ class RestoreDatabaseExecutor(private val repository: ChatRepository) {
                 memoriesQueries.deleteAllMemories()
             }
             if (selection.chats) {
+                replyTurnsQueries.deleteAllReplyTurns()
                 chatDisplayEventsQueries.deleteAllDisplayEvents()
                 chatArchivesQueries.deleteAllArchives()
                 chatArchivesQueries.deleteAllHistorySegments()
@@ -89,11 +90,17 @@ class RestoreDatabaseExecutor(private val repository: ChatRepository) {
                 momentIds[moment.id] = momentsQueries.getLastInsertRowId().executeAsOne()
             }
             val commentIds = mutableMapOf<Long, Long>()
-            payload.content.momentComments.orEmpty().forEach { comment ->
-                val momentId = momentIds[comment.momentId] ?: return@forEach
-                val parentId = commentIds[comment.parentCommentId] ?: 0L
-                momentCommentsQueries.insertComment(momentId, comment.operatorId, comment.operatorName, comment.content, parentId, comment.replyToName, comment.createdAt, if (comment.isRead) 1 else 0)
-                commentIds[comment.id] = momentCommentsQueries.getLastInsertRowId().executeAsOne()
+            val pendingComments = payload.content.momentComments.orEmpty().toMutableList()
+            while (pendingComments.isNotEmpty()) {
+                val ready = pendingComments.filter { it.parentCommentId == 0L || it.parentCommentId in commentIds }
+                check(ready.isNotEmpty()) { "评论父级引用无法恢复" }
+                ready.forEach { comment ->
+                    val momentId = requireNotNull(momentIds[comment.momentId]) { "评论引用的动态无法恢复" }
+                    val parentId = if (comment.parentCommentId == 0L) 0L else requireNotNull(commentIds[comment.parentCommentId]) { "评论父级无法恢复" }
+                    momentCommentsQueries.insertComment(momentId, comment.operatorId, comment.operatorName, comment.content, parentId, comment.replyToName, comment.createdAt, if (comment.isRead) 1 else 0)
+                    commentIds[comment.id] = momentCommentsQueries.getLastInsertRowId().executeAsOne()
+                }
+                pendingComments.removeAll(ready.toSet())
             }
             payload.content.momentLikes.orEmpty().forEach { like ->
                 momentIds[like.momentId]?.let { momentId -> momentLikesQueries.insertLike(momentId, like.operatorId, like.operatorName, like.createdAt) }

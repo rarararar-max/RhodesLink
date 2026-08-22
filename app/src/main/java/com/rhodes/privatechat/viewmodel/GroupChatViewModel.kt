@@ -48,6 +48,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import java.util.concurrent.ConcurrentHashMap
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 import java.io.IOException
 import kotlinx.serialization.json.Json
@@ -100,6 +101,9 @@ class GroupChatViewModel(
         private const val GROUP_MESSAGE_WRITE_TIMEOUT_MS = 8_000L
         private const val GROUP_REPLY_TIMEOUT_MS = 100_000L
         private const val GROUP_FORMAT_REPAIR_TIMEOUT_MS = 20_000L
+        private const val GROUP_RULES_MAX_CHARS = 3_000
+        private const val GROUP_MEMBER_PERSONA_MAX_CHARS = 1_500
+        private const val GROUP_MEMBER_PROFILES_MAX_CHARS = 8_000
         // A WorkManager task can construct a second MainViewModel in this process.
         // Auto scheduling must therefore be shared across all GroupChatViewModel instances.
         private val autoChatGenerations = ConcurrentHashMap<String, Long>()
@@ -150,6 +154,7 @@ class GroupChatViewModel(
     private val groupGenerations = ConcurrentHashMap<String, Long>()
     private val retryingMessageIds = ConcurrentHashMap.newKeySet<Long>()
     private val restartCleanupJobs = ConcurrentHashMap<String, Job>()
+    private val groupMaintenanceJobs = ConcurrentHashMap<String, Job>()
 
     private fun logAutoInterval(groupId: String, event: String, details: String) {
         Log.d("AutoGroupInterval", "AUTO_GROUP_INTERVAL vm=$autoLogInstanceId event=$event groupId=$groupId $details")
@@ -584,7 +589,7 @@ class GroupChatViewModel(
             }
     }
 
-    fun sendGroupMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online", autoSpeak: Boolean = false, isAuto: Boolean = false, autoGeneration: Long? = null, userMessageAlreadyStored: Boolean = false, sourceMessageId: Long? = null, retryMessageId: Long? = null, onMessageSent: () -> Unit = {}, onResponseComplete: (Boolean) -> Unit = {}) {
+    fun sendGroupMessage(groupSessionId: String, groupName: String, text: String, mode: String = "online", autoSpeak: Boolean = false, isAuto: Boolean = false, autoGeneration: Long? = null, userMessageAlreadyStored: Boolean = false, sourceMessageId: Long? = null, retryMessageId: Long? = null, replyTurnIdOverride: String? = null, replyLeaseTokenOverride: String? = null, onMessageSent: () -> Unit = {}, onResponseComplete: (Boolean) -> Unit = {}) {
         if (!isAuto) {
             DebugLogger.diagnostic("GroupChat/SendRequested", "groupId=$groupSessionId, textLength=${text.length}, mode=$mode, alreadyStored=$userMessageAlreadyStored")
         }
@@ -603,6 +608,8 @@ class GroupChatViewModel(
             val generation = groupGenerations[groupSessionId] ?: 0L
             scope.launch {
             var userMessageId: Long? = null
+            var replyTurnId = ""
+            var replyLeaseToken = ""
             var failureMessageId: Long? = retryMessageId ?: sourceMessageId
             val debugRoundId = DebugLogger.startConversationRound("群聊", groupName, mode)
             val cacheUsage = SharedUtils.ChatUsageSummary()
@@ -616,18 +623,23 @@ class GroupChatViewModel(
                 failureMessageId = userMsgId
                 val userMessageTimestamp = System.currentTimeMillis()
                 DebugLogger.diagnostic("GroupChat/SendStep", "groupId=$groupSessionId, messageId=$userMsgId, step=message_insert_start")
+                replyTurnId = "group:$groupSessionId:$userMsgId"
+                val turnNow = System.currentTimeMillis()
                 withTimeout(GROUP_MESSAGE_WRITE_TIMEOUT_MS) {
-                    repository.sendMessage(groupSessionId, ChatMessage(
+                    repository.sendMessageAndCreateReplyTurn(groupSessionId, ChatMessage(
                         id = userMsgId, sessionId = groupSessionId,
                         senderName = "我", content = text, type = "text", mode = mode,
                         timestamp = userMessageTimestamp, isMe = true
+                    ), com.rhodes.privatechat.shared.model.ReplyTurn(
+                        replyTurnId, groupSessionId, "group", "manual", userMsgId, "", mode,
+                        "pending", 0, turnNow, "", 0, null, "", turnNow, turnNow, 0,
                     ))
                 }
                 DebugLogger.diagnostic("GroupChat/SendStep", "groupId=$groupSessionId, messageId=$userMsgId, step=message_insert_done")
                 // Clear the input as soon as persistence succeeds; optional recovery scheduling
                 // must not make an already saved message look unsent.
                 onMessageSent()
-                runCatching { com.rhodes.privatechat.automation.ManualReplyScheduler.schedule(context, groupSessionId, userMsgId, isGroup = true) }
+                runCatching { com.rhodes.privatechat.automation.ManualReplyScheduler.scheduleTurn(context, replyTurnId) }
                     .onFailure { DebugLogger.diagnostic("GroupChat/ReplyRecoveryScheduleFailed", "groupId=$groupSessionId, messageId=$userMsgId, error=${it.javaClass.simpleName}:${it.message?.take(120)}") }
                 DebugLogger.chatEvent("群聊", "发送消息", "已保存", "群=$groupName，模式=$mode")
                 DebugLogger.conversationStep(debugRoundId, "群聊", "用户消息", "已保存", "消息ID=$userMsgId")
@@ -656,6 +668,16 @@ class GroupChatViewModel(
             var batchIds = emptySet<Long>()
             var responseStored = false
             try {
+                if (replyTurnId.isBlank()) replyTurnId = replyTurnIdOverride ?: "group:$groupSessionId:${retryMessageId ?: sourceMessageId ?: userMessageId ?: return@launch}"
+                replyLeaseToken = replyLeaseTokenOverride ?: UUID.randomUUID().toString()
+                if (replyLeaseTokenOverride == null) {
+                    if (repository.replyTurns.get(replyTurnId) == null) {
+                        val now = System.currentTimeMillis()
+                        repository.createReplyTurn(com.rhodes.privatechat.shared.model.ReplyTurn(replyTurnId, groupSessionId, "group", "manual", retryMessageId ?: sourceMessageId ?: userMessageId, "", mode, "pending", 0, now, "", 0, null, "", now, now, 0))
+                    }
+                    val claimed = repository.claimReplyTurn(replyTurnId, replyLeaseToken, System.currentTimeMillis(), System.currentTimeMillis() + GROUP_REPLY_TIMEOUT_MS)
+                    if (claimed == null) return@launch
+                }
                 mutexFor(groupSessionId).lock()
                 mutexLocked = true
                 if ((groupGenerations[groupSessionId] ?: 0L) != generation) return@launch
@@ -725,8 +747,9 @@ class GroupChatViewModel(
                         senderName = "系统", content = "所有成员已被禁言，无法回复",
                         type = "system", mode = mode, isMe = false
                     ))
+                    repository.replyTurns.complete(replyTurnId, replyLeaseToken, System.currentTimeMillis())
+                    com.rhodes.privatechat.automation.ManualReplyScheduler.completeTurn(context, replyTurnId)
                     responseStored = true
-                    batchIds.firstOrNull()?.let { com.rhodes.privatechat.automation.ManualReplyScheduler.complete(context, it) }
                     setGroupLoading(groupSessionId, false)
                     if (mutexLocked) { mutexFor(groupSessionId).unlock(); mutexLocked = false }
                     return@launch
@@ -1226,18 +1249,19 @@ class GroupChatViewModel(
                     val parsedTurnState = parseGroupTurnState(rawBase)?.let(::validateGroupTurnState)
                     val verifiedState = parsedTurnState
                         ?: deriveGroupTurnState(userMsg = if (isAuto) "" else text, previous = groupTurnState)
-                    settings.putGroupTurnState(groupSessionId, verifiedState.copy(updatedAt = System.currentTimeMillis()))
-                    settings.putGroupPlotSummary(groupSessionId, verifiedState.currentTopic)
                     if (parsedTurnState == null) {
                         DebugLogger.conversationStep(debugRoundId, "群聊", "连续性状态", "已保守降级", "模型未输出完整群聊回合状态，已使用当前用户消息和上一有效状态生成保守状态")
                     }
-                    repository.sendMessage(groupSessionId, ChatMessage(
+                    check(repository.sendReplyAndCompleteTurn(groupSessionId, ChatMessage(
                         id = aiMsgId, sessionId = groupSessionId,
                         senderName = groupName, content = storedContent,
                         type = "ai_json", mode = mode, isMe = false
-                    ))
+                    ), replyTurnId, replyLeaseToken, System.currentTimeMillis())) { "reply turn lease lost" }
+                    settings.putGroupTurnState(groupSessionId, verifiedState.copy(updatedAt = System.currentTimeMillis()))
+                    settings.putGroupPlotSummary(groupSessionId, verifiedState.currentTopic)
                     DebugLogger.traceFinalSaved("群聊", debugRoundId, storedContent)
                     responseStored = true
+                    com.rhodes.privatechat.automation.ManualReplyScheduler.completeTurn(context, replyTurnId)
                     batchIds.forEach { messageId ->
                         com.rhodes.privatechat.automation.ManualReplyScheduler.complete(context, messageId)
                     }
@@ -1260,23 +1284,7 @@ class GroupChatViewModel(
                     }
                 }
                 if (filtered.isNotEmpty()) markGroupUnreadIfNotCurrent(groupSessionId, visibleGroupMessageCount(filtered, mode))
-                if (filtered.isNotEmpty()) extractGroupMemoryIfNeeded(groupSessionId, groupName)
-                if (filtered.isNotEmpty()) {
-                    val summaryCursor = if (settings.summaryCursorEnabled) settings.getSummaryCursor(groupSessionId) else 0L
-                    val unsummarized = repository.getMessagesSync(groupSessionId).count { message ->
-                        message.id > summaryCursor && message.type == "ai_json"
-                    }
-                    if (unsummarized >= settings.summaryThreshold && groupSessionId.isNotBlank()) {
-                        val gs = repository.getSession(groupSessionId)
-                        if (gs != null) {
-                            if (generateGroupShortTermSummary(groupSessionId, gs.operatorName)) {
-                                sessionMessageCounter.remove(groupSessionId)
-                            }
-                            // 生成群聊每日摘要（昨日消息 >1 条时）
-                            generateGroupDailySummary(groupSessionId, gs.operatorName)
-                        }
-                    }
-                }
+                if (filtered.isNotEmpty()) scheduleGroupPostReplyMaintenance(groupSessionId, groupName)
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                 if ((groupGenerations[groupSessionId] ?: 0L) != generation) return@launch
                 if (isAuto && autoGeneration != null && autoChatGenerations[groupSessionId] != autoGeneration) return@launch
@@ -1303,6 +1311,9 @@ class GroupChatViewModel(
                 markGroupMessagesUndelivered(groupSessionId, if (batchIds.isNotEmpty()) batchIds else failureMessageId?.let(::setOf).orEmpty(), groupName)
                 _lastSendError.value = errMsg
             } finally {
+                if (!responseStored && replyTurnId.isNotBlank() && replyLeaseToken.isNotBlank()) {
+                    runCatching { repository.releaseReplyTurn(replyTurnId, replyLeaseToken, System.currentTimeMillis(), System.currentTimeMillis(), "reply_not_completed") }
+                }
                 setGroupLoading(groupSessionId, false)
                 if (groupAiJobs[groupSessionId] == coroutineContext[Job]) groupAiJobs.remove(groupSessionId)
                 if (mutexLocked) mutexFor(groupSessionId).unlock()
@@ -1331,7 +1342,8 @@ class GroupChatViewModel(
                 put("giftName", giftName)
                 put("recipientNames", buildJsonArray { recipientNames.forEach { add(JsonPrimitive(it)) } })
             }.toString()
-            repository.sendMessage(groupSessionId, ChatMessage(
+            val turnId = "group:$groupSessionId:$id"
+            repository.sendMessageAndCreateReplyTurn(groupSessionId, ChatMessage(
                 id = id,
                 sessionId = groupSessionId,
                 senderName = "我",
@@ -1340,10 +1352,11 @@ class GroupChatViewModel(
                 mode = mode,
                 timestamp = giftTimestamp,
                 isMe = true
-            ))
+            ), com.rhodes.privatechat.shared.model.ReplyTurn(turnId, groupSessionId, "group", "gift", id, "", mode, "pending", 0, giftTimestamp, "", 0, null, "", giftTimestamp, giftTimestamp, 0))
+            com.rhodes.privatechat.automation.ManualReplyScheduler.scheduleTurn(context, turnId)
             unhideSession(groupSessionId)
             DebugLogger.chatEvent("送礼", "群聊礼物", "开始", "群=$groupName，礼物=$giftName，收礼人=${recipientNames.joinToString("、")}")
-            sendGroupMessage(groupSessionId, groupName, text, mode, userMessageAlreadyStored = true, sourceMessageId = id)
+            sendGroupMessage(groupSessionId, groupName, text, mode, userMessageAlreadyStored = true, sourceMessageId = id, replyTurnIdOverride = turnId)
         }
     }
 
@@ -1407,10 +1420,21 @@ class GroupChatViewModel(
             return false
         }
         autoRoundCounts[groupId] = plan.round
+        val turnId = "auto:$groupId:${plan.token}"
+        val turnNow = System.currentTimeMillis()
+        repository.createReplyTurn(com.rhodes.privatechat.shared.model.ReplyTurn(
+            turnId, groupId, "group", "group_auto", null, plan.token, getGroupChatMode(groupId),
+            "pending", 0, turnNow, "", 0, null, "", turnNow, turnNow, 0,
+        ))
+        val leaseToken = UUID.randomUUID().toString()
+        if (repository.claimReplyTurn(turnId, leaseToken, System.currentTimeMillis(), System.currentTimeMillis() + GROUP_REPLY_TIMEOUT_MS) == null) {
+            GroupAutoChatScheduler.releaseClaim(context, settings, groupId, plan.round - 1)
+            return false
+        }
         return kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
             try {
                 sendGroupMessage(groupId, session.operatorName, "", getGroupChatMode(groupId), isAuto = true,
-                    autoGeneration = expectedGeneration, onResponseComplete = { succeeded ->
+                    autoGeneration = expectedGeneration, replyTurnIdOverride = turnId, replyLeaseTokenOverride = leaseToken, onResponseComplete = { succeeded ->
                         if (succeeded && isAutoGroupChatEnabled(groupId)) {
                             GroupAutoChatScheduler.scheduleNext(context, settings, groupId, plan.round, plan.token)
                         } else {
@@ -1620,7 +1644,7 @@ $members
         return hasDialogue && membersComplete && (mode == "online" || results.any { it.type == "narration" && it.message.isNotBlank() })
     }
 
-    fun resumePersistedReply(groupSessionId: String, msgId: Long, onComplete: (Boolean) -> Unit) {
+    fun resumePersistedReply(groupSessionId: String, msgId: Long, onComplete: (Boolean) -> Unit, replyTurnId: String? = null, replyLeaseToken: String? = null) {
         scope.launch {
             val session = repository.getSession(groupSessionId)
             val message = repository.getMessagesSync(groupSessionId).firstOrNull { it.id == msgId && it.isMe }
@@ -1637,6 +1661,8 @@ $members
                 mode = message.mode,
                 userMessageAlreadyStored = true,
                 retryMessageId = msgId,
+                replyTurnIdOverride = replyTurnId,
+                replyLeaseTokenOverride = replyLeaseToken,
                 onResponseComplete = onComplete
             )
         }
@@ -1758,7 +1784,7 @@ $members
         return (total * 1.2).toInt()
     }
 
-    fun sendGroupImageMessage(groupSessionId: String, groupName: String, imageUri: String, imageForModel: String?, caption: String, mode: String = "online", existingMessageId: Long? = null, onMessageSent: () -> Unit = {}, onResult: (Boolean) -> Unit = {}) {
+    fun sendGroupImageMessage(groupSessionId: String, groupName: String, imageUri: String, imageForModel: String?, caption: String, mode: String = "online", existingMessageId: Long? = null, replyLeaseTokenOverride: String? = null, onMessageSent: () -> Unit = {}, onResult: (Boolean) -> Unit = {}) {
         if (groupSessionId.isBlank()) { onResult(false); return }
         sharedUtils.chatConfigurationError()?.let { error ->
             _lastSendError.value = error
@@ -1779,6 +1805,9 @@ $members
         val imageJob = scope.launch {
             var visionMutexLocked = false
             var imageMessageId = 0L
+            var replyTurnId = ""
+            var replyLeaseToken = ""
+            var handedOffToGroupReply = false
             try {
                 groupAiJobs[groupSessionId] = coroutineContext[Job]!!
                 if ((groupGenerations[groupSessionId] ?: 0L) != generation) return@launch
@@ -1795,7 +1824,9 @@ $members
                 )))
                 if (existingMessageId == null) {
                     val imageTimestamp = System.currentTimeMillis()
-                    repository.sendMessage(groupSessionId, ChatMessage(
+                    val turnId = "group:$groupSessionId:$id"
+                    replyTurnId = turnId
+                    repository.sendMessageAndCreateReplyTurn(groupSessionId, ChatMessage(
                         id = id,
                         sessionId = groupSessionId,
                         senderName = "我",
@@ -1804,10 +1835,24 @@ $members
                         mode = mode,
                         timestamp = imageTimestamp,
                         isMe = true
+                    ), com.rhodes.privatechat.shared.model.ReplyTurn(
+                        turnId, groupSessionId, "group", "image", id, "", mode,
+                        "pending", 0, imageTimestamp, "", 0, null, "", imageTimestamp, imageTimestamp, 0,
                     ))
                 } else {
+                    replyTurnId = "group:$groupSessionId:$id"
+                    val now = System.currentTimeMillis()
+                    if (repository.replyTurns.get(replyTurnId) == null) {
+                        repository.createReplyTurn(com.rhodes.privatechat.shared.model.ReplyTurn(
+                            replyTurnId, groupSessionId, "group", "image", id, "", mode,
+                            "pending", 0, now, "", 0, null, "", now, now, 0,
+                        ))
+                    }
                     repository.updateMessageContent(id, placeholderJson)
                 }
+                replyLeaseToken = replyLeaseTokenOverride ?: UUID.randomUUID().toString()
+                if (replyLeaseTokenOverride == null && repository.claimReplyTurn(replyTurnId, replyLeaseToken, System.currentTimeMillis(), System.currentTimeMillis() + GROUP_REPLY_TIMEOUT_MS) == null) return@launch
+                if (existingMessageId == null) com.rhodes.privatechat.automation.ManualReplyScheduler.scheduleTurn(context, replyTurnId)
                 unhideSession(groupSessionId)
                 // The message is safely persisted now. The composer must never wait for vision/AI work.
                 if (existingMessageId == null) onMessageSent()
@@ -1862,7 +1907,8 @@ $members
                 saveVisionVectorMemory(groupSessionId, caption, visionSummary ?: visionText)
                 // The image message above is the only user-visible record. The vision result is AI-only context.
                 if ((groupGenerations[groupSessionId] ?: 0L) != generation) return@launch
-                sendGroupMessage(groupSessionId, groupName, promptText, mode, userMessageAlreadyStored = true, sourceMessageId = id)
+                sendGroupMessage(groupSessionId, groupName, promptText, mode, userMessageAlreadyStored = true, sourceMessageId = id, replyTurnIdOverride = replyTurnId, replyLeaseTokenOverride = replyLeaseToken)
+                handedOffToGroupReply = true
             } catch (e: kotlinx.coroutines.CancellationException) {
                 if (imageMessageId != 0L) {
                     val failedJson = json.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), kotlinx.serialization.json.JsonObject(mapOf(
@@ -1878,6 +1924,9 @@ $members
                 _lastSendError.value = classifyGroupError(e)
                 onResult(false)
             } finally {
+                if (!handedOffToGroupReply && replyTurnId.isNotBlank() && replyLeaseToken.isNotBlank()) {
+                    runCatching { repository.releaseReplyTurn(replyTurnId, replyLeaseToken, System.currentTimeMillis(), System.currentTimeMillis(), "image_reply_not_completed") }
+                }
                 if (visionMutexLocked) mutexFor(groupSessionId).unlock()
                 if (groupAiJobs[groupSessionId] == coroutineContext[Job]) groupAiJobs.remove(groupSessionId)
             }
@@ -2281,6 +2330,47 @@ $text"""
         if (pending.size < settings.groupMemoryExtractionThreshold) return
         if (ingestGroupMemoryV2(groupSessionId, groupName, pending)) {
             pending.maxOfOrNull { it.id }?.let { settings.putMemoryExtractionCursor(groupSessionId, it) }
+        }
+    }
+
+    fun resumeImageReply(groupSessionId: String, messageId: Long, onComplete: (Boolean) -> Unit, replyLeaseToken: String? = null) {
+        scope.launch {
+            val session = repository.getSession(groupSessionId)
+            val message = repository.getMessagesSync(groupSessionId).firstOrNull { it.id == messageId && it.isMe && it.type == "image" }
+            val image = message?.let { runCatching { json.parseToJsonElement(it.content).jsonObject }.getOrNull() }
+            val uri = image?.get("imageUri")?.jsonPrimitive?.content.orEmpty()
+            val caption = image?.get("caption")?.jsonPrimitive?.content.orEmpty()
+            if (session == null || message == null || uri.isBlank()) { onComplete(false); return@launch }
+            val imageForModel = com.rhodes.privatechat.MainActivity.imageForModel(uri)
+            if (imageForModel.isNullOrBlank()) { onComplete(false); return@launch }
+            sendGroupImageMessage(groupSessionId, session.operatorName, uri, imageForModel, caption, message.mode, existingMessageId = messageId, replyLeaseTokenOverride = replyLeaseToken, onResult = onComplete)
+        }
+    }
+
+    /** Memory extraction and summaries are best-effort maintenance, not part of a visible turn. */
+    private fun scheduleGroupPostReplyMaintenance(groupSessionId: String, groupName: String) {
+        if (groupMaintenanceJobs[groupSessionId]?.isActive == true) return
+        scope.launch(Dispatchers.Default) {
+            groupMaintenanceJobs[groupSessionId] = coroutineContext[Job]!!
+            runCatching {
+                extractGroupMemoryIfNeeded(groupSessionId, groupName)
+                val summaryCursor = if (settings.summaryCursorEnabled) settings.getSummaryCursor(groupSessionId) else 0L
+                val unsummarized = repository.getMessagesSync(groupSessionId).count { message ->
+                    message.id > summaryCursor && message.type == "ai_json"
+                }
+                if (unsummarized >= settings.summaryThreshold && groupSessionId.isNotBlank()) {
+                    repository.getSession(groupSessionId)?.let { session ->
+                        if (generateGroupShortTermSummary(groupSessionId, session.operatorName)) {
+                            sessionMessageCounter.remove(groupSessionId)
+                        }
+                        generateGroupDailySummary(groupSessionId, session.operatorName)
+                    }
+                }
+            }.onFailure { error ->
+                DebugLogger.diagnostic("GroupChat/PostReplyMaintenanceFailed", "groupId=$groupSessionId,error=${error.javaClass.simpleName}")
+            }.also {
+                if (groupMaintenanceJobs[groupSessionId] == coroutineContext[Job]) groupMaintenanceJobs.remove(groupSessionId)
+            }
         }
     }
 

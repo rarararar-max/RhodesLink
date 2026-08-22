@@ -1,6 +1,7 @@
 package com.rhodes.privatechat.shared.data
 
-import com.rhodes.privatechat.shared.db.DatabaseWrapper
+import com.rhodes.privatechat.shared.db.DatabaseWrapper
+import com.rhodes.privatechat.shared.db.DatabaseDispatcher
 import com.rhodes.privatechat.shared.db.RhodesDatabase
 import com.rhodes.privatechat.shared.model.*
 import kotlinx.coroutines.Dispatchers
@@ -43,7 +44,7 @@ class OperatorRepository(private val wrapper: DatabaseWrapper) {
     val allOperators: Flow<List<Operator>> =
         db.operatorsQueries.getAllOperators(::mapOperator).asFlow().mapToList(Dispatchers.Default)
 
-    suspend fun getOperator(id: String): Operator? = withContext(Dispatchers.IO) {
+    suspend fun getOperator(id: String): Operator? = withContext(DatabaseDispatcher.dispatcher) {
         db.operatorsQueries.getOperator(id, ::mapOperator).executeAsOneOrNull()
     }
 
@@ -115,7 +116,7 @@ class OperatorRepository(private val wrapper: DatabaseWrapper) {
 
     fun isPresetOperatorId(id: String): Boolean = presetOperators.any { it.id == id }
 
-    suspend fun getAllOperatorsSync(): List<Operator> = withContext(Dispatchers.IO) {
+    suspend fun getAllOperatorsSync(): List<Operator> = withContext(DatabaseDispatcher.dispatcher) {
         db.operatorsQueries.getAllOperators(::mapOperator).executeAsList()
     }
 
@@ -271,7 +272,7 @@ class OperatorRepository(private val wrapper: DatabaseWrapper) {
 
     suspend fun deleteOperator(id: String) = withContext(Dispatchers.IO) { db.operatorsQueries.deleteOperator(id) }
 
-    suspend fun updateOperator(op: Operator) = withContext(Dispatchers.IO) {
+    suspend fun updateOperator(op: Operator) = withContext(DatabaseDispatcher.dispatcher) {
         db.operatorsQueries.updateOperator(op.name, op.title, op.description, op.gender, op.avatarUri, op.location, op.activity, op.emotion, op.intimacy.toLong(), op.privatePrompt, op.groupPrompt, op.memoryInjection, op.userRelation, op.lmb.toLong(), op.attack.toDouble(), op.defense.toDouble(), op.meldPref, op.activityLevel.toDouble(), op.voiceName, op.voiceSpeed, op.voicePitch, op.id)
     }
 
@@ -279,7 +280,7 @@ class OperatorRepository(private val wrapper: DatabaseWrapper) {
         db.operatorsQueries.updateIntimacy(intimacy.toLong(), id)
     }
 
-    suspend fun insertOperator(op: Operator) = withContext(Dispatchers.IO) {
+    suspend fun insertOperator(op: Operator) = withContext(DatabaseDispatcher.dispatcher) {
         db.operatorsQueries.insertOperator(op.id, op.name, op.title, op.description, op.gender, op.avatarUri, op.location, op.activity, op.emotion, op.intimacy.toLong(), op.privatePrompt, op.groupPrompt, op.memoryInjection, op.userRelation, op.lmb.toLong(), op.attack.toDouble(), op.defense.toDouble(), op.meldPref, op.activityLevel.toDouble(), op.voiceName, op.voiceSpeed, op.voicePitch)
     }
 }

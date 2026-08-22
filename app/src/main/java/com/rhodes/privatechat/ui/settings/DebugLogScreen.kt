@@ -194,6 +194,11 @@ private fun ProblemReportDialog(summary: String, report: String, progress: com.r
 }
 
 private fun stageLabel(name: String): String = when (name) {
+    "vector_diagnostics_probe" -> "向量 SQL、解码与评分"
+    "backup_snapshot_timing_probe" -> "备份快照读取与序列化估算"
+    "db_native_read_probe" -> "原生 SQLite 基础读取"
+    "db_repository_read_probe" -> "应用数据库读取"
+    "embedding_compute_probe" -> "本地向量计算"
     "private_message_probe" -> "私聊消息写入与读取"
     "group_message_probe" -> "群聊消息写入与读取"
     "private_ai_probe" -> "私聊结构化模型回复"
@@ -214,6 +219,8 @@ private fun stageLabel(name: String): String = when (name) {
     "persistent_state_probe" -> "持久化设置、状态与旧提示词"
     "backup_snapshot_probe" -> "完整备份快照构建"
     "backup_file_probe" -> "备份文件写入与回读校验"
+    "backup_memories" -> "备份传统记忆读取"
+    "backup_anchors" -> "备份记忆锚点读取"
     "session_integrity" -> "会话完整性"
     "contacts_recovery" -> "角色与会话恢复"
     else -> name

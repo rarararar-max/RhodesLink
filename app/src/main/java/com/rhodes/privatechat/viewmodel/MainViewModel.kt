@@ -267,11 +267,14 @@ class MainViewModel(
     data class MemoryIndexHealth(val eligible: Int, val indexed: Int, val pending: Int, val stale: Int)
     private val memoryIndexMaintenanceMutex = Mutex()
 
-    fun resumePrivateReply(sessionId: String, messageId: Long, onComplete: (Boolean) -> Unit) =
-        chatViewModel.resumePersistedReply(sessionId, messageId, onComplete)
+    fun resumePrivateReply(sessionId: String, messageId: Long, onComplete: (Boolean) -> Unit, replyTurnId: String? = null, replyLeaseToken: String? = null) =
+        chatViewModel.resumePersistedReply(sessionId, messageId, onComplete, replyTurnId, replyLeaseToken)
 
-    fun resumeGroupReply(groupId: String, messageId: Long, onComplete: (Boolean) -> Unit) =
-        groupChatViewModel.resumePersistedReply(groupId, messageId, onComplete)
+    fun resumeGroupReply(groupId: String, messageId: Long, onComplete: (Boolean) -> Unit, replyTurnId: String? = null, replyLeaseToken: String? = null) =
+        groupChatViewModel.resumePersistedReply(groupId, messageId, onComplete, replyTurnId, replyLeaseToken)
+
+    fun resumePrivateImageReply(sessionId: String, messageId: Long, onComplete: (Boolean) -> Unit, replyLeaseToken: String? = null) = chatViewModel.resumeImageReply(sessionId, messageId, onComplete, replyLeaseToken)
+    fun resumeGroupImageReply(groupId: String, messageId: Long, onComplete: (Boolean) -> Unit, replyLeaseToken: String? = null) = groupChatViewModel.resumeImageReply(groupId, messageId, onComplete, replyLeaseToken)
 
     private val _momentGenerateStatus: MutableStateFlow<MomentGenerateStatus> get() = _globalMomentStatus
     val momentGenerateStatus: StateFlow<MomentGenerateStatus> = _momentGenerateStatus.asStateFlow()

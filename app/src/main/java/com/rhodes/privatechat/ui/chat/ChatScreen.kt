@@ -319,7 +319,8 @@ fun ChatScreen(
         val target = scrollToMessageId ?: return@LaunchedEffect
         val index = messages.indexOfFirst { it.originalMessageId == target }
         if (index >= 0) {
-            listState.scrollToItem(index)
+            // MessageList has a permanent spacer at index zero.
+            listState.scrollToItem(index + 1)
             viewModel.consumeChatScrollTarget()
         }
     }

@@ -238,8 +238,8 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putString("personal_memory_reference_style", value.takeIf { it in setOf("restrained", "natural", "proactive") } ?: "natural")
 
     var memoryRecallCandidateLimit: Int
-        get() = getInt("memory_recall_candidate_limit", 300).coerceIn(50, 1000)
-        set(value) = putInt("memory_recall_candidate_limit", value.coerceIn(50, 1000))
+        get() = getInt("memory_recall_candidate_limit", 160).coerceIn(50, 400)
+        set(value) = putInt("memory_recall_candidate_limit", value.coerceIn(50, 400))
 
     var momentMemoryV2Enabled: Boolean
         get() = getBoolean("moment_memory_v2_enabled", true)

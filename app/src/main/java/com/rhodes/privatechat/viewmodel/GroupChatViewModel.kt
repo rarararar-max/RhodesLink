@@ -59,6 +59,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.put
 import kotlinx.serialization.encodeToString
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 import kotlin.time.TimeSource
 
@@ -690,7 +691,9 @@ class GroupChatViewModel(
                 }
                 groupAiJobs[groupSessionId] = coroutineContext[Job]!!
                 setGroupLoading(groupSessionId, true)
-                val session = repository.getSession(groupSessionId) ?: run {
+                val session = withTimeoutOrNull(1_000L) { repository.getSession(groupSessionId) }
+                    ?: appState.allSessions.value.firstOrNull { it.id == groupSessionId }
+                    ?: run {
                     DebugLogger.log("GroupChat", "⚠️ 群session不存在: $groupSessionId")
                     _lastSendError.value = "群聊尚未保存完成，请返回后重新进入群聊再发送"
                     DebugLogger.diagnostic("GroupChat/SessionUnavailable", "groupId=$groupSessionId, reason=session_not_found")
@@ -704,7 +707,8 @@ class GroupChatViewModel(
                 val allOps = if (memberIds.all { id -> stateOperators.any { it.id == id || it.name == id } }) {
                     stateOperators
                 } else {
-                    repository.getAllOperatorsSync()
+                    withTimeoutOrNull(1_000L) { repository.getAllOperatorsSync() }
+                        ?: run { DebugLogger.conversationStep(debugRoundId, "群聊", "成员资料", "已降级", "数据库读取超时，使用当前内存成员资料"); stateOperators }
                 }
                 val opsById = allOps.associateBy { it.id }
                 val opsByName = allOps.associateBy { it.name }
@@ -728,14 +732,20 @@ class GroupChatViewModel(
                     return@launch
                 }
 
+                val coreMembers = activeMembers
+
                 // The reply emits state together with dialogue; only accepted replies may update it.
-                val groupTurnState = settings.getGroupTurnState(groupSessionId)
+                val groupTurnState = withTimeoutOrNull(1_000L) { settings.getGroupTurnState(groupSessionId) }
+                    ?: run { DebugLogger.conversationStep(debugRoundId, "群聊", "连续性状态", "已降级", "读取超时，跳过本轮连续性状态"); null }
                 val groupPlotSummary = groupTurnState?.currentTopic?.ifBlank { null }
-                    ?: settings.getGroupPlotSummary(groupSessionId)
+                    ?: withTimeoutOrNull(1_000L) { settings.getGroupPlotSummary(groupSessionId) }.orEmpty()
 
                 val profile = getUserProfile()
                 val promptUserName = profile.nickname.trim().ifBlank { "来访者" }
-                val relContext = if (settings.isMemoryInjectionAllowed("group_chat", "RELATIONSHIP")) getGroupRelationshipContext(activeMembers) else ""
+                val relContext = if (settings.isMemoryInjectionAllowed("group_chat", "RELATIONSHIP"))
+                    withTimeoutOrNull(1_500L) { getGroupRelationshipContext(activeMembers) }
+                        ?: run { DebugLogger.conversationStep(debugRoundId, "群聊", "关系上下文", "已降级", "读取超时，跳过本轮关系上下文"); "" }
+                else ""
                 val relationHints = if (relContext.isNotBlank()) relContext else "无"
                 // Personal chat background becomes shared only when the user explicitly names
                 // that member in this round; vague recall questions must not expose it.
@@ -745,10 +755,10 @@ class GroupChatViewModel(
                 val memberPrivateContext = buildString {
                     recalledMembers.forEach { member ->
                         val knowledge = if (settings.isMemoryInjectionAllowed("group_chat", "MEMBER_PRIVATE_CHAT")) {
-                            memoryV2Pipeline.buildPrivateMemoryContext(
+                            withTimeoutOrNull(2_000L) { memoryV2Pipeline.buildPrivateMemoryContext(
                                 member.id, 1, 1, 1, requestText,
                                 allowedSources = setOf(MemorySourceKind.PRIVATE_CHAT.name),
-                            )
+                            ) } ?: run { DebugLogger.conversationStep(debugRoundId, "群聊", "成员私聊记忆", "已降级", "读取超时，跳过本轮成员私聊记忆"); "" }
                         } else ""
                         if (knowledge.isNotBlank()) {
                             appendLine("【用户本轮提起的${member.name}私聊背景，所有成员可自然回应】")
@@ -762,10 +772,10 @@ class GroupChatViewModel(
                     ?.content?.takeIf { it.isNotBlank() } ?: ""
                 val memberMemoryContext = ""
                 val sourceAwareMemories = "无"
-                val groupVectorMemories = if (settings.isMemoryInjectionAllowed("group_chat", "GROUP_CHAT")) {
+                 val groupVectorMemories = if (settings.isMemoryInjectionAllowed("group_chat", "GROUP_CHAT")) {
                     val memoryRestartAt = settings.getSessionRestartAt(groupSessionId)
                     val memoryQuery = requestText.ifBlank { groupPlotSummary.ifBlank { groupSummary }.ifBlank { "最近群聊进展" } }
-                    memoryV2Pipeline.buildOwnerMemoryContext(
+                     withTimeoutOrNull(2_000L) { memoryV2Pipeline.buildOwnerMemoryContext(
                         ownerType = "group",
                         ownerId = groupSessionId,
                         limitL1 = 2,
@@ -773,14 +783,15 @@ class GroupChatViewModel(
                         limitL3 = 1,
                         query = memoryQuery,
                         minCreatedAt = memoryRestartAt,
-                    ).ifBlank { "无" }
+                     ) }?.ifBlank { "无" } ?: run { DebugLogger.conversationStep(debugRoundId, "群聊", "群向量记忆", "已降级", "读取超时，跳过本轮群向量记忆"); "无" }
                 } else "无"
                 val groupPublicMemories = if (settings.isMemoryInjectionAllowed("group_chat", "MOMENT") || settings.isMemoryInjectionAllowed("group_chat", "MOMENT_COMMENT")) {
                     val publicSources = buildSet {
                         if (settings.isMemoryInjectionAllowed("group_chat", "MOMENT")) add(MemorySourceKind.MOMENT.name)
                         if (settings.isMemoryInjectionAllowed("group_chat", "MOMENT_COMMENT")) add(MemorySourceKind.MOMENT_COMMENT.name)
                     }
-                    memoryV2Pipeline.buildPublicMemoryContext(requestText, limit = 2, allowedSources = publicSources).ifBlank { "无" }
+                     withTimeoutOrNull(1_500L) { memoryV2Pipeline.buildPublicMemoryContext(requestText, limit = 2, allowedSources = publicSources) }
+                         ?.ifBlank { "无" } ?: run { DebugLogger.conversationStep(debugRoundId, "群聊", "公开记忆", "已降级", "读取超时，跳过本轮公开记忆"); "无" }
                 } else "无"
                 val recentSocialContext = sharedUtils.buildRecentSocialContext(
                     activeMembers.map { it.id }.toSet(),
@@ -817,11 +828,23 @@ class GroupChatViewModel(
                     }
                 }
                  val groupKnowledgeBaseContext = run {
-                    val memberBookIds = activeMembers.flatMap { member ->
-                        repository.knowledgeBases.getAssignments(member.id).filter { it.enabled && settings.isKnowledgeBaseEnabledForBook(it.knowledgeBaseId, "group_chat") }.map { it.knowledgeBaseId }
-                    }.toSet()
-                    val query = requestText.ifBlank { groupPlotSummary.ifBlank { groupSummary } }
-                     knowledgeBaseContextBuilder?.forOperators(activeMembers.map { it.id }, query, 2, 720, memberBookIds).orEmpty().ifBlank { "无" }
+                     val memberBookIds = withTimeoutOrNull(1_000L) {
+                         activeMembers.flatMap { member ->
+                             repository.knowledgeBases.getAssignments(member.id)
+                                 .filter { it.enabled && settings.isKnowledgeBaseEnabledForBook(it.knowledgeBaseId, "group_chat") }
+                                 .map { it.knowledgeBaseId }
+                         }.toSet()
+                     } ?: run {
+                         DebugLogger.conversationStep(debugRoundId, "群聊", "知识库绑定", "已降级", "读取超时，跳过本轮知识库")
+                         emptySet()
+                     }
+                     val query = requestText.ifBlank { groupPlotSummary.ifBlank { groupSummary } }
+                     if (memberBookIds.isEmpty()) "无" else withTimeoutOrNull(3_000L) {
+                         knowledgeBaseContextBuilder?.forOperators(activeMembers.map { it.id }, query, 2, 720, memberBookIds).orEmpty()
+                     }?.ifBlank { "无" } ?: run {
+                         DebugLogger.conversationStep(debugRoundId, "群聊", "知识库召回", "已降级", "向量召回超时，跳过本轮知识库")
+                         "无"
+                     }
                  }
                  DebugLogger.contextUsed(
                      surface = "群聊",

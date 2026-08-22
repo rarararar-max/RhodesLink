@@ -13,11 +13,11 @@ import kotlin.random.Random
 class KnowledgeBaseRepository(private val wrapper: DatabaseWrapper) {
     private val db: RhodesDatabase get() = wrapper.database
 
-    suspend fun getAll(): List<KnowledgeBase> = withContext(Dispatchers.Default) {
+    suspend fun getAll(): List<KnowledgeBase> = withContext(Dispatchers.IO) {
         db.knowledgeBasesQueries.getAllKnowledgeBases(::mapKnowledgeBase).executeAsList()
     }
 
-    suspend fun get(id: String): KnowledgeBase? = withContext(Dispatchers.Default) {
+    suspend fun get(id: String): KnowledgeBase? = withContext(Dispatchers.IO) {
         db.knowledgeBasesQueries.getKnowledgeBase(id, ::mapKnowledgeBase).executeAsOneOrNull()
     }
 
@@ -43,11 +43,11 @@ class KnowledgeBaseRepository(private val wrapper: DatabaseWrapper) {
         }
     }
 
-    suspend fun getChunks(knowledgeBaseId: String): List<KnowledgeBaseChunk> = withContext(Dispatchers.Default) {
+    suspend fun getChunks(knowledgeBaseId: String): List<KnowledgeBaseChunk> = withContext(Dispatchers.IO) {
         db.knowledgeBasesQueries.getChunksByKnowledgeBase(knowledgeBaseId, ::mapChunk).executeAsList()
     }
 
-    suspend fun getAllChunksForBackup(): List<KnowledgeBaseChunk> = withContext(Dispatchers.Default) {
+    suspend fun getAllChunksForBackup(): List<KnowledgeBaseChunk> = withContext(Dispatchers.IO) {
         db.knowledgeBasesQueries.getAllKnowledgeBaseChunks(::mapChunk).executeAsList()
     }
 
@@ -120,17 +120,17 @@ class KnowledgeBaseRepository(private val wrapper: DatabaseWrapper) {
         }
     }
 
-    suspend fun getAssignments(operatorId: String): List<OperatorKnowledgeBaseAssignment> = withContext(Dispatchers.Default) {
+    suspend fun getAssignments(operatorId: String): List<OperatorKnowledgeBaseAssignment> = withContext(Dispatchers.IO) {
         db.knowledgeBasesQueries.getKnowledgeBaseAssignmentsByOperator(operatorId) { opId, knowledgeBaseId, enabled, sortOrder ->
             OperatorKnowledgeBaseAssignment(opId, knowledgeBaseId, enabled != 0L, sortOrder.toInt())
         }.executeAsList()
     }
 
-    suspend fun getAllAssignmentsForBackup(): List<OperatorKnowledgeBaseAssignment> = withContext(Dispatchers.Default) {
+    suspend fun getAllAssignmentsForBackup(): List<OperatorKnowledgeBaseAssignment> = withContext(Dispatchers.IO) {
         db.knowledgeBasesQueries.getAllKnowledgeBaseAssignments(::mapAssignment).executeAsList()
     }
 
-    suspend fun getAssignmentsForKnowledgeBase(knowledgeBaseId: String): List<OperatorKnowledgeBaseAssignment> = withContext(Dispatchers.Default) {
+    suspend fun getAssignmentsForKnowledgeBase(knowledgeBaseId: String): List<OperatorKnowledgeBaseAssignment> = withContext(Dispatchers.IO) {
         db.knowledgeBasesQueries.getKnowledgeBaseAssignmentsByKnowledgeBase(knowledgeBaseId, ::mapAssignment).executeAsList()
     }
 

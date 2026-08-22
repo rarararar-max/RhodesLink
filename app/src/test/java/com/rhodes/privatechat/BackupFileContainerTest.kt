@@ -168,9 +168,19 @@ class BackupFileContainerTest {
         val output = ByteArrayOutputStream()
         BackupFileWriter("1.13.1", 24).writeFullBackup(output, payload)
         val tampered = output.toByteArray().clone()
-        tampered[tampered.indexOfFirst { it == 'f'.code.toByte() }] = 'x'.code.toByte()
+        val manifestOffset = indexOfBytes(tampered, "manifest.json".encodeToByteArray())
+        check(manifestOffset >= 0) { "manifest entry not found" }
+        // Corrupt the stored manifest name, which is guaranteed to invalidate the container.
+        tampered[manifestOffset] = 'x'.code.toByte()
 
         assertTrue(BackupFileReader().validate(ByteArrayInputStream(tampered)) is BackupValidationResult.Invalid)
+    }
+
+    private fun indexOfBytes(bytes: ByteArray, target: ByteArray): Int {
+        for (start in 0..bytes.size - target.size) {
+            if (target.indices.all { offset -> bytes[start + offset] == target[offset] }) return start
+        }
+        return -1
     }
 
     @Test

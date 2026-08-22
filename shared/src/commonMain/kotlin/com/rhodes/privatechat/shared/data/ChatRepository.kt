@@ -125,6 +125,19 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
         purgeSessionData(id)
         sessions.deleteSession(id)
     }
+
+    /** Removes only records created by diagnostics; never performs user-data recovery work. */
+    suspend fun deleteDiagnosticSession(id: String) = withContext(Dispatchers.Default) {
+        require(isDiagnosticId(id)) { "not a diagnostic session" }
+        val db = wrapper.database
+        db.transaction {
+            db.chatDisplayEventsQueries.deleteSessionDisplayEvents(id)
+            db.chatMessagesQueries.deleteSessionMessages(id)
+        }
+        archives.deleteBySession(id)
+        archives.deleteHistoryBySession(id)
+        sessions.deleteSession(id)
+    }
     suspend fun updateSessionMode(sessionId: String, mode: String) = sessions.updateSessionMode(sessionId, mode)
     suspend fun markAllRead() = sessions.markAllRead()
     suspend fun markSessionRead(sessionId: String) = sessions.markSessionRead(sessionId)

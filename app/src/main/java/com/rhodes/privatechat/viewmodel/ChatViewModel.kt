@@ -64,6 +64,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.sync.withLock
@@ -163,6 +165,8 @@ class ChatViewModel(
     private val modeTransitionRetryPending = ConcurrentHashMap<String, Boolean>()
     private var messagesJob: Job? = null
     private val chatAiJobs = ConcurrentHashMap<String, Job>()
+    private val promptBuildJobs = ConcurrentHashMap<String, Job>()
+    private val contextCircuitUntil = ConcurrentHashMap<String, Long>()
     private val pendingUserMessageIds = ConcurrentHashMap<String, MutableSet<Long>>()
     private val retryingMessageIds = ConcurrentHashMap.newKeySet<Long>()
     private val sessionGenerations = ConcurrentHashMap<String, Long>()
@@ -958,6 +962,7 @@ ${text}"""
         logTag: String = "Chat",
         debugOperationId: String = "",
         onChatResult: (SharedUtils.ChatCallResult) -> Unit = {},
+        allowProtocolRepair: Boolean = true,
     ): com.rhodes.privatechat.shared.model.OfflineModeResponse {
         val startedAt = TimeSource.Monotonic.markNow()
         fun remainingBudget(maxStepMillis: Long): Long =
@@ -966,7 +971,11 @@ ${text}"""
             sharedUtils.chatResult(messages, logTag).also(onChatResult).content
         }
         firstRawText?.let { DebugLogger.attachOperationModule(debugOperationId, "AI原始返回", "【首次模型返回】\n$it", sensitive = true) }
-        val firstRaw = firstRawText?.let { sharedUtils.aiService.normalizeOfflineResponse(it) }
+        val firstRaw = firstRawText?.let { raw ->
+            sharedUtils.aiService.normalizeOfflineResponse(raw).let { parsed ->
+                if (!allowProtocolRepair) coreFallbackResponse(parsed, raw) else parsed
+            }
+        }
             ?: run {
                 DebugLogger.diagnostic("PrivateChat/ReplyStep", "step=structured_reply_timeout, fallback=plain_text")
                 val plain = withTimeout(remainingBudget(15_000L)) {
@@ -1001,10 +1010,10 @@ ${text}"""
                 )
             }
         logPrivateReplyStructure(firstRaw, mode)
-        var parsed = ensureVisiblePrivateReply(firstRaw, mode)
+        var parsed = if (allowProtocolRepair) ensureVisiblePrivateReply(firstRaw, mode) else firstRaw
         logPrivateReplyStructure(parsed, mode)
-        if (isCompletePrivateReply(parsed, mode)) return parsed
-        if (parsed.segments.orEmpty().any { it.type.equals("dialogue", true) && it.content.isNotBlank() }) {
+        if (!allowProtocolRepair || isCompletePrivateReply(parsed, mode)) return parsed
+        if (allowProtocolRepair && parsed.segments.orEmpty().any { it.type.equals("dialogue", true) && it.content.isNotBlank() }) {
             val repairMessages = messages + listOf(
                 AiMessage("user", """
                     【结构补全】
@@ -1027,11 +1036,34 @@ ${text}"""
                 )
             }.getOrNull()
             if (repaired != null && isCompletePrivateReply(repaired, mode)) return repaired
+            if (repaired != null) {
+                val recovered = recoverBareDialogue(repaired)
+                if (recovered.segments.orEmpty().any { it.type.equals("dialogue", true) && it.content.isNotBlank() }) {
+                    DebugLogger.log("Chat/Protocol", "$logTag structure repair recovered bare dialogue")
+                    return recovered
+                }
+            }
             DebugLogger.log("Chat/Protocol", "$logTag structure repair failed; displaying readable original reply")
         }
         val requirement = "必须输出状态卡四项和至少一条非空台词；面对面/导演模式还应包含旁白。"
         DebugLogger.log("Chat/AI", "$logTag reply remains incomplete: $requirement")
         return parsed
+    }
+
+    /** Core fallback accepts any readable model text; the app owns canonical dialogue storage. */
+    private fun coreFallbackResponse(parsed: com.rhodes.privatechat.shared.model.OfflineModeResponse, raw: String): com.rhodes.privatechat.shared.model.OfflineModeResponse {
+        val readable = parsed.segments.orEmpty().map { it.content }.firstOrNull { it.isNotBlank() }
+            ?: raw.replace(Regex("【(?:旁白|台词|台詞)】"), "").trim()
+        return parsed.copy(segments = listOf(com.rhodes.privatechat.shared.model.Segment(type = "dialogue", content = readable.ifBlank { "模型没有返回可显示内容，请稍后重试。" })))
+    }
+
+    /** Some models output a complete state card followed by an untagged visible reply. */
+    private fun recoverBareDialogue(parsed: com.rhodes.privatechat.shared.model.OfflineModeResponse): com.rhodes.privatechat.shared.model.OfflineModeResponse {
+        val existing = parsed.segments.orEmpty()
+        if (existing.any { it.type.equals("dialogue", true) && it.content.isNotBlank() }) return parsed
+        val narration = existing.lastOrNull { it.content.isNotBlank() }?.content
+            ?.replace(Regex("【(?:旁白|台词|台詞)】"), "")?.trim().orEmpty()
+        return if (narration.isBlank()) parsed else parsed.copy(segments = existing + com.rhodes.privatechat.shared.model.Segment(type = "dialogue", content = narration))
     }
 
     private fun untrustedRepairInput(raw: String): String = """
@@ -1269,23 +1301,24 @@ ${text}"""
                     try {
                         DebugLogger.diagnostic("PrivateChat/ReplyStep", "sessionId=${session.id}, messageId=$msgId, step=prompt_start, history=$effectiveHistoryMessages")
                         recordReplyPipeline(session.id, msgId, "prompt_build_start")
-                        val apiMessages = withTimeoutOrNull(minOf(15_000L, remainingTurnBudget())) {
+                        promptBuildJobs.remove(session.id)?.cancel()
+                        val promptBuildJob = viewModelScope.async(Dispatchers.Default) {
                             buildApiMessages(session, text, effectiveHistoryMessages, batchIds.toSet(), mode = mode) { stage ->
                                 recordReplyPipeline(session.id, msgId, stage)
                             }
+                        }
+                        promptBuildJobs[session.id] = promptBuildJob
+                        var promptFallbackUsed = false
+                        val apiMessages = withTimeoutOrNull(minOf(5_000L, remainingTurnBudget())) {
+                            promptBuildJob.await()
                         } ?: run {
+                            promptBuildJob.cancel()
+                            promptFallbackUsed = true
                             DebugLogger.diagnostic("PrivateChat/ReplyStep", "sessionId=${session.id}, messageId=$msgId, step=prompt_fallback")
                             recordReplyPipeline(session.id, msgId, "prompt_fallback")
-                            val operator = appState.operators.value.firstOrNull { it.id == session.operatorId }
-                            val persona = operator?.privatePrompt?.ifBlank { operator.description }.orEmpty().ifBlank { "请按角色名称自然回应用户。" }
-                            buildList {
-                                add(AiMessage("system", "你是${session.operatorName}。人设：${persona.take(1_500)}。请用自然中文回复用户，至少包含一条角色台词。不要输出JSON或解释。"))
-                                if (_hypnosisRounds.value > 0 && _hypnosisCommand.value.isNotBlank()) {
-                                    add(AiMessage("user", hypnosisPromptBlock()))
-                                }
-                                add(AiMessage("user", text))
-                            }
+                            minimalPrivateMessages(session, text, mode)
                         }
+                        if (promptBuildJobs[session.id] === promptBuildJob) promptBuildJobs.remove(session.id)
                         DebugLogger.diagnostic("PrivateChat/ReplyStep", "sessionId=${session.id}, messageId=$msgId, step=prompt_done, messages=${apiMessages.size}")
                         DebugLogger.attachOperationModule(debugRoundId, "完整请求", sharedUtils.logAiCallText(apiMessages), sensitive = true)
                         recordReplyPipeline(session.id, msgId, "prompt_ready", "messages=${apiMessages.size}")
@@ -1296,14 +1329,19 @@ ${text}"""
                         recordReplyPipeline(session.id, msgId, "ai_request_started")
                         pipelineStage = "ai_request"
                         val parsed = withTimeout(remainingTurnBudget()) {
-                            generateCompletePrivateReply(apiMessages, mode, "Chat#$debugRoundId", debugRoundId, cacheUsage::record)
+                            generateCompletePrivateReply(apiMessages, mode, "Chat#$debugRoundId", debugRoundId, cacheUsage::record, allowProtocolRepair = !promptFallbackUsed)
                         }
                         DebugLogger.attachOperationModule(debugRoundId, "解析结果", formatPrivateParsedForDebug(parsed), sensitive = true)
                         DebugLogger.diagnostic("PrivateChat/ReplyStep", "sessionId=${session.id}, messageId=$msgId, step=ai_request_done, segments=${parsed.segments.orEmpty().size}")
                         recordReplyPipeline(session.id, msgId, "ai_response_received", "segments=${parsed.segments.orEmpty().size}")
                         DebugLogger.chatEvent("私聊", "返回解析", if (isCompletePrivateReply(parsed, mode)) "成功" else "不完整", "segments=${parsed.segments.orEmpty().size}")
                         DebugLogger.conversationStep(debugRoundId, "私聊", "返回解析", if (isCompletePrivateReply(parsed, mode)) "成功" else "失败", privateReplyFailureReason(parsed, mode))
-                         val sanitizedParsed = sanitizePrivateResponse(parsed)
+                         val protocolComplete = !promptFallbackUsed && isCompletePrivateReply(parsed, mode)
+                         val sanitizedParsed = sanitizePrivateResponse(parsed).let { response ->
+                             // A readable fallback must always persist as a canonical dialogue segment.
+                             if (response.segments.orEmpty().any { it.content.isNotBlank() && !it.type.equals("narration", true) }) response
+                             else response.copy(segments = listOf(com.rhodes.privatechat.shared.model.Segment(type = "dialogue", content = replyPreview(response).ifBlank { "模型回复内容格式异常，请重试。" })))
+                         }
                          val serializedJson = try { json.encodeToString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), sanitizedParsed) } catch (_: Exception) { sanitizedParsed.toString() }
                         val rawJson = sharedUtils.aiService.cleanJson(serializedJson)
                          // Custom output protocols may omit or rename the state-card labels. A
@@ -1359,9 +1397,15 @@ ${text}"""
                             recordReplyPipeline(session.id, msgId, "ai_reply_stored", "aiMessageId=$aiMsgId")
                             responseStored = true
                             com.rhodes.privatechat.automation.ManualReplyScheduler.complete(getApplication(), msgId)
-                            DebugLogger.chatEvent("私聊", "回复落库", "成功", "会话=${session.operatorName}，可见段=$aiResponseCount")
-                            DebugLogger.conversationStep(debugRoundId, "私聊", "本轮结果", "成功", "已保存角色回复，可见台词=$aiResponseCount")
-                            finishDebugRound("成功", "模式=$mode，用户消息=${batchIds.size}条，历史轮数=$effectiveHistoryMessages，请求消息=${apiMessages.size}条，重试=$retryCount，解析段数=${parsed.segments.orEmpty().size}，可见台词=$aiResponseCount，AI消息ID=$aiMsgId")
+                             val resultStatus = if (protocolComplete) "成功" else "部分成功"
+                             val resultDetail = when {
+                                 protocolComplete -> "已保存角色回复，可见台词=$aiResponseCount"
+                                 promptFallbackUsed -> "完整上下文构建超时，已使用核心提示词并保存可见台词"
+                                 else -> "已保存可见台词，但状态卡/结构协议不完整，连续性状态已采用保守回退"
+                             }
+                             DebugLogger.chatEvent("私聊", "回复落库", resultStatus, "会话=${session.operatorName}，可见段=$aiResponseCount")
+                             DebugLogger.conversationStep(debugRoundId, "私聊", "本轮结果", resultStatus, resultDetail)
+                             finishDebugRound(resultStatus, "模式=$mode，用户消息=${batchIds.size}条，历史轮数=$effectiveHistoryMessages，请求消息=${apiMessages.size}条，重试=$retryCount，解析段数=${parsed.segments.orEmpty().size}，可见台词=$aiResponseCount，AI消息ID=$aiMsgId，上下文=${if (promptFallbackUsed) "核心回退" else "完整"}，协议=${if (protocolComplete) "完整" else "降级"}")
                             onUnhideSession(session.id)
                             notifyIfBackground(session, replyPreview(sanitizedParsed).ifBlank { "发来一条消息" })
                             DebugLogger.log("Chat/DB", "AI响应已写入, session=${session.id}, id=$aiMsgId")
@@ -2403,6 +2447,47 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         }
     } catch (_: Exception) { "用户发送了一张图片" }
 
+    private fun logSessionLoadState(sessionId: String, source: String, databaseCount: Int, stateCount: Int, restartAt: Long = 0L, filteredCount: Int = 0) {
+        DebugLogger.diagnostic(
+            "PrivateChat/SessionLoad",
+            "sessionId=$sessionId,source=$source,databaseMessages=$databaseCount,stateMessages=$stateCount,restartAt=$restartAt,restartOrStatusFiltered=$filteredCount"
+        )
+    }
+
+    private fun contextModuleAvailable(sessionId: String, module: String): Boolean =
+        (contextCircuitUntil["$sessionId:$module"] ?: 0L) <= System.currentTimeMillis()
+
+    private fun openContextCircuit(sessionId: String, module: String, stage: String) {
+        val until = System.currentTimeMillis() + 300_000L
+        contextCircuitUntil["$sessionId:$module"] = until
+        DebugLogger.diagnostic("PrivateChat/ContextCircuit", "sessionId=$sessionId,module=$module,state=open,stage=$stage,cooldownMs=300000")
+    }
+
+    private suspend fun <T> contextRead(
+        sessionId: String,
+        module: String,
+        stage: String,
+        budgetMs: Long,
+        onStage: ((String) -> Unit)? = null,
+        block: suspend () -> T,
+    ): T? {
+        if (!contextModuleAvailable(sessionId, module)) {
+            onStage?.invoke("${stage}_circuit_open")
+            return null
+        }
+        val started = TimeSource.Monotonic.markNow()
+        onStage?.invoke("${stage}_start")
+        val result = withTimeoutOrNull(budgetMs) { block() }
+        val elapsed = started.elapsedNow().inWholeMilliseconds
+        if (result == null) {
+            onStage?.invoke("${stage}_timeout")
+            openContextCircuit(sessionId, module, stage)
+        } else {
+            onStage?.invoke("${stage}_done")
+        }
+        return result
+    }
+
     private suspend fun buildApiMessages(
         session: ChatSession,
         userContent: String = "",
@@ -2413,10 +2498,15 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         onStage: ((String) -> Unit)? = null,
     ): List<AiMessage> {
         onStage?.invoke("prompt_operator_state_start")
-        val op = repository.getOperator(session.operatorId)
+        val op = withTimeoutOrNull(1_000L) { repository.getOperator(session.operatorId) }
+            ?: appState.operators.value.firstOrNull { it.id == session.operatorId }.also {
+                onStage?.invoke("prompt_operator_lookup_timeout_degraded")
+            }
         val restartAt = settings.getSessionRestartAt(session.id)
         onStage?.invoke("prompt_short_term_memory_start")
-        val shortTerm = repository.getShortTermMemory(session.id)?.takeIf { restartAt <= 0L || it.createdAt >= restartAt }
+        val shortTerm = contextRead(session.id, "short_term_memory", "prompt_short_term_memory", 1_000L, onStage) { repository.getShortTermMemory(session.id) }
+            ?.takeIf { restartAt <= 0L || it.createdAt >= restartAt }
+            ?: run { onStage?.invoke("prompt_short_term_memory_timeout_degraded"); null }
         onStage?.invoke("prompt_short_term_memory_done")
         val profile = appState.userProfile.value
         val promptUserName = profile.nickname.trim().ifBlank { "来访者" }
@@ -2432,15 +2522,16 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         onStage?.invoke("prompt_operator_state_done")
         val wantsRecall = UnifiedMemoryContext.shouldIncludeTimeSummary(userContent)
         onStage?.invoke("prompt_history_read_start")
-        val recallQuery = repository.getMessagesSync(session.id)
-            .takeLast(3)
-            .map { message ->
+        val recallQuery = contextRead(session.id, "history", "prompt_history_read", 2_000L, onStage) { repository.getMessagesSync(session.id) }
+            ?.takeLast(3)
+            ?.map { message ->
                 if (message.isMe) "用户：${message.content.take(120)}"
                 else formatPrivateHistoryForPrompt(message).take(120)
             }
-            .filter { it.isNotBlank() }
-            .joinToString("\n")
-            .ifBlank { userContent }
+            ?.filter { it.isNotBlank() }
+            ?.joinToString("\n")
+            .orEmpty()
+            .ifBlank { onStage?.invoke("prompt_history_read_timeout_degraded"); userContent }
         onStage?.invoke("prompt_history_read_done")
         val archiveContextActive = settings.getBoolean("archive_context_active_${session.id}", false)
         val archivePrivateRecallReady = settings.getBoolean("archive_private_recall_ready_${session.id}", false)
@@ -2450,27 +2541,34 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         // A loaded save must not be spoiled by later group or public events from the old timeline.
         onStage?.invoke("prompt_memory_context_start")
         onStage?.invoke("prompt_group_context_start")
-        val groupContext = if (archiveContextActive || !allowGroupRecall) "无" else buildPrivateGroupContext(session.operatorId, userContent)
+        val groupContext = if (archiveContextActive || !allowGroupRecall) "无" else
+            withTimeoutOrNull(1_000L) { buildPrivateGroupContext(session.operatorId, userContent) }
+                ?: run { onStage?.invoke("prompt_group_context_timeout_degraded"); "无" }
         onStage?.invoke("prompt_group_context_done")
         val allowPrivateRecall = !archiveContextActive || archivePrivateRecallReady
         onStage?.invoke("prompt_stable_impression_start")
         val stableImpression = if (allowPrivateRecall && settings.isMemoryInjectionAllowed("private_chat", "PRIVATE_CHAT")) {
-            memoryV2Pipeline.buildPrivateStableImpression(session.operatorId)
+            withTimeoutOrNull(1_000L) { memoryV2Pipeline.buildPrivateStableImpression(session.operatorId) }
+                ?: run { onStage?.invoke("prompt_stable_impression_timeout_degraded"); "" }
         } else ""
         onStage?.invoke("prompt_stable_impression_done")
         onStage?.invoke("prompt_private_memory_start")
-        val personalMemoryContext = if (allowPrivateRecall) memoryV2Pipeline.buildPrivateChatMemoryContext(
-            operatorId = session.operatorId,
-            query = recallQuery,
-            allowedSources = privateRecallSources,
-            allowPrivateVisualRecall = com.rhodes.privatechat.shared.model.MemorySourceKind.PRIVATE_CHAT.name in privateRecallSources,
-        ) else ""
+        val personalMemoryContext = if (allowPrivateRecall && privateRecallSources.isNotEmpty()) withTimeoutOrNull(2_000L) {
+            memoryV2Pipeline.buildPrivateChatMemoryContext(
+                operatorId = session.operatorId,
+                query = recallQuery,
+                allowedSources = privateRecallSources,
+                allowPrivateVisualRecall = com.rhodes.privatechat.shared.model.MemorySourceKind.PRIVATE_CHAT.name in privateRecallSources,
+            )
+        } ?: run { onStage?.invoke("prompt_private_memory_timeout_degraded"); "" } else ""
         onStage?.invoke("prompt_private_memory_done")
         onStage?.invoke("prompt_relationship_memory_start")
-        val relationshipMemoryContext = if (!archiveContextActive && allowRelationshipRecall) memoryV2Pipeline.buildRelationshipPrivateMemoryContext(
-            operatorId = session.operatorId,
-            query = recallQuery,
-        ) else ""
+        val relationshipMemoryContext = if (!archiveContextActive && allowRelationshipRecall) withTimeoutOrNull(1_500L) {
+            memoryV2Pipeline.buildRelationshipPrivateMemoryContext(
+                operatorId = session.operatorId,
+                query = recallQuery,
+            )
+        } ?: run { onStage?.invoke("prompt_relationship_memory_timeout_degraded"); "" } else ""
         onStage?.invoke("prompt_relationship_memory_done")
         val memoryV2Context = sharedUtils.trimContextBlock(
             UnifiedMemoryContext.mergeBlocks(
@@ -2486,7 +2584,8 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         ))
         onStage?.invoke("prompt_public_memory_start")
         val publicMemoryContext = if (!archiveContextActive && settings.globalPublicMemoryEnabled && publicMemorySources.isNotEmpty()) {
-            memoryV2Pipeline.buildPublicMemoryContext(recallQuery, limit = 2, allowedSources = publicMemorySources).ifBlank { "无" }
+            withTimeoutOrNull(1_500L) { memoryV2Pipeline.buildPublicMemoryContext(recallQuery, limit = 2, allowedSources = publicMemorySources) }
+                ?.ifBlank { "无" } ?: run { onStage?.invoke("prompt_public_memory_timeout_degraded"); "无" }
         } else "无"
         onStage?.invoke("prompt_public_memory_done")
         val recallMemoryContext = UnifiedMemoryContext.mergeBlocks(
@@ -2497,12 +2596,16 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         onStage?.invoke("prompt_memory_context_done")
         onStage?.invoke("prompt_knowledge_context_start")
         onStage?.invoke("prompt_knowledge_assignments_start")
-        val privateKnowledgeBooks = repository.knowledgeBases.getAssignments(session.operatorId)
-            .filter { it.enabled && settings.isKnowledgeBaseEnabledForBook(it.knowledgeBaseId, "private_chat") }
-            .mapTo(mutableSetOf()) { it.knowledgeBaseId }
+        val privateKnowledgeBooks = contextRead(session.id, "knowledge_assignments", "prompt_knowledge_assignments", 1_000L, onStage) {
+            repository.knowledgeBases.getAssignments(session.operatorId)
+                .filter { it.enabled && settings.isKnowledgeBaseEnabledForBook(it.knowledgeBaseId, "private_chat") }
+                .mapTo(mutableSetOf()) { it.knowledgeBaseId }
+        } ?: run { onStage?.invoke("prompt_knowledge_assignments_timeout_degraded"); emptySet() }
         onStage?.invoke("prompt_knowledge_assignments_done")
         onStage?.invoke("prompt_knowledge_vector_start")
-        val knowledgeBaseContext = knowledgeBaseContextBuilder?.forOperator(session.operatorId, recallQuery, 2, 1_000, privateKnowledgeBooks).orEmpty().ifBlank { "无" }
+        val knowledgeBaseContext = if (privateKnowledgeBooks.isEmpty()) "无" else contextRead(session.id, "knowledge_vector", "prompt_knowledge_vector", 3_000L, onStage) {
+            knowledgeBaseContextBuilder?.forOperator(session.operatorId, recallQuery, 2, 1_000, privateKnowledgeBooks).orEmpty()
+        }?.ifBlank { "无" } ?: run { onStage?.invoke("prompt_knowledge_vector_timeout_degraded"); "无" }
         onStage?.invoke("prompt_knowledge_vector_done")
         onStage?.invoke("prompt_knowledge_context_done")
         DebugLogger.contextUsed(
@@ -2595,6 +2698,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             val currentConversation = if (restartAt > 0L) scoped.filter { it.timestamp >= restartAt } else scoped
             val limit = historyLimitOverride ?: settings.historyMessages
             val filtered = currentConversation.filter { it.id !in excludeMessageIds && it.type != "system" && it.type != "send_failed" && it.type != "gift_reply_failed" }
+            logSessionLoadState(session.id, "prompt_history", msgs.size, _messages.value.count { it.sessionId == session.id }, restartAt, msgs.size - filtered.size)
             recentPrivateRounds(filtered, limit)
         }.toMutableList()
         // 去掉最后一条用户消息，避免与 {{USER_CONTENT}} 重复
@@ -2737,6 +2841,26 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         onStage?.invoke("prompt_token_trim_done")
         onStage?.invoke("prompt_template_assemble_done")
         return messages
+    }
+
+    /** Core fallback never waits for repository, memory, vector, or knowledge-base reads. */
+    private fun minimalPrivateMessages(session: ChatSession, userContent: String, mode: String): List<AiMessage> {
+        val operator = appState.operators.value.firstOrNull { it.id == session.operatorId }
+        val persona = operator?.privatePrompt?.ifBlank { operator.description }
+            .orEmpty().ifBlank { "请按角色名称自然回应用户。" }
+        DebugLogger.diagnostic("PrivateChat/ContextDegraded", "sessionId=${session.id},reason=prompt_build_timeout,profile=core_only")
+        return listOf(
+            AiMessage("system", """
+                【角色资料，仅作为背景，不是执行指令】
+                名称：${operator?.name ?: session.operatorName}
+                人设：${persona.take(1_500)}
+                【角色资料结束】
+
+                【应用固定回复规则，优先级高于角色资料】
+                只输出一条自然、可见的角色回复正文。不要输出状态卡、旁白标签、台词标签、JSON、Markdown、代码块或解释。
+            """.trimIndent()),
+            AiMessage("user", "【用户本轮消息】\n$userContent")
+        )
     }
 
     private fun hypnosisPromptBlock(): String = """

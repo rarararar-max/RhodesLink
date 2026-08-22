@@ -4,6 +4,8 @@ import com.rhodes.privatechat.shared.db.DatabaseWrapper
 import com.rhodes.privatechat.shared.db.RhodesDatabase
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.math.sqrt
 
 class LocalVectorStoreGateway(
@@ -29,7 +31,7 @@ class LocalVectorStoreGateway(
         )
     }
 
-    override suspend fun search(request: VectorSearchRequest): List<VectorMemory> {
+    override suspend fun search(request: VectorSearchRequest): List<VectorMemory> = withContext(Dispatchers.IO) {
         val now = request.now.takeIf { it > 0L } ?: System.currentTimeMillis()
         val minCreatedAt = request.minCreatedAt.coerceAtLeast(0L)
         val sourceKinds = request.sourceKinds.distinct()
@@ -90,7 +92,7 @@ class LocalVectorStoreGateway(
             .filter { row -> request.embeddingSignature.isBlank() || row.embeddingSignature == request.embeddingSignature }
             .filter { row -> row.expiresAt > now }
             .toList()
-        return filtered
+        filtered
             .mapNotNull { row ->
                 val embedding = runCatching { json.decodeFromString<List<Double>>(row.embeddingJson) }.getOrDefault(emptyList())
                 val score = if (request.queryEmbedding.isNotEmpty() && embedding.isNotEmpty() && request.queryEmbedding.size == embedding.size) {
@@ -123,8 +125,8 @@ class LocalVectorStoreGateway(
             .map { it.first }
     }
 
-    override suspend fun listMemories(ownerType: String, ownerId: String): List<VectorMemory> {
-        return db.vectorMemoriesQueries.getVectorMemoriesByOwner(ownerType, ownerId).executeAsList().map { row ->
+    override suspend fun listMemories(ownerType: String, ownerId: String): List<VectorMemory> = withContext(Dispatchers.IO) {
+        db.vectorMemoriesQueries.getVectorMemoriesByOwner(ownerType, ownerId).executeAsList().map { row ->
             val embedding = runCatching { json.decodeFromString<List<Double>>(row.embeddingJson) }.getOrDefault(emptyList())
             VectorMemory(
                 id = row.id,

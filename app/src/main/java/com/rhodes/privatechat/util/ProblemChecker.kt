@@ -238,6 +238,7 @@ object ProblemChecker {
             }
             appendLine("lastStage=${snapshot.currentStage}")
             appendLine("diagnosis.primary=$primary")
+            appendLine("diagnosis.detail=${diagnosisDetail(snapshot, primary)}")
             appendLine("diagnosis.confidence=${if (snapshot.abandoned) "high" else "medium"}")
             appendLine("diagnosis.nextAction=${when { status == "running" -> "请保持应用在前台，等待status=completed后再复制"; snapshot.abandoned -> "根据lastStage和对应阶段detail处理；后台探针已脱离界面"; else -> "检查失败阶段的detail" }}")
         }
@@ -245,6 +246,13 @@ object ProblemChecker {
         val localSuccess = required.all { snapshot.stages[it]?.status == ProblemStageStatus.SUCCESS }
         val modelSuccess = listOf("private_ai_probe", "group_ai_probe").all { snapshot.stages[it]?.status == ProblemStageStatus.SUCCESS }
         return ProblemCheckResult(report, conciseReport(snapshot, status, versionName, versionCode), status == "completed" && localSuccess && modelSuccess && primary == "NO_DATABASE_PROBLEM_FOUND")
+    }
+
+    private fun diagnosisDetail(progress: ProblemCheckProgress, primary: String): String = when (primary) {
+        "KNOWLEDGE_BASE_SQLDELIGHT_READ_FAILED" -> "native_sqlite=success,sqldelight_repository_getAll=timeout,likely=application_db_dispatcher_or_shared_driver_blocked"
+        "VECTOR_TABLE_ACCESS_FAILED", "VECTOR_EMBEDDING_DATA_READ_FAILED" -> "native_vector_sqlite=failed,likely=vector_memories_table_or_driver_access"
+        "EMBEDDING_PIPELINE_FAILED" -> "vector_mode=${runCatching { settingsForProbe().vectorProviderMode }.getOrDefault("unknown")},likely=local_vector_store_or_embedding_gateway_path"
+        else -> "see_primary_stage_detail"
     }
 
     private fun conciseReport(snapshot: ProblemCheckProgress, status: String, versionName: String, versionCode: Int): String = buildString {
@@ -263,6 +271,7 @@ object ProblemChecker {
         appendPipeline(snapshot, "客服本地能力", listOf("support_manual_probe", "support_transcript_probe"))
         appendPipeline(snapshot, "本地数据库与备份", listOf("database_open", "database_schema", "persistent_state_probe", "session_integrity", "database_copy_write_test", "backup_roles_sessions", "backup_relationships", "backup_messages", "backup_knowledge_bases", "backup_memories_anchors", "backup_memory_items", "backup_social_diaries", "backup_archives_display", "backup_gifts_dispatches_extras", "backup_settings_snapshot", "backup_snapshot_probe"))
         if (status != "running") appendLine("建议：${when {
+            snapshot.stages["knowledge_base_metadata"]?.status == ProblemStageStatus.TIMEOUT && snapshot.stages["kb_sql_metadata"]?.status == ProblemStageStatus.SUCCESS -> "原生 SQLite 已正常读取知识库表，但应用 SQLDelight 仓库读取超时；已定位为应用数据库调度/共享连接路径，请查看 diagnosis.detail。"
             snapshot.stages["backup_snapshot_probe"]?.status == ProblemStageStatus.TIMEOUT -> "备份快照构建超时；聊天与模型探针已独立继续执行。请查看技术详情中的备份数据分类。"
             snapshot.stages["private_ai_probe"]?.status == ProblemStageStatus.TIMEOUT || snapshot.stages["group_ai_probe"]?.status == ProblemStageStatus.TIMEOUT -> "模型自检超过 60 秒；本地消息保存若通过，请检查网络、模型服务节点或更换更快模型。"
             else -> "如有失败项，请查看技术详情中的失败步骤和原因。"
@@ -730,7 +739,7 @@ object ProblemChecker {
         var deletedSessions = 0
         var deletedOperators = 0
         staleSessions.forEach { session ->
-            runCatching { withTimeout(1_500L) { repository.deleteSession(session.id) } }
+            runCatching { withTimeout(1_500L) { repository.deleteDiagnosticSession(session.id) } }
                 .onSuccess { deletedSessions++ }
                 .onFailure { DebugLogger.diagnostic("ProblemCheck/StaleSessionCleanupFailed", "sessionId=${session.id},errorClass=${it.javaClass.simpleName}") }
         }
@@ -957,7 +966,7 @@ object ProblemChecker {
             if (!replyReadBack) throw IllegalStateException("private AI reply was not readable after save")
             return "temporarySession=true,userMessageSave=true,userMessageVisible=true,aiReplySave=true,aiReplyReadBack=true"
         } finally {
-            runCatching { withTimeout(1_500L) { repository.deleteSession(session.id) } }
+            runCatching { withTimeout(1_500L) { repository.deleteDiagnosticSession(session.id) } }
         }
     }
 
@@ -975,7 +984,7 @@ object ProblemChecker {
             if (repository.getMessagesSync(group.id).none { it.id == replyId && !it.isMe && it.type == "ai_json" && isValidProbeAiReply(it.content) }) throw IllegalStateException("group AI reply was not readable after save")
             return "temporarySession=true,userMessageSave=true,userMessageVisible=true,aiReplySave=true,aiReplyReadBack=true"
         } finally {
-            runCatching { withTimeout(1_500L) { repository.deleteSession(group.id) } }
+            runCatching { withTimeout(1_500L) { repository.deleteDiagnosticSession(group.id) } }
         }
     }
 

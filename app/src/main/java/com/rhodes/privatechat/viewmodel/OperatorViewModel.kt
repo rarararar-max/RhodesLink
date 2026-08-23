@@ -5,6 +5,7 @@ import com.rhodes.privatechat.shared.model.Relationship
 import com.rhodes.privatechat.shared.model.OperatorKnowledgeBaseAssignment
 import com.rhodes.privatechat.shared.data.BfsNode
 import com.rhodes.privatechat.shared.data.ChatRepository
+import com.rhodes.privatechat.shared.db.DatabaseDispatcher
 import com.rhodes.privatechat.viewmodel.shared.AppStateHolder
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 import com.rhodes.privatechat.util.DebugLogger
@@ -41,6 +42,11 @@ class OperatorViewModel(
         DebugLogger.diagnostic("Operator/SaveEnqueued", "operatorId=$id, nameLength=${name.trim().length}")
         scope.launch(Dispatchers.IO) {
             try {
+                val saveStarted = android.os.SystemClock.elapsedRealtime()
+                fun saveStep(stage: String, detail: String = "") {
+                    val db = DatabaseDispatcher.snapshot()
+                    DebugLogger.diagnostic("Operator/SaveTrace", "operatorId=$id,stage=$stage,elapsedMs=${android.os.SystemClock.elapsedRealtime() - saveStarted},$detail,dbTask=${db.runningTask},dbRunningMs=${db.runningForMs},dbQueued=${db.queuedTasks}")
+                }
                 val cleanName = name.trim()
                 if (id.isBlank()) {
                     DebugLogger.diagnostic("Operator/SaveBlocked", "reason=blank_id, nameLength=${cleanName.length}, existingOperators=${appState.getOperatorsSnapshot().size}")
@@ -61,8 +67,10 @@ class OperatorViewModel(
                     return@launch
                 }
                 DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=get_existing_start")
+                saveStep("get_existing_start")
                 val existing = withTimeout(8_000L) { repository.getOperator(id) }
                 DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=get_existing_done, exists=${existing != null}")
+                saveStep("get_existing_done", "exists=${existing != null}")
                 val op = Operator(
                     id = id, name = cleanName, title = title,
                     description = description, gender = gender,
@@ -84,18 +92,30 @@ class OperatorViewModel(
                     voicePitch = voicePitch.ifBlank { existing?.voicePitch ?: "" }
                 )
                 DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=insert_start")
+                saveStep("insert_start")
                 withTimeout(15_000L) { repository.insertOperator(op) }
                 DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=insert_done")
+                saveStep("insert_done")
                 DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=insert_readback_start")
+                saveStep("readback_start")
                 val saved = withTimeout(15_000L) { repository.getOperator(id) }
                 if (saved?.id != id) throw IllegalStateException("角色写入后读取不到")
                 DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=insert_readback_done")
-                // Persist associations before declaring the editor save successful. Unlike prompt
-                // slot preferences, these rows change what the role can retrieve at runtime.
-                withTimeout(15_000L) { repository.knowledgeBases.replaceAssignments(id, knowledgeBaseAssignments) }
+                saveStep("readback_done")
+                // A newly created role with no assignments must not depend on the optional
+                // knowledge-base relation table before the main record is visible to the user.
+                if (existing != null || knowledgeBaseAssignments.isNotEmpty()) {
+                    saveStep("knowledge_assignments_start", "count=${knowledgeBaseAssignments.size}")
+                    withTimeout(15_000L) { repository.knowledgeBases.replaceAssignments(id, knowledgeBaseAssignments) }
+                    saveStep("knowledge_assignments_done")
+                } else {
+                    saveStep("knowledge_assignments_skipped", "reason=empty_assignments")
+                }
                 // Database readback is the success boundary. The contacts state must be refreshed
                 // before the editor callback, but optional synchronization must not delay it.
-                appState.refreshOperators(repository.getAllOperatorsSync())
+                saveStep("refresh_operators_start")
+                withTimeout(15_000L) { appState.refreshOperators(repository.getAllOperatorsSync()) }
+                saveStep("refresh_operators_done")
                 DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=ui_success_notified")
                 finish(onComplete, null)
                 scope.launch(Dispatchers.IO) {
@@ -130,7 +150,9 @@ class OperatorViewModel(
                 }
                 return@launch
             } catch (e: Exception) {
+                val db = DatabaseDispatcher.snapshot()
                 DebugLogger.diagnostic("Operator/SaveFailed", "operatorId=$id, nameLength=${name.trim().length}, error=${e.javaClass.simpleName}:${e.message?.take(120)}")
+                DebugLogger.diagnostic("Operator/SaveFailureSnapshot", "operatorId=$id,errorClass=${e.javaClass.simpleName},errorMessage=${e.message?.take(160)},dbTask=${db.runningTask},dbRunningMs=${db.runningForMs},dbQueued=${db.queuedTasks}")
                 DebugLogger.diagnostic("Special/OperatorCreateFailed", "operatorId=$id, error=${e.javaClass.simpleName}:${e.message?.take(160)}")
                 finish(onComplete, "保存失败：${e.message?.take(80) ?: "请稍后重试"}")
             }

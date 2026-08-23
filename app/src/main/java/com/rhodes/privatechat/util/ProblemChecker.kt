@@ -46,6 +46,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.ConcurrentHashMap
 
 data class ProblemCheckResult(val report: String, val summary: String, val success: Boolean)
 
@@ -71,7 +72,8 @@ data class ProblemCheckProgress(
 
 /** Diagnostic work is deliberately fire-and-forget. UI never awaits a probe. */
 object ProblemChecker {
-    private const val TOTAL_TIMEOUT_MS = 150_000L
+    // A complete export diagnosis includes multiple independently timed backup reads.
+    private const val TOTAL_TIMEOUT_MS = 300_000L
     private const val LOCAL_TIMEOUT_MS = 15_000L
     private const val COPY_TIMEOUT_MS = 30_000L
     private const val MODEL_PROBE_TIMEOUT_MS = 60_000L
@@ -79,6 +81,7 @@ object ProblemChecker {
     private val checkScopes = mutableMapOf<String, CoroutineScope>()
     private val current = AtomicReference<ProblemCheckProgress>()
     private val active = AtomicReference<String?>(null)
+    private val diagnosticEmbeddings = ConcurrentHashMap<String, List<Double>>()
 
     fun progress(): ProblemCheckProgress = current.get() ?: ProblemCheckProgress()
 
@@ -88,6 +91,7 @@ object ProblemChecker {
 
     private fun clearCheckScope(checkId: String) {
         synchronized(checkScopes) { checkScopes.remove(checkId) }?.cancel("problem check finished")
+        diagnosticEmbeddings.remove(checkId)
     }
 
     fun start(
@@ -101,7 +105,7 @@ object ProblemChecker {
         val checkId = UUID.randomUUID().toString().replace("-", "").take(8)
         if (!active.compareAndSet(null, checkId)) return active.get() ?: checkId
         val now = System.currentTimeMillis()
-        val names = listOf("cleanup_previous_probe", "db_native_read_probe", "db_repository_read_probe", "embedding_compute_probe", "vector_diagnostics_probe", "memory_items_stats_probe", "backup_snapshot_timing_probe", "database_open", "database_schema", "database_counts", "persistent_state_probe", "prompt_template_integrity", "kb_sql_count", "kb_sql_metadata", "kb_sql_content_size", "knowledge_base_metadata", "knowledge_base_assignments", "knowledge_base_chunks", "knowledge_base_readiness", "vector_sql_count", "vector_sql_signature_size", "vector_sql_invalid_rows", "vector_config_probe", "vector_embedding_probe", "vector_local_search_probe", "support_manual_probe", "support_transcript_probe", "session_integrity", "session_message_audit", "contacts_recovery", "database_copy_write_test", "backup_roles_sessions", "backup_relationships", "backup_messages", "backup_knowledge_bases", "backup_memories", "backup_anchors", "backup_memory_items", "backup_social_diaries", "backup_archives_display", "backup_gifts_dispatches_extras", "backup_settings_snapshot", "backup_snapshot_probe", "backup_file_probe", "private_message_probe", "private_pipeline_history", "private_pipeline_context", "private_pipeline_reply_parse", "private_pipeline_last_state", "group_message_probe", "group_pipeline_roster_history", "group_pipeline_context", "group_pipeline_reply_parse", "private_ai_probe", "group_ai_probe", "cleanup")
+        val names = listOf("cleanup_previous_probe", "db_native_read_probe", "db_native_backup_tables", "db_repository_read_probe", "embedding_compute_probe", "vector_diagnostics_probe", "memory_items_stats_probe", "backup_snapshot_timing_probe", "database_open", "database_schema", "database_counts", "persistent_state_probe", "prompt_template_integrity", "kb_sql_count", "kb_sql_metadata", "kb_sql_content_size", "knowledge_base_metadata", "knowledge_base_assignments", "knowledge_base_chunks", "knowledge_base_readiness", "vector_sql_count", "vector_sql_signature_size", "vector_sql_invalid_rows", "vector_config_probe", "vector_embedding_gateway_probe", "vector_store_query_probe", "vector_local_search_probe", "support_manual_probe", "support_transcript_probe", "session_integrity", "session_message_audit", "contacts_recovery", "database_copy_write_test", "backup_roles_sessions", "backup_relationships", "backup_messages", "backup_knowledge_bases", "backup_memories", "backup_anchors", "backup_memory_items", "backup_moments", "backup_moment_likes", "backup_moment_comments", "backup_diaries", "backup_archives_display", "backup_gifts", "backup_dispatches", "backup_shared_experiences", "backup_mahjong", "backup_settings_snapshot", "backup_snapshot_probe", "backup_file_probe", "private_message_probe", "private_pipeline_history", "private_pipeline_context", "private_pipeline_reply_parse", "private_pipeline_last_state", "group_message_probe", "group_pipeline_roster_history", "group_pipeline_context", "group_pipeline_reply_parse", "private_ai_probe", "group_ai_probe", "cleanup")
         current.set(ProblemCheckProgress(checkId, now, now + TOTAL_TIMEOUT_MS, currentStage = "starting", stages = names.associateWith { StageProgress() }))
         startDetachedLocalProbe(checkId, "cleanup_previous_probe", LOCAL_TIMEOUT_MS) {
             val files = cleanupOldProbes(context)
@@ -113,11 +117,16 @@ object ProblemChecker {
         startDetachedAiProbe(checkId, "group_ai_probe", sharedUtils, "ProblemCheckGroup")
         startDetachedLocalProbe(checkId, "vector_config_probe", LOCAL_TIMEOUT_MS) { vectorConfigProbe() }
         startDetachedLocalProbe(checkId, "db_native_read_probe", LOCAL_TIMEOUT_MS) { nativeDatabaseReadProbe(context) }
+        startDetachedLocalProbe(checkId, "db_native_backup_tables", LOCAL_TIMEOUT_MS) { nativeBackupTableProbe(context) }
         startDetachedLocalProbe(checkId, "db_repository_read_probe", LOCAL_TIMEOUT_MS) { repositoryDatabaseReadProbe(repository) }
         startDetachedLocalProbe(checkId, "embedding_compute_probe", LOCAL_TIMEOUT_MS) { localEmbeddingComputeProbe() }
         startDetachedLocalProbe(checkId, "vector_diagnostics_probe", LOCAL_TIMEOUT_MS) { vectorDiagnosticsProbe() }
         startDetachedLocalProbe(checkId, "memory_items_stats_probe", LOCAL_TIMEOUT_MS) { memoryItemsStatsProbe(context) }
-        startDetachedLocalProbe(checkId, "vector_embedding_probe", COPY_TIMEOUT_MS) { vectorEmbeddingProbe() }
+        startDetachedLocalProbe(checkId, "vector_embedding_gateway_probe", COPY_TIMEOUT_MS) { vectorEmbeddingGatewayProbe(checkId) }
+        // Candidate SQL is already measured without user data by vector_diagnostics_probe. Do not
+        // run a second production-store search: a stuck platform SQLite call cannot be cancelled
+        // reliably and would block interactive message writes on the shared dispatcher.
+        mark(checkId, "vector_store_query_probe", ProblemStageStatus.NOT_RUN, detail = "reason=covered_by_vector_diagnostics_probe;avoids_production_dispatcher_contention")
         // A production-store search needs an isolated seeded vector to prove ranking semantics.
         // Do not write diagnostic vectors into user namespaces; configuration and embedding are
         // still checked above, while store ranking is covered by unit tests.
@@ -240,7 +249,7 @@ object ProblemChecker {
         val primary = diagnosis(snapshot)
         val report = buildString {
             appendLine("RHODES_PROBLEM_CHECK")
-            appendLine("reportVersion=7")
+            appendLine("reportVersion=10")
             appendLine("checkId=${snapshot.checkId}")
             appendLine("status=$status")
             appendLine("elapsedMs=${if (snapshot.startedAt == 0L) 0 else now - snapshot.startedAt}")
@@ -267,7 +276,8 @@ object ProblemChecker {
     private fun diagnosisDetail(progress: ProblemCheckProgress, primary: String): String = when (primary) {
         "KNOWLEDGE_BASE_SQLDELIGHT_READ_FAILED" -> "native_sqlite=success,sqldelight_repository_getAll=timeout,likely=application_db_dispatcher_or_shared_driver_blocked"
         "VECTOR_TABLE_ACCESS_FAILED", "VECTOR_EMBEDDING_DATA_READ_FAILED" -> "native_vector_sqlite=failed,likely=vector_memories_table_or_driver_access"
-        "EMBEDDING_PIPELINE_FAILED" -> "vector_mode=${runCatching { settingsForProbe().vectorProviderMode }.getOrDefault("unknown")},likely=local_vector_store_or_embedding_gateway_path"
+        "EMBEDDING_GATEWAY_FAILED" -> "vector_mode=${runCatching { settingsForProbe().vectorProviderMode }.getOrDefault("unknown")},likely=embedding_gateway_or_network_path"
+        "VECTOR_STORE_QUERY_FAILED" -> "embedding_gateway=completed;compare=vector_diagnostics_probe_and_db_native_backup_tables;likely=DatabaseDispatcher_queue_or_vector_memories_query"
         else -> "see_primary_stage_detail"
     }
 
@@ -283,11 +293,12 @@ object ProblemChecker {
         appendPipeline(snapshot, "群聊发送与存储", listOf("group_message_probe", "group_pipeline_roster_history", "group_pipeline_reply_parse"))
         appendPipeline(snapshot, "群聊上下文与提示词前置条件", listOf("group_pipeline_context"))
         appendPipeline(snapshot, "群聊 AI 回复", listOf("group_ai_probe"))
-        appendPipeline(snapshot, "向量化与记忆检索", listOf("vector_config_probe", "embedding_compute_probe", "vector_diagnostics_probe", "memory_items_stats_probe", "vector_sql_count", "vector_sql_signature_size", "vector_sql_invalid_rows", "vector_embedding_probe"))
+        appendPipeline(snapshot, "向量化与记忆检索", listOf("vector_config_probe", "embedding_compute_probe", "vector_diagnostics_probe", "memory_items_stats_probe", "vector_sql_count", "vector_sql_signature_size", "vector_sql_invalid_rows", "vector_embedding_gateway_probe"))
         appendPipeline(snapshot, "客服本地能力", listOf("support_manual_probe", "support_transcript_probe"))
-        appendPipeline(snapshot, "本地数据库与备份", listOf("database_open", "database_schema", "persistent_state_probe", "session_integrity", "database_copy_write_test", "backup_snapshot_timing_probe", "backup_roles_sessions", "backup_relationships", "backup_messages", "backup_knowledge_bases", "backup_memories", "backup_anchors", "backup_memory_items", "backup_social_diaries", "backup_archives_display", "backup_gifts_dispatches_extras", "backup_settings_snapshot", "backup_snapshot_probe"))
+        appendPipeline(snapshot, "本地数据库与备份", listOf("database_open", "database_schema", "db_native_backup_tables", "persistent_state_probe", "session_integrity", "database_copy_write_test", "backup_snapshot_timing_probe", "backup_roles_sessions", "backup_relationships", "backup_messages", "backup_knowledge_bases", "backup_memories", "backup_anchors", "backup_memory_items", "backup_moments", "backup_moment_likes", "backup_moment_comments", "backup_diaries", "backup_archives_display", "backup_gifts", "backup_dispatches", "backup_shared_experiences", "backup_mahjong", "backup_settings_snapshot", "backup_snapshot_probe"))
         if (status != "running") appendLine("建议：${when {
             snapshot.stages["knowledge_base_metadata"]?.status == ProblemStageStatus.TIMEOUT && snapshot.stages["kb_sql_metadata"]?.status == ProblemStageStatus.SUCCESS -> "原生 SQLite 已正常读取知识库表，但应用 SQLDelight 仓库读取超时；已定位为应用数据库调度/共享连接路径，请查看 diagnosis.detail。"
+            snapshot.stages["backup_moments"]?.status == ProblemStageStatus.TIMEOUT || snapshot.stages["backup_moment_likes"]?.status == ProblemStageStatus.TIMEOUT || snapshot.stages["backup_moment_comments"]?.status == ProblemStageStatus.TIMEOUT || snapshot.stages["backup_diaries"]?.status == ProblemStageStatus.TIMEOUT -> "备份已定位到具体社交数据分类超时；请导出技术报告并查看该步骤的记录数、文本大小和耗时。"
             snapshot.stages["backup_snapshot_probe"]?.status == ProblemStageStatus.TIMEOUT -> "备份快照构建超时；聊天与模型探针已独立继续执行。请查看技术详情中的备份数据分类。"
             snapshot.stages["private_ai_probe"]?.status == ProblemStageStatus.TIMEOUT || snapshot.stages["group_ai_probe"]?.status == ProblemStageStatus.TIMEOUT -> "模型自检超过 60 秒；本地消息保存若通过，请检查网络、模型服务节点或更换更快模型。"
             else -> "如有失败项，请查看技术详情中的失败步骤和原因。"
@@ -342,7 +353,8 @@ object ProblemChecker {
         }
     }
 
-    /** One SQLite lane prevents timed-out workers from multiplying into misleading lock timeouts. */
+    /** Run every probe after a failure too. A blocked dispatcher is itself the finding, but later
+     * probes identify which independent application paths remain healthy. */
     private suspend fun runDatabaseLane(
         checkId: String,
         context: Context,
@@ -388,20 +400,27 @@ object ProblemChecker {
             Triple("backup_memories", COPY_TIMEOUT_MS, suspend { backupMemoriesProbe(repository) }),
             Triple("backup_anchors", COPY_TIMEOUT_MS, suspend { backupAnchorsProbe(repository) }),
             Triple("backup_memory_items", COPY_TIMEOUT_MS, suspend { backupMemoryItemsProbe(repository) }),
-            Triple("backup_social_diaries", COPY_TIMEOUT_MS, suspend { backupSocialDiariesProbe(repository) }),
+            // All repository reads share one Android SQLite driver. Keep these distinct probes
+            // serial so the diagnostic itself cannot create a driver-contention false positive.
+            Triple("backup_moments", COPY_TIMEOUT_MS, suspend { backupMomentsProbe(repository) }),
+            Triple("backup_moment_likes", COPY_TIMEOUT_MS, suspend { backupMomentLikesProbe(repository) }),
+            Triple("backup_moment_comments", COPY_TIMEOUT_MS, suspend { backupMomentCommentsProbe(repository) }),
+            Triple("backup_diaries", COPY_TIMEOUT_MS, suspend { backupDiariesProbe(repository) }),
             Triple("backup_archives_display", COPY_TIMEOUT_MS, suspend { backupArchivesDisplayProbe(repository) }),
-            Triple("backup_gifts_dispatches_extras", COPY_TIMEOUT_MS, suspend { backupExtrasProbe(repository) }),
+            Triple("backup_gifts", LOCAL_TIMEOUT_MS, suspend { backupGiftsProbe(repository) }),
+            Triple("backup_dispatches", LOCAL_TIMEOUT_MS, suspend { backupDispatchesProbe(repository) }),
+            Triple("backup_shared_experiences", LOCAL_TIMEOUT_MS, suspend { backupSharedExperiencesProbe(repository) }),
+            Triple("backup_mahjong", LOCAL_TIMEOUT_MS, suspend { backupMahjongProbe(repository) }),
             Triple("backup_settings_snapshot", COPY_TIMEOUT_MS, suspend { backupSettingsProbe(repository) }),
         )
         for ((name, timeout, action) in stages) {
             if (progress().abandoned) return
             startDetachedLocalProbe(checkId, name, timeout) { action() }
             awaitReportedStage(checkId, name)
-            val result = progress().stages[name]?.status
-            if (result != ProblemStageStatus.SUCCESS) {
+            if (progress().stages[name]?.status != ProblemStageStatus.SUCCESS) {
                 val remaining = stages.dropWhile { it.first != name }.drop(1).map { it.first } + "backup_snapshot_probe"
                 remaining.forEach { pending ->
-                    mark(checkId, pending, ProblemStageStatus.NOT_RUN, detail = "reason=database_lane_blocked_at_$name")
+                    mark(checkId, pending, ProblemStageStatus.NOT_RUN, detail = "reason=skipped_after_first_database_failure,blockedAt=$name;inspect_db_native_backup_tables_for_table_and_field_metrics")
                 }
                 return
             }
@@ -417,6 +436,7 @@ object ProblemChecker {
         "backup_memories" -> "备份传统记忆读取"
         "backup_anchors" -> "备份记忆锚点读取"
         "db_native_read_probe" -> "原生 SQLite 基础读取"
+        "db_native_backup_tables" -> "原生 SQLite 备份表与字段统计"
         "db_repository_read_probe" -> "应用数据库读取"
         "embedding_compute_probe" -> "本地向量计算"
         "private_message_probe", "group_message_probe" -> "消息保存与 AI 回复写回"
@@ -435,7 +455,8 @@ object ProblemChecker {
         "kb_sql_metadata" -> "知识库表原生 SQLite 最小元数据读取"
         "kb_sql_content_size" -> "知识库原文大小统计"
         "vector_config_probe" -> "向量模型本地配置"
-        "vector_embedding_probe" -> "固定诊断文本 Embedding 请求"
+        "vector_embedding_gateway_probe" -> "固定诊断文本向量生成"
+        "vector_store_query_probe" -> "向量表候选查询（已由只读 SQL 诊断覆盖）"
         "vector_local_search_probe" -> "本地向量检索"
         "vector_sql_count" -> "向量表原生 SQLite 计数"
         "vector_sql_signature_size" -> "向量签名与 JSON 大小统计"
@@ -454,8 +475,7 @@ object ProblemChecker {
     }
 
     private fun diagnosis(p: ProblemCheckProgress): String = when {
-        p.stages.values.any { it.status == ProblemStageStatus.PENDING || it.status == ProblemStageStatus.RUNNING } -> "CHECK_RUNNING"
-        p.abandoned -> "${p.currentStage.uppercase()}_PROBE_BLOCKED"
+        p.stages.values.any { it.status == ProblemStageStatus.PENDING || it.status == ProblemStageStatus.RUNNING } && !p.abandoned -> "CHECK_RUNNING"
         p.stages["db_native_read_probe"]?.status in setOf(ProblemStageStatus.FAILED, ProblemStageStatus.TIMEOUT) -> "NATIVE_DATABASE_READ_FAILED"
         p.stages["db_repository_read_probe"]?.status in setOf(ProblemStageStatus.FAILED, ProblemStageStatus.TIMEOUT) -> "SHARED_DATABASE_DRIVER_OR_DISPATCHER_BLOCKED"
         p.stages["kb_sql_count"]?.status in setOf(ProblemStageStatus.FAILED, ProblemStageStatus.TIMEOUT) -> "KNOWLEDGE_BASE_TABLE_ACCESS_FAILED"
@@ -465,7 +485,8 @@ object ProblemChecker {
         p.stages["vector_sql_count"]?.status in setOf(ProblemStageStatus.FAILED, ProblemStageStatus.TIMEOUT) -> "VECTOR_TABLE_ACCESS_FAILED"
         p.stages["vector_sql_signature_size"]?.status in setOf(ProblemStageStatus.FAILED, ProblemStageStatus.TIMEOUT) -> "VECTOR_EMBEDDING_DATA_READ_FAILED"
         p.stages["vector_sql_invalid_rows"]?.status in setOf(ProblemStageStatus.FAILED, ProblemStageStatus.TIMEOUT) -> "VECTOR_RECORD_VALIDATION_FAILED"
-        p.stages["vector_embedding_probe"]?.status in setOf(ProblemStageStatus.FAILED, ProblemStageStatus.TIMEOUT) -> "EMBEDDING_PIPELINE_FAILED"
+        p.stages["vector_embedding_gateway_probe"]?.status in setOf(ProblemStageStatus.FAILED, ProblemStageStatus.TIMEOUT) -> "EMBEDDING_GATEWAY_FAILED"
+        p.stages["vector_store_query_probe"]?.status in setOf(ProblemStageStatus.FAILED, ProblemStageStatus.TIMEOUT) -> "VECTOR_STORE_QUERY_FAILED"
         p.stages["contacts_recovery"]?.status != ProblemStageStatus.SUCCESS -> "CONTACTS_RECOVERY_FAILED"
         p.stages["session_message_audit"]?.status == ProblemStageStatus.SUCCESS &&
             p.stages["session_message_audit"]?.detail?.contains("issues=") == true &&
@@ -487,6 +508,7 @@ object ProblemChecker {
         } == true -> "CHAT_SESSION_INTEGRITY_FAILED"
         p.stages["database_copy_write_test"]?.status == ProblemStageStatus.FAILED -> "DATABASE_COPY_WRITE_FAILED"
         p.stages["database_schema"]?.status == ProblemStageStatus.FAILED -> "DATABASE_SCHEMA_FAILED"
+        p.abandoned -> "${p.currentStage.uppercase()}_PROBE_BLOCKED"
         else -> "NO_DATABASE_PROBLEM_FOUND"
     }
 
@@ -553,12 +575,24 @@ object ProblemChecker {
         return "memoryItems=${items.size},contentChars=${items.sumOf { it.content.length }},rawJsonChars=${items.sumOf { it.rawJson.length }},vectorIdsCleared=${copied.count { it.vectorId.isBlank() }}"
     }
 
-    private suspend fun backupSocialDiariesProbe(repository: ChatRepository): String {
+    private suspend fun backupMomentsProbe(repository: ChatRepository): String {
         val moments = repository.getAllMomentsSync()
+        return "moments=${moments.size},contentChars=${moments.sumOf { it.content.length }},maxContentChars=${moments.maxOfOrNull { it.content.length } ?: 0}"
+    }
+
+    private suspend fun backupMomentLikesProbe(repository: ChatRepository): String {
         val likes = repository.getAllLikesForBackup()
+        return "likes=${likes.size}"
+    }
+
+    private suspend fun backupMomentCommentsProbe(repository: ChatRepository): String {
         val comments = repository.getAllCommentsForBackup()
+        return "comments=${comments.size},contentChars=${comments.sumOf { it.content.length }},maxContentChars=${comments.maxOfOrNull { it.content.length } ?: 0}"
+    }
+
+    private suspend fun backupDiariesProbe(repository: ChatRepository): String {
         val diaries = repository.getAllDiariesForBackup()
-        return "moments=${moments.size},likes=${likes.size},comments=${comments.size},diaries=${diaries.size},socialTextChars=${moments.sumOf { it.content.length } + comments.sumOf { it.content.length } + diaries.sumOf { it.content.length }}"
+        return "diaries=${diaries.size},contentChars=${diaries.sumOf { it.content.length }},maxContentChars=${diaries.maxOfOrNull { it.content.length } ?: 0}"
     }
 
     private suspend fun backupArchivesDisplayProbe(repository: ChatRepository): String {
@@ -568,14 +602,25 @@ object ProblemChecker {
         return "displayEvents=${displayEvents.size},archives=${archives.size},historySegments=${history.size},archiveJsonChars=${archives.sumOf { it.messagesJson.length + it.stateJson.length } + history.sumOf { it.messagesJson.length }}"
     }
 
-    private suspend fun backupExtrasProbe(repository: ChatRepository): String {
-        val operators = repository.getAllOperatorsSync()
-        val gifts = operators.flatMap { repository.getGiftsByOperator(it.id) }
+    private suspend fun backupGiftsProbe(repository: ChatRepository): String {
+        val gifts = repository.getAllGifts()
+        return "gifts=${gifts.size},nameChars=${gifts.sumOf { it.giftName.length }},uriChars=${gifts.sumOf { it.imageUri.length }}"
+    }
+
+    private suspend fun backupDispatchesProbe(repository: ChatRepository): String {
         val dispatches = repository.dispatches.getAllDispatches()
+        return "dispatches=${dispatches.size},logChars=${dispatches.sumOf { it.logChain.length }},itemsChars=${dispatches.sumOf { it.items.length }}"
+    }
+
+    private suspend fun backupSharedExperiencesProbe(repository: ChatRepository): String {
         val experiences = repository.getAllSharedExperiences()
         val participants = repository.getAllSharedExperienceParticipants()
+        return "experiences=${experiences.size},participants=${participants.size},contentChars=${experiences.sumOf { it.content.length }}"
+    }
+
+    private suspend fun backupMahjongProbe(repository: ChatRepository): String {
         val mahjong = repository.mahjong.getMahjongSave()
-        return "gifts=${gifts.size},dispatches=${dispatches.size},experiences=${experiences.size},participants=${participants.size},mahjongSave=${mahjong != null}"
+        return "mahjongSave=${mahjong != null},saveChars=${mahjong?.saveJson?.length ?: 0}"
     }
 
     private suspend fun backupSettingsProbe(repository: ChatRepository): String {
@@ -968,22 +1013,38 @@ object ProblemChecker {
         return "memoryV2Enabled=true,mode=$mode,modelConfigured=${settings.vectorModelName.isNotBlank()},networkProbePending=true"
     }
 
-    private suspend fun vectorEmbeddingProbe(): String {
+    private suspend fun vectorEmbeddingGatewayProbe(checkId: String): String {
         val settings = settingsForProbe()
         if (!settings.memoryV2Enabled) return "skipped=memory_v2_disabled"
         val vectorService = runCatching {
             org.koin.java.KoinJavaComponent.get<MemoryVectorService>(MemoryVectorService::class.java)
         }.getOrElse { throw IllegalStateException("vector service unavailable", it) }
-        val results = vectorService.search(
+        val started = SystemClock.elapsedRealtime()
+        val embedding = vectorService.embedForDiagnostics("Rhodes diagnostic vector health probe")
+        check(embedding.isNotEmpty() && embedding.all { it.isFinite() }) { "embedding gateway returned an invalid vector" }
+        diagnosticEmbeddings[checkId] = embedding
+        return "memoryV2Enabled=true,embeddingRequest=true,dimensions=${embedding.size},gatewayMs=${SystemClock.elapsedRealtime() - started},userContentSent=false"
+    }
+
+    private suspend fun vectorStoreQueryProbe(checkId: String): String {
+        val settings = settingsForProbe()
+        if (!settings.memoryV2Enabled) return "skipped=memory_v2_disabled"
+        val vectorService = runCatching {
+            org.koin.java.KoinJavaComponent.get<MemoryVectorService>(MemoryVectorService::class.java)
+        }.getOrElse { throw IllegalStateException("vector service unavailable", it) }
+        val embedding = diagnosticEmbeddings[checkId]
+            ?: throw IllegalStateException("embedding gateway probe did not complete; inspect vector_embedding_gateway_probe")
+        val started = SystemClock.elapsedRealtime()
+        val results = vectorService.searchWithEmbedding(
             VectorSearchRequest(
                 ownerType = "__diagnostic__",
                 ownerId = "__diagnostic__",
                 query = "Rhodes diagnostic vector health probe",
                 limit = 1,
                 candidateLimit = 1,
-            )
+            ), embedding
         )
-        return "memoryV2Enabled=true,embeddingRequest=true,vectorSearch=true,resultCount=${results.size},userContentSent=false"
+        return "memoryV2Enabled=true,vectorSearch=true,resultCount=${results.size},storeAndCacheMs=${SystemClock.elapsedRealtime() - started},userContentSent=false"
     }
 
     /** Production data remains read-only. Message persistence is validated only in a disposable DB copy. */
@@ -1080,6 +1141,42 @@ object ProblemChecker {
         buildString {
             append("nativeRead=true,sessions=").append(count("chat_sessions"))
             append(",vectors=").append(count("vector_memories"))
+        }
+    }
+
+    /** Reads every export-relevant table through an independent read-only SQLite connection.
+     * This remains usable when the app's SQLDelight dispatcher is stalled. */
+    private fun nativeBackupTableProbe(context: Context): String = SQLiteDatabase.openDatabase(context.getDatabasePath(DB_NAME).path, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+        data class TableSpec(val table: String, val textColumns: List<String> = emptyList())
+        val tables = listOf(
+            TableSpec("moments", listOf("content")),
+            TableSpec("moment_likes"),
+            TableSpec("moment_comments", listOf("content", "replyToName")),
+            TableSpec("diaries", listOf("content")),
+            TableSpec("chat_archives", listOf("messagesJson", "summary", "stateJson")),
+            TableSpec("chat_history_segments", listOf("messagesJson", "title", "reason")),
+            TableSpec("gift_records", listOf("giftName", "imageUri")),
+            TableSpec("dispatch_records", listOf("logChain", "items")),
+            TableSpec("shared_experiences", listOf("content")),
+            TableSpec("shared_experience_participants"),
+            TableSpec("memory_items", listOf("content", "rawJson")),
+            TableSpec("vector_memories", listOf("content", "embeddingJson", "tags")),
+        )
+        tables.joinToString(";") { spec ->
+            val columns = spec.textColumns.joinToString(",") { column ->
+                "COALESCE(SUM(LENGTH([$column])),0) AS ${column}_sum,COALESCE(MAX(LENGTH([$column])),0) AS ${column}_max"
+            }
+            val sql = "SELECT COUNT(*) AS rows${if (columns.isBlank()) "" else ",$columns"} FROM [${spec.table}]"
+            db.rawQuery(sql, null).use { cursor ->
+                check(cursor.moveToFirst()) { "${spec.table} aggregate returned no row" }
+                buildString {
+                    append("table=").append(spec.table).append(",rows=").append(cursor.getLong(0))
+                    spec.textColumns.forEachIndexed { index, column ->
+                        append(",").append(column).append("Chars=").append(cursor.getLong(1 + index * 2))
+                        append(",max").append(column.replaceFirstChar { it.uppercase() }).append("Chars=").append(cursor.getLong(2 + index * 2))
+                    }
+                }
+            }
         }
     }
 

@@ -1,6 +1,7 @@
 package com.rhodes.privatechat.shared.data
 
 import com.rhodes.privatechat.shared.db.DatabaseWrapper
+import com.rhodes.privatechat.shared.db.DatabaseDispatcher
 import com.rhodes.privatechat.shared.db.RhodesDatabase
 import com.rhodes.privatechat.shared.model.*
 import kotlinx.coroutines.Dispatchers
@@ -23,7 +24,7 @@ class DispatchRepository(private val wrapper: DatabaseWrapper) {
         }.executeAsList()
     }
 
-    suspend fun getAllDispatches(): List<DispatchRecord> = withContext(Dispatchers.Default) {
+    suspend fun getAllDispatches(): List<DispatchRecord> = withContext(DatabaseDispatcher.dispatcher) {
         db.dispatchRecordsQueries.getAllDispatches() { id, taskType, durationHours, budget, netProfit, opIds, logChain, status, startTime, endTime, totalSegments, segmentInterval, items ->
             DispatchRecord(id, taskType, durationHours.toInt(), budget.toInt(), netProfit.toInt(), opIds, logChain, status, startTime, endTime, totalSegments.toInt(), segmentInterval, items)
         }.executeAsList()

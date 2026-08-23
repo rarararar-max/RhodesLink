@@ -67,8 +67,7 @@ class MomentsViewModel(
 
     suspend fun getMomentBadgeSuspend(): Int {
         val lastSeenMoment = settings.lastSeenMomentId
-        val recent = withContext(Dispatchers.IO) { repository.getMomentsPaged(100, 0) }
-        return recent.count { it.id > lastSeenMoment && !it.isUserPost }
+        return repository.countUnreadMomentsAfterId(lastSeenMoment)
     }
 
     suspend fun hasNewMomentsSince(latestLoadedId: Long): Boolean {
@@ -98,10 +97,8 @@ class MomentsViewModel(
         }
     }
 
-    fun markMomentsSeen() {
-        scope.launch {
-            settings.lastSeenMomentId = repository.getMaxMomentId()
-        }
+    suspend fun markMomentsSeen() {
+        settings.lastSeenMomentId = repository.getMaxMomentId()
     }
 
     fun markCommentRead(commentId: Long) {

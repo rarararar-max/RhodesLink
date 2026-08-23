@@ -74,12 +74,13 @@ fun KnowledgeBaseDetailScreen(
             Text("${current.rawContent.length} 字 · $chunkCount 个分段 · $enabledChunkCount 个使用中 · 已关联 $roleCount 个角色", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 4.dp))
             Text("索引状态：${if (enabledChunkCount == 0) "没有可用分段" else indexStatusText(current.indexStatus)}", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 4.dp))
             if (current.indexStatus == "pending") Text("内容已变更，需要重新索引后才能参与生成。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 4.dp))
-            DetailRow(if (indexing) "正在索引" else "开始/重建索引", if (settings.vectorProviderMode == "third_party") "远程模式会使用当前配置发起向量请求" else "使用当前本地向量模型建立索引", {
+            val canRetryFailed = current.indexStatus == "partial_failed"
+            DetailRow(if (indexing) "正在索引" else if (canRetryFailed) "重试失败分段" else "开始/重建索引", if (canRetryFailed) "保留已成功索引的分段，只重试失败分段" else if (settings.vectorProviderMode == "third_party") "远程模式会使用当前配置发起向量请求" else "使用当前本地向量模型建立索引", {
                 if (indexing) return@DetailRow
                 if (settings.vectorProviderMode == "third_party") confirmRemoteIndex = true
                 else scope.launch {
                     indexing = true
-                    runCatching { viewModel.indexKnowledgeBase(current.id, true) }
+                    runCatching { if (canRetryFailed) viewModel.retryFailedKnowledgeBaseChunks(current.id) else viewModel.indexKnowledgeBase(current.id, true) }
                         .onSuccess { message = "索引完成：成功 ${it.succeeded}，失败 ${it.failed}" }
                         .onFailure { message = "索引失败：${it.message ?: "未知错误"}" }
                     book = viewModel.getKnowledgeBase(current.id)
@@ -99,6 +100,9 @@ fun KnowledgeBaseDetailScreen(
                     })
                 }
             }
+            Text("检索规则", fontSize = 14.sp, color = TextPrimary, modifier = Modifier.padding(top = 12.dp))
+            Text("私聊：每本符合条件的知识库最多召回 3 个分段，再从全部候选中选择相关度最高的 3 段；同一本资料可以占多条。群聊：按知识库去重后选择最多 2 段。动态、评论、日记只引用 1 段最相关资料，检索慢时仍会照常生成内容。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 4.dp))
+            if (settings.vectorProviderMode == "third_party") Text("第三方向量：建立索引会发送资料分段；聊天检索会发送当前问题文本。请确认服务商的隐私政策、数据处理方式与费用。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 4.dp))
             DetailRow("编辑名称和正文", "修改正文后会重新分段并需要重新索引", onEdit)
             DetailRow("关联角色", "多选角色；与角色编辑页自动同步", onRoles)
             DetailRow("分段管理", "查看、编辑、启用或禁用自动分段", onChunks)
@@ -113,10 +117,10 @@ fun KnowledgeBaseDetailScreen(
     )
     if (confirmRemoteIndex) AlertDialog(
         onDismissRequest = { confirmRemoteIndex = false }, title = { Text("确认远程索引") },
-        text = { Text("将为 $chunkCount 个有效分段发起 Embedding 请求，可能产生服务商费用。") },
+        text = { Text(if (current.indexStatus == "partial_failed") "将仅重试此前失败的分段，可能产生服务商费用。" else "将为 $chunkCount 个有效分段发起 Embedding 请求，可能产生服务商费用。") },
         confirmButton = { TextButton(enabled = !indexing, onClick = { scope.launch {
             indexing = true
-            runCatching { viewModel.indexKnowledgeBase(current.id, true) }
+            runCatching { if (current.indexStatus == "partial_failed") viewModel.retryFailedKnowledgeBaseChunks(current.id) else viewModel.indexKnowledgeBase(current.id, true) }
                 .onSuccess { message = "索引完成：成功 ${it.succeeded}，失败 ${it.failed}" }
                 .onFailure { message = "索引失败：${it.message ?: "未知错误"}" }
             book = viewModel.getKnowledgeBase(current.id)

@@ -138,7 +138,7 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
 
     /** Atomically makes a user message visible and records its durable reply recovery turn. */
     suspend fun sendMessageAndCreateReplyTurn(sessionId: String, message: ChatMessage, turn: ReplyTurn) = idMutex.withLock {
-        withContext(DatabaseDispatcher.dispatcher) {
+        DatabaseDispatcher.execute("message_write_user") {
             val ts = if (message.timestamp > 0) message.timestamp else Clock.System.now().toEpochMilliseconds()
             db.transaction {
                 nextMessageId = maxOf(nextMessageId ?: 0L, message.id + 1)
@@ -167,7 +167,7 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
 
     /** A reply row is committed only together with the token-fenced turn completion. */
     suspend fun sendReplyAndCompleteTurn(sessionId: String, message: ChatMessage, turnId: String, leaseToken: String, now: Long): Boolean = idMutex.withLock {
-        withContext(DatabaseDispatcher.dispatcher) {
+        DatabaseDispatcher.execute("message_write_ai_reply") {
             var completed = false
             db.transaction {
                 if (!db.replyTurnsQueries.isReplyTurnOwned(turnId, leaseToken).executeAsOne()) return@transaction
@@ -232,7 +232,7 @@ class MessageRepository(private val wrapper: DatabaseWrapper) {
     }.getOrDefault("[送出了礼物]")
 
     suspend fun getNextMessageId(): Long = idMutex.withLock {
-        withContext(DatabaseDispatcher.dispatcher) {
+        DatabaseDispatcher.execute("message_allocate_id") {
             val next = nextMessageId ?: ((db.chatMessagesQueries.getMaxId().executeAsOne().MAX ?: 0) + 1)
             nextMessageId = next + 1
             next

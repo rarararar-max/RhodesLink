@@ -32,6 +32,9 @@ SELECT * FROM moments WHERE operatorId = ? ORDER BY createdAt DESC;
 countMomentsByOperatorSince:
 SELECT COUNT(*) FROM moments WHERE operatorId = ? AND createdAt >= ? AND isUserPost = 0;
 
+countUnreadMomentsAfterId:
+SELECT COUNT(*) FROM moments WHERE id > ? AND isUserPost = 0;
+
 insertMoment:
 INSERT INTO moments(operatorId, operatorName, content, isUserPost, mentionedOperatorIds, likeCount, commentCount, createdAt)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?);

@@ -35,9 +35,11 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -210,6 +212,7 @@ private fun FeaturesTabContent(navigator: Navigator) {
     var momentBadge by remember { mutableIntStateOf(0) }
     var commentBadge by remember { mutableIntStateOf(0) }
     var diaryBadge by remember { mutableIntStateOf(0) }
+    val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) {
         while (true) {
             momentBadge = viewModel.getMomentBadgeSuspend()
@@ -222,7 +225,17 @@ private fun FeaturesTabContent(navigator: Navigator) {
         momentBadge = momentBadge,
         commentBadge = commentBadge,
         diaryBadge = diaryBadge,
-        onMoments = { viewModel.markMomentsSeen(); momentBadge = 0; navigator.push(MomentsRoute) },
+        onMoments = {
+            // Keep navigation responsive when the shared database lane is busy. The immediate
+            // local badge acknowledgement is followed by the durable checkpoint write.
+            momentBadge = 0
+            navigator.push(MomentsRoute)
+            scope.launch {
+                // Opening the feed acknowledges posts only. Reply notifications remain unread
+                // until the user opens the inbox or the corresponding moment.
+                viewModel.markMomentsSeen()
+            }
+        },
         onDiary = { navigator.push(DiaryRoute) },
         onRanking = { navigator.push(RankingRoute) },
         onImpressions = { navigator.push(ImpressionsRoute) },

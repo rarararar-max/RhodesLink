@@ -1,6 +1,7 @@
 package com.rhodes.privatechat.shared.data
 
 import com.rhodes.privatechat.shared.db.DatabaseWrapper
+import com.rhodes.privatechat.shared.db.DatabaseDispatcher
 import com.rhodes.privatechat.shared.model.SharedExperience
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -30,13 +31,13 @@ class SharedExperienceRepository(private val wrapper: DatabaseWrapper) {
         }
     }
 
-    suspend fun getAll(): List<SharedExperience> = withContext(Dispatchers.Default) {
+    suspend fun getAll(): List<SharedExperience> = withContext(DatabaseDispatcher.dispatcher) {
         db.sharedExperiencesQueries.getAllSharedExperiences { id, sourceKind, sourceRefId, groupId, content, importance, status, createdAt, expiresAt ->
             SharedExperience(id, sourceKind, sourceRefId, groupId, content, importance.toInt(), status, createdAt, expiresAt)
         }.executeAsList()
     }
 
-    suspend fun getAllParticipants(): List<SharedExperienceParticipant> = withContext(Dispatchers.Default) {
+    suspend fun getAllParticipants(): List<SharedExperienceParticipant> = withContext(DatabaseDispatcher.dispatcher) {
         db.sharedExperiencesQueries.getSharedExperienceParticipants { experienceId, operatorId, role ->
             SharedExperienceParticipant(experienceId, operatorId, role)
         }.executeAsList()

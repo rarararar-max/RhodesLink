@@ -1,6 +1,7 @@
 package com.rhodes.privatechat.shared.data
 
 import com.rhodes.privatechat.shared.db.DatabaseWrapper
+import com.rhodes.privatechat.shared.db.DatabaseDispatcher
 import com.rhodes.privatechat.shared.db.RhodesDatabase
 import com.rhodes.privatechat.shared.model.*
 import kotlinx.coroutines.Dispatchers
@@ -11,7 +12,7 @@ class MahjongRepository(private val wrapper: DatabaseWrapper) {
     private val db: RhodesDatabase get() = wrapper.database
 
     // --- Mahjong ---
-    suspend fun getMahjongSave(): MahjongSave? = withContext(Dispatchers.Default) {
+    suspend fun getMahjongSave(): MahjongSave? = withContext(DatabaseDispatcher.dispatcher) {
         db.mahjongSavesQueries.getSave().executeAsOneOrNull()?.let { MahjongSave(id = it.id, saveJson = it.saveJson, ruleType = it.ruleType, savedAt = it.savedAt) }
     }
 

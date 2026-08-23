@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
@@ -41,6 +42,7 @@ import com.rhodes.privatechat.ui.theme.ErrorRed
 import com.rhodes.privatechat.ui.theme.Primary
 import com.rhodes.privatechat.ui.theme.TextPrimary
 import com.rhodes.privatechat.ui.theme.TextSecondary
+import com.rhodes.privatechat.util.DebugLogger
 import com.rhodes.privatechat.viewmodel.MainViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -68,16 +70,28 @@ fun KnowledgeBasesScreen(onBack: () -> Unit, onOpen: (String) -> Unit, modifier:
     suspend fun refresh(initial: Boolean = false) {
         if (initial) loading = true
         val refreshedBooks = runCatching { viewModel.getKnowledgeBases() }
-            .getOrElse { emptyList() }
+            .onFailure { error ->
+                val db = com.rhodes.privatechat.shared.db.DatabaseDispatcher.snapshot()
+                message = "知识库读取失败：${error.message?.take(80) ?: error.javaClass.simpleName}"
+                DebugLogger.diagnostic("KnowledgeBase/ListLoadFailed", "errorClass=${error.javaClass.simpleName},errorMessage=${error.message?.take(160)},dbTask=${db.runningTask},dbRunningMs=${db.runningForMs},dbQueued=${db.queuedTasks}")
+            }
+            .getOrElse { books }
             // The support manual is a system record. Never infer this from its display name.
             .filterNot { it.sourceType == "system_support" || it.id == settings.supportKnowledgeBaseId }
         books = refreshedBooks
         books.filter { it.indexStatus == "processing" }.forEach { viewModel.resumeKnowledgeBaseProcessing(it) }
-        bookStats = books.associate { book ->
-            val chunks = viewModel.getKnowledgeBaseChunks(book.id)
-            val roles = viewModel.getKnowledgeBaseAssignmentsForBook(book.id).count { it.enabled }
-            val surfaces = listOf("private_chat", "group_chat", "moment", "comment", "diary").count { settings.isKnowledgeBaseEnabledForBook(book.id, it) }
-            book.id to Triple(chunks.size, roles, surfaces)
+        bookStats = runCatching {
+            books.associate { book ->
+                val chunks = viewModel.getKnowledgeBaseChunks(book.id)
+                val roles = viewModel.getKnowledgeBaseAssignmentsForBook(book.id).count { it.enabled }
+                val surfaces = listOf("private_chat", "group_chat", "moment", "comment", "diary").count { settings.isKnowledgeBaseEnabledForBook(book.id, it) }
+                book.id to Triple(chunks.size, roles, surfaces)
+            }
+        }.getOrElse { error ->
+            val db = com.rhodes.privatechat.shared.db.DatabaseDispatcher.snapshot()
+            message = "知识库统计读取失败：${error.message?.take(80) ?: error.javaClass.simpleName}"
+            DebugLogger.diagnostic("KnowledgeBase/ListStatsFailed", "errorClass=${error.javaClass.simpleName},errorMessage=${error.message?.take(160)},dbTask=${db.runningTask},dbRunningMs=${db.runningForMs},dbQueued=${db.queuedTasks}")
+            bookStats
         }
         if (settings.vectorProviderMode == "third_party" && remoteConfirm == null) {
             books.firstOrNull { it.indexStatus == "pending_confirm" && it.id !in deferredRemoteConfirmationIds }?.let { pending ->
@@ -161,8 +175,8 @@ fun KnowledgeBasesScreen(onBack: () -> Unit, onOpen: (String) -> Unit, modifier:
         showSave = false,
         icon = { androidx.compose.material3.Icon(Icons.AutoMirrored.Filled.MenuBook, null, tint = Primary) },
     ) {
-        Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
-            Text("导入 TXT 或 MD 后会自动分段。知识库仅在关联角色和当前话题相关时才会在后续生成中使用。", fontSize = 12.sp, color = TextSecondary)
+        Column(Modifier.padding(16.dp).imePadding().verticalScroll(rememberScrollState())) {
+            Text("导入 TXT 或 MD 后会自动分段。知识库仅在关联角色、启用对应场景、索引可用且话题相关时使用；系统只选少量相关片段，不会把整本资料发送给模型。", fontSize = 12.sp, color = TextSecondary)
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { creating = true }, modifier = Modifier.weight(1f)) { Text("新建知识库") }
                 Button(onClick = { importer.launch(arrayOf("text/plain", "text/markdown", "text/*")) }, modifier = Modifier.weight(1f)) { Text("导入 TXT / MD") }
@@ -229,7 +243,7 @@ private fun KnowledgeBaseTextDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
-        text = { Column { OutlinedTextField(name, { name = it }, label = { Text("名称") }); OutlinedTextField(content, { content = it }, label = { Text("正文") }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp), minLines = 6) } },
+        text = { Column(Modifier.imePadding().verticalScroll(rememberScrollState())) { OutlinedTextField(name, { name = it }, label = { Text("名称") }); OutlinedTextField(content, { content = it }, label = { Text("正文") }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp), minLines = 6) } },
         confirmButton = { TextButton(enabled = !saving, onClick = { onSave(name, content) }) { Text(if (saving) "处理中…" else "保存") } },
         dismissButton = { TextButton(enabled = !saving, onClick = onDismiss) { Text("取消") } },
     )
@@ -241,7 +255,7 @@ fun indexStatusText(status: String): String = when (status) {
     "pending_confirm" -> "已分段，等待确认索引"
     "indexing" -> "索引中"
     else -> if (status.startsWith("indexing:")) "索引中：${status.removePrefix("indexing:")}" else when (status) {
-    "partial_failed" -> "部分失败，可点此重建"
+    "partial_failed" -> "部分失败，已完成分段可用，可点此重试失败分段"
     "failed" -> "索引失败，可点此重建"
     else -> "等待索引"
     }

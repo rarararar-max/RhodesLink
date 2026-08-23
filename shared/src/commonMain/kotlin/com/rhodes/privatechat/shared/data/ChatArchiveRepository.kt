@@ -1,6 +1,7 @@
 package com.rhodes.privatechat.shared.data
 
 import com.rhodes.privatechat.shared.db.DatabaseWrapper
+import com.rhodes.privatechat.shared.db.DatabaseDispatcher
 import com.rhodes.privatechat.shared.db.RhodesDatabase
 import com.rhodes.privatechat.shared.model.ChatArchive
 import com.rhodes.privatechat.shared.model.ChatHistorySegment
@@ -16,7 +17,7 @@ class ChatArchiveRepository(private val wrapper: DatabaseWrapper) {
         }.executeAsList()
     }
 
-    suspend fun getAllArchives(): List<ChatArchive> = withContext(Dispatchers.Default) {
+    suspend fun getAllArchives(): List<ChatArchive> = withContext(DatabaseDispatcher.dispatcher) {
         db.chatArchivesQueries.getAllArchives { id, sid, operatorId, title, note, mode, messagesJson, summary, stateJson, status, createdAt, updatedAt ->
             ChatArchive(id, sid, operatorId, title, note, mode, messagesJson, summary, stateJson, status, createdAt, updatedAt)
         }.executeAsList()
@@ -59,7 +60,7 @@ class ChatArchiveRepository(private val wrapper: DatabaseWrapper) {
         }.executeAsList()
     }
 
-    suspend fun getAllHistorySegments(): List<ChatHistorySegment> = withContext(Dispatchers.Default) {
+    suspend fun getAllHistorySegments(): List<ChatHistorySegment> = withContext(DatabaseDispatcher.dispatcher) {
         db.chatArchivesQueries.getAllHistorySegments { id, sid, title, reason, messagesJson, createdAt ->
             ChatHistorySegment(id, sid, title, reason, messagesJson, createdAt)
         }.executeAsList()

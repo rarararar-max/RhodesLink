@@ -1,6 +1,7 @@
 package com.rhodes.privatechat.shared.data
 
 import com.rhodes.privatechat.shared.db.DatabaseWrapper
+import com.rhodes.privatechat.shared.db.DatabaseDispatcher
 import com.rhodes.privatechat.shared.db.RhodesDatabase
 import com.rhodes.privatechat.shared.model.*
 import kotlinx.coroutines.Dispatchers
@@ -47,7 +48,7 @@ class DiaryRepository(private val wrapper: DatabaseWrapper) {
         }.executeAsList()
     }
 
-    suspend fun getAllDiariesForBackup(): List<Diary> = withContext(Dispatchers.Default) {
+    suspend fun getAllDiariesForBackup(): List<Diary> = withContext(DatabaseDispatcher.dispatcher) {
         db.diariesQueries.getAllDiariesForBackup { id, opId, opName, content, date, version, createdAt ->
             Diary(id, opId, opName, content, date, version.toInt(), createdAt)
         }.executeAsList()

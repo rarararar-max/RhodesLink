@@ -254,7 +254,9 @@ class MemoryV2Pipeline(
         )
         val l1 = listOf(publicEventItem(MemorySourceKind.MOMENT_COMMENT, comment.operatorId, comment.id.toString(), sourceText, comment.createdAt))
         if (l1.isNotEmpty()) {
-            saveMemoryItems(l1)
+            // Ordinary public chatter is useful as shared short-lived context, but should not
+            // also flood each author's personal vector history.
+            if (isHighValueComment(comment)) saveMemoryItems(l1)
             saveMemoryItems(l1.map { it.copy(ownerType = "global", ownerId = "public", sourceTarget = "public", vectorId = "") })
             repository.saveMemoryBatch(MemoryBatch(
                 ownerType = "operator",
@@ -841,7 +843,7 @@ class MemoryV2Pipeline(
         if (objects.size >= 2 && parsed.size * 2 <= objects.size) {
             throw IllegalStateException("记忆模型有效项不足一半，等待重试（有效=${parsed.size}/${objects.size}）")
         }
-        return parsed
+        return parsed.take(MAX_L1_ITEMS_PER_EXTRACTION)
     }
 
     /** Replays unprocessed private/group source windows after transient model or network failures. */
@@ -1017,7 +1019,7 @@ class MemoryV2Pipeline(
                 ?.distinct()
                 .orEmpty()
             if (evidenceIds.isEmpty()) null else withPromotionMeta(item, topicKey, parents.filter { it.id in evidenceIds }, level)
-        }
+        }.take(if (level == MemoryLevel.L2) MAX_L2_ITEMS_PER_PROMOTION else MAX_L3_ITEMS_PER_PROMOTION)
     }
 
     private fun evidenceIdsFrom(jsonText: String): List<Long> = runCatching<List<Long>> {
@@ -1093,6 +1095,12 @@ class MemoryV2Pipeline(
         MemorySourceKind.PRIVATE_CHAT -> "private"
         MemorySourceKind.GROUP_CHAT, MemorySourceKind.MOMENT, MemorySourceKind.MOMENT_COMMENT -> "public"
         else -> "shared"
+    }
+
+    private fun isHighValueComment(comment: MomentComment): Boolean {
+        if (comment.operatorId == "user") return true
+        val text = comment.content
+        return HIGH_VALUE_COMMENT_TERMS.any { it in text }
     }
 
 
@@ -1203,6 +1211,10 @@ class MemoryV2Pipeline(
     }
 
     private companion object {
+        const val MAX_L1_ITEMS_PER_EXTRACTION = 5
+        const val MAX_L2_ITEMS_PER_PROMOTION = 2
+        const val MAX_L3_ITEMS_PER_PROMOTION = 1
+        val HIGH_VALUE_COMMENT_TERMS = setOf("答应", "约定", "承诺", "计划", "决定", "以后", "生日", "搬家", "住在", "工作")
         val allowedTypes = setOf(
             "emotion_state", "behavior_state", "physiological_state", "event", "agreement_commitment",
             "intent_wish", "preference_expression", "evaluation_opinion", "self_cognition_statement",

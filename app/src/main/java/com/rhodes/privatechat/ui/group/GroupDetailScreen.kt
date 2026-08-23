@@ -291,9 +291,6 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                 )
 
                 val groupLoading by viewModel.groupLoading.collectAsState()
-                if (messageSaving) {
-                    Text("正在保存消息…", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
-                }
                 if (pendingImageUri.isNotBlank()) {
                     Row(modifier = Modifier.fillMaxWidth().background(ElevatedSurface.copy(alpha = 0.96f)).padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         AsyncImage(model = pendingImageUri, contentDescription = "待发送图片", modifier = Modifier.size(72.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(10.dp)), contentScale = ContentScale.Crop)

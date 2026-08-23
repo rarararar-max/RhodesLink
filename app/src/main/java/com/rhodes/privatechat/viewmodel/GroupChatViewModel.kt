@@ -14,6 +14,7 @@ import com.rhodes.privatechat.util.DebugLogger
 import com.rhodes.privatechat.util.ChatTrace
 import com.rhodes.privatechat.shared.model.RelationshipType
 import com.rhodes.privatechat.shared.data.ChatRepository
+import com.rhodes.privatechat.shared.db.DatabaseDispatcher
 import com.rhodes.privatechat.shared.memory.AnchorSourcePolicy
 import com.rhodes.privatechat.shared.network.AIService
 import com.rhodes.privatechat.shared.network.JsonBlockExtractor
@@ -40,7 +41,10 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -616,6 +620,14 @@ class GroupChatViewModel(
             var failureMessageId: Long? = retryMessageId ?: sourceMessageId
             val debugRoundId = DebugLogger.startConversationRound("群聊", groupName, mode)
             val cacheUsage = SharedUtils.ChatUsageSummary()
+            var pipelineStage = "user_message_prepare"
+            fun failureSnapshot(reason: String, error: Throwable? = null) {
+                val db = DatabaseDispatcher.snapshot()
+                DebugLogger.diagnostic(
+                    "GroupChat/FailureSnapshot",
+                    "roundId=$debugRoundId,attempt=$sendAttemptId,groupId=$groupSessionId,stage=$pipelineStage,userMessageId=${userMessageId ?: 0},failureMessageId=${failureMessageId ?: 0},reason=$reason,errorClass=${error?.javaClass?.simpleName ?: "none"},dbTask=${db.runningTask},dbRunningMs=${db.runningForMs},dbQueued=${db.queuedTasks}"
+                )
+            }
             try {
                 val cleanup = restartCleanupJobs[groupSessionId]
                 if (cleanup != null && cleanup.isActive) {
@@ -626,12 +638,14 @@ class GroupChatViewModel(
             // 步骤1: 用户消息立即插入（不持锁），消息即时显示
             if (!isAuto && !userMessageAlreadyStored && text.isNotBlank()) {
                 DebugLogger.diagnostic("GroupChat/SaveAttempt", "attempt=$sendAttemptId,groupId=$groupSessionId,stage=message_id_begin")
+                pipelineStage = "user_message_id"
                 val userMsgId = withTimeout(GROUP_MESSAGE_WRITE_TIMEOUT_MS) { repository.getNextMessageId() }
                 DebugLogger.diagnostic("GroupChat/SaveAttempt", "attempt=$sendAttemptId,groupId=$groupSessionId,messageId=$userMsgId,stage=message_id_end")
                 userMessageId = userMsgId
                 failureMessageId = userMsgId
                 val userMessageTimestamp = System.currentTimeMillis()
                 DebugLogger.diagnostic("GroupChat/SaveAttempt", "attempt=$sendAttemptId,groupId=$groupSessionId,messageId=$userMsgId,stage=transaction_begin")
+                pipelineStage = "user_message_write"
                 replyTurnId = "group:$groupSessionId:$userMsgId"
                 val turnNow = System.currentTimeMillis()
                 withTimeout(GROUP_MESSAGE_WRITE_TIMEOUT_MS) {
@@ -667,6 +681,7 @@ class GroupChatViewModel(
                 val timeout = e is kotlinx.coroutines.TimeoutCancellationException
                 val error = if (timeout) "群消息保存超时，请稍后重试" else "群消息保存失败，请重试"
                 DebugLogger.diagnostic("GroupChat/UserMessageWriteFailed", "attempt=$sendAttemptId,groupId=$groupSessionId,stage=save_failed,timeout=$timeout,error=${e.javaClass.simpleName}:${e.message?.take(160)}")
+                failureSnapshot("user_message_write_failed", e)
                 DebugLogger.finishOperation(debugRoundId, "失败", if (timeout) "群消息保存超时" else "群消息保存失败：${e.javaClass.simpleName}")
                 _lastSendError.value = error
                 onResponseComplete(false)
@@ -689,6 +704,7 @@ class GroupChatViewModel(
                     if (claimed == null) return@launch
                 }
                 mutexFor(groupSessionId).lock()
+                pipelineStage = "group_mutex_locked"
                 mutexLocked = true
                 if ((groupGenerations[groupSessionId] ?: 0L) != generation) return@launch
                 if (isAuto && autoGeneration != null && autoChatGenerations[groupSessionId] != autoGeneration) return@launch
@@ -785,47 +801,49 @@ class GroupChatViewModel(
                 val recalledMembers = activeMembers.filter { member ->
                     requestText.contains(member.name)
                 }.take(settings.groupMemberMemoryCount.coerceAtMost(2))
-                val memberPrivateContext = buildString {
-                    recalledMembers.forEach { member ->
-                        val knowledge = if (settings.isMemoryInjectionAllowed("group_chat", "MEMBER_PRIVATE_CHAT")) {
-                            withTimeoutOrNull(2_000L) { memoryV2Pipeline.buildPrivateMemoryContext(
-                                member.id, 1, 1, 1, requestText,
-                                allowedSources = setOf(MemorySourceKind.PRIVATE_CHAT.name),
-                            ) } ?: run { DebugLogger.conversationStep(debugRoundId, "群聊", "成员私聊记忆", "已降级", "读取超时，跳过本轮成员私聊记忆"); "" }
-                        } else ""
-                        if (knowledge.isNotBlank()) {
-                            appendLine("【用户本轮提起的${member.name}私聊背景，所有成员可自然回应】")
-                            appendLine(knowledge)
-                        }
-                    }
-                }.ifBlank { "无" }
                 val restartAt = settings.getSessionRestartAt(groupSessionId)
                 val groupSummary = repository.getShortTermMemory(groupSessionId)
                     ?.takeIf { restartAt <= 0L || it.createdAt >= restartAt }
                     ?.content?.takeIf { it.isNotBlank() } ?: ""
                 val memberMemoryContext = ""
                 val sourceAwareMemories = "无"
-                 val groupVectorMemories = if (settings.isMemoryInjectionAllowed("group_chat", "GROUP_CHAT")) {
-                    val memoryRestartAt = settings.getSessionRestartAt(groupSessionId)
-                    val memoryQuery = requestText.ifBlank { groupPlotSummary.ifBlank { groupSummary }.ifBlank { "最近群聊进展" } }
-                     withTimeoutOrNull(2_000L) { memoryV2Pipeline.buildOwnerMemoryContext(
-                        ownerType = "group",
-                        ownerId = groupSessionId,
-                        limitL1 = 2,
-                        limitL2 = 1,
-                        limitL3 = 1,
-                        query = memoryQuery,
-                        minCreatedAt = memoryRestartAt,
-                     ) }?.ifBlank { "无" } ?: run { DebugLogger.conversationStep(debugRoundId, "群聊", "群向量记忆", "已降级", "读取超时，跳过本轮群向量记忆"); "无" }
-                } else "无"
-                val groupPublicMemories = if (settings.isMemoryInjectionAllowed("group_chat", "MOMENT") || settings.isMemoryInjectionAllowed("group_chat", "MOMENT_COMMENT")) {
-                    val publicSources = buildSet {
-                        if (settings.isMemoryInjectionAllowed("group_chat", "MOMENT")) add(MemorySourceKind.MOMENT.name)
-                        if (settings.isMemoryInjectionAllowed("group_chat", "MOMENT_COMMENT")) add(MemorySourceKind.MOMENT_COMMENT.name)
+                val (memberPrivateContext, groupVectorMemories, groupPublicMemories) = supervisorScope {
+                    val memberPrivate = async {
+                        buildString {
+                            recalledMembers.forEach { member ->
+                                val knowledge = if (settings.isMemoryInjectionAllowed("group_chat", "MEMBER_PRIVATE_CHAT")) {
+                                    withTimeoutOrNull(2_000L) { memoryV2Pipeline.buildPrivateMemoryContext(
+                                        member.id, 1, 1, 1, requestText,
+                                        allowedSources = setOf(MemorySourceKind.PRIVATE_CHAT.name),
+                                    ) } ?: run { DebugLogger.conversationStep(debugRoundId, "群聊", "成员私聊记忆", "已降级", "读取超时，跳过本轮成员私聊记忆"); "" }
+                                } else ""
+                                if (knowledge.isNotBlank()) {
+                                    appendLine("【用户本轮提起的${member.name}私聊背景，所有成员可自然回应】")
+                                    appendLine(knowledge)
+                                }
+                            }
+                        }.ifBlank { "无" }
                     }
-                     withTimeoutOrNull(1_500L) { memoryV2Pipeline.buildPublicMemoryContext(requestText, limit = 2, allowedSources = publicSources) }
-                         ?.ifBlank { "无" } ?: run { DebugLogger.conversationStep(debugRoundId, "群聊", "公开记忆", "已降级", "读取超时，跳过本轮公开记忆"); "无" }
-                } else "无"
+                    val groupMemory = async {
+                        if (!settings.isMemoryInjectionAllowed("group_chat", "GROUP_CHAT")) return@async "无"
+                        val memoryRestartAt = settings.getSessionRestartAt(groupSessionId)
+                        val memoryQuery = requestText.ifBlank { groupPlotSummary.ifBlank { groupSummary }.ifBlank { "最近群聊进展" } }
+                        withTimeoutOrNull(2_000L) { memoryV2Pipeline.buildOwnerMemoryContext(
+                            ownerType = "group", ownerId = groupSessionId, limitL1 = 2, limitL2 = 1, limitL3 = 1,
+                            query = memoryQuery, minCreatedAt = memoryRestartAt,
+                        ) }?.ifBlank { "无" } ?: run { DebugLogger.conversationStep(debugRoundId, "群聊", "群向量记忆", "已降级", "读取超时，跳过本轮群向量记忆"); "无" }
+                    }
+                    val publicMemory = async {
+                        if (!settings.isMemoryInjectionAllowed("group_chat", "MOMENT") && !settings.isMemoryInjectionAllowed("group_chat", "MOMENT_COMMENT")) return@async "无"
+                        val publicSources = buildSet {
+                            if (settings.isMemoryInjectionAllowed("group_chat", "MOMENT")) add(MemorySourceKind.MOMENT.name)
+                            if (settings.isMemoryInjectionAllowed("group_chat", "MOMENT_COMMENT")) add(MemorySourceKind.MOMENT_COMMENT.name)
+                        }
+                        withTimeoutOrNull(1_500L) { memoryV2Pipeline.buildPublicMemoryContext(requestText, limit = 2, allowedSources = publicSources) }
+                            ?.ifBlank { "无" } ?: run { DebugLogger.conversationStep(debugRoundId, "群聊", "公开记忆", "已降级", "读取超时，跳过本轮公开记忆"); "无" }
+                    }
+                    Triple(memberPrivate.await(), groupMemory.await(), publicMemory.await())
+                }
                 val recentSocialContext = sharedUtils.buildRecentSocialContext(
                     activeMembers.map { it.id }.toSet(),
                     requestText,
@@ -1250,6 +1268,7 @@ class GroupChatViewModel(
                 if (filtered.isNotEmpty()) {
                     if (isAuto && autoGeneration != null && autoChatGenerations[groupSessionId] != autoGeneration) return@launch
                     if ((groupGenerations[groupSessionId] ?: 0L) != generation) return@launch
+                    pipelineStage = "ai_reply_id"
                     val aiMsgId = repository.getNextMessageId()
                     val storedContent = if (filtered.isNotEmpty()) {
                         try {
@@ -1262,6 +1281,7 @@ class GroupChatViewModel(
                     if (parsedTurnState == null) {
                         DebugLogger.conversationStep(debugRoundId, "群聊", "连续性状态", "已保守降级", "模型未输出完整群聊回合状态，已使用当前用户消息和上一有效状态生成保守状态")
                     }
+                    pipelineStage = "ai_reply_write"
                     check(repository.sendReplyAndCompleteTurn(groupSessionId, ChatMessage(
                         id = aiMsgId, sessionId = groupSessionId,
                         senderName = groupName, content = storedContent,
@@ -1304,6 +1324,7 @@ class GroupChatViewModel(
                 DebugLogger.conversationStep(debugRoundId, "群聊", "本轮结果", "失败", "模型请求超时")
                 DebugLogger.attachOperationModule(debugRoundId, "模型用量", cacheUsage.summary())
                 DebugLogger.conversationStep(debugRoundId, "群聊", "本轮总览", "失败", "模式=$mode，自动=$isAuto，原因=模型请求超时，缓存=${cacheUsage.summary()}")
+                failureSnapshot("group_pipeline_timeout", e)
                 markGroupMessagesUndelivered(groupSessionId, if (batchIds.isNotEmpty()) batchIds else failureMessageId?.let(::setOf).orEmpty(), groupName)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 markGroupMessagesUndelivered(groupSessionId, if (batchIds.isNotEmpty()) batchIds else failureMessageId?.let(::setOf).orEmpty(), groupName)
@@ -1318,6 +1339,7 @@ class GroupChatViewModel(
                 DebugLogger.conversationStep(debugRoundId, "群聊", "本轮结果", "失败", "模型错误：$errMsg")
                 DebugLogger.attachOperationModule(debugRoundId, "模型用量", cacheUsage.summary())
                 DebugLogger.conversationStep(debugRoundId, "群聊", "本轮总览", "失败", "模式=$mode，自动=$isAuto，错误=${e.javaClass.simpleName}，缓存=${cacheUsage.summary()}")
+                failureSnapshot("group_pipeline_error", e)
                 markGroupMessagesUndelivered(groupSessionId, if (batchIds.isNotEmpty()) batchIds else failureMessageId?.let(::setOf).orEmpty(), groupName)
                 _lastSendError.value = errMsg
             } finally {

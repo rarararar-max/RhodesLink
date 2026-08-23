@@ -4,6 +4,8 @@ import android.content.Context
 import android.net.Uri
 import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.shared.settings.SettingsRepository
+import com.rhodes.privatechat.util.DebugLogger
+import com.rhodes.privatechat.shared.db.DatabaseDispatcher
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -46,10 +48,24 @@ class BackupExportCoordinator(
         includeMedia: Boolean,
         onProgress: (BackupExportProgress) -> Unit = {},
     ): BackupExportResult {
+        var exportStage = "snapshot"
         onProgress(BackupExportProgress(BackupExportStage.SNAPSHOT, "正在读取备份数据"))
         val coroutineContext = currentCoroutineContext()
         coroutineContext.ensureActive()
-        val snapshot = BackupContentFilter.apply(BackupSnapshotBuilder(repository, settings).build(), selection)
+        var snapshotPart = "initializing"
+        val snapshotStarted = android.os.SystemClock.elapsedRealtime()
+        DebugLogger.diagnostic("Backup/Export", "stage=snapshot,status=start,selection=$selection,includeMedia=$includeMedia")
+        val snapshot = try {
+            BackupContentFilter.apply(BackupSnapshotBuilder(repository, settings).build { name, elapsedMs ->
+                snapshotPart = name
+                DebugLogger.diagnostic("Backup/SnapshotRead", "part=$name,status=done,elapsedMs=$elapsedMs")
+            }, selection)
+        } catch (error: Throwable) {
+            DebugLogger.diagnostic("Backup/Export", "stage=snapshot,status=failed,part=$snapshotPart,elapsedMs=${android.os.SystemClock.elapsedRealtime() - snapshotStarted},errorClass=${error.javaClass.simpleName},errorMessage=${error.message?.replace('\n', ' ')?.take(160)}")
+            throw error
+        }
+        DebugLogger.diagnostic("Backup/Export", "stage=snapshot,status=done,elapsedMs=${android.os.SystemClock.elapsedRealtime() - snapshotStarted},lastPart=$snapshotPart")
+        exportStage = "media"
         onProgress(BackupExportProgress(BackupExportStage.MEDIA, "正在整理本机图片"))
         val (payload, media) = if (includeMedia) BackupMediaCollector(context).attachCollectedMedia(snapshot)
         else snapshot to BackupMediaCollector.Result(emptyList(), emptyList(), emptyList())
@@ -58,6 +74,7 @@ class BackupExportCoordinator(
         val final = File(dir, "rhodes_${System.currentTimeMillis()}.rbackup")
         val partial = File(dir, "${final.name}.partial")
         try {
+            exportStage = "write_cache"
             onProgress(BackupExportProgress(BackupExportStage.WRITE_CACHE, "正在写入本地暂存备份"))
             val manifest = FileOutputStream(partial).use { output ->
                 writer.writeFullBackup(
@@ -70,11 +87,13 @@ class BackupExportCoordinator(
             }
             coroutineContext.ensureActive()
             check(partial.renameTo(final)) { "无法完成备份暂存" }
+            exportStage = "validate_cache"
             onProgress(BackupExportProgress(BackupExportStage.VALIDATE_CACHE, "正在校验本地暂存备份"))
             val validation = FileInputStream(final).use(reader::validate)
             check(validation is BackupValidationResult.Valid) {
                 (validation as? BackupValidationResult.Invalid)?.reason ?: "暂存备份校验失败"
             }
+            exportStage = "copy_destination"
             onProgress(BackupExportProgress(BackupExportStage.COPY_DESTINATION, "正在保存到所选位置", 0L, final.length()))
             context.contentResolver.openOutputStream(destination, "w")?.use { output ->
                 FileInputStream(final).use { input ->
@@ -91,8 +110,11 @@ class BackupExportCoordinator(
                     output.flush()
                 }
             } ?: error("无法写入所选位置")
+            DebugLogger.diagnostic("Backup/Export", "stage=copy_destination,status=done,bytes=${final.length()}")
             return BackupExportResult(manifest, payload, media, final)
         } catch (error: Throwable) {
+            val db = DatabaseDispatcher.snapshot()
+            DebugLogger.diagnostic("Backup/Export", "stage=$exportStage,status=failed,errorClass=${error.javaClass.simpleName},errorMessage=${error.message?.replace('\n', ' ')?.take(160)},dbTask=${db.runningTask},dbRunningMs=${db.runningForMs},dbQueued=${db.queuedTasks}")
             partial.delete()
             final.delete()
             throw error

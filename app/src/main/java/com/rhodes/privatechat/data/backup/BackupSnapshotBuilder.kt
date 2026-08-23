@@ -11,13 +11,22 @@ import com.rhodes.privatechat.data.OperatorKnowledgeBaseAssignmentExport
 import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.shared.model.Operator
 import com.rhodes.privatechat.shared.settings.SettingsRepository
+import android.os.SystemClock
 
 /** Builds authoritative user content only; vectors, leases, queues and credentials stay excluded. */
 class BackupSnapshotBuilder(
     private val repository: ChatRepository,
     private val settings: SettingsRepository,
 ) {
-    suspend fun build(operators: List<Operator>? = null): BackupPayload {
+    suspend fun build(operators: List<Operator>? = null, onRead: (String, Long) -> Unit = { _, _ -> }): BackupPayload {
+        suspend fun <T> read(name: String, block: suspend () -> T): T {
+            val started = SystemClock.elapsedRealtime()
+            return try {
+                block()
+            } finally {
+                onRead(name, SystemClock.elapsedRealtime() - started)
+            }
+        }
         val snapshotOperators = operators ?: repository.getAllOperatorsSync()
         val sessions = repository.getAllSessionsSync()
         val relationships = repository.getAllRelationshipsForBackup()
@@ -42,10 +51,10 @@ class BackupSnapshotBuilder(
                 messages = messages.map(MessageExport::fromEntity),
                 memories = memories,
                 anchors = anchors,
-                moments = repository.getAllMomentsSync(),
-                momentLikes = repository.getAllLikesForBackup(),
-                momentComments = repository.getAllCommentsForBackup(),
-                diaries = repository.getAllDiariesForBackup(),
+                moments = read("moments") { repository.getAllMomentsSync() },
+                momentLikes = read("moment_likes") { repository.getAllLikesForBackup() },
+                momentComments = read("moment_comments") { repository.getAllCommentsForBackup() },
+                diaries = read("diaries") { repository.getAllDiariesForBackup() },
                 memoryItems = repository.getAllMemoryItems().map { it.copy(vectorId = "") },
                 knowledgeBases = knowledgeBases.map { KnowledgeBaseExport(it.id, it.name, it.rawContent, it.sourceFileName, it.sourceFormat, it.sourceType, it.chunkingMode, it.createdAt, it.updatedAt) },
                 knowledgeBaseChunks = knowledgeBaseChunks.map { KnowledgeBaseChunkExport(it.id, it.knowledgeBaseId, it.ordinal, it.sourceHeading, it.content, it.userKeywords, it.enabled, it.createdAt, it.updatedAt) },

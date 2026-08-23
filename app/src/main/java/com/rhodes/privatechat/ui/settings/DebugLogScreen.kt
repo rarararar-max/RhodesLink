@@ -98,6 +98,7 @@ fun DebugLogScreen(onBack: () -> Unit) {
     var problemProgress by remember { mutableStateOf(ProblemChecker.progress()) }
     var showProblemReport by remember { mutableStateOf(false) }
     var pendingTechnicalReport by remember { mutableStateOf<String?>(null) }
+    var pendingOperationExport by remember { mutableStateOf<String?>(null) }
     val clipboard = LocalClipboardManager.current
     val context = LocalContext.current
     val technicalReportExporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
@@ -113,6 +114,21 @@ fun DebugLogScreen(onBack: () -> Unit) {
             Toast.makeText(context, "技术报告 TXT 已导出", Toast.LENGTH_SHORT).show()
         }.onFailure { error ->
             Toast.makeText(context, "导出技术报告失败：${error.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
+        }
+    }
+    val operationExporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+        val report = pendingOperationExport
+        pendingOperationExport = null
+        if (uri == null || report == null) return@rememberLauncherForActivityResult
+        runCatching {
+            context.contentResolver.openOutputStream(uri, "w")?.bufferedWriter(Charsets.UTF_8).use { writer ->
+                checkNotNull(writer) { "无法写入所选位置" }
+                writer.write(report)
+            }
+        }.onSuccess {
+            Toast.makeText(context, "本次诊断 TXT 已导出", Toast.LENGTH_SHORT).show()
+        }.onFailure { error ->
+            Toast.makeText(context, "导出本次诊断失败：${error.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -183,7 +199,16 @@ fun DebugLogScreen(onBack: () -> Unit) {
             }
         }
     }
-    selected?.let { OperationDetails(it, onDismiss = { selected = null }, onCopy = { clipboard.setText(AnnotatedString(formatOperation(it))); Toast.makeText(context, "已复制本次诊断", Toast.LENGTH_SHORT).show() }) }
+    selected?.let { operation -> OperationDetails(
+        operation,
+        onDismiss = { selected = null },
+        onCopy = { clipboard.setText(AnnotatedString(formatOperation(operation))); Toast.makeText(context, "已复制本次诊断", Toast.LENGTH_SHORT).show() },
+        onExport = {
+            pendingOperationExport = formatOperation(operation)
+            val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+            operationExporter.launch("rhodes_${operation.surface.replace(Regex("[^A-Za-z0-9_-]"), "_")}_$stamp.txt")
+        },
+    ) }
     if (showProblemReport) {
         val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
         val report = ProblemChecker.report(packageInfo.versionName ?: "未知", packageInfo.versionCode)
@@ -229,6 +254,7 @@ private fun stageLabel(name: String): String = when (name) {
     "memory_items_stats_probe" -> "Memory V2 数据量与大字段统计"
     "backup_snapshot_timing_probe" -> "备份快照读取与序列化估算"
     "db_native_read_probe" -> "原生 SQLite 基础读取"
+    "db_native_backup_tables" -> "原生 SQLite 备份表与字段统计"
     "db_repository_read_probe" -> "应用数据库读取"
     "embedding_compute_probe" -> "本地向量计算"
     "private_message_probe" -> "私聊消息写入与读取"
@@ -242,7 +268,8 @@ private fun stageLabel(name: String): String = when (name) {
     "group_pipeline_roster_history" -> "群聊成员与历史读取"
     "group_pipeline_context" -> "群聊成员、记忆、知识库与提示词前置条件"
     "group_pipeline_reply_parse" -> "群聊已保存 AI 回复解析与读回"
-    "vector_embedding_probe" -> "固定诊断文本向量化与本地检索"
+    "vector_embedding_gateway_probe" -> "固定诊断文本向量生成"
+    "vector_store_query_probe" -> "向量表候选查询（只读 SQL 诊断已覆盖）"
     "support_manual_probe" -> "客服说明书与本地检索"
     "support_transcript_probe" -> "客服会话持久化与配置"
     "database_open" -> "数据库打开"
@@ -253,6 +280,14 @@ private fun stageLabel(name: String): String = when (name) {
     "backup_file_probe" -> "备份文件写入与回读校验"
     "backup_memories" -> "备份传统记忆读取"
     "backup_anchors" -> "备份记忆锚点读取"
+    "backup_moments" -> "备份动态读取"
+    "backup_moment_likes" -> "备份动态点赞读取"
+    "backup_moment_comments" -> "备份动态评论读取"
+    "backup_diaries" -> "备份日记读取"
+    "backup_gifts" -> "备份礼物读取"
+    "backup_dispatches" -> "备份派遣记录读取"
+    "backup_shared_experiences" -> "备份共享经历读取"
+    "backup_mahjong" -> "备份麻将存档读取"
     "session_integrity" -> "会话完整性"
     "contacts_recovery" -> "角色与会话恢复"
     else -> name
@@ -276,7 +311,7 @@ private fun OperationCard(operation: DebugOperation, onClick: () -> Unit) {
 }
 
 @Composable
-private fun OperationDetails(operation: DebugOperation, onDismiss: () -> Unit, onCopy: () -> Unit) {
+private fun OperationDetails(operation: DebugOperation, onDismiss: () -> Unit, onCopy: () -> Unit, onExport: () -> Unit) {
     var tab by remember(operation.id) { mutableIntStateOf(0) }
     val tabs = buildList {
         add("概览"); add("过程")
@@ -297,7 +332,7 @@ private fun OperationDetails(operation: DebugOperation, onDismiss: () -> Unit, o
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onCopy) { Text("复制本次诊断", color = Primary) } },
+        confirmButton = { Row { TextButton(onClick = onCopy) { Text("复制本次诊断", color = Primary) }; TextButton(onClick = onExport) { Text("导出 TXT", color = Primary) } } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("关闭") } }
     )
 }

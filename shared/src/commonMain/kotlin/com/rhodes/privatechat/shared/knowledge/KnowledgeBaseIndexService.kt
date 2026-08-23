@@ -10,8 +10,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 
 data class KnowledgeBaseIndexResult(
     val knowledgeBaseId: String,
@@ -33,8 +40,12 @@ class KnowledgeBaseIndexService(
     private val vectorService: MemoryVectorService,
     private val settings: SettingsRepository,
 ) {
-    private val indexMutex = Mutex()
+    // A slow remote embedding request for one book must not serialize all knowledge bases.
+    private val bookMutexesMutex = Mutex()
+    private val bookMutexes = mutableMapOf<String, Mutex>()
+    private val stateMutex = Mutex()
     private val cancelledBooks = mutableSetOf<String>()
+    private val activeJobs = mutableMapOf<String, MutableSet<Job>>()
 
     private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -70,22 +81,53 @@ class KnowledgeBaseIndexService(
     suspend fun indexBook(
         knowledgeBaseId: String,
         onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
-    ): KnowledgeBaseIndexResult = index(knowledgeBaseId, rebuildAll = true, onProgress)
+    ): KnowledgeBaseIndexResult {
+        val job = currentCoroutineContext()[Job]!!
+        stateMutex.withLock {
+            cancelledBooks.remove(knowledgeBaseId)
+            activeJobs.getOrPut(knowledgeBaseId) { mutableSetOf() } += job
+        }
+        return try {
+            index(knowledgeBaseId, rebuildAll = true, onProgress)
+        } finally {
+            stateMutex.withLock {
+                activeJobs[knowledgeBaseId]?.remove(job)
+                if (activeJobs[knowledgeBaseId].isNullOrEmpty()) activeJobs.remove(knowledgeBaseId)
+            }
+        }
+    }
 
     suspend fun retryFailedChunks(
         knowledgeBaseId: String,
         onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
-    ): KnowledgeBaseIndexResult = index(knowledgeBaseId, rebuildAll = false, onProgress)
+    ): KnowledgeBaseIndexResult {
+        val job = currentCoroutineContext()[Job]!!
+        stateMutex.withLock {
+            cancelledBooks.remove(knowledgeBaseId)
+            activeJobs.getOrPut(knowledgeBaseId) { mutableSetOf() } += job
+        }
+        return try {
+            index(knowledgeBaseId, rebuildAll = false, onProgress)
+        } finally {
+            stateMutex.withLock {
+                activeJobs[knowledgeBaseId]?.remove(job)
+                if (activeJobs[knowledgeBaseId].isNullOrEmpty()) activeJobs.remove(knowledgeBaseId)
+            }
+        }
+    }
 
-    suspend fun invalidate(knowledgeBaseId: String) = indexMutex.withLock {
-        cancelledBooks.remove(knowledgeBaseId)
+    suspend fun invalidate(knowledgeBaseId: String) {
+        cancelActiveIndex(knowledgeBaseId)
+        mutexFor(knowledgeBaseId).withLock {
         vectorService.clearOwnerMemory(OWNER_TYPE, knowledgeBaseId)
         repository.clearChunkIndexes(knowledgeBaseId)
         repository.updateIndexStatus(knowledgeBaseId, "pending")
+        }
+        stateMutex.withLock { cancelledBooks.remove(knowledgeBaseId) }
     }
 
-    suspend fun cancelAndRemove(knowledgeBaseId: String) = indexMutex.withLock {
-        cancelledBooks += knowledgeBaseId
+    suspend fun cancelAndRemove(knowledgeBaseId: String) {
+        cancelActiveIndex(knowledgeBaseId)
         vectorService.clearOwnerMemory(OWNER_TYPE, knowledgeBaseId)
     }
 
@@ -93,9 +135,9 @@ class KnowledgeBaseIndexService(
         knowledgeBaseId: String,
         rebuildAll: Boolean,
         onProgress: (done: Int, total: Int) -> Unit,
-    ): KnowledgeBaseIndexResult = indexMutex.withLock {
+    ): KnowledgeBaseIndexResult = mutexFor(knowledgeBaseId).withLock {
         try {
-        if (knowledgeBaseId in cancelledBooks) return@withLock KnowledgeBaseIndexResult(knowledgeBaseId, 0, 0, 0)
+        if (isCancelled(knowledgeBaseId)) return@withLock KnowledgeBaseIndexResult(knowledgeBaseId, 0, 0, 0)
         val book = repository.get(knowledgeBaseId) ?: throw IllegalArgumentException("知识库不存在")
         val chunks = repository.getChunks(knowledgeBaseId).filter {
             it.enabled && it.content.isNotBlank() && (rebuildAll || it.indexError.isNotBlank())
@@ -119,21 +161,14 @@ class KnowledgeBaseIndexService(
         var failed = 0
         val errors = mutableListOf<String>()
         chunks.forEachIndexed { index, chunk ->
-            if (knowledgeBaseId in cancelledBooks || repository.get(knowledgeBaseId) == null) return@withLock KnowledgeBaseIndexResult(knowledgeBaseId, chunks.size, succeeded, failed)
+            if (isCancelled(knowledgeBaseId) || repository.get(knowledgeBaseId) == null) return@withLock KnowledgeBaseIndexResult(knowledgeBaseId, chunks.size, succeeded, failed)
             try {
                 val searchableContent = buildSearchableContent(book.name, chunk.sourceHeading, chunk.userKeywords, chunk.content)
-                vectorService.saveMemory(
+                saveChunkVector(
                     VectorMemory(
-                        id = vectorId(chunk.id),
-                        ownerType = OWNER_TYPE,
-                        ownerId = knowledgeBaseId,
-                        sourceType = SOURCE_TYPE,
-                        sourceId = chunk.id,
-                        content = searchableContent,
-                        importance = 0.5,
-                        tags = chunk.userKeywords,
-                        visibility = "public",
-                        createdAt = chunk.createdAt,
+                        id = vectorId(chunk.id), ownerType = OWNER_TYPE, ownerId = knowledgeBaseId,
+                        sourceType = SOURCE_TYPE, sourceId = chunk.id, content = searchableContent,
+                        importance = 0.5, tags = chunk.userKeywords, visibility = "public", createdAt = chunk.createdAt,
                     )
                 )
                 repository.updateChunkIndex(chunk.id, System.currentTimeMillis())
@@ -174,8 +209,68 @@ class KnowledgeBaseIndexService(
 
     private fun vectorId(chunkId: String): String = "knowledge_base_chunk_$chunkId"
 
+    private suspend fun mutexFor(knowledgeBaseId: String): Mutex = bookMutexesMutex.withLock {
+        bookMutexes.getOrPut(knowledgeBaseId) { Mutex() }
+    }
+
+    private suspend fun saveChunkVector(memory: VectorMemory) {
+        if (settings.vectorProviderMode != "third_party") {
+            withTimeout(EMBEDDING_TIMEOUT_MS) { vectorService.saveMemory(memory) }
+            return
+        }
+        var lastFailure: Throwable? = null
+        repeat(MAX_REMOTE_ATTEMPTS) { attempt ->
+            try {
+                withTimeout(EMBEDDING_TIMEOUT_MS) {
+                    remoteIndexSemaphore.withPermit {
+                        vectorService.saveMemory(memory)
+                    }
+                }
+                return
+            } catch (timeout: TimeoutCancellationException) {
+                if (!currentCoroutineContext().isActive) throw timeout
+                lastFailure = timeout
+                if (attempt + 1 < MAX_REMOTE_ATTEMPTS) delay(RETRY_DELAYS_MS[attempt]) else throw timeout
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                lastFailure = error
+                if (attempt + 1 < MAX_REMOTE_ATTEMPTS && isRetryable(error)) {
+                    delay(RETRY_DELAYS_MS[attempt])
+                } else {
+                    throw error
+                }
+            }
+        }
+        throw lastFailure ?: IllegalStateException("知识库向量化失败")
+    }
+
+    private fun isRetryable(error: Throwable): Boolean {
+        val message = error.message.orEmpty()
+        return "timeout" in message.lowercase() ||
+            "connection" in message.lowercase() ||
+            "network" in message.lowercase() ||
+            "408" in message || "429" in message || Regex("\\b5\\d{2}\\b").containsMatchIn(message)
+    }
+
+    private suspend fun isCancelled(knowledgeBaseId: String): Boolean = stateMutex.withLock {
+        knowledgeBaseId in cancelledBooks
+    }
+
+    private suspend fun cancelActiveIndex(knowledgeBaseId: String) {
+        val jobs = stateMutex.withLock {
+            cancelledBooks += knowledgeBaseId
+            activeJobs[knowledgeBaseId]?.toList().orEmpty()
+        }
+        jobs.forEach(Job::cancel)
+    }
+
     private companion object {
         const val OWNER_TYPE = "knowledge_base"
         const val SOURCE_TYPE = "knowledge_base_chunk"
+        const val EMBEDDING_TIMEOUT_MS = 15_000L
+        const val MAX_REMOTE_ATTEMPTS = 3
+        val RETRY_DELAYS_MS = longArrayOf(750L, 2_000L)
+        val remoteIndexSemaphore = Semaphore(1)
     }
 }

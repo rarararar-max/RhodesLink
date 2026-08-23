@@ -167,8 +167,8 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 ttsModelName = ttsModelName.trim(),
                 ttsApiKey = ttsApiKey.trim(),
         )
-        val newVectorSignature = if (vectorProviderMode == "local") "local-hash-384-v1" else "${vectorProvider}:${vectorBaseUrl.trim()}:${vectorModelName.trim()}"
-        val previousVectorSignature = if (prevVectorMode == "local") "local-hash-384-v1" else "${prevVectorProvider}:${prevVectorUrl.trim()}:${prevVectorModel.trim()}"
+        val newVectorSignature = com.rhodes.privatechat.shared.vector.EmbeddingConfigurationSignature.create(vectorProviderMode, vectorProvider, vectorBaseUrl, vectorModelName)
+        val previousVectorSignature = com.rhodes.privatechat.shared.vector.EmbeddingConfigurationSignature.create(prevVectorMode, prevVectorProvider, prevVectorUrl, prevVectorModel)
         val firstTime = settings.vectorIndexSignature.isBlank()
         val vectorSignatureChanged = !firstTime && previousVectorSignature != newVectorSignature
         if (firstTime) settings.vectorIndexSignature = newVectorSignature

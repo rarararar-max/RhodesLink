@@ -127,7 +127,7 @@ class AiSupportViewModel(
             } else if (existingBook.sourceType != "system_support") {
                 knowledgeBases.save(existingBook.copy(sourceType = "system_support"), knowledgeBases.getChunks(existingBook.id))
             }
-            if (settings.vectorProviderMode == "third_party" && settings.supportRemoteVectorEnabled && settings.supportRemoteEmbeddingConfirmedSignature != currentEmbeddingSignature()) {
+            if (settings.vectorProviderMode == "third_party" && settings.supportRemoteVectorEnabled && settings.supportRemoteEmbeddingConfirmedSignature != vectorSignature()) {
                 _remoteConfirmation.value = true
                 _notice.value = "检测到第三方向量模型，可用于提升客服说明检索的同义问题匹配。"
             } else {
@@ -149,7 +149,7 @@ class AiSupportViewModel(
                 indexService.enqueueIndex(id, remoteConfirmed = true) { result ->
                     if (result.failed == 0 && result.succeeded > 0) {
                         settings.supportRemoteVectorEnabled = true
-                        settings.supportRemoteEmbeddingConfirmedSignature = currentEmbeddingSignature()
+                        settings.supportRemoteEmbeddingConfirmedSignature = vectorSignature()
                         _notice.value = "客服说明索引完成，已启用第三方向量检索。"
                     } else {
                         settings.supportRemoteVectorEnabled = false
@@ -166,7 +166,7 @@ class AiSupportViewModel(
     fun dismissRemoteEmbedding() {
         _remoteConfirmation.value = false
         settings.supportRemoteVectorEnabled = false
-        settings.supportRemoteEmbeddingConfirmedSignature = currentEmbeddingSignature()
+        settings.supportRemoteEmbeddingConfirmedSignature = vectorSignature()
         _notice.value = "已继续使用本地章节检索。"
     }
 
@@ -319,9 +319,11 @@ class AiSupportViewModel(
     private suspend fun retrieve(query: String): String {
         val id = settings.supportKnowledgeBaseId
         val remoteVerified = settings.supportRemoteVectorEnabled &&
-            settings.supportRemoteEmbeddingConfirmedSignature == currentEmbeddingSignature()
+            settings.supportRemoteEmbeddingConfirmedSignature == vectorSignature()
         if (id.isNotBlank() && (settings.vectorProviderMode == "local" || remoteVerified)) {
-            val vector = contextBuilder.forKnowledgeBase(id, query, 4_000)
+            val vector = withTimeoutOrNull(SUPPORT_RETRIEVAL_TIMEOUT_MS) {
+                contextBuilder.forKnowledgeBase(id, query, 4_000)
+            } ?: "无"
             if (vector != "无") return vector
         }
         return AiSupportContract.localReference(manualSections, query)
@@ -364,7 +366,16 @@ class AiSupportViewModel(
         """.trimIndent()
     }
 
-    private fun currentEmbeddingSignature(): String = listOf(settings.vectorProviderMode, settings.vectorProvider, settings.vectorModelName, settings.vectorBaseUrl).joinToString("|")
+    private fun vectorSignature(): String = com.rhodes.privatechat.shared.vector.EmbeddingConfigurationSignature.create(
+        settings.vectorProviderMode,
+        settings.vectorProvider,
+        settings.vectorBaseUrl,
+        settings.vectorModelName,
+    )
+
+    private companion object {
+        const val SUPPORT_RETRIEVAL_TIMEOUT_MS = 2_000L
+    }
 
     private fun supportDate(): String = SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).apply {
         timeZone = TimeZone.getTimeZone("Asia/Shanghai")

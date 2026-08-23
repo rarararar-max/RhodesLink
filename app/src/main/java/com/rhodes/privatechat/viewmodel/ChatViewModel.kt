@@ -16,6 +16,7 @@ import com.rhodes.privatechat.shared.model.MemorySourceKind
 import com.rhodes.privatechat.shared.model.MemoryType
 import com.rhodes.privatechat.shared.model.Operator
 import com.rhodes.privatechat.shared.data.ChatRepository
+import com.rhodes.privatechat.shared.db.DatabaseDispatcher
 import com.rhodes.privatechat.shared.memory.AnchorSourcePolicy
 import com.rhodes.privatechat.shared.model.PrivateTurnState
 import com.rhodes.privatechat.shared.model.SuggestionResponse
@@ -28,6 +29,7 @@ import com.rhodes.privatechat.shared.modelgateway.createVisionGateway
 import com.rhodes.privatechat.shared.vector.MemoryVectorService
 import com.rhodes.privatechat.shared.vector.VectorMemory
 import com.rhodes.privatechat.shared.knowledge.KnowledgeBaseContextBuilder
+import com.rhodes.privatechat.shared.knowledge.KnowledgeBaseRecallPolicy
 import com.rhodes.privatechat.util.ChatTrace
 import com.rhodes.privatechat.util.DebugLogger
 import com.rhodes.privatechat.notification.RhodesAppVisibility
@@ -1217,6 +1219,13 @@ ${text}"""
             var debugRoundFinished = false
             var replyTurnId = ""
             var replyLeaseToken = ""
+            fun failureSnapshot(reason: String, error: Throwable? = null) {
+                val db = DatabaseDispatcher.snapshot()
+                DebugLogger.diagnostic(
+                    "PrivateChat/FailureSnapshot",
+                    "roundId=$debugRoundId,sessionId=${session.id},stage=$pipelineStage,userMessageId=$msgId,aiMessageId=$aiMsgId,userPersisted=$userMessagePersisted,responseStored=$responseStored,reason=$reason,errorClass=${error?.javaClass?.simpleName ?: "none"},dbTask=${db.runningTask},dbRunningMs=${db.runningForMs},dbQueued=${db.queuedTasks}"
+                )
+            }
             fun finishDebugRound(result: String, summary: String) {
                 if (debugRoundFinished) return
                 val usage = cacheUsage.summary()
@@ -1320,8 +1329,21 @@ ${text}"""
                 var lastError: Exception? = null
                 var effectiveHistoryMessages = settings.historyMessages
                 val turnStartedAt = TimeSource.Monotonic.markNow()
+                val contextStageStarted = mutableMapOf<String, Long>()
                 fun remainingTurnBudget(): Long =
                     (PRIVATE_REPLY_TIMEOUT_MS - turnStartedAt.elapsedNow().inWholeMilliseconds).coerceAtLeast(1L)
+                fun recordContextStage(stage: String) {
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    when {
+                        stage.endsWith("_start") -> contextStageStarted[stage.removeSuffix("_start")] = now
+                        stage.endsWith("_done") || stage.endsWith("_degraded") -> {
+                            val base = stage.removeSuffix("_done").removeSuffix("_degraded")
+                            val elapsed = (now - (contextStageStarted.remove(base) ?: now)).coerceAtLeast(0L)
+                            val status = if (stage.endsWith("_degraded")) "已降级" else "完成"
+                            DebugLogger.conversationStep(debugRoundId, "私聊", "上下文/$base", status, "耗时=${elapsed}ms")
+                        }
+                    }
+                }
                 while (retryCount < maxRetries) {
                     try {
                         DebugLogger.diagnostic("PrivateChat/ReplyStep", "sessionId=${session.id}, messageId=$msgId, step=prompt_start, history=$effectiveHistoryMessages")
@@ -1330,18 +1352,25 @@ ${text}"""
                         val promptBuildJob = viewModelScope.async(Dispatchers.Default) {
                             buildApiMessages(session, text, effectiveHistoryMessages, batchIds.toSet(), mode = mode) { stage ->
                                 recordReplyPipeline(session.id, msgId, stage)
+                                recordContextStage(stage)
                             }
                         }
                         promptBuildJobs[session.id] = promptBuildJob
                         var promptFallbackUsed = false
-                        val apiMessages = withTimeoutOrNull(minOf(5_000L, remainingTurnBudget())) {
+                        // Knowledge-base retrieval has a five-second user-facing budget and runs
+                        // after other bounded context sources, so the full context budget must be larger.
+                        val apiMessages = withTimeoutOrNull(minOf(8_000L, remainingTurnBudget())) {
                             promptBuildJob.await()
                         } ?: run {
                             promptBuildJob.cancel()
                             promptFallbackUsed = true
                             DebugLogger.diagnostic("PrivateChat/ReplyStep", "sessionId=${session.id}, messageId=$msgId, step=prompt_fallback")
                             recordReplyPipeline(session.id, msgId, "prompt_fallback")
+                            DebugLogger.conversationStep(debugRoundId, "私聊", "提示词总构建", "核心回退", "预算=8000ms；完整上下文未完成，保留=角色资料片段和当前用户消息")
                             minimalPrivateMessages(session, text, mode)
+                        }
+                        if (!promptFallbackUsed) {
+                            DebugLogger.conversationStep(debugRoundId, "私聊", "提示词总构建", "完成", "请求消息=${apiMessages.size}条；完整上下文已注入")
                         }
                         if (promptBuildJobs[session.id] === promptBuildJob) promptBuildJobs.remove(session.id)
                         DebugLogger.diagnostic("PrivateChat/ReplyStep", "sessionId=${session.id}, messageId=$msgId, step=prompt_done, messages=${apiMessages.size}")
@@ -1461,20 +1490,21 @@ ${text}"""
                         }
                         lastError = null
                         break  // 成功，退出重试循环
-                    } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                         DebugLogger.diagnostic("PrivateChat/ReplyStep", "sessionId=${session.id}, messageId=$msgId, step=ai_timeout")
                         recordReplyPipeline(session.id, msgId, "ai_timeout")
                         DebugLogger.log("Chat/AI", "AI超时, session=${session.id}")
                         DebugLogger.chatEvent("私聊", "请求模型", "超时", "会话=${session.operatorName}")
                         DebugLogger.conversationStep(debugRoundId, "私聊", "本轮结果", "失败", "模型请求超时")
-                        finishDebugRound("失败", "模式=$mode，用户消息=${batchIds.size}条，历史轮数=$effectiveHistoryMessages，重试=$retryCount，原因=${if (pipelineStage == "ai_reply_write") "AI回复保存超时" else "模型请求超时"}")
+                            finishDebugRound("失败", "模式=$mode，用户消息=${batchIds.size}条，历史轮数=$effectiveHistoryMessages，重试=$retryCount，原因=${if (pipelineStage == "ai_reply_write") "AI回复保存超时" else "模型请求超时"}")
+                            failureSnapshot(if (pipelineStage == "ai_reply_write") "ai_reply_write_timeout" else "ai_request_timeout", e)
                         if ((sessionGenerations[session.id] ?: 0L) != generation) return@launch
                         markPrivateMessagesUndelivered(session.id, batchIds.toSet())
                         break
                     } catch (e: kotlinx.coroutines.CancellationException) {
                         DebugLogger.log("Chat/AI", "AI被取消, session=${session.id}")
                         throw e
-                    } catch (e: Exception) {
+                        } catch (e: Exception) {
                         DebugLogger.diagnostic("PrivateChat/ReplyStep", "sessionId=${session.id}, messageId=$msgId, step=ai_error, error=${e.javaClass.simpleName}:${e.message?.take(160)}")
                         recordReplyPipeline(session.id, msgId, "ai_error", "${e.javaClass.simpleName}:${e.message?.take(120)}")
                         val isContextError = e.message?.contains("400") == true &&
@@ -1491,7 +1521,8 @@ ${text}"""
                             DebugLogger.conversationStep(debugRoundId, "私聊", "模型请求", "重试", "上下文超限，历史轮数降为$newLimit")
                             continue
                         }
-                        lastError = e
+                            lastError = e
+                            failureSnapshot("ai_request_or_parse_error", e)
                         Log.e("ChatVM", "私聊AI失败 session=${session.id} mode=$mode provider=${settings.provider} model=${settings.modelName} err=${e.message?.take(120)}")
                         break
                     }
@@ -1507,6 +1538,7 @@ ${text}"""
                     recordReplyPipeline(session.id, msgId, "reply_failed", lastError.javaClass.simpleName)
                 }
             } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                failureSnapshot("pipeline_timeout", e)
                 if (!userMessagePersisted) {
                     _messages.value = _messages.value.filterNot { it.id == msgId }
                     if (textOverride == null && _inputText.value.isBlank()) _inputText.value = originalText
@@ -1521,6 +1553,7 @@ ${text}"""
                 }
                 throw e
             } catch (e: Exception) {
+                failureSnapshot("pipeline_error", e)
                 if (!userMessagePersisted) {
                     _messages.value = _messages.value.filterNot { it.id == msgId }
                     if (textOverride == null && _inputText.value.isBlank()) _inputText.value = originalText
@@ -2681,8 +2714,16 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         } ?: run { onStage?.invoke("prompt_knowledge_assignments_timeout_degraded"); emptySet() }
         onStage?.invoke("prompt_knowledge_assignments_done")
         onStage?.invoke("prompt_knowledge_vector_start")
-        val knowledgeBaseContext = if (privateKnowledgeBooks.isEmpty()) "无" else contextRead(session.id, "knowledge_vector", "prompt_knowledge_vector", 3_000L, onStage) {
-            knowledgeBaseContextBuilder?.forOperator(session.operatorId, recallQuery, 2, 1_000, privateKnowledgeBooks).orEmpty()
+        val knowledgeBaseContext = if (privateKnowledgeBooks.isEmpty()) "无" else contextRead(session.id, "knowledge_vector", "prompt_knowledge_vector", 5_000L, onStage) {
+            knowledgeBaseContextBuilder?.forOperator(
+                session.operatorId,
+                recallQuery,
+                KnowledgeBaseRecallPolicy.PRIVATE_FINAL_RESULTS,
+                KnowledgeBaseRecallPolicy.PRIVATE_MAX_CHARS,
+                privateKnowledgeBooks,
+                KnowledgeBaseRecallPolicy.PRIVATE_PER_BOOK_RESULTS,
+                KnowledgeBaseRecallPolicy.PRIVATE_CANDIDATE_LIMIT,
+            ).orEmpty()
         }?.ifBlank { "无" } ?: run { onStage?.invoke("prompt_knowledge_vector_timeout_degraded"); "无" }
         onStage?.invoke("prompt_knowledge_vector_done")
         onStage?.invoke("prompt_knowledge_context_done")

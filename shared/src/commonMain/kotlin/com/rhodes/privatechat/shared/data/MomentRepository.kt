@@ -1,6 +1,7 @@
 package com.rhodes.privatechat.shared.data
 
 import com.rhodes.privatechat.shared.db.DatabaseWrapper
+import com.rhodes.privatechat.shared.db.DatabaseDispatcher
 import com.rhodes.privatechat.shared.db.RhodesDatabase
 import com.rhodes.privatechat.shared.model.*
 import kotlinx.coroutines.Dispatchers
@@ -101,19 +102,19 @@ class MomentRepository(private val wrapper: DatabaseWrapper) {
             Moment(id, opId, opName, content, isUserPost != 0L, mentionedIds, likeCount.toInt(), commentCount.toInt(), createdAt)
         }.asFlow().mapToList(Dispatchers.Default)
 
-    suspend fun getAllMomentsSync(): List<Moment> = withContext(Dispatchers.Default) {
+    suspend fun getAllMomentsSync(): List<Moment> = withContext(DatabaseDispatcher.dispatcher) {
         db.momentsQueries.getAllMoments { id, opId, opName, content, isUserPost, mentionedIds, likeCount, commentCount, createdAt ->
             Moment(id, opId, opName, content, isUserPost != 0L, mentionedIds, likeCount.toInt(), commentCount.toInt(), createdAt)
         }.executeAsList()
     }
 
-    suspend fun getAllLikesForBackup(): List<MomentLike> = withContext(Dispatchers.Default) {
+    suspend fun getAllLikesForBackup(): List<MomentLike> = withContext(DatabaseDispatcher.dispatcher) {
         db.momentLikesQueries.getAllLikesForBackup { id, mId, opId, opName, createdAt ->
             MomentLike(id, mId, opId, opName, createdAt)
         }.executeAsList()
     }
 
-    suspend fun getAllCommentsForBackup(): List<MomentComment> = withContext(Dispatchers.Default) {
+    suspend fun getAllCommentsForBackup(): List<MomentComment> = withContext(DatabaseDispatcher.dispatcher) {
         db.momentCommentsQueries.getAllCommentsForBackup { id, mId, opId, opName, content, parentCommentId, replyToName, createdAt, isRead ->
             MomentComment(id, mId, opId, opName, content, parentCommentId, replyToName, createdAt, isRead != 0L)
         }.executeAsList()
@@ -168,6 +169,10 @@ class MomentRepository(private val wrapper: DatabaseWrapper) {
 
     suspend fun getMaxCommentId(): Long? = withContext(Dispatchers.Default) {
         db.momentCommentsQueries.getMaxCommentId().executeAsOne().MAX
+    }
+
+    suspend fun countUnreadMomentsAfterId(lastSeenMomentId: Long): Int = withContext(DatabaseDispatcher.dispatcher) {
+        db.momentsQueries.countUnreadMomentsAfterId(lastSeenMomentId).executeAsOne().toInt()
     }
 
     suspend fun getCommentById(commentId: Long): MomentComment? = withContext(Dispatchers.Default) {

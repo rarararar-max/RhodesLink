@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.OutlinedTextField
@@ -50,7 +51,7 @@ fun KnowledgeBaseEditorScreen(id: String, onBack: () -> Unit) {
     LaunchedEffect(id) { viewModel.getKnowledgeBase(id)?.let { book = it; name = it.name; content = it.rawContent } }
     val current = book ?: return
     SaveableSettingsScaffold("编辑知识库", onBack, Modifier.fillMaxSize().background(BG), showSave = false) {
-        Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
+        Column(Modifier.padding(16.dp).imePadding().verticalScroll(rememberScrollState())) {
             OutlinedTextField(name, { name = it }, label = { Text("知识库名称") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(content, { content = it }, label = { Text("正文") }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp).heightIn(min = 280.dp), minLines = 12)
             if (message.isNotBlank()) Text(message, fontSize = 12.sp, color = TextSecondary)
@@ -149,13 +150,13 @@ fun KnowledgeBaseChunksScreen(id: String, onBack: () -> Unit) {
     }
     editing?.let { chunk -> androidx.compose.material3.AlertDialog(
         onDismissRequest = { editing = null }, title = { Text("编辑片段 ${chunk.ordinal}") },
-        text = { Column { OutlinedTextField(editingHeading, { editingHeading = it }, label = { Text("来源标题") }); OutlinedTextField(editingText, { editingText = it }, label = { Text("正文") }, modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp)); OutlinedTextField(editingKeywords, { editingKeywords = it }, label = { Text("关键词") }) } },
+        text = { Column(Modifier.imePadding().verticalScroll(rememberScrollState())) { OutlinedTextField(editingHeading, { editingHeading = it }, label = { Text("来源标题") }); OutlinedTextField(editingText, { editingText = it }, label = { Text("正文") }, modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp)); OutlinedTextField(editingKeywords, { editingKeywords = it }, label = { Text("关键词") }) } },
         confirmButton = { TextButton(onClick = { scope.launch { runCatching { viewModel.updateKnowledgeBaseChunk(id, chunk.id, editingHeading, editingText, editingKeywords) }.onSuccess { editing = null; message = "已更新分段"; refresh() }.onFailure { message = "保存失败：${it.message ?: "未知错误"}" } } }) { Text("保存") } },
         dismissButton = { TextButton(onClick = { editing = null }) { Text("取消") } }
     ) }
     if (adding) androidx.compose.material3.AlertDialog(
         onDismissRequest = { adding = false }, title = { Text("新增分段") },
-        text = { Column { OutlinedTextField(editingHeading, { editingHeading = it }, label = { Text("来源标题") }); OutlinedTextField(editingText, { editingText = it }, label = { Text("正文") }, modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp)); OutlinedTextField(editingKeywords, { editingKeywords = it }, label = { Text("关键词") }) } },
+        text = { Column(Modifier.imePadding().verticalScroll(rememberScrollState())) { OutlinedTextField(editingHeading, { editingHeading = it }, label = { Text("来源标题") }); OutlinedTextField(editingText, { editingText = it }, label = { Text("正文") }, modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp)); OutlinedTextField(editingKeywords, { editingKeywords = it }, label = { Text("关键词") }) } },
         confirmButton = { TextButton(onClick = { scope.launch { runCatching { viewModel.addKnowledgeBaseChunk(id, editingHeading, editingText, editingKeywords) }.onSuccess { adding = false; message = "已新增分段"; refresh() }.onFailure { message = "保存失败：${it.message ?: "未知错误"}" } } }) { Text("保存") } },
         dismissButton = { TextButton(onClick = { adding = false }) { Text("取消") } }
     )

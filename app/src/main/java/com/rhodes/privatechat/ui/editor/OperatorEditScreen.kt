@@ -730,7 +730,7 @@ fun NewOperatorScreen(
 
     LaunchedEffect(saving) {
         if (!saving) return@LaunchedEffect
-        kotlinx.coroutines.delay(12_000L)
+        kotlinx.coroutines.delay(20_000L)
         if (saving) {
             saving = false
             DebugLogger.diagnostic("NewOperator/SaveTimeout", "operatorId=$operatorId")

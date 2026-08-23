@@ -91,6 +91,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ConcurrentHashMap
 
 private val json = Json { ignoreUnknownKeys = true }
@@ -242,6 +243,8 @@ class MainViewModel(
         require(!plan.requiresUserConfirmation || remoteConfirmed) { "远程向量化需要用户确认预计请求次数" }
         return service.indexBook(id, onProgress)
     }
+    suspend fun retryFailedKnowledgeBaseChunks(id: String, onProgress: (Int, Int) -> Unit = { _, _ -> }): KnowledgeBaseIndexResult =
+        requireNotNull(knowledgeBaseIndexService) { "知识库索引服务不可用" }.retryFailedChunks(id, onProgress)
     private val pendingMomentPosts = ConcurrentHashMap.newKeySet<String>()
     private val commentCountMutexes = ConcurrentHashMap<Long, kotlinx.coroutines.sync.Mutex>()
     private val mentionedCommentSemaphore = Semaphore(2)
@@ -482,7 +485,20 @@ class MainViewModel(
     private suspend fun knowledgeBaseContext(operatorId: String, query: String, maxEntries: Int, maxChars: Int, surface: String): String {
         if (operatorId.isBlank()) return "无"
         val allowed = repository.knowledgeBases.getAssignments(operatorId).filter { it.enabled && settings.isKnowledgeBaseEnabledForBook(it.knowledgeBaseId, surface) }.mapTo(mutableSetOf()) { it.knowledgeBaseId }
-        return knowledgeBaseContextBuilder?.forOperator(operatorId, query, maxEntries, maxChars, allowed).orEmpty().ifBlank { "无" }
+        val timeout = when (surface) {
+            "moment" -> 1_000L
+            "comment" -> 800L
+            "diary" -> 1_500L
+            else -> 3_000L
+        }
+        return withTimeoutOrNull(timeout) {
+            knowledgeBaseContextBuilder?.forOperator(
+                operatorId, query, maxEntries, maxChars, allowed,
+                queryEmbeddingTimeoutMs = timeout / 2,
+                perBookTimeoutMs = timeout / 2,
+                workBudgetMs = timeout,
+            ).orEmpty()
+        }.orEmpty().ifBlank { "无" }
     }
 
     private fun defaultTemplate(type: String, mode: String = ""): String =
@@ -2693,7 +2709,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     suspend fun getMomentBadgeSuspend(): Int = momentsViewModel.getMomentBadgeSuspend()
     suspend fun hasNewMomentsSince(latestLoadedId: Long): Boolean = momentsViewModel.hasNewMomentsSince(latestLoadedId)
     suspend fun getUnreadCommentCountSuspend(): Int = momentsViewModel.getUnreadCommentCountSuspend()
-    fun markMomentsSeen() = momentsViewModel.markMomentsSeen()
+    suspend fun markMomentsSeen() = momentsViewModel.markMomentsSeen()
     fun loadInboxComments(callback: (List<MomentComment>) -> Unit) = momentsViewModel.loadInboxComments(callback)
     fun markAllCommentsRead() = momentsViewModel.markAllCommentsRead()
     fun markCommentRead(commentId: Long) = momentsViewModel.markCommentRead(commentId)

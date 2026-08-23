@@ -24,11 +24,12 @@ class MemoryVectorService(
         return gateway!!
     }
 
-    fun currentEmbeddingSignature(): String = listOf(
+    fun currentEmbeddingSignature(): String = EmbeddingConfigurationSignature.create(
         settings.vectorProviderMode,
-        settings.vectorBaseUrl.trim(),
-        settings.vectorModelName.trim(),
-    ).joinToString("|")
+        settings.vectorProvider,
+        settings.vectorBaseUrl,
+        settings.vectorModelName,
+    )
 
     suspend fun saveMemory(memory: VectorMemory) {
         val embedding = embedCached(memory.content)
@@ -69,6 +70,13 @@ class MemoryVectorService(
 
     suspend fun search(request: VectorSearchRequest): List<VectorMemory> {
         val queryEmbedding = embedCached(request.query)
+        return searchWithEmbedding(request, queryEmbedding)
+    }
+
+    /** Keeps diagnostics able to distinguish gateway latency from local vector-store latency. */
+    suspend fun embedForDiagnostics(text: String): List<Double> = embedCached(text)
+
+    suspend fun searchWithEmbedding(request: VectorSearchRequest, queryEmbedding: List<Double>): List<VectorMemory> {
         if (!queryEmbedding.isUsableEmbedding()) return emptyList()
         return vectorStoreGateway.search(request.copy(queryEmbedding = queryEmbedding, embeddingSignature = currentEmbeddingSignature()))
     }

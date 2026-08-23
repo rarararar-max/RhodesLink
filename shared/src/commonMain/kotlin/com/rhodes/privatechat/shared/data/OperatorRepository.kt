@@ -44,7 +44,7 @@ class OperatorRepository(private val wrapper: DatabaseWrapper) {
     val allOperators: Flow<List<Operator>> =
         db.operatorsQueries.getAllOperators(::mapOperator).asFlow().mapToList(Dispatchers.Default)
 
-    suspend fun getOperator(id: String): Operator? = withContext(DatabaseDispatcher.dispatcher) {
+    suspend fun getOperator(id: String): Operator? = DatabaseDispatcher.execute("operator_get") {
         db.operatorsQueries.getOperator(id, ::mapOperator).executeAsOneOrNull()
     }
 
@@ -116,7 +116,7 @@ class OperatorRepository(private val wrapper: DatabaseWrapper) {
 
     fun isPresetOperatorId(id: String): Boolean = presetOperators.any { it.id == id }
 
-    suspend fun getAllOperatorsSync(): List<Operator> = withContext(DatabaseDispatcher.dispatcher) {
+    suspend fun getAllOperatorsSync(): List<Operator> = DatabaseDispatcher.execute("operator_list") {
         db.operatorsQueries.getAllOperators(::mapOperator).executeAsList()
     }
 
@@ -272,7 +272,7 @@ class OperatorRepository(private val wrapper: DatabaseWrapper) {
 
     suspend fun deleteOperator(id: String) = withContext(Dispatchers.IO) { db.operatorsQueries.deleteOperator(id) }
 
-    suspend fun updateOperator(op: Operator) = withContext(DatabaseDispatcher.dispatcher) {
+    suspend fun updateOperator(op: Operator) = DatabaseDispatcher.execute("operator_update") {
         db.operatorsQueries.updateOperator(op.name, op.title, op.description, op.gender, op.avatarUri, op.location, op.activity, op.emotion, op.intimacy.toLong(), op.privatePrompt, op.groupPrompt, op.memoryInjection, op.userRelation, op.lmb.toLong(), op.attack.toDouble(), op.defense.toDouble(), op.meldPref, op.activityLevel.toDouble(), op.voiceName, op.voiceSpeed, op.voicePitch, op.id)
     }
 
@@ -280,7 +280,7 @@ class OperatorRepository(private val wrapper: DatabaseWrapper) {
         db.operatorsQueries.updateIntimacy(intimacy.toLong(), id)
     }
 
-    suspend fun insertOperator(op: Operator) = withContext(DatabaseDispatcher.dispatcher) {
+    suspend fun insertOperator(op: Operator) = DatabaseDispatcher.execute("operator_insert") {
         db.operatorsQueries.insertOperator(op.id, op.name, op.title, op.description, op.gender, op.avatarUri, op.location, op.activity, op.emotion, op.intimacy.toLong(), op.privatePrompt, op.groupPrompt, op.memoryInjection, op.userRelation, op.lmb.toLong(), op.attack.toDouble(), op.defense.toDouble(), op.meldPref, op.activityLevel.toDouble(), op.voiceName, op.voiceSpeed, op.voicePitch)
     }
 }

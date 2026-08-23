@@ -1,6 +1,7 @@
 package com.rhodes.privatechat.shared.data
 
 import com.rhodes.privatechat.shared.db.DatabaseWrapper
+import com.rhodes.privatechat.shared.db.DatabaseDispatcher
 import com.rhodes.privatechat.shared.db.RhodesDatabase
 import com.rhodes.privatechat.shared.model.*
 import com.rhodes.privatechat.shared.settings.SettingsRepository
@@ -90,7 +91,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
         wrapper.database.giftRecordsQueries.insert(gift.id, gift.operatorId, gift.imageUri, gift.giftName, gift.senderName, gift.createdAt)
     }
 
-    suspend fun getAllGifts(): List<GiftRecord> = withContext(Dispatchers.Default) {
+    suspend fun getAllGifts(): List<GiftRecord> = withContext(DatabaseDispatcher.dispatcher) {
         wrapper.database.giftRecordsQueries.getAllGifts { id, opId, imageUri, giftName, senderName, createdAt ->
             GiftRecord(id, opId, imageUri, giftName, senderName, createdAt)
         }.executeAsList()
@@ -570,6 +571,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun getUnreadCommentCount(cutoff: Long, userName: String) = moments.getUnreadCommentCount(cutoff, userName)
     suspend fun getMomentsByOperator(operatorId: String) = moments.getMomentsByOperator(operatorId)
     suspend fun countMomentsByOperatorSince(operatorId: String, since: Long) = moments.countMomentsByOperatorSince(operatorId, since)
+    suspend fun countUnreadMomentsAfterId(lastSeenMomentId: Long) = moments.countUnreadMomentsAfterId(lastSeenMomentId)
     suspend fun deleteLike(momentId: Long, operatorId: String) = moments.deleteLike(momentId, operatorId)
     suspend fun getMoment(id: Long) = moments.getMoment(id)
     suspend fun getMaxMomentId() = moments.getMaxMomentId()

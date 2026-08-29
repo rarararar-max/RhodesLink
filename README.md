@@ -4,7 +4,7 @@
 
 <img width="300" height="600" alt="image" src="https://github.com/user-attachments/assets/ccafdcb7-a737-4064-82d1-a140fa3fd2c7" />
 <img width="300" height="600" alt="image" src="https://github.com/user-attachments/assets/856a8cbe-3dee-46b8-9001-43df465988ca" />
-<img width="300" height="600" alt="image" src="https://github.com/user-attachments/assets/f03442e8-d824-4f3f-ae7a-00f3f5f167fb" />
+
 
 
 罗德岛通讯端是一个面向普通用户的 AI 角色聊天软件：为角色设定性格与背景后，即可与其进行长期聊天；也可以创建群聊展开群像互动、用 Galgame 制作互动剧情、通过知识库为角色挂载世界观资料，并将角色卡与聊天记录随时导出、跨设备迁移。

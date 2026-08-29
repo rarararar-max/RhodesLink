@@ -2,8 +2,10 @@
 
 > 一款以 AI 角色互动为核心的开源 Android 聊天应用 —— 角色陪伴 · 长期记忆 · 群像叙事 · 世界观创作
 
-<!-- 📸 截图位置①（顶部横幅，建议聊天主界面竖版截图，宽度约 800px）：
-![罗德岛通讯端主界面](docs/screenshots/main.png) -->
+<img width="300" height="600" alt="image" src="https://github.com/user-attachments/assets/ccafdcb7-a737-4064-82d1-a140fa3fd2c7" />
+<img width="300" height="600" alt="image" src="https://github.com/user-attachments/assets/856a8cbe-3dee-46b8-9001-43df465988ca" />
+<img width="300" height="600" alt="image" src="https://github.com/user-attachments/assets/f03442e8-d824-4f3f-ae7a-00f3f5f167fb" />
+
 
 罗德岛通讯端是一个面向普通用户的 AI 角色聊天软件：为角色设定性格与背景后，即可与其进行长期聊天；也可以创建群聊展开群像互动、用 Galgame 制作互动剧情、通过知识库为角色挂载世界观资料，并将角色卡与聊天记录随时导出、跨设备迁移。
 
@@ -12,12 +14,9 @@
 ## ✨ 功能特性
 
 - 💬 **私聊 & 群聊**：单角色深度陪伴与多角色群像互动
-  <!-- 📸 截图位置②a：![群聊界面](docs/screenshots/group_chat.png) -->
 - 🧠 **多层记忆系统**：短期 / 日常 / 长期三层记忆，配合向量检索，让角色"记得"久远经历
-  <!-- 📸 截图位置②b：![记忆设置](docs/screenshots/memory.png) -->
 - 📚 **知识库 / 世界书**：为角色挂载设定资料与世界观，按需回召注入上下文
 - 🎮 **Galgame & 小游戏**：制作互动剧情，内置麻将等玩法
-  <!-- 📸 截图位置②c：![Galgame剧情](docs/screenshots/galgame.png) -->
 - 🤖 **自动化互动**：每日内容推送、群聊自动互动、定时回复
 - 📅 **内容创作**：日记、朋友圈、排行
 - 🎁 **送礼 & 道具**：自定义礼物图片与名字，批量赠送表达心意
@@ -26,6 +25,9 @@
 - 💾 **数据管理**：完整备份与恢复、角色卡导出分享
 - 📞 **语音能力**：TTS / ASR / 语音通话
 - 🌙 **陪睡模式**：沉浸式哄睡体验，让角色在入睡时刻陪伴你
+<img width="607" height="269" alt="image" src="https://github.com/user-attachments/assets/cb05e589-aca3-42e4-846b-ef07b3ca5dcf" />
+
+
 
 ## 🧠 核心机制
 

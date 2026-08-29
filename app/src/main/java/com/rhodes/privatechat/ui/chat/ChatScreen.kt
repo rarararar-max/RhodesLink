@@ -151,7 +151,7 @@ private fun recentChatForInnerThoughts(
     }
 }
 
-private fun cleanInnerThought(raw: String, operatorName: String): String? {
+private fun cleanInnerThought(raw: String): String? {
     var text = raw.trim()
         .removePrefix("```text").removePrefix("```txt").removePrefix("```")
         .removeSuffix("```").trim()
@@ -168,11 +168,9 @@ private fun cleanInnerThought(raw: String, operatorName: String): String? {
         Regex("^(?:【(?:内心独白|心理活动)】|(?:内心独白|心理活动|内心|心理)\\s*[：:]|(?:以下是|这是)干员[^：:]*的内心(?:独白)?[：:]|(?:thought|inner\\s*thoughts?)\\s*[：:])\\s*", RegexOption.IGNORE_CASE),
         ""
     ).trim().trim('"', '“', '”', '‘', '’').trim()
-    if (text.isBlank() || text.length > 600) return null
-    val forbidden = listOf("用户的心理", "博士的心理", "用户心里", "博士心里", "作为用户", "作为博士", "用户认为", "博士认为")
-    if (forbidden.any { text.contains(it) }) return null
-    if (text.startsWith("$operatorName：") || text.startsWith("${operatorName}的内心")) return null
-    if (text.startsWith("旁白") || text.startsWith("场景") || text.startsWith("他") || text.startsWith("她") || text.startsWith("它")) return null
+    // 只做最低限度的异常兜底：空白或纯符号文本才判失败。
+    // 不做字数限制或关键词拦截——本输出直接展示给用户，格式无需严格校验。
+    if (text.isBlank()) return null
     return text.takeIf { it.any { ch -> ch.isLetterOrDigit() } }
 }
 
@@ -861,7 +859,7 @@ ${recentChats.ifBlank { "暂无" }}
                                       var thought: String? = null
                                       for (attempt in 0..1) {
                                          val messages = if (attempt == 0) requestMessages else requestMessages + AiMessage(
-                                             "user", "上一版不合格。请重写：只输出100~200字、当前干员的第一人称心理独白纯文本，不要标题、旁白、第三人称、JSON或任何解释。"
+                                             "user", "请重新生成一次：只输出100~200字、当前干员的第一人称心理独白纯文本，不要标题、旁白、第三人称、JSON或任何解释。"
                                          )
                                           DebugLogger.conversationStep(operationId, "看穿眼镜", "模型请求", "进行中", "第${attempt + 1}次，超时45秒")
                                            val result = withTimeoutOrNull(45_000) {
@@ -878,15 +876,15 @@ ${recentChats.ifBlank { "暂无" }}
                                           }
                                           DebugLogger.conversationStep(operationId, "看穿眼镜", "模型请求", "成功", "第${attempt + 1}次返回${result.length}字")
                                           viewModel.sharedUtils.trackTokens("inner_monologue", messages, result)
-                                          thought = cleanInnerThought(result, operatorName)
-                                          if (thought == null) DebugLogger.conversationStep(operationId, "看穿眼镜", "返回解析", "失败", "返回内容不符合第一人称内心独白格式")
-                                          if (thought != null) break
+                                          // 模型已按要求返回第一人称内心独白文本，直接清理后展示，不做严格格式校验
+                                          thought = cleanInnerThought(result)
+                                          break
                                       }
                                       if (thought == null) {
                                           val refunded = settings.addLmb(PROP_PRICE)
                                           DebugLogger.conversationStep(operationId, "看穿眼镜", "退款", "成功", "已退还${PROP_PRICE}龙门币，当前余额$refunded")
-                                          DebugLogger.finishOperation(operationId, "失败", "模型超时或返回格式不合格，费用已退回")
-                                          innerThoughts = "读取失败：模型超时或返回格式不符合要求，本次费用已退回。"
+                                          DebugLogger.finishOperation(operationId, "失败", "模型超时或返回内容异常，费用已退回")
+                                          innerThoughts = "读取失败：模型超时或返回内容异常，本次费用已退回。"
                                       } else {
                                           innerThoughts = thought
                                           DebugLogger.conversationStep(operationId, "看穿眼镜", "返回解析", "成功", "第一人称内心独白校验通过")

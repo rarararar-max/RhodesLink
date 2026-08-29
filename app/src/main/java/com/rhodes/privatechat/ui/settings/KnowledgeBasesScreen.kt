@@ -22,6 +22,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -66,6 +68,7 @@ fun KnowledgeBasesScreen(onBack: () -> Unit, onOpen: (String) -> Unit, modifier:
     var remoteChunkCount by remember { mutableStateOf(0) }
     var deferredRemoteConfirmationIds by remember { mutableStateOf(emptySet<String>()) }
     var message by remember { mutableStateOf("") }
+    var privateCandidateLimit by remember { mutableStateOf(settings.knowledgeBasePrivateCandidateLimit) }
 
     suspend fun refresh(initial: Boolean = false) {
         if (initial) loading = true
@@ -95,7 +98,7 @@ fun KnowledgeBasesScreen(onBack: () -> Unit, onOpen: (String) -> Unit, modifier:
         }
         if (settings.vectorProviderMode == "third_party" && remoteConfirm == null) {
             books.firstOrNull { it.indexStatus == "pending_confirm" && it.id !in deferredRemoteConfirmationIds }?.let { pending ->
-                runCatching { viewModel.planKnowledgeBaseIndex(pending.id).chunkCount }
+                runCatching { if (pending.indexStatus == "partial_pending_confirm") viewModel.planPendingKnowledgeBaseIndex(pending.id).chunkCount else viewModel.planKnowledgeBaseIndex(pending.id).chunkCount }
                     .onSuccess { remoteChunkCount = it; remoteConfirm = pending }
             }
         }
@@ -177,6 +180,23 @@ fun KnowledgeBasesScreen(onBack: () -> Unit, onOpen: (String) -> Unit, modifier:
     ) {
         Column(Modifier.padding(16.dp).imePadding().verticalScroll(rememberScrollState())) {
             Text("导入 TXT 或 MD 后会自动分段。知识库仅在关联角色、启用对应场景、索引可用且话题相关时使用；系统只选少量相关片段，不会把整本资料发送给模型。", fontSize = 12.sp, color = TextSecondary)
+            Text("私聊检索设置", fontSize = 14.sp, color = TextPrimary, modifier = Modifier.padding(top = 14.dp))
+            Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("每本知识库最多检索分段数", fontSize = 13.sp, color = TextPrimary)
+                    Text("每次私聊会从每本关联知识库中比较最多 $privateCandidateLimit 个分段，再从全部书中选相关度最高的 3 段。数值越高越不易漏掉长资料中的内容，但会增加手机性能消耗和回复前等待。", fontSize = 11.sp, color = TextSecondary)
+                }
+                Text(privateCandidateLimit.toString(), fontSize = 14.sp, color = Primary)
+            }
+            Slider(
+                value = privateCandidateLimit.toFloat(),
+                onValueChange = { privateCandidateLimit = (it / 50f).toInt() * 50 },
+                onValueChangeFinished = { settings.knowledgeBasePrivateCandidateLimit = privateCandidateLimit },
+                valueRange = 100f..1000f,
+                steps = 17,
+                colors = SliderDefaults.colors(thumbColor = Primary, activeTrackColor = Primary),
+            )
+            Text("当前单本知识库最多 500 个分段；设置为 500 或更高时，会比较该知识库的全部有效分段。", fontSize = 11.sp, color = TextSecondary)
             Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { creating = true }, modifier = Modifier.weight(1f)) { Text("新建知识库") }
                 Button(onClick = { importer.launch(arrayOf("text/plain", "text/markdown", "text/*")) }, modifier = Modifier.weight(1f)) { Text("导入 TXT / MD") }
@@ -223,7 +243,7 @@ fun KnowledgeBasesScreen(onBack: () -> Unit, onOpen: (String) -> Unit, modifier:
     remoteConfirm?.let { book -> AlertDialog(
         onDismissRequest = { deferredRemoteConfirmationIds = deferredRemoteConfirmationIds + book.id; remoteConfirm = null },
         title = { Text("确认远程向量化") },
-        text = { Text("《${book.name}》预计会发起 $remoteChunkCount 次 Embedding 请求，可能产生服务商费用。") },
+        text = { Text(if (book.indexStatus == "partial_pending_confirm") "《${book.name}》已保存新增或修改分段。将为 $remoteChunkCount 个待补分段发起 Embedding 请求，其他已索引分段继续可用。" else "《${book.name}》预计会发起 $remoteChunkCount 次 Embedding 请求，可能产生服务商费用。") },
         confirmButton = { TextButton(onClick = { remoteConfirm = null; startIndex(book, true) }) { Text("确认并索引", color = Primary) } },
         dismissButton = { TextButton(onClick = { deferredRemoteConfirmationIds = deferredRemoteConfirmationIds + book.id; remoteConfirm = null }) { Text("稍后") } },
     ) }
@@ -253,8 +273,9 @@ fun indexStatusText(status: String): String = when (status) {
     "ready" -> "索引完成"
     "processing" -> "处理中：正在分段"
     "pending_confirm" -> "已分段，等待确认索引"
+    "partial_pending_confirm" -> "部分内容可用，待确认补充索引"
     "indexing" -> "索引中"
-    else -> if (status.startsWith("indexing:")) "索引中：${status.removePrefix("indexing:")}" else when (status) {
+    else -> if (status.startsWith("indexing:")) "索引中：${status.removePrefix("indexing:")}" else if (status.startsWith("partial_indexing:")) "部分内容可用，正在补充索引：${status.removePrefix("partial_indexing:")}" else when (status) {
     "partial_failed" -> "部分失败，已完成分段可用，可点此重试失败分段"
     "failed" -> "索引失败，可点此重建"
     else -> "等待索引"

@@ -20,4 +20,12 @@ class VisionEndpointTest {
             normalizeOpenAiChatEndpoint("https://api.siliconflow.cn/v1/chat/completions/"),
         )
     }
+
+    @Test
+    fun acceptsDeepSeekBaseUrl() {
+        assertEquals(
+            "https://api.deepseek.com/chat/completions",
+            normalizeOpenAiChatEndpoint("https://api.deepseek.com/"),
+        )
+    }
 }

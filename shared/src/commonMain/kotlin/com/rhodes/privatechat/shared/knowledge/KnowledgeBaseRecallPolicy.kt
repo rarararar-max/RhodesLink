@@ -37,5 +37,5 @@ object KnowledgeBaseRecallPolicy {
 
     fun referenceOverhead(): Int = wrapReference(listOf("")).length
 
-    private val USABLE_INDEX_STATUSES = setOf("ready", "partial_failed")
+    private val USABLE_INDEX_STATUSES = setOf("ready", "partial_failed", "partial_pending_confirm", "partial_indexing")
 }

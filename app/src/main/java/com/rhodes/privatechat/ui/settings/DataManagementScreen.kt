@@ -75,13 +75,13 @@ fun DataManagementScreen(
         Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Spacer(Modifier.width(4.dp))
-            Text("数据管理", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
+            Text("数据管理与备份", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
         }
         HorizontalDivider(color = Divider)
 
         Column(Modifier.verticalScroll(rememberScrollState()).padding(16.dp)) {
             Column(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Card)
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(PrimaryContainer)
                     .clickable(onClick = onBackupRestore).padding(16.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -90,10 +90,11 @@ fun DataManagementScreen(
                     }
                     Spacer(Modifier.width(10.dp))
                     Column(Modifier.weight(1f)) {
-                        Text("备份与恢复", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
-                        Text("导出完整数据、迁移新设备、校验备份文件", fontSize = 12.sp, color = TextSecondary)
+                        Text("备份与恢复", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                        Text("点击进入：导出完整数据、迁移新设备、恢复以前备份", fontSize = 12.sp, color = TextSecondary)
                     }
-                    Icon(Icons.Default.ChevronRight, null, tint = TextSecondary)
+                    Text("点击进入", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Primary)
+                    Icon(Icons.Default.ChevronRight, null, tint = Primary)
                 }
             }
             Spacer(Modifier.height(8.dp))

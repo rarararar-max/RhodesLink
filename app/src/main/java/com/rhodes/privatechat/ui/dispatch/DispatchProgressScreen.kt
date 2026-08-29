@@ -53,6 +53,7 @@ fun DispatchProgressScreen(
 
     // 加载派遣记录（含等待 AI 生成）
     LaunchedEffect(dispatchId) {
+        try {
         // 轮询等待记录出现（AI 生成中 status="generating"）
         var rec = viewModel.repository.getDispatch(dispatchId)
         var waitSec = 0
@@ -72,7 +73,11 @@ fun DispatchProgressScreen(
             var genSec = 0
             while (true) {
                 delay(1000); genSec++
-                val updated = viewModel.repository.getDispatch(dispatchId) ?: break
+                val updated = viewModel.repository.getDispatch(dispatchId) ?: run {
+                    done = true
+                    errorMsg = "派遣记录不存在或已删除"
+                    return@LaunchedEffect
+                }
                 if (updated.status != "generating") { rec = updated; break }
                 if (genSec > 120) { done = true; errorMsg = "AI 生成超时，请重试"; return@LaunchedEffect }
             }
@@ -149,7 +154,11 @@ fun DispatchProgressScreen(
             if (System.currentTimeMillis() - waitStartedAt > 120L * 60_000L) { done = true; errorMsg = "派遣超时"; break }
             // 从 DB 拉取最新数据
             val currentRec = viewModel.repository.getDispatch(dispatchId)
-            if (currentRec == null) { delay(3000); continue }
+            if (currentRec == null) {
+                done = true
+                errorMsg = "派遣记录不存在或已删除"
+                break
+            }
             if (currentRec.status == "cancelled" || currentRec.status == "finished") {
                 done = true; visibleCount = currentRec.totalSegments
                 netProfit = currentRec.netProfit; items = currentRec.items
@@ -187,6 +196,12 @@ fun DispatchProgressScreen(
                 viewModel.finishDispatch(dispatchId)
             }
             delay(3000)
+        }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            done = true
+            errorMsg = "派遣读取失败：${e.message?.take(60) ?: "请返回后重试"}"
         }
     }
 

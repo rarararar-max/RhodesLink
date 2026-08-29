@@ -246,4 +246,7 @@ class ChatRepository(
     suspend fun deleteRelationshipByOperator(operatorId: String) {
         shared.deleteRelationshipByOperator(operatorId)
     }
+
+    suspend fun replaceRelationships(operatorId: String, relationships: List<Relationship>) =
+        shared.replaceRelationships(operatorId, relationships)
 }

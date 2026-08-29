@@ -374,10 +374,11 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             Spacer(Modifier.height(12.dp))
 
             SettingsSection("识图模型") {
-                DropDown("服务商", listOf("阿里千问", "豆包", "小米 MiMo", "Anthropic Claude", "硅基流动", "OpenAI 兼容/自填"), when (visionProvider) { "ali" -> 0; "doubao" -> 1; "xiaomi" -> 2; "anthropic" -> 3; "siliconflow" -> 4; else -> 5 }) { index ->
-                    visionProvider = listOf("ali", "doubao", "xiaomi", "anthropic", "siliconflow", "openai")[index]
+                DropDown("服务商", listOf("阿里千问", "DeepSeek Vision", "豆包", "小米 MiMo", "Anthropic Claude", "硅基流动", "OpenAI 兼容/自填"), when (visionProvider) { "ali" -> 0; "deepseek" -> 1; "doubao" -> 2; "xiaomi" -> 3; "anthropic" -> 4; "siliconflow" -> 5; else -> 6 }) { index ->
+                    visionProvider = listOf("ali", "deepseek", "doubao", "xiaomi", "anthropic", "siliconflow", "openai")[index]
                     when (visionProvider) {
                         "ali" -> { visionBaseUrl = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"; visionModelName = "qwen3-vl-plus" }
+                        "deepseek" -> { visionBaseUrl = "https://api.deepseek.com/chat/completions"; visionModelName = "deepseek-v4-flash-vision-exp" }
                         "doubao" -> { visionBaseUrl = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"; visionModelName = "" }
                         "xiaomi" -> { visionBaseUrl = "https://api.xiaomimimo.com/v1/chat/completions"; visionModelName = "mimo-v2.5" }
                         "anthropic" -> { visionBaseUrl = "https://api.anthropic.com/v1/messages"; visionModelName = "claude-sonnet-4-20250514" }
@@ -387,6 +388,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 Spacer(Modifier.height(10.dp))
                 Text(when (visionProvider) {
                     "ali" -> "使用阿里千问视觉接口。"
+                    "deepseek" -> "使用 DeepSeek OpenAI 兼容视觉接口，图片会以 Base64 image_url 发送；请使用 deepseek-v4-flash-vision-exp。"
                     "xiaomi" -> "使用小米 MiMo 图片理解接口，API Key 使用 api-key 请求头。"
                     "anthropic" -> "使用 Anthropic Messages 图片理解接口，要求传入 Base64 图片。"
                     "siliconflow" -> "使用硅基流动 OpenAI 兼容多模态接口，支持 Qwen3-VL 等视觉模型。"

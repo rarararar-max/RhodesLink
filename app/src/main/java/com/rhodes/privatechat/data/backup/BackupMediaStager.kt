@@ -25,6 +25,9 @@ class BackupMediaStager {
                 zip.closeEntry()
             }
         }
+        if (restored.keys != payload.media.map { it.mediaId }.toSet()) {
+            throw BackupFormatException("备份媒体文件不完整，已取消恢复")
+        }
         return restored
     }
 }

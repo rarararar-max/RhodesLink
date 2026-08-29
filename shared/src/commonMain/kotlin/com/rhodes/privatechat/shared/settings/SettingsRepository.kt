@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.Serializable
 import com.rhodes.privatechat.shared.model.PrivateTurnState
 import com.rhodes.privatechat.shared.model.GroupTurnState
 import kotlinx.coroutines.flow.map
@@ -148,6 +149,50 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = getInt("summary_retain", 5).coerceIn(1, 50)
         set(value) = putInt("summary_retain", value.coerceIn(1, 50))
 
+    /** Rolling summaries retain complete recent interaction rounds as raw prompt context. */
+    var privateSummaryTriggerRounds: Int
+        get() = getInt("private_summary_trigger_rounds", summaryThreshold).coerceIn(3, 200)
+        set(value) = putInt("private_summary_trigger_rounds", value.coerceIn(3, 200))
+
+    var groupSummaryTriggerRounds: Int
+        get() = getInt("group_summary_trigger_rounds", summaryThreshold).coerceIn(3, 200)
+        set(value) = putInt("group_summary_trigger_rounds", value.coerceIn(3, 200))
+
+    var privateSummaryRawTailRounds: Int
+        get() = getInt("private_summary_raw_tail_rounds", 25).coerceIn(1, 100)
+        set(value) = putInt("private_summary_raw_tail_rounds", value.coerceIn(1, 100))
+
+    var groupSummaryRawTailRounds: Int
+        get() = getInt("group_summary_raw_tail_rounds", 25).coerceIn(1, 100)
+        set(value) = putInt("group_summary_raw_tail_rounds", value.coerceIn(1, 100))
+
+    var summaryAutoRetryEnabled: Boolean
+        get() = getBoolean("summary_auto_retry_enabled", true)
+        set(value) = putBoolean("summary_auto_retry_enabled", value)
+
+    @Serializable
+    data class RollingSummaryStatus(
+        val state: String = "idle",
+        val pendingRounds: Int = 0,
+        val lastSuccessAt: Long = 0L,
+        val lastAttemptAt: Long = 0L,
+        val failureCount: Int = 0,
+        val nextRetryAt: Long = 0L,
+        val failureCode: String = "",
+        val operationId: String = "",
+    )
+
+    private fun summaryStatusKey(sessionId: String) = "rolling_summary_status_$sessionId"
+
+    fun getRollingSummaryStatus(sessionId: String): RollingSummaryStatus =
+        runCatching { Json.decodeFromString<RollingSummaryStatus>(getString(summaryStatusKey(sessionId), "")) }
+            .getOrDefault(RollingSummaryStatus())
+
+    fun putRollingSummaryStatus(sessionId: String, status: RollingSummaryStatus) =
+        putString(summaryStatusKey(sessionId), Json.encodeToString(status))
+
+    fun clearRollingSummaryStatus(sessionId: String) = remove(summaryStatusKey(sessionId))
+
     var impressionThreshold: Int
         get() = getInt("impression_threshold", 50).coerceIn(5, 500)
         set(value) = putInt("impression_threshold", value.coerceIn(5, 500))
@@ -182,7 +227,8 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putBoolean("support_remote_vector_enabled", value)
 
     var supportPersistConversation: Boolean
-        get() = getBoolean("support_persist_conversation", false)
+        // Legacy versions always persisted support chat, so an absent key must preserve that behavior.
+        get() = getBoolean("support_persist_conversation", true)
         set(value) = putBoolean("support_persist_conversation", value)
 
     var supportConversation: String
@@ -930,12 +976,12 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putString("mahjong_history_json", value)
 
     var groupMsgMin: Int
-        get() = getInt("group_msg_min", 10).coerceIn(1, getInt("group_msg_max", 100).coerceIn(1, 2000))
-        set(value) = putInt("group_msg_min", value.coerceIn(1, getInt("group_msg_max", 100).coerceIn(1, 2000)))
+        get() = getInt("group_msg_min", 10).coerceIn(5, getInt("group_msg_max", 100).coerceIn(30, 200))
+        set(value) = putInt("group_msg_min", value.coerceIn(5, getInt("group_msg_max", 100).coerceIn(30, 200)))
 
     var groupMsgMax: Int
-        get() = getInt("group_msg_max", 100).coerceIn(getInt("group_msg_min", 10).coerceIn(1, 2000), 2000)
-        set(value) = putInt("group_msg_max", value.coerceIn(getInt("group_msg_min", 10).coerceIn(1, 2000), 2000))
+        get() = getInt("group_msg_max", 100).coerceIn(getInt("group_msg_min", 10).coerceIn(5, 50), 200)
+        set(value) = putInt("group_msg_max", value.coerceIn(getInt("group_msg_min", 10).coerceIn(5, 50), 200))
 
     var groupSpeechMin: Int
         get() = getInt("group_speech_min", 1).coerceIn(1, getInt("group_speech_max", 2).coerceIn(1, 20))
@@ -945,21 +991,27 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = getInt("group_speech_max", 2).coerceIn(getInt("group_speech_min", 1).coerceIn(1, 20), 20)
         set(value) = putInt("group_speech_max", value.coerceIn(getInt("group_speech_min", 1).coerceIn(1, 20), 20))
 
+    // Legacy versions allowed 0. Read old 0/0 values as 1/1 without changing keys or requiring a migration.
     var groupNarSegMin: Int
-        get() = getInt("group_nar_seg_min", 1).coerceIn(0, getInt("group_nar_seg_max", 1).coerceIn(0, 20))
-        set(value) = putInt("group_nar_seg_min", value.coerceIn(0, getInt("group_nar_seg_max", 1).coerceIn(0, 20)))
+        get() = getInt("group_nar_seg_min", 1).coerceIn(1, getInt("group_nar_seg_max", 1).coerceIn(1, 20))
+        set(value) = putInt("group_nar_seg_min", value.coerceIn(1, getInt("group_nar_seg_max", 1).coerceIn(1, 20)))
 
     var groupNarSegMax: Int
-        get() = getInt("group_nar_seg_max", 1).coerceIn(getInt("group_nar_seg_min", 1).coerceIn(0, 20), 20)
-        set(value) = putInt("group_nar_seg_max", value.coerceIn(getInt("group_nar_seg_min", 1).coerceIn(0, 20), 20))
+        get() = getInt("group_nar_seg_max", 1).coerceIn(getInt("group_nar_seg_min", 1).coerceIn(1, 20), 20)
+        set(value) = putInt("group_nar_seg_max", value.coerceIn(getInt("group_nar_seg_min", 1).coerceIn(1, 20), 20))
 
     var groupNarMin: Int
-        get() = getInt("group_nar_min", 20).coerceIn(0, getInt("group_nar_max", 100).coerceIn(0, 2000))
-        set(value) = putInt("group_nar_min", value.coerceIn(0, getInt("group_nar_max", 100).coerceIn(0, 2000)))
+        get() = getInt("group_nar_min", 20).coerceIn(0, getInt("group_nar_max", 100).coerceIn(0, 300))
+        set(value) = putInt("group_nar_min", value.coerceIn(0, getInt("group_nar_max", 100).coerceIn(0, 300)))
 
     var groupNarMax: Int
-        get() = getInt("group_nar_max", 100).coerceIn(getInt("group_nar_min", 20).coerceIn(0, 2000), 2000)
-        set(value) = putInt("group_nar_max", value.coerceIn(getInt("group_nar_min", 20).coerceIn(0, 2000), 2000))
+        get() = getInt("group_nar_max", 100).coerceIn(getInt("group_nar_min", 20).coerceIn(0, 200), 300)
+        set(value) = putInt("group_nar_max", value.coerceIn(getInt("group_nar_min", 20).coerceIn(0, 200), 300))
+
+    /** Maximum vector candidates compared per knowledge base during private-chat retrieval. */
+    var knowledgeBasePrivateCandidateLimit: Int
+        get() = getInt("knowledge_base_private_candidate_limit", 100).coerceIn(100, 1_000)
+        set(value) = putInt("knowledge_base_private_candidate_limit", value.coerceIn(100, 1_000))
 
     var commentMinChars: Int
         get() = getInt("comment_min_chars", 10).coerceAtLeast(0)
@@ -1005,22 +1057,41 @@ class SettingsRepository(private val settings: ObservableSettings) {
         return next
     }
 
-    /** Durable one-turn plan used by the foreground timer and WorkManager fallback. */
-    data class GroupAutoChatPlan(val token: String, val dueAt: Long, val round: Int)
-
-    fun getGroupAutoChatPlan(groupId: String): GroupAutoChatPlan = GroupAutoChatPlan(
-        getString("group_auto_plan_token_$groupId", ""),
-        getLong("group_auto_plan_due_$groupId", 0L),
-        getInt("group_auto_plan_round_$groupId", 0)
+    /** Durable one-turn plan shared by the foreground timer and WorkManager fallback. */
+    @Serializable
+    data class GroupAutoChatPlan(
+        val token: String = "",
+        val dueAt: Long = 0L,
+        val round: Int = 0,
+        val state: String = "pending",
+        val claimedAt: Long = 0L,
+        val leaseExpiresAt: Long = 0L,
+        val revision: Long = 0L,
     )
 
+    private fun groupAutoPlanKey(groupId: String) = "group_auto_plan_$groupId"
+
+    fun getGroupAutoChatPlan(groupId: String): GroupAutoChatPlan {
+        val encoded = getString(groupAutoPlanKey(groupId), "")
+        runCatching { Json.decodeFromString<GroupAutoChatPlan>(encoded) }.getOrNull()?.let { return it }
+        val legacy = GroupAutoChatPlan(
+            token = getString("group_auto_plan_token_$groupId", ""),
+            dueAt = getLong("group_auto_plan_due_$groupId", 0L),
+            round = getInt("group_auto_plan_round_$groupId", 0),
+        )
+        if (legacy.token.isNotBlank()) putGroupAutoChatPlan(groupId, legacy)
+        return legacy
+    }
+
     fun putGroupAutoChatPlan(groupId: String, plan: GroupAutoChatPlan) {
-        putString("group_auto_plan_token_$groupId", plan.token)
-        putLong("group_auto_plan_due_$groupId", plan.dueAt)
-        putInt("group_auto_plan_round_$groupId", plan.round)
+        putString(groupAutoPlanKey(groupId), Json.encodeToString(plan))
+        remove("group_auto_plan_token_$groupId")
+        remove("group_auto_plan_due_$groupId")
+        remove("group_auto_plan_round_$groupId")
     }
 
     fun clearGroupAutoChatPlan(groupId: String) {
+        remove(groupAutoPlanKey(groupId))
         remove("group_auto_plan_token_$groupId")
         remove("group_auto_plan_due_$groupId")
         remove("group_auto_plan_round_$groupId")

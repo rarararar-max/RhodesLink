@@ -62,6 +62,12 @@ class KnowledgeBaseRecallPolicyTest {
         )
     }
 
+    @Test
+    fun referenceBudgetAccountsForTheSafetyWrapper() {
+        assertTrue(KnowledgeBaseRecallPolicy.referenceOverhead() > 0)
+        assertTrue(KnowledgeBaseRecallPolicy.referenceOverhead() < KnowledgeBaseRecallPolicy.PRIVATE_MAX_CHARS)
+    }
+
     private fun candidate(book: String, text: String, score: Double, order: Int) =
         KnowledgeBaseRecallPolicy.Candidate(book, text, score, order)
 }

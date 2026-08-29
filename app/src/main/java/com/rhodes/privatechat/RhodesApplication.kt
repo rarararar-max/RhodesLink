@@ -26,9 +26,14 @@ class RhodesApplication : Application() {
         super.onCreate()
         DebugLogger.initialize(this)
         DebugLogger.installCrashHandler()
-        DebugLogger.diagnostic("Startup/Application", "applicationCreated=true")
+        // Startup is a normal lifecycle event, not a user-visible key exception.
+        DebugLogger.log("Startup/Application", "applicationCreated=true")
         AndroidSettingsFactory.init(this)
-        SettingsMigration.migrateIfNeeded(this)
+        runCatching { SettingsMigration.migrateIfNeeded(this) }
+            .onFailure { error ->
+                // A damaged legacy preference must not prevent users from opening the app.
+                DebugLogger.diagnostic("Startup/SettingsMigrationFailed", "error=${error.javaClass.simpleName}:${error.message?.take(120)}")
+            }
         
         // 版本升级后清除导航栈状态，防止旧版序列化数据导致新版崩溃
         clearNavigationStateIfNeeded()
@@ -44,12 +49,13 @@ class RhodesApplication : Application() {
         DebugLogger.enabled = settings.debugLogEnabled
         DebugLogger.allowSensitiveTrace = settings.debugLogEnabled && settings.debugLogPayloadsEnabled
         DebugLogger.log("Debug/Startup", "调试日志已启动 | 完整模型内容=${if (DebugLogger.allowSensitiveTrace) "开启" else "关闭"}")
-        GroupAutoChatScheduler.reconcile(
-            this,
-            repository,
-            settings
-        )
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            if (settings.autoAiEnabled) {
+                runCatching { GroupAutoChatScheduler.reconcile(this@RhodesApplication, repository, settings) }
+                    .onFailure { error ->
+                        DebugLogger.diagnostic("Startup/AutoGroupReconcileFailed", "error=${error.javaClass.simpleName}:${error.message?.take(120)}")
+                    }
+            }
             repository.repairAiSessionPreviews()
             // A previous diagnostic may have been interrupted while deleting its temporary data.
             // Recovery is best-effort and never delays app startup or normal session rendering.

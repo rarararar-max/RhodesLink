@@ -107,6 +107,7 @@ class KnowledgeBaseImportService(
         indexService.invalidate(existing.id)
         repository.save(updated, chunks)
         if (settings.vectorProviderMode == "local") indexService.enqueueIndex(existing.id, remoteConfirmed = false)
+        else repository.updateIndexStatus(existing.id, "pending_confirm")
         return updated
     }
 

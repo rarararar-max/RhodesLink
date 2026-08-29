@@ -20,9 +20,14 @@ fun copyToInternalStorage(context: Context, uri: Uri): String {
             dest.outputStream().use { output ->
                 input.copyTo(output)
             }
+        } ?: return uri.toString()
+        if (!dest.isFile || dest.length() <= 0L) {
+            dest.delete()
+            return uri.toString()
         }
         return Uri.fromFile(dest).toString()
     } catch (_: Exception) {
+        // Never leave an empty owned image that would back up and restore as a blank avatar.
         return uri.toString()
     }
 }

@@ -5,8 +5,28 @@ import com.rhodes.privatechat.shared.model.MemoryLevel
 
 /** Restores portable user data in one SQLite transaction. Runtime queues, links and vectors reset. */
 class RestoreDatabaseExecutor(private val repository: ChatRepository) {
-    suspend fun restore(payload: BackupPayload, requestedSelection: BackupContentSelection = BackupContentSelection.All) {
+    suspend fun restore(
+        payload: BackupPayload,
+        requestedSelection: BackupContentSelection = BackupContentSelection.All,
+        onProgress: (BackupRestoreProgress) -> Unit = {},
+    ) {
         val selection = requestedSelection.normalized()
+        val total = listOf(
+            payload.content.operators.orEmpty().size, payload.content.knowledgeBases.orEmpty().size,
+            payload.content.knowledgeBaseChunks.orEmpty().size, payload.content.operatorKnowledgeBaseAssignments.orEmpty().size,
+            payload.content.relationships.orEmpty().size, payload.content.sessions.orEmpty().size,
+            payload.content.messages.orEmpty().size, payload.displayEvents.size, payload.content.memories.orEmpty().size,
+            payload.content.anchors.orEmpty().size, payload.content.moments.orEmpty().size,
+            payload.content.momentComments.orEmpty().size, payload.content.momentLikes.orEmpty().size,
+            payload.content.diaries.orEmpty().size, payload.giftRecords.size, payload.dispatchRecords.size,
+            payload.sharedExperiences.size, payload.sharedExperienceParticipants.size, payload.chatArchives.size,
+            payload.chatHistorySegments.size, payload.content.memoryItems.orEmpty().size,
+        ).sum()
+        var completed = 0
+        fun report(detail: String, added: Int = 0) {
+            completed += added
+            onProgress(BackupRestoreProgress(BackupRestoreStage.RESTORING_DATABASE, detail, completed, total))
+        }
         repository.runRestoreTransaction {
             // Clear only selected categories, with children removed before their parents.
             if (selection.extras) {
@@ -53,9 +73,11 @@ class RestoreDatabaseExecutor(private val repository: ChatRepository) {
                 operatorsQueries.deleteAllOperators()
             }
 
+            report("正在恢复角色与关系")
             payload.content.operators.orEmpty().forEach { op ->
                 operatorsQueries.insertAllOperators(op.id, op.name, op.title, op.description, op.gender, op.avatarUri, op.location, op.activity, op.emotion, op.intimacy.toLong(), op.privatePrompt, op.groupPrompt, op.memoryInjection, op.userRelation, op.lmb.toLong(), op.attack.toDouble(), op.defense.toDouble(), op.meldPref, op.activityLevel.toDouble(), op.voiceName, op.voiceSpeed, op.voicePitch)
             }
+            report("正在恢复知识库")
             payload.content.knowledgeBases.orEmpty().forEach { book ->
                 knowledgeBasesQueries.insertKnowledgeBase(book.id, book.name, book.rawContent, book.sourceFileName, book.sourceFormat, book.sourceType, book.chunkingMode, "pending", "", book.createdAt, book.updatedAt)
             }
@@ -68,6 +90,9 @@ class RestoreDatabaseExecutor(private val repository: ChatRepository) {
             payload.content.relationships.orEmpty().forEach { rel ->
                 relationshipsQueries.insertAllRelationships(rel.operatorId, rel.relatedOperatorId, rel.relatedOperatorName, rel.type, rel.intimacy.toLong(), if (rel.isPreset) 1 else 0, rel.note)
             }
+            report("已恢复知识库", payload.content.knowledgeBases.orEmpty().size + payload.content.knowledgeBaseChunks.orEmpty().size + payload.content.operatorKnowledgeBaseAssignments.orEmpty().size)
+            report("已恢复角色与关系", payload.content.operators.orEmpty().size + payload.content.relationships.orEmpty().size)
+            report("正在恢复聊天记录")
             payload.content.sessions.orEmpty().forEach { session ->
                 chatSessionsQueries.insertSession(session.id, session.operatorId, session.operatorName, session.lastMessage, session.lastTime, session.mode, if (session.isPinned) 1 else 0, session.unreadCount.toLong(), session.members, session.rules, session.avatarUri, session.mutedMembers)
             }
@@ -77,13 +102,17 @@ class RestoreDatabaseExecutor(private val repository: ChatRepository) {
             payload.displayEvents.forEach { event ->
                 chatDisplayEventsQueries.insertDisplayEventIfAbsent(event.messageId, event.segmentIndex.toLong(), event.sessionId, event.revealOrder)
             }
+            report("已恢复聊天记录", payload.content.sessions.orEmpty().size + payload.content.messages.orEmpty().size + payload.displayEvents.size)
+            report("正在恢复记忆")
             payload.content.memories.orEmpty().forEach { memory ->
                 memoriesQueries.insertMemory(memory.sessionId, memory.operatorId, memory.type.name, memory.content, memory.keywords, memory.preferences, memory.taboos, memory.createdAt, memory.expiresAt)
             }
             payload.content.anchors.orEmpty().forEach { anchor ->
                 memoryAnchorsQueries.insertAnchor(anchor.sessionId, anchor.operatorId, anchor.type.name, anchor.content, if (anchor.isPrivate) 1 else 0, anchor.createdAt, anchor.expiresAt, anchor.source, anchor.sourceName, anchor.sourceActor, anchor.sourceTarget, anchor.importance, anchor.knownFrom)
             }
+            report("已恢复记忆", payload.content.memories.orEmpty().size + payload.content.anchors.orEmpty().size)
 
+            report("正在恢复动态与日记")
             val momentIds = mutableMapOf<Long, Long>()
             payload.content.moments.orEmpty().forEach { moment ->
                 momentsQueries.insertMoment(moment.operatorId, moment.operatorName, moment.content, if (moment.isUserPost) 1 else 0, moment.mentionedOperatorIds, moment.likeCount.toLong(), moment.commentCount.toLong(), moment.createdAt)
@@ -110,6 +139,8 @@ class RestoreDatabaseExecutor(private val repository: ChatRepository) {
             payload.content.diaries.orEmpty().forEach { diary ->
                 diariesQueries.insertDiary(diary.operatorId, diary.operatorName, diary.content, diary.date, diary.version.toLong(), diary.createdAt)
             }
+            report("已恢复动态与日记", payload.content.moments.orEmpty().size + payload.content.momentComments.orEmpty().size + payload.content.momentLikes.orEmpty().size + payload.content.diaries.orEmpty().size)
+            report("正在恢复附加数据")
             payload.giftRecords.forEach { gift -> giftRecordsQueries.insert(gift.id, gift.operatorId, gift.imageUri, gift.giftName, gift.senderName, gift.createdAt) }
             payload.dispatchRecords.forEach { dispatch ->
                 val status = when (dispatch.status) {
@@ -140,6 +171,7 @@ class RestoreDatabaseExecutor(private val repository: ChatRepository) {
                 }
                 memoryItemsQueries.insertMemoryItem(item.ownerType, item.ownerId, item.memoryLevel.name, item.memoryType, item.sourceKind.name, sourceRefId, item.sessionId, item.content, item.nickname, item.importance.toLong(), item.privacy, if (item.unmetNeed) 1 else 0, item.location, item.emotionValence, item.eventTime, item.createdAt, item.updatedAt, item.expiresAt, status, item.scheduledTime, item.action, item.careType, item.topicKey, item.sourceActor, item.sourceTarget, item.lastUsedAt, item.usedCount.toLong(), item.confidence, item.rawJson, "")
             }
+            report("已恢复附加数据", payload.giftRecords.size + payload.dispatchRecords.size + payload.sharedExperiences.size + payload.sharedExperienceParticipants.size + payload.chatArchives.size + payload.chatHistorySegments.size + payload.content.memoryItems.orEmpty().size)
         }
     }
 }

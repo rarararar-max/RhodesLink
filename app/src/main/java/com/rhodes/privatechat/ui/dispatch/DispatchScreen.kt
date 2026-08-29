@@ -100,10 +100,17 @@ fun DispatchScreen(
     var balance by remember { mutableIntStateOf(settings.lmb) }
     LaunchedEffect(Unit) { while (true) { balance = settings.lmb; delay(5000) } }
     var activeDispatches by remember { mutableStateOf<List<DispatchRecordEntity>>(emptyList()) }
+    var startError by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
         while (true) {
-            activeDispatches = viewModel.repository.getActiveDispatches().sortedBy { it.startTime }.take(2)
+            try {
+                activeDispatches = viewModel.repository.getActiveDispatches().sortedBy { it.startTime }.take(2)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                startError = "无法读取派遣状态：${e.message?.take(60) ?: "请稍后重试"}"
+            }
             delay(3000)
         }
     }
@@ -252,6 +259,9 @@ fun DispatchScreen(
             if (startBlockReason.isNotBlank()) {
                 Text(startBlockReason, fontSize = 12.sp, color = ErrorRed, modifier = Modifier.padding(bottom = 8.dp))
             }
+            if (startError.isNotBlank()) {
+                Text(startError, fontSize = 12.sp, color = ErrorRed, modifier = Modifier.padding(bottom = 8.dp))
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedButton(onClick = onHistory, modifier = Modifier.weight(1f).height(44.dp),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = Primary)) {
@@ -262,7 +272,10 @@ fun DispatchScreen(
                     if (activeDispatches.size >= 2) return@Button
                     if (canStart) {
                         val id = UUID.randomUUID().toString()
-                        viewModel.startDispatch(id, taskName, durations[selectedDuration], budget, team.map { it.id }) { onStart(id) }
+                        startError = ""
+                        viewModel.startDispatch(id, taskName, durations[selectedDuration], budget, team.map { it.id }) { error ->
+                            if (error == null) onStart(id) else startError = error
+                        }
                     }
                 }, modifier = Modifier.weight(1f).height(44.dp), shape = RoundedCornerShape(10.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = if (canStart) Primary else Divider)) {

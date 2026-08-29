@@ -52,7 +52,7 @@ class AppStateHolder(
             while (true) {
                 try {
                     repository.allOperators.collect { operators ->
-                        DebugLogger.diagnostic("AppState/OperatorsUpdated", "source=flow, operators=${operators.size}")
+                        DebugLogger.log("AppState/OperatorsUpdated", "source=flow, operators=${operators.size}")
                         if (operators.isEmpty()) {
                             DebugLogger.diagnostic("Special/OperatorsEmpty", "source=flow")
                             // A stale SQLDelight invalidation flow must not erase contacts that
@@ -80,7 +80,7 @@ class AppStateHolder(
                 try {
                     repository.allSessions.collect { all ->
                         val hidden = settings.hiddenIds
-                        DebugLogger.diagnostic("AppState/SessionsUpdated", "source=flow, allSessions=${all.size}, visibleSessions=${_sessions.value.size}, hiddenSessions=${hidden.size}")
+                        DebugLogger.log("AppState/SessionsUpdated", "source=flow, allSessions=${all.size}, visibleSessions=${_sessions.value.size}, hiddenSessions=${hidden.size}")
                         if (all.isEmpty()) {
                             DebugLogger.diagnostic("Special/SessionsEmpty", "source=flow")
                             val direct = repository.getAllSessionsSync()
@@ -106,13 +106,13 @@ class AppStateHolder(
 
     private suspend fun hydrateChatState(source: String, attempt: Int) {
         try {
-            DebugLogger.diagnostic("AppState/HydrationStart", "source=$source, attempt=$attempt")
+            DebugLogger.log("AppState/HydrationStart", "source=$source, attempt=$attempt")
             val operators = repository.getAllOperatorsSync()
             val allSessions = repository.getAllSessionsSync()
             val hidden = settings.hiddenIds
             refreshOperators(operators)
             refreshAllSessions(allSessions, hidden)
-            DebugLogger.diagnostic(
+            DebugLogger.log(
                 "AppState/HydrationDone",
                 "source=$source, attempt=$attempt, operators=${operators.size}, allSessions=${allSessions.size}, visibleSessions=${_sessions.value.size}, hiddenSessions=${hidden.size}"
             )
@@ -137,7 +137,7 @@ class AppStateHolder(
             val sessions = repository.getAllSessionsSync()
             refreshOperators(operators)
             refreshAllSessions(sessions, settings.hiddenIds)
-            DebugLogger.diagnostic("AppState/ReloadDone", "source=$source, operators=${operators.size}, allSessions=${sessions.size}, visibleSessions=${_sessions.value.size}")
+            DebugLogger.log("AppState/ReloadDone", "source=$source, operators=${operators.size}, allSessions=${sessions.size}, visibleSessions=${_sessions.value.size}")
             true
         } catch (e: Exception) {
             DebugLogger.diagnostic("AppState/ReloadFailed", "source=$source, error=${e.javaClass.simpleName}:${e.message?.take(160)}")

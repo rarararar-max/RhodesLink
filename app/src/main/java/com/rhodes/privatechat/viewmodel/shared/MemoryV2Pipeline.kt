@@ -363,13 +363,14 @@ class MemoryV2Pipeline(
         query: String = "",
         applyPrivateSourceFilter: Boolean = false,
         allowedSources: Set<String>? = null,
+        visibilities: List<String> = emptyList(),
     ): String {
         if (!settings.memoryV2Enabled) return ""
         val sourcePolicy = allowedSources ?: if (applyPrivateSourceFilter) privateChatAllowedSources() else null
         if (sourcePolicy != null && sourcePolicy.isEmpty()) return ""
         val personal = buildOwnerMemoryContext(
             "operator", operatorId, limitL1, limitL2, limitL3, query,
-            sourcePolicy
+            sourcePolicy, visibilities = visibilities
         )
         return listOf(
             personal.takeIf { it.isNotBlank() },
@@ -619,7 +620,7 @@ class MemoryV2Pipeline(
         )
     }
 
-    suspend fun buildOwnerMemoryContext(ownerType: String, ownerId: String, limitL1: Int, limitL2: Int, limitL3: Int, query: String = "", allowedSources: Set<String>? = null, minCreatedAt: Long = 0L): String {
+    suspend fun buildOwnerMemoryContext(ownerType: String, ownerId: String, limitL1: Int, limitL2: Int, limitL3: Int, query: String = "", allowedSources: Set<String>? = null, minCreatedAt: Long = 0L, visibilities: List<String> = emptyList()): String {
         if (!settings.memoryV2Enabled) return ""
         val now = System.currentTimeMillis()
         val vectorService = memoryVectorService ?: return ""
@@ -636,6 +637,7 @@ class MemoryV2Pipeline(
                     ownerType = ownerType, ownerId = ownerId, query = query, limit = limit,
                     sourceTypes = sourceTypes, sourceKinds = allowedSources?.toList().orEmpty(),
                     candidateSourceType = sourceTypes.singleOrNull().orEmpty(),
+                    visibilities = visibilities,
                     minScore = if (settings.memoryRecallMode == "fast") 0.24 else 0.16,
                     now = now, candidateLimit = candidateLimit,
                     minCreatedAt = maxOf(minCreatedAt, if (settings.memoryRecallMode == "fast") now - 30L * 86_400_000L else 0L),

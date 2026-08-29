@@ -596,10 +596,15 @@ private fun CreationWizard(context: Context, state: GameState, assets: ProjectAs
         val finalChapters = (chapters.filterNot { it.id == selectedChapter } + value).sortedBy { it.id }
         chapters = finalChapters
         val project = ProjectConfig(title.trim(), description.trim(), projectStyle.trim(), projectRestrictions.trim(), playerCharacterId, characters, finalChapters, state.project.variables, state.project.items, state.project.events)
-        val issues = projectIssues(project, workingAssets)
-        if (issues.isNotEmpty()) { guide = issues.first(); return }
+        // Save the editor's complete current state first. Validation controls progression to
+        // resource adaptation, not whether an unfinished later chapter is retained.
         draftProject = project
         saveState(state.copy(project = project))
+        val issues = projectIssues(project, workingAssets)
+        if (issues.isNotEmpty()) {
+            guide = "项目已保存。\n" + issues.joinToString("\n")
+            return
+        }
         previewScale = workingAssets.globalSpriteScale
         previewOffsetX = workingAssets.globalSpriteOffsetX
         previewOffsetY = workingAssets.globalSpriteOffsetY
@@ -1252,7 +1257,18 @@ private fun ProjectEditor(config: ProjectConfig, save: (ProjectConfig) -> Unit, 
             status?.let { Text(it, color = Accent, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp)) }
             Button({
                 val finalCharacters = characters.filter { it.name.isNotBlank() }
-                val finalChapters = chapters.filter { it.title.isNotBlank() || it.goal.isNotBlank() }
+                // Include the chapter currently open in the form even if the user saves the
+                // project directly instead of pressing the separate chapter-save action first.
+                val currentChapter = (chapters.firstOrNull { it.id == selectedChapter } ?: ChapterConfig(selectedChapter)).copy(
+                    title = chapterTitle.trim(),
+                    goal = chapterGoal.trim(),
+                    contentDescription = chapterText.trim(),
+                    completionHint = completionText.trim(),
+                    allowedCharacterIds = finalCharacters.map { it.id }
+                )
+                val finalChapters = (chapters.filterNot { it.id == selectedChapter } + currentChapter)
+                    .filter { it.title.isNotBlank() || it.goal.isNotBlank() || it.contentDescription.isNotBlank() }
+                    .sortedBy { it.id }
                 val playerId = config.playerCharacterId.takeIf { id -> finalCharacters.any { it.id == id } } ?: finalCharacters.firstOrNull()?.id.orEmpty()
                 save(config.copy(title = title.trim(), description = description.trim(), playerCharacterId = playerId, characters = finalCharacters, chapters = finalChapters)); close()
             }, Modifier.fillMaxWidth().padding(top = 16.dp)) { Text("保存游戏内容") }

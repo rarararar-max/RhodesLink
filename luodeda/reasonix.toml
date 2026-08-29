@@ -1,0 +1,5 @@
+[permissions]
+allow = []
+
+[sandbox]
+allow_write = ["D:\\app\\anzhuoapp\\mingrifnagzhou\\mingrifnagzhou-test2\\shared\\src\\commonMain\\kotlin\\com\\rhodes\\privatechat\\shared\\settings", "D:\\app\\anzhuoapp\\mingrifnagzhou\\mingrifnagzhou-test2\\app\\src\\main\\java\\com\\rhodes\\privatechat\\ui\\chatsettings", "D:\\app\\anzhuoapp\\mingrifnagzhou\\mingrifnagzhou-test2\\app\\src\\main\\java\\com\\rhodes\\privatechat\\viewmodel", "D:\\app\\anzhuoapp\\mingrifnagzhou\\mingrifnagzhou-test2\\app\\src\\main\\java\\com\\rhodes\\privatechat\\ui\\settings", "D:\\app\\anzhuoapp\\mingrifnagzhou\\mingrifnagzhou-test2\\app\\src\\test\\java\\com\\rhodes\\privatechat"]

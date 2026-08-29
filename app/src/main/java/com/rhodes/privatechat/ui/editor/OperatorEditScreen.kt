@@ -516,7 +516,10 @@ fun OperatorEditScreen(
 
     if (showAddPicker) {
         OperatorPickerDialog(
-            operators = operators.filter { op -> operator == null || op.id != operator.id },
+            operators = operators.filter { op ->
+                (operator == null || op.id != operator.id) &&
+                    relationships.none { it.relatedOperatorId == op.id }
+            },
             onDismiss = { showAddPicker = false },
             onSelect = { op ->
                 relationships = relationships + RelationshipEntity(
@@ -812,7 +815,7 @@ private fun RelationshipHelpCard() {
         Text("关系是当前干员眼中的关系", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
         Spacer(Modifier.height(4.dp))
         Text(
-            "例如在能天使页面添加“德克萨斯：挚友”，表示能天使把德克萨斯视为挚友。德克萨斯是否也这样看待能天使，需要到德克萨斯页面单独设置。",
+            "例如在能天使页面添加“德克萨斯：姐姐”，表示能天使是德克萨斯的姐姐。若需要双向关系，还要在德克萨斯页面设置“能天使：妹妹”。",
             fontSize = 11.sp,
             color = TextSecondary,
             lineHeight = 16.sp

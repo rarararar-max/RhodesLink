@@ -13,7 +13,7 @@ fun createVisionGateway(provider: String, endpoint: String, apiKey: String, mode
             "ali" -> AliyunQwenVlGateway(endpoint, apiKey, modelName)
             "anthropic" -> AnthropicVisionGateway(endpoint, apiKey, modelName)
             "xiaomi" -> OpenAiCompatVisionGateway(normalizeOpenAiChatEndpoint(endpoint), apiKey, modelName, useApiKeyHeader = true)
-            "doubao", "openai", "siliconflow" -> OpenAiCompatVisionGateway(normalizeOpenAiChatEndpoint(endpoint), apiKey, modelName)
+            "deepseek", "doubao", "openai", "siliconflow" -> OpenAiCompatVisionGateway(normalizeOpenAiChatEndpoint(endpoint), apiKey, modelName)
             else -> OpenAiCompatVisionGateway(normalizeOpenAiChatEndpoint(endpoint), apiKey, modelName)
         }
     } else {

@@ -38,6 +38,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -90,11 +92,13 @@ fun DebugLogScreen(onBack: () -> Unit) {
     val sharedUtils: SharedUtils = koinInject()
     val appState: AppStateHolder = koinInject()
     var operations by remember { mutableStateOf(DebugLogger.getOperations()) }
+    var diagnostics by remember { mutableStateOf(DebugLogger.getLogs().filter(DebugLogger::isCriticalDiagnostic).asReversed()) }
     var selected by remember { mutableStateOf<DebugOperation?>(null) }
     var loggingEnabled by remember { mutableStateOf(settings.debugLogEnabled) }
     var payloadsEnabled by remember { mutableStateOf(settings.debugLogPayloadsEnabled) }
     var filter by remember { mutableStateOf(OperationFilter.ALL) }
     var resultFilter by remember { mutableStateOf("全部") }
+    var keyword by remember { mutableStateOf("") }
     var problemProgress by remember { mutableStateOf(ProblemChecker.progress()) }
     var showProblemReport by remember { mutableStateOf(false) }
     var pendingTechnicalReport by remember { mutableStateOf<String?>(null) }
@@ -135,6 +139,7 @@ fun DebugLogScreen(onBack: () -> Unit) {
     LaunchedEffect(Unit) {
         while (true) {
             operations = DebugLogger.getOperations().asReversed()
+            diagnostics = DebugLogger.getLogs().filter(DebugLogger::isCriticalDiagnostic).asReversed()
             problemProgress = ProblemChecker.progress()
             delay(800)
         }
@@ -153,7 +158,7 @@ fun DebugLogScreen(onBack: () -> Unit) {
                         DebugLogger.allowSensitiveTrace = it && payloadsEnabled
                     })
                     IconButton(onClick = { clipboard.setText(AnnotatedString(DebugLogger.getLogText())); Toast.makeText(context, "已复制诊断日志", Toast.LENGTH_SHORT).show() }) { Icon(Icons.Default.ContentCopy, "复制诊断日志", tint = TextPrimary) }
-                    IconButton(onClick = { DebugLogger.clear(); operations = emptyList() }) { Icon(Icons.Default.DeleteSweep, "清空", tint = TextPrimary) }
+                    IconButton(onClick = { DebugLogger.clear(); operations = emptyList(); diagnostics = emptyList() }) { Icon(Icons.Default.DeleteSweep, "清空", tint = TextPrimary) }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = AppSurface)
             )
@@ -161,8 +166,10 @@ fun DebugLogScreen(onBack: () -> Unit) {
     ) { padding ->
         val filtered = operations.filter { operation ->
             (filter == OperationFilter.ALL || operationFilter(operation) == filter) &&
-                (resultFilter == "全部" || operation.result == resultFilter)
+                (resultFilter == "全部" || operation.result == resultFilter) &&
+                (keyword.isBlank() || operation.surface.contains(keyword, true) || operation.target.contains(keyword, true) || operation.summary.contains(keyword, true) || operation.steps.any { it.label.contains(keyword, true) || it.status.contains(keyword, true) || it.details.contains(keyword, true) })
         }
+        val filteredDiagnostics = diagnostics.filter { keyword.isBlank() || it.tag.contains(keyword, true) || it.message.contains(keyword, true) }
         Column(Modifier.fillMaxSize().padding(padding)) {
             Column(Modifier.fillMaxWidth().background(AppSurface).padding(horizontal = 12.dp, vertical = 8.dp)) {
                 Text("状态：${if (loggingEnabled) "正在记录" else "仅保留关键异常"} · ${operations.size} 条最终结果", fontSize = 12.sp, color = if (loggingEnabled) AccentGreen else AccentOrange)
@@ -189,11 +196,38 @@ fun DebugLogScreen(onBack: () -> Unit) {
                         Text("当前：${problemProgress.currentStage}", fontSize = 10.sp, color = AccentOrange)
                     }
                 }
+                OutlinedTextField(
+                    value = keyword,
+                    onValueChange = { keyword = it },
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                    singleLine = true,
+                    label = { Text("关键词筛选") },
+                    placeholder = { Text("如：GroupAuto、ParseFallback、Crash、WorkerFailed") },
+                    trailingIcon = {
+                        if (keyword.isNotBlank()) TextButton(onClick = {
+                            clipboard.setText(AnnotatedString(DebugLogger.getFilteredLogText(keyword)))
+                            Toast.makeText(context, "已复制关键词筛选结果", Toast.LENGTH_SHORT).show()
+                        }) { Text("复制", color = Primary) }
+                    },
+                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Primary)
+                )
             }
-            if (filtered.isEmpty()) {
+            if (filtered.isEmpty() && filteredDiagnostics.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("暂无最终结果记录\n完成一次聊天、客服、动态或记忆操作后会显示在这里", fontSize = 14.sp, color = TextTertiary) }
             } else {
                 LazyColumn(Modifier.fillMaxSize().padding(horizontal = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (filteredDiagnostics.isNotEmpty()) {
+                        item { Text("关键异常", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = ErrorRed, modifier = Modifier.padding(top = 8.dp, start = 4.dp)) }
+                        items(filteredDiagnostics, key = { it.id }) { entry ->
+                            Surface(color = ErrorRed.copy(alpha = 0.08f), shape = RoundedCornerShape(10.dp)) {
+                                Column(Modifier.fillMaxWidth().padding(10.dp)) {
+                                    Text(entry.tag.removePrefix("Diagnostic/"), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = ErrorRed)
+                                    Text(entry.message, fontSize = 11.sp, color = TextSecondary, modifier = Modifier.padding(top = 3.dp))
+                                }
+                            }
+                        }
+                    }
+                    if (filtered.isNotEmpty()) item { Text("本次互动", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary, modifier = Modifier.padding(top = 8.dp, start = 4.dp)) }
                     items(filtered, key = { it.id }) { operation -> OperationCard(operation) { selected = operation } }
                 }
             }

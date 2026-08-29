@@ -51,5 +51,5 @@ object RelationshipUiMapper {
     }
 
     fun description(operatorName: String, relatedName: String, type: RelationshipType): String =
-        "${operatorName}把${relatedName}视为【${label(type)}】"
+        "${operatorName}是${relatedName}的【${label(type)}】"
 }

@@ -87,6 +87,7 @@ fun GroupEditScreen(
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var idleAutoChat by remember { mutableStateOf(settings.getGroupAuto(groupId)) }
+    var autoStatus by remember(groupId) { mutableStateOf(if (groupId.isBlank()) "保存后可开启" else viewModel.autoGroupChatStatus(groupId)) }
     var eventAutoChat by remember { mutableStateOf(settings.getGroupEventAuto(groupId)) }
     var avatarUri by remember { mutableStateOf("") }
     var initialGroupName by remember { mutableStateOf("") }
@@ -148,7 +149,9 @@ fun GroupEditScreen(
                         android.widget.Toast.makeText(ctx, error, android.widget.Toast.LENGTH_LONG).show()
                         return@saveGroup
                     }
-                    viewModel.setAutoGroupChatEnabled(resolvedId, idleAutoChat)
+                    if (idleAutoChat != settings.getGroupAuto(resolvedId)) {
+                        viewModel.setAutoGroupChatEnabled(resolvedId, idleAutoChat)
+                    }
                     settings.putGroupEventAuto(resolvedId, eventAutoChat)
                     onBack()
                 }
@@ -186,9 +189,15 @@ fun GroupEditScreen(
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("空闲自动聊天", fontSize = 14.sp, color = TextPrimary)
-                        Text("开启后，群会按随机时间间隔一直自己聊。", fontSize = 11.sp, color = TextSecondary)
+                        Text(if (idleAutoChat) "状态：$autoStatus" else "开启后，群会按随机时间间隔自动聊天。", fontSize = 11.sp, color = TextSecondary)
                     }
-                    Switch(checked = idleAutoChat, onCheckedChange = { idleAutoChat = it }, colors = SwitchDefaults.colors(checkedThumbColor = Primary, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
+                    Switch(checked = idleAutoChat, onCheckedChange = { idleAutoChat = it; autoStatus = if (it) "保存后开始安排" else "已关闭" }, colors = SwitchDefaults.colors(checkedThumbColor = Primary, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
+                }
+                if (idleAutoChat && groupId.isNotBlank()) {
+                    TextButton(onClick = {
+                        viewModel.resetAutoGroupChatTimer(groupId)
+                        autoStatus = "已重新安排下一轮"
+                    }) { Text(if (autoStatus.contains("上限")) "继续自动聊天" else "重新安排下一轮", color = Primary, fontSize = 12.sp) }
                 }
             }
 

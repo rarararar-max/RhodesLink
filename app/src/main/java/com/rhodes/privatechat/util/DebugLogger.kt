@@ -1,6 +1,7 @@
 package com.rhodes.privatechat.util
 
 import android.content.Context
+import android.util.Log
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -26,6 +27,7 @@ object DebugLogger {
     }
 
     fun log(tag: String, message: String) {
+        logcat(Log.DEBUG, "RhodesLog", "$tag | $message")
         if (!enabled) return
         addEntry(tag, message)
     }
@@ -45,6 +47,18 @@ object DebugLogger {
             .toList()
         synchronized(lock) {
             if (entries.isEmpty()) entries.addAll(restored.takeLast(MAX_PERSISTED_DIAGNOSTICS))
+            // Remove old builds' normal lifecycle rows that were incorrectly persisted as errors.
+            val removedNormalRows = entries.removeAll { entry ->
+                entry.tag in setOf(
+                    "Diagnostic/Startup/Application",
+                    "Diagnostic/AppState/OperatorsUpdated",
+                    "Diagnostic/AppState/SessionsUpdated",
+                    "Diagnostic/AppState/HydrationStart",
+                    "Diagnostic/AppState/HydrationDone",
+                    "Diagnostic/Startup/RoleRecovery"
+                )
+            }
+            if (removedNormalRows) persistDiagnosticsLocked()
         }
     }
 
@@ -62,7 +76,33 @@ object DebugLogger {
      * Callers must only include identifiers, counts and exception summaries, never chat content or secrets.
      */
     fun diagnostic(tag: String, message: String) {
+        val priority = if (tag.contains("Crash") || tag.contains("Failed") || tag.contains("Failure") || tag.contains("Error")) Log.ERROR else Log.WARN
+        logcat(priority, "RhodesDiag", "$tag | $message")
         addEntry("Diagnostic/$tag", message.replace('\n', ' ').replace('\t', ' '), persist = true)
+    }
+
+    /** Only failure-like diagnostics belong in the red persistent "关键异常" section. */
+    fun isCriticalDiagnostic(entry: LogEntry): Boolean = isCriticalDiagnosticTag(entry.tag)
+
+    fun isCriticalDiagnosticTag(tag: String): Boolean {
+        val normalized = tag.removePrefix("Diagnostic/")
+        return listOf(
+            "Crash/", "Failed", "Failure", "Error", "Timeout", "ParseFallback",
+            "LeaseDenied", "NoActiveMembers", "Blocked", "Unavailable", "SessionMissing",
+            "Database/Compatibility", "Database/UpgradeVerification"
+        ).any { marker -> normalized.contains(marker, ignoreCase = true) }
+    }
+
+    /** Android Logcat limits a single entry, so split long diagnostics without dropping keywords. */
+    private fun logcat(priority: Int, tag: String, message: String) {
+        message.chunked(3_500).ifEmpty { listOf("") }.forEachIndexed { index, part ->
+            val value = if (index == 0) part else "[part ${index + 1}] $part"
+            when (priority) {
+                Log.ERROR -> Log.e(tag, value)
+                Log.WARN -> Log.w(tag, value)
+                else -> Log.d(tag, value)
+            }
+        }
     }
 
     private fun addEntry(tag: String, message: String, persist: Boolean = false) {
@@ -73,14 +113,18 @@ object DebugLogger {
                 entries.removeAt(0)
             }
             if (persist) {
-                val encoded = entries.asSequence()
-                    .filter { it.tag.startsWith("Diagnostic/") }
-                    .toList()
-                    .takeLast(MAX_PERSISTED_DIAGNOSTICS)
-                    .joinToString("\n") { "${it.timestamp}\t${it.tag}\t${it.message}" }
-                diagnosticPrefs?.edit()?.putString(DIAGNOSTIC_KEY, encoded)?.commit()
+                persistDiagnosticsLocked()
             }
         }
+    }
+
+    private fun persistDiagnosticsLocked() {
+        val encoded = entries.asSequence()
+            .filter { it.tag.startsWith("Diagnostic/") && isCriticalDiagnosticTag(it.tag) }
+            .toList()
+            .takeLast(MAX_PERSISTED_DIAGNOSTICS)
+            .joinToString("\n") { "${it.timestamp}\t${it.tag}\t${it.message}" }
+        diagnosticPrefs?.edit()?.putString(DIAGNOSTIC_KEY, encoded)?.commit()
     }
 
     /** Compact lifecycle records for the in-app debug screen; never include chat content. */
@@ -218,6 +262,15 @@ object DebugLogger {
 
     fun getLogText(): String = synchronized(lock) {
         entries.joinToString("\n") { "[${it.formattedTime}][${it.tag}] ${it.message}" }
+    }
+
+    fun getFilteredLogText(keyword: String): String {
+        val normalized = keyword.trim()
+        return synchronized(lock) {
+            entries.asSequence()
+                .filter { normalized.isBlank() || it.tag.contains(normalized, true) || it.message.contains(normalized, true) }
+                .joinToString("\n") { "[${it.formattedTime}][${it.tag}] ${it.message}" }
+        }
     }
 
     fun clear() {

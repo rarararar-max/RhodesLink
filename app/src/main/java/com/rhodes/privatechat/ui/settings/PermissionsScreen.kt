@@ -174,7 +174,7 @@ private fun GroupPermTab(groups: List<com.rhodes.privatechat.data.db.entity.Chat
                         }
                         Switch(checked = idleAuto, onCheckedChange = { b ->
                             idleAuto = b
-                            settings.putGroupAuto(g.id, b)
+                            viewModel.setAutoGroupChatEnabled(g.id, b)
                         }, colors = SwitchDefaults.colors(checkedThumbColor = Primary, checkedTrackColor = PrimaryContainer, uncheckedThumbColor = TextSecondary, uncheckedTrackColor = Divider))
                     }
                     HorizontalDivider(color = Divider)

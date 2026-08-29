@@ -29,7 +29,7 @@ class ManualReplyWorker(context: Context, params: WorkerParameters) : CoroutineW
                 val current = repository.replyTurns.get(turnId) ?: return Result.success()
                 if (current.status == ReplyTurnStatus.SUCCEEDED) return Result.success()
                 val token = UUID.randomUUID().toString()
-                val claimed = repository.replyTurns.claim(turnId, token, System.currentTimeMillis(), System.currentTimeMillis() + 120_000L)
+                val claimed = repository.replyTurns.claim(turnId, token, System.currentTimeMillis(), System.currentTimeMillis() + 180_000L)
                     ?: return Result.retry()
                 ownedTurnId = turnId
                 ownedToken = token
@@ -67,7 +67,7 @@ class ManualReplyWorker(context: Context, params: WorkerParameters) : CoroutineW
                 messageId, "", message.mode, "pending", 0, now, "", 0, null, "", now, now, 0,
             ))
             val token = UUID.randomUUID().toString()
-            val claimed = repository.replyTurns.claim(legacyTurnId, token, now, now + 120_000L) ?: return Result.success()
+            val claimed = repository.replyTurns.claim(legacyTurnId, token, now, now + 180_000L) ?: return Result.success()
             ownedTurnId = legacyTurnId
             ownedToken = token
             val settings = get<SettingsRepository>(SettingsRepository::class.java)

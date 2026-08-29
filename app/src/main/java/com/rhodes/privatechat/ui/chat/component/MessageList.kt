@@ -70,6 +70,7 @@ import com.rhodes.privatechat.ui.chat.model.ChatUiMessage
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.shared.data.ChatDisplayEvent
 import kotlinx.coroutines.delay
+import kotlin.random.Random
 
 
 /**
@@ -98,6 +99,7 @@ fun MessageList(
     displayEventsLoaded: Boolean = false,
     legacyMessageCutoff: Long = Long.MAX_VALUE,
     onReveal: (suspend (ChatUiMessage) -> Long)? = null,
+    onSegmentRevealed: ((ChatUiMessage) -> Unit)? = null,
     onLoadOlder: (() -> Unit)? = null,
     isLoadingOlder: Boolean = false,
     hasMore: Boolean = false,
@@ -109,34 +111,59 @@ fun MessageList(
 ) {
     fun eventKey(message: ChatUiMessage) = "${message.originalMessageId}:${message.segmentIndex}"
     var localEvents by remember(displaySessionKey) { mutableStateOf(emptyList<ChatDisplayEvent>()) }
+    var revealFailedReplyIds by remember(displaySessionKey) { mutableStateOf(emptySet<Long>()) }
+    var lastRevealedMessage by remember(displaySessionKey) { mutableStateOf<ChatUiMessage?>(null) }
     LaunchedEffect(displayEvents) {
         localEvents = (localEvents + displayEvents)
             .distinctBy { "${it.messageId}:${it.segmentIndex}" }
     }
 
-    // Display events are an animation aid only. A missing/corrupt event row must never hide
-    // persisted history or a newly saved user message.
-    val nextAi = messages.firstOrNull { message ->
-        message.timestamp >= legacyMessageCutoff && message.isAiSegment && localEvents.none { event -> event.messageId == message.originalMessageId && event.segmentIndex == message.segmentIndex }
-    }
-    LaunchedEffect(nextAi?.let(::eventKey), displayEventsLoaded) {
-        val message = nextAi ?: return@LaunchedEffect
+    fun isRevealed(message: ChatUiMessage): Boolean =
+        message.originalMessageId in revealFailedReplyIds || localEvents.any {
+            it.messageId == message.originalMessageId && it.segmentIndex == message.segmentIndex
+        }
+
+    LaunchedEffect(displaySessionKey, displayEventsLoaded, messages) {
         if (!progressiveDisplay || onReveal == null || !displayEventsLoaded) return@LaunchedEffect
-        val priorAiSegmentIsVisible = messages.indexOf(message).takeIf { it > 0 }?.let { index ->
-            val previous = messages[index - 1]
-            previous.isAiSegment && previous.originalMessageId == message.originalMessageId &&
-                localEvents.any { it.messageId == previous.originalMessageId && it.segmentIndex == previous.segmentIndex }
-        } == true
-        if (priorAiSegmentIsVisible) delay((1_000L + (Math.random() * 500)).toLong())
-        if (localEvents.none { it.messageId == message.originalMessageId && it.segmentIndex == message.segmentIndex }) {
-            val order = onReveal(message)
-            localEvents = localEvents + ChatDisplayEvent(message.originalMessageId, message.segmentIndex, order)
+        while (true) {
+            val message = messages.firstOrNull { candidate ->
+                candidate.timestamp >= legacyMessageCutoff && candidate.isAiSegment && !isRevealed(candidate)
+            } ?: return@LaunchedEffect
+            val priorAiSegmentIsVisible = messages.indexOf(message).takeIf { it > 0 }?.let { index ->
+                val previous = messages[index - 1]
+                previous.isAiSegment && previous.originalMessageId == message.originalMessageId && isRevealed(previous)
+            } == true
+            if (priorAiSegmentIsVisible) delay(Random.nextLong(1_000L, 1_501L))
+            if (isRevealed(message)) continue
+            // Make the bubble visible first. Persisting the reveal must not delay the first frame.
+            localEvents = localEvents + ChatDisplayEvent(message.originalMessageId, message.segmentIndex, -1L)
+            lastRevealedMessage = message
+            try {
+                val order = onReveal(message)
+                localEvents = localEvents.filterNot {
+                    it.messageId == message.originalMessageId && it.segmentIndex == message.segmentIndex
+                } + ChatDisplayEvent(message.originalMessageId, message.segmentIndex, order)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                // A display-event failure must never leave part of a persisted reply invisible.
+                revealFailedReplyIds = revealFailedReplyIds + message.originalMessageId
+            }
         }
     }
-    // Display-event rows are optional animation metadata. Never hide a persisted AI reply while
-    // their asynchronous write/read is delayed or fails; otherwise a successful reply can look
-    // like the model never answered in both private and group chats.
-    val displayMessages = messages
+    val displayMessages = if (!progressiveDisplay || !displayEventsLoaded) {
+        messages
+    } else {
+        messages.filter { message ->
+            message.timestamp < legacyMessageCutoff || !message.isAiSegment || isRevealed(message)
+        }
+    }
+    LaunchedEffect(lastRevealedMessage?.let(::eventKey)) {
+        val message = lastRevealedMessage ?: return@LaunchedEffect
+        // Let LazyColumn apply the newly visible bubble before starting speech.
+        delay(16)
+        onSegmentRevealed?.invoke(message)
+    }
     val latestRoleReplyId = displayMessages.lastOrNull { !it.isMe && !it.isSystem }?.originalMessageId
     LaunchedEffect(messages.size, displayMessages.size) {
         onDisplayState?.invoke(messages.size, displayMessages.size)

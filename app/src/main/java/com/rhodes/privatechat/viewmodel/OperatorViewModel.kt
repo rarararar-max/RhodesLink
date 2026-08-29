@@ -111,16 +111,17 @@ class OperatorViewModel(
                 } else {
                     saveStep("knowledge_assignments_skipped", "reason=empty_assignments")
                 }
-                // Database readback is the success boundary. The contacts state must be refreshed
-                // before the editor callback, but optional synchronization must not delay it.
-                saveStep("refresh_operators_start")
-                withTimeout(15_000L) { appState.refreshOperators(repository.getAllOperatorsSync()) }
-                saveStep("refresh_operators_done")
-                DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=ui_success_notified")
-                finish(onComplete, null)
-                scope.launch(Dispatchers.IO) {
-                    // A new operator has no session yet. These optional syncs must not turn a
-                    // successful operator insert into a visible save failure on an upgraded DB.
+                // A relation update is a single replacement, so deleting stale edges cannot leave
+                // a partially-written graph when a later insert fails.
+                saveStep("relationships_start", "count=${relationships.size}")
+                withTimeout(15_000L) { repository.replaceRelationships(id, relationships) }
+                val savedRelationships = withTimeout(15_000L) { repository.getRelationships(id) }
+                if (savedRelationships.size != relationships.distinctBy { it.relatedOperatorId }.size) {
+                    throw IllegalStateException("关系网保存后读取数量不一致")
+                }
+                saveStep("relationships_done", "count=${savedRelationships.size}")
+                // Optional synchronization runs only after the complete operator graph has been
+                // persisted. It must not turn a successful save into a visible failure.
                 if (existing != null) {
                     runCatching { withTimeout(8_000L) { repository.syncOperatorAvatar(id, op.avatarUri) } }
                         .onFailure { DebugLogger.diagnostic("Special/OperatorAvatarSyncFailed", "operatorId=$id, error=${it.javaClass.simpleName}:${it.message?.take(120)}") }
@@ -129,25 +130,15 @@ class OperatorViewModel(
                 }
                 settings.putOperatorDynPermission(id, autoPost)
                 settings.putOperatorMsgPermission(id, allowChat)
-                DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=relationships_start, count=${relationships.size}")
-                runCatching {
-                    withTimeout(8_000L) { repository.deleteRelationshipByOperator(id) }
-                    for (rel in relationships) {
-                        withTimeout(8_000L) { repository.insertRelationship(rel.copy(operatorId = id)) }
-                    }
-                }.onFailure {
-                    DebugLogger.diagnostic("Special/OperatorRelationshipsFailed", "operatorId=$id, error=${it.javaClass.simpleName}:${it.message?.take(160)}")
-                }
-                DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=relationships_done")
                 runCatching { onSelectedOperatorUpdated?.invoke(saved) }
                     .onFailure { DebugLogger.diagnostic("Special/OperatorSelectionRefreshFailed", "operatorId=$id, error=${it.javaClass.simpleName}:${it.message?.take(160)}") }
                 DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=state_refresh_start")
-                runCatching { appState.refreshOperators(repository.getAllOperatorsSync()) }
-                    .onFailure { DebugLogger.diagnostic("Special/OperatorStateRefreshFailed", "operatorId=$id, error=${it.javaClass.simpleName}:${it.message?.take(160)}") }
+                withTimeout(15_000L) { appState.refreshOperators(repository.getAllOperatorsSync()) }
                 DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=state_refresh_done")
                 DebugLogger.log("Operator/Save", "saved operatorId=$id, isNew=${existing == null}, operatorCount=${appState.getOperatorsSnapshot().size}")
                 DebugLogger.diagnostic("Special/OperatorCreateSucceeded", "operatorId=$id, isNew=${existing == null}, operatorCount=${appState.getOperatorsSnapshot().size}")
-                }
+                DebugLogger.diagnostic("Operator/SaveStep", "operatorId=$id, step=ui_success_notified")
+                finish(onComplete, null)
                 return@launch
             } catch (e: Exception) {
                 val db = DatabaseDispatcher.snapshot()

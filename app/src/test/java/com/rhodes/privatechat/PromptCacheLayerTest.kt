@@ -13,6 +13,17 @@ import org.junit.Test
 class PromptCacheLayerTest {
 
     @Test
+    fun automaticGroupTemplateRequiresConcreteProgressAndNaturalClosure() {
+        val template = PromptTemplates.get("group", "auto")
+
+        assertTrue(template.contains("推进决策"))
+        assertTrue(template.contains("已收束"))
+        assertTrue(template.contains("禁止重复"))
+        assertTrue(template.contains("自然停顿或收束"))
+        assertTrue(template.contains("GROUP_MODE_FORMAT"))
+    }
+
+    @Test
     fun proactiveTemplateUsesTheActiveTagProtocolInsteadOfJson() {
         val template = PromptTemplates.get("private", "proactive")
 
@@ -37,7 +48,7 @@ class PromptCacheLayerTest {
         assertTrue(protocol.contains("成人互动请求"))
         assertTrue(protocol.contains("必须在本轮【旁白】或【台词】中有直接对应"))
         assertTrue(protocol.contains("【输出格式示例"))
-        assertTrue(protocol.contains("【当前主线】博士邀请阿米娅一同前往宿舍拿东西"))
+        assertTrue(protocol.contains("【当前主线】<当前正在处理的主线>"))
     }
 
     @Test
@@ -67,9 +78,32 @@ class PromptCacheLayerTest {
         assertTrue(protocol.contains("用户昵称"))
         assertTrue(protocol.contains("第一人称"))
         assertTrue(protocol.contains("内部推断"))
-        assertTrue(protocol.contains("旁白】与紧接的【台词】不得表达同一信息"))
+        assertTrue(protocol.contains("旁白】与紧接的【台词】必须相关，但不得表达同一信息"))
         assertTrue(protocol.contains("同义重复"))
+        assertTrue(protocol.contains("即时反应对"))
+        assertTrue(protocol.contains("第一段可见内容必须是【旁白】"))
         assertEquals("", com.rhodes.privatechat.viewmodel.PromptModuleDefaults.narrationProtocol("online"))
+    }
+
+    @Test
+    fun offlineProtocolsRequireInterleavedNarrationAndDialogue() {
+        val privateProtocol = com.rhodes.privatechat.viewmodel.PromptModuleDefaults.outputProtocol("private", "offline")
+        val groupProtocol = com.rhodes.privatechat.viewmodel.PromptModuleDefaults.outputProtocol("group", "director")
+
+        assertTrue(privateProtocol.contains("交叉排列"))
+        assertTrue(groupProtocol.contains("交叉"))
+        assertTrue(privateProtocol.contains("无法完全交叉"))
+        assertTrue(groupProtocol.contains("无法完全交叉"))
+        assertTrue(privateProtocol.contains("可以原样朗读"))
+        assertTrue(privateProtocol.contains("场景仍在继续"))
+    }
+
+    @Test
+    fun rollingSummaryStatusStartsIdleWithoutPendingRounds() {
+        val status = com.rhodes.privatechat.shared.settings.SettingsRepository.RollingSummaryStatus()
+
+        assertEquals("idle", status.state)
+        assertEquals(0, status.pendingRounds)
     }
 
     @Test
@@ -299,7 +333,7 @@ class PromptCacheLayerTest {
 
     @Test
     fun promptTemplateVersionAdvancesForTheCurrentPromptRevision() {
-        assertEquals(33, PromptTemplates.VERSION)
+        assertEquals(35, PromptTemplates.VERSION)
     }
 
     @Test
@@ -324,6 +358,35 @@ class PromptCacheLayerTest {
         assertTrue(behavior.contains("【群聊亲密互动】"))
         assertTrue(behavior.contains("不得让所有成员只重复"))
         assertTrue(behavior.contains("未确认现场无人"))
+    }
+
+    @Test
+    fun groupOfflineRulesKeepFaceToFaceMediumAndRequireNarrationByPrompt() {
+        val offlineTemplate = PromptTemplates.get("group", "offline")
+        val directorTemplate = PromptTemplates.get("group", "director")
+        val behavior = com.rhodes.privatechat.viewmodel.PromptModuleDefaults.behavior("group", "offline")
+        val protocol = com.rhodes.privatechat.viewmodel.PromptModuleDefaults.outputProtocol("group", "offline")
+
+        assertTrue(offlineTemplate.contains("线上群消息"))
+        assertTrue(directorTemplate.contains("线上群消息"))
+        assertTrue(behavior.contains("消息提示音"))
+        assertTrue(protocol.contains("每轮至少输出一段旁白"))
+        assertTrue(protocol.contains("第一段可见内容必须是【旁白】"))
+    }
+
+    @Test
+    fun groupRegistryIncludesKnowledgeContext() {
+        assertTrue("__KNOWLEDGE_BASE_CONTEXT" in PromptPlaceholderRegistry.allowed("group"))
+        assertTrue("__KNOWLEDGE_BASE_CONTEXT" in PromptPlaceholderRegistry.recommended("group"))
+    }
+
+    @Test
+    fun groupProtocolRequiresAllMembersAndAtLeastOneNarration() {
+        val protocol = com.rhodes.privatechat.viewmodel.PromptModuleDefaults.outputProtocol("group", "offline")
+
+        assertTrue(protocol.contains("每位当前成员本轮都必须发言"))
+        assertTrue(protocol.contains("每轮至少输出一段旁白"))
+        assertTrue(protocol.contains("不得只换词重复前一位成员"))
     }
 
     @Test

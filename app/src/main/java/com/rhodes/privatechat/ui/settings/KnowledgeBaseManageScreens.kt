@@ -48,28 +48,34 @@ fun KnowledgeBaseEditorScreen(id: String, onBack: () -> Unit) {
     var content by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }
     var confirmResplit by remember { mutableStateOf(false) }
+    var pendingCompleteSave by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var pendingCancelSave by remember { mutableStateOf<(() -> Unit)?>(null) }
     LaunchedEffect(id) { viewModel.getKnowledgeBase(id)?.let { book = it; name = it.name; content = it.rawContent } }
     val current = book ?: return
-    SaveableSettingsScaffold("编辑知识库", onBack, Modifier.fillMaxSize().background(BG), showSave = false) {
+    fun requestSave(completeSave: () -> Unit = onBack, cancelSave: () -> Unit = {}) {
+        if (content != current.rawContent) {
+            pendingCompleteSave = completeSave
+            pendingCancelSave = cancelSave
+            confirmResplit = true
+        } else scope.launch {
+            runCatching { viewModel.renameKnowledgeBase(id, name); current.copy(name = name.trim()) }
+                .onSuccess { completeSave() }
+                .onFailure { message = it.message ?: "保存失败"; cancelSave() }
+        }
+    }
+    SaveableSettingsScaffold("编辑知识库", onBack, Modifier.fillMaxSize().background(BG), onSaveRequest = { complete, cancel -> requestSave(complete, cancel) }) {
         Column(Modifier.padding(16.dp).imePadding().verticalScroll(rememberScrollState())) {
             OutlinedTextField(name, { name = it }, label = { Text("知识库名称") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(content, { content = it }, label = { Text("正文") }, modifier = Modifier.fillMaxWidth().padding(top = 12.dp).heightIn(min = 280.dp), minLines = 12)
             if (message.isNotBlank()) Text(message, fontSize = 12.sp, color = TextSecondary)
-             TextButton(onClick = {
-                 if (content != current.rawContent) confirmResplit = true else scope.launch {
-                 val result = runCatching {
-                     viewModel.renameKnowledgeBase(id, name); current.copy(name = name.trim())
-                 }
-                 result.onSuccess { onBack() }.onFailure { message = it.message ?: "保存失败" }
-             } }, modifier = Modifier.align(Alignment.End)) { Text("保存") }
-         }
-     }
+          }
+      }
      if (confirmResplit) AlertDialog(
-         onDismissRequest = { confirmResplit = false },
+          onDismissRequest = { confirmResplit = false; pendingCancelSave?.invoke(); pendingCancelSave = null },
          title = { Text("重新分段") },
          text = { Text("重新分段将覆盖当前所有手动新增、编辑、启用、停用和删除的分段设置。是否继续？") },
-         confirmButton = { TextButton(onClick = { confirmResplit = false; scope.launch { runCatching { viewModel.updateKnowledgeBaseText(current, name, content) }.onSuccess { onBack() }.onFailure { message = it.message ?: "保存失败" } } }) { Text("确认重新分段") } },
-         dismissButton = { TextButton(onClick = { confirmResplit = false }) { Text("取消") } }
+          confirmButton = { TextButton(onClick = { confirmResplit = false; scope.launch { runCatching { viewModel.updateKnowledgeBaseText(current, name, content) }.onSuccess { (pendingCompleteSave ?: onBack).invoke() }.onFailure { message = it.message ?: "保存失败"; pendingCancelSave?.invoke() }; pendingCompleteSave = null; pendingCancelSave = null } }) { Text("确认重新分段") } },
+          dismissButton = { TextButton(onClick = { confirmResplit = false; pendingCancelSave?.invoke(); pendingCancelSave = null }) { Text("取消") } }
      )
 }
 
@@ -128,7 +134,7 @@ fun KnowledgeBaseChunksScreen(id: String, onBack: () -> Unit) {
     LaunchedEffect(id) { refresh() }
     SaveableSettingsScaffold("分段管理", onBack, Modifier.fillMaxSize().background(BG), showSave = false) {
         Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
-            Text("编辑、启用或禁用分段后，知识库需要重新索引。", fontSize = 12.sp, color = TextSecondary)
+            Text("新增、修改或重新启用分段需要补充索引；删除或停用会立即从检索中移除，不影响其他分段。", fontSize = 12.sp, color = TextSecondary)
             if (message.isNotBlank()) Text(message, fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 6.dp))
             Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("使用中 ${chunks.count { it.enabled }} / ${chunks.size}", color = TextPrimary, modifier = Modifier.weight(1f))
@@ -142,7 +148,7 @@ fun KnowledgeBaseChunksScreen(id: String, onBack: () -> Unit) {
                     }
                     Text(if (chunk.enabled) "使用中" else "未使用", color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp))
                     TextButton(onClick = { editing = chunk; editingHeading = chunk.sourceHeading; editingText = chunk.content; editingKeywords = chunk.userKeywords }) { Text("编辑") }
-                    TextButton(onClick = { scope.launch { runCatching { viewModel.updateKnowledgeBaseChunkEnabled(id, chunk.id, !chunk.enabled) }.onSuccess { message = "已更新分段状态"; refresh() }.onFailure { message = "更新失败：${it.message ?: "未知错误"}" } } }) { Text(if (chunk.enabled) "停用" else "启用") }
+                    TextButton(onClick = { scope.launch { runCatching { viewModel.updateKnowledgeBaseChunkEnabled(id, chunk.id, !chunk.enabled) }.onSuccess { message = if (chunk.enabled) "已停用分段并移除其索引" else "已启用分段；等待补充索引确认"; refresh() }.onFailure { message = "更新失败：${it.message ?: "未知错误"}" } } }) { Text(if (chunk.enabled) "停用" else "启用") }
                     TextButton(onClick = { deleting = chunk }) { Text("删除") }
                 }
             }
@@ -151,19 +157,19 @@ fun KnowledgeBaseChunksScreen(id: String, onBack: () -> Unit) {
     editing?.let { chunk -> androidx.compose.material3.AlertDialog(
         onDismissRequest = { editing = null }, title = { Text("编辑片段 ${chunk.ordinal}") },
         text = { Column(Modifier.imePadding().verticalScroll(rememberScrollState())) { OutlinedTextField(editingHeading, { editingHeading = it }, label = { Text("来源标题") }); OutlinedTextField(editingText, { editingText = it }, label = { Text("正文") }, modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp)); OutlinedTextField(editingKeywords, { editingKeywords = it }, label = { Text("关键词") }) } },
-        confirmButton = { TextButton(onClick = { scope.launch { runCatching { viewModel.updateKnowledgeBaseChunk(id, chunk.id, editingHeading, editingText, editingKeywords) }.onSuccess { editing = null; message = "已更新分段"; refresh() }.onFailure { message = "保存失败：${it.message ?: "未知错误"}" } } }) { Text("保存") } },
+        confirmButton = { TextButton(onClick = { scope.launch { runCatching { viewModel.updateKnowledgeBaseChunk(id, chunk.id, editingHeading, editingText, editingKeywords) }.onSuccess { editing = null; message = "已更新分段；等待补充索引确认"; refresh() }.onFailure { message = "保存失败：${it.message ?: "未知错误"}" } } }) { Text("保存") } },
         dismissButton = { TextButton(onClick = { editing = null }) { Text("取消") } }
     ) }
     if (adding) androidx.compose.material3.AlertDialog(
         onDismissRequest = { adding = false }, title = { Text("新增分段") },
         text = { Column(Modifier.imePadding().verticalScroll(rememberScrollState())) { OutlinedTextField(editingHeading, { editingHeading = it }, label = { Text("来源标题") }); OutlinedTextField(editingText, { editingText = it }, label = { Text("正文") }, modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp)); OutlinedTextField(editingKeywords, { editingKeywords = it }, label = { Text("关键词") }) } },
-        confirmButton = { TextButton(onClick = { scope.launch { runCatching { viewModel.addKnowledgeBaseChunk(id, editingHeading, editingText, editingKeywords) }.onSuccess { adding = false; message = "已新增分段"; refresh() }.onFailure { message = "保存失败：${it.message ?: "未知错误"}" } } }) { Text("保存") } },
+        confirmButton = { TextButton(onClick = { scope.launch { runCatching { viewModel.addKnowledgeBaseChunk(id, editingHeading, editingText, editingKeywords) }.onSuccess { adding = false; message = "已新增分段；等待补充索引确认"; refresh() }.onFailure { message = "保存失败：${it.message ?: "未知错误"}" } } }) { Text("保存") } },
         dismissButton = { TextButton(onClick = { adding = false }) { Text("取消") } }
     )
     deleting?.let { chunk -> AlertDialog(
         onDismissRequest = { deleting = null }, title = { Text("删除分段") },
         text = { Text("确定删除片段 ${chunk.ordinal} 吗？删除后不会修改原文正文，但该分段将不再参与检索。") },
-        confirmButton = { TextButton(onClick = { scope.launch { runCatching { viewModel.deleteKnowledgeBaseChunk(id, chunk.id) }.onSuccess { deleting = null; message = "已删除分段"; refresh() }.onFailure { message = "删除失败：${it.message ?: "未知错误"}" } } }) { Text("确认删除") } },
+        confirmButton = { TextButton(onClick = { scope.launch { runCatching { viewModel.deleteKnowledgeBaseChunk(id, chunk.id) }.onSuccess { deleting = null; message = "已删除分段并移除其索引；其他分段不受影响"; refresh() }.onFailure { message = "删除失败：${it.message ?: "未知错误"}" } } }) { Text("确认删除") } },
         dismissButton = { TextButton(onClick = { deleting = null }) { Text("取消") } }
     ) }
 }

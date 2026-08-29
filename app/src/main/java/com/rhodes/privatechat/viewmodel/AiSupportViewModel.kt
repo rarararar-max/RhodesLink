@@ -47,6 +47,16 @@ data class AiSupportMessage(
     val redPacketClaimed: Boolean = false,
 )
 
+/** Repairs old transcripts before Compose receives them as keyed lazy-list items. */
+internal fun sanitizeSupportConversation(messages: List<AiSupportMessage>): List<AiSupportMessage> =
+    messages.asReversed()
+        .asSequence()
+        .filter { it.id > 0L }
+        .distinctBy { it.id }
+        .take(100)
+        .toList()
+        .asReversed()
+
 class AiSupportViewModel(
     application: Application,
     private val settings: SettingsRepository,
@@ -89,7 +99,7 @@ class AiSupportViewModel(
     private var manualHash = ""
 
     init {
-        restoreConversation()
+        if (settings.supportPersistConversation) restoreConversation()
         viewModelScope.launch { prepareManual() }
     }
 
@@ -197,17 +207,20 @@ class AiSupportViewModel(
         val debugOperationId = DebugLogger.beginOperation("客服", agent.name, "文字聊天")
         DebugLogger.conversationStep(debugOperationId, "客服", "发送入口", "已接收", "消息ID=$userMessageId")
         _messages.value = _messages.value + AiSupportMessage(userMessageId, "user", trimmed, agentId = agent.id, imageUri = imageUri)
-        runCatching { persistConversation() }.onFailure { error ->
-            _busy.value = false
-            _messages.value = _messages.value.dropLast(1)
-            _notice.value = "客服记录保存失败，请检查设备存储后重试。"
-            DebugLogger.diagnostic("AiSupport/Persist", "stage=user_message,status=failed,errorClass=${error.javaClass.simpleName}")
-            DebugLogger.finishOperation(debugOperationId, "失败", "用户消息保存失败")
-            return false
+        if (settings.supportPersistConversation) {
+            runCatching { persistConversation() }.onFailure { error ->
+                _busy.value = false
+                _messages.value = _messages.value.dropLast(1)
+                _notice.value = "客服记录保存失败，请检查设备存储后重试。"
+                DebugLogger.diagnostic("AiSupport/Persist", "stage=user_message,status=failed,errorClass=${error.javaClass.simpleName}")
+                DebugLogger.finishOperation(debugOperationId, "失败", "用户消息保存失败")
+                return false
+            }
         }
         requestJob = viewModelScope.launch {
             try {
                 _notice.value = "正在检索说明并请求客服回复…"
+                DebugLogger.conversationStep(debugOperationId, "客服", "说明检索", "进行中", "正在准备客服资料")
                 sharedUtils.chatConfigurationError()?.let { throw IllegalStateException(it) }
                 val imageSummary = if (imageUri.isBlank()) "" else analyzeImage(imageForModel)
                 if (imageSummary.isNotBlank()) {
@@ -221,7 +234,8 @@ class AiSupportViewModel(
                     if (imageSummary.isNotBlank()) append("\n【用户发送的图片摘要】").append(imageSummary)
                 }
                 val reference = retrieve(questionForModel)
-                val recent = AiSupportContract.historyAfter(_messages.value.dropLast(1), settings.supportConversationContextStartId)
+                DebugLogger.conversationStep(debugOperationId, "客服", "说明检索", "成功", "已获取${reference.length}字参考资料")
+                val recent = AiSupportContract.historyAfter(_messages.value.dropLast(1), settings.supportConversationContextStartId, agent.id)
                 val supportDate = supportDate()
                 val remainingLmb = settings.supportLmbRemaining(agent.id, supportDate)
                 // The app controls whether this turn has a surprise-reward opportunity; the model
@@ -256,9 +270,11 @@ class AiSupportViewModel(
                 val requestMessages = listOf(AiMessage("system", prompt)) + recent + AiMessage("user", context)
                 DebugLogger.attachOperationModule(debugOperationId, "完整请求", sharedUtils.logAiCallText(requestMessages), sensitive = true)
                 DebugLogger.attachOperationModule(debugOperationId, "产品资料", reference, sensitive = true)
+                DebugLogger.conversationStep(debugOperationId, "客服", "模型请求", "进行中", "超时45秒")
                 val raw = withTimeoutOrNull(45_000L) {
                     aiService.chat(settings.apiKey, requestMessages, settings.provider, settings.modelName, settings.customUrl, AiSupportContract.temperature, maxOutputTokens = AiSupportContract.maxOutputTokens, requestType = "AiSupport").content
                 } ?: throw java.net.SocketTimeoutException("客服请求超过45秒未完成")
+                DebugLogger.conversationStep(debugOperationId, "客服", "模型请求", "成功", "返回${raw.length}字")
                 DebugLogger.attachOperationModule(debugOperationId, "AI原始返回", raw, sensitive = true)
                 DebugLogger.conversationStep(debugOperationId, "客服", "模型请求", "成功", "已收到客服回复")
                 val sources = AiSupportContract.sources(reference)
@@ -268,10 +284,13 @@ class AiSupportViewModel(
                 val packetRequest = AiSupportContract.extractRedPacket(raw)
                     ?: if (explicitPromise) Random.nextInt(20, 121) else null
                 val packetAmount = if (packetRequest == null || (!packetOpportunity && !explicitPromise)) 0
-                else settings.reserveSupportLmb(agent.id, supportDate, packetRequest)
+                    else settings.reserveSupportLmb(agent.id, supportDate, packetRequest)
                 val visibleReply = AiSupportContract.removeRedPacketMarker(raw).ifBlank { "模型没有返回内容，请稍后重试。" }
+                DebugLogger.conversationStep(debugOperationId, "客服", "返回解析", "成功", "红包=${packetAmount > 0}")
                 _messages.value = _messages.value + AiSupportMessage(++nextMessageId, "assistant", visibleReply, sources, agent.id, redPacketAmount = packetAmount)
+                DebugLogger.conversationStep(debugOperationId, "客服", "本地保存", "进行中", "正在保存客服回复")
                 persistConversation()
+                DebugLogger.conversationStep(debugOperationId, "客服", "本地保存", "成功", "回复已保存")
                 DebugLogger.attachOperationModule(debugOperationId, "最终保存", visibleReply + if (packetAmount > 0) "\n红包：$packetAmount 龙门币" else "", sensitive = true)
                 DebugLogger.finishOperation(debugOperationId, "成功", "已回复${if (packetAmount > 0) "，并发送 $packetAmount 龙门币红包" else ""}")
                 _notice.value = ""
@@ -283,6 +302,7 @@ class AiSupportViewModel(
                     _messages.value = _messages.value + AiSupportMessage(++nextMessageId, "assistant", AiSupportContract.userError(error), agentId = agent.id)
                     persistConversation()
                     DebugLogger.finishOperation(debugOperationId, "失败", AiSupportContract.userError(error))
+                    DebugLogger.conversationStep(debugOperationId, "客服", "本轮总览", "失败", AiSupportContract.userError(error))
                 }
             } finally { _busy.value = false; requestJob = null }
         }
@@ -330,13 +350,24 @@ class AiSupportViewModel(
     }
 
     private fun restoreConversation() {
-        runCatching { Json.decodeFromString<List<AiSupportMessage>>(settings.supportConversation) }.getOrDefault(emptyList()).let {
-            _messages.value = it.takeLast(100)
-            nextMessageId = it.maxOfOrNull(AiSupportMessage::id) ?: 0L
+        val restored = runCatching { Json.decodeFromString<List<AiSupportMessage>>(settings.supportConversation) }
+            .getOrDefault(emptyList())
+        val sanitized = sanitizeSupportConversation(restored)
+        _messages.value = sanitized
+        nextMessageId = sanitized.maxOfOrNull(AiSupportMessage::id) ?: 0L
+        val contextStart = settings.supportConversationContextStartId
+        val repairedContextStart = contextStart.coerceAtMost(nextMessageId)
+        if (repairedContextStart != contextStart) {
+            settings.supportConversationContextStartId = repairedContextStart
+        }
+        if (sanitized.size != restored.size) {
+            settings.supportConversation = Json.encodeToString(sanitized)
+            DebugLogger.diagnostic("AiSupport/Transcript", "status=sanitized,before=${restored.size},after=${sanitized.size}")
         }
     }
 
     private fun persistConversation() {
+        if (!settings.supportPersistConversation) return
         settings.supportConversation = Json.encodeToString(_messages.value.takeLast(100))
     }
 

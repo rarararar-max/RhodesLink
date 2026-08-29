@@ -34,6 +34,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -41,6 +42,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -104,6 +106,8 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     var state by remember { mutableStateOf<BackupUiState>(BackupUiState.Idle) }
     var resultDialog by remember { mutableStateOf<Pair<String, String>?>(null) }
     var progressDialog by remember { mutableStateOf<String?>(null) }
+    var progressNumbers by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var restoreProgressGeneration by remember { mutableIntStateOf(0) }
     var exportJob by remember { mutableStateOf<Job?>(null) }
     var restoreOptions by remember { mutableStateOf(com.rhodes.privatechat.data.backup.BackupRestoreOptions()) }
     var showIssueDialog by remember { mutableStateOf(false) }
@@ -125,6 +129,7 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         exportJob = scope.launch {
             state = BackupUiState.Working("正在整理数据和图片")
             progressDialog = "正在整理数据和图片"
+            progressNumbers = null
             try {
                 val detail = withContext(Dispatchers.IO) {
                     val result = com.rhodes.privatechat.data.backup.BackupExportCoordinator(context, repository, settings, writer, reader).export(
@@ -159,6 +164,7 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         scope.launch {
             state = BackupUiState.Working("正在校验备份文件")
             progressDialog = "正在校验备份文件"
+            progressNumbers = null
             val next = withContext(Dispatchers.IO) {
                 context.contentResolver.openInputStream(uri)?.use { input ->
                     when (val result = reader.validate(input)) {
@@ -321,6 +327,7 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                             scope.launch {
                                 state = BackupUiState.Working("正在校验恢复前备份")
                                 progressDialog = "正在校验恢复前备份"
+                                progressNumbers = null
                                 state = withContext(Dispatchers.IO) {
                                     backup.inputStream().use { input ->
                                         when (val result = reader.validate(input)) {
@@ -383,6 +390,9 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                     Text("消息：${manifest.recordCounts["messages"] ?: 0}  日记：${manifest.recordCounts["diaries"] ?: 0}")
                     Text("动态：${manifest.recordCounts["moments"] ?: 0}  图片：${manifest.recordCounts["mediaFiles"] ?: 0}")
                     Text("完整恢复会替换当前数据。恢复前会自动保存当前数据；模型密钥不会恢复。", color = TextSecondary, fontSize = 12.sp)
+                    if (manifest.mediaIncluded) {
+                        Text("提示：外部图片，或较早版本未记录图片归属路径的媒体，可能无法自动对应恢复为头像。", color = TextSecondary, fontSize = 12.sp)
+                    }
                 }
             },
             confirmButton = { TextButton(onClick = { restoreSelection = BackupContentSelection.All; showRestoreSelection = true }) { Text("选择恢复内容") } },
@@ -400,25 +410,44 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             onConfirm = {
                 showRestoreSelection = false
                 scope.launch {
-                    val coordinator = BackupRestoreCoordinator(
-                        context, repository, settings, BackupSnapshotBuilder(repository, settings), writer,
-                            restoreExecutor = { payload, _ -> RestoreDatabaseExecutor(repository).restore(payload, restoreSelection) },
-                    )
-                    val result = withContext(Dispatchers.IO) {
-                        coordinator.restore(
-                            openInput = {
-                                ready.safetyFile?.inputStream()
-                                    ?: ready.uri?.let { context.contentResolver.openInputStream(it) }
-                                    ?: error("无法再次读取备份文件")
-                            },
-                            onProgress = { progress: BackupRestoreProgress -> state = BackupUiState.Working(progress.detail); progressDialog = progress.detail },
-                            options = restoreOptions.copy(contentSelection = restoreSelection),
+                    progressNumbers = null
+                    val progressGeneration = ++restoreProgressGeneration
+                    try {
+                        val coordinator = BackupRestoreCoordinator(
+                            context, repository, settings, BackupSnapshotBuilder(repository, settings), writer,
+                                restoreExecutor = { payload, progress -> RestoreDatabaseExecutor(repository).restore(payload, restoreSelection, progress) },
                         )
-                    }
-                    if (result.success) {
+                        val result = withContext(Dispatchers.IO) {
+                            coordinator.restore(
+                                openInput = {
+                                    ready.safetyFile?.inputStream()
+                                        ?: ready.uri?.let { context.contentResolver.openInputStream(it) }
+                                        ?: error("无法再次读取备份文件")
+                                },
+                                onProgress = { progress: BackupRestoreProgress ->
+                                    scope.launch(Dispatchers.Main.immediate) {
+                                        if (progressGeneration != restoreProgressGeneration) return@launch
+                                        state = BackupUiState.Working(progress.detail)
+                                        progressDialog = progress.detail
+                                        progressNumbers = progress.completed?.let { done -> progress.total?.let { total -> done to total } }
+                                    }
+                                },
+                                options = restoreOptions.copy(contentSelection = restoreSelection),
+                            )
+                        }
+                        if (result.success) {
                         state = BackupUiState.Working("正在重建记忆检索索引")
                         progressDialog = "正在重建记忆检索索引"
-                        val indexResult = withContext(Dispatchers.IO) { mainViewModel.rebuildAllMemoryIndexes() }
+                        progressNumbers = null
+                        val indexResult = withContext(Dispatchers.IO) {
+                            mainViewModel.rebuildAllMemoryIndexes { done, total ->
+                                scope.launch(Dispatchers.Main.immediate) {
+                                    if (progressGeneration != restoreProgressGeneration) return@launch
+                                    progressDialog = "正在重建记忆检索索引：$done / $total"
+                                    progressNumbers = done to total
+                                }
+                            }
+                        }
                         safetyBackups = refreshSafetyBackups()
                         val skipped = ready.issues.filter { it.code in restoreOptions.skipIssueCodes }.sumOf { it.count }
                         val detail = buildString {
@@ -429,11 +458,23 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                         }
                         state = BackupUiState.Success("恢复完成", detail)
                         progressDialog = null
+                        progressNumbers = null
                         resultDialog = "恢复完成" to detail
-                    } else {
-                        state = BackupUiState.Error(result.reason)
+                        } else {
+                            state = BackupUiState.Error(result.reason)
+                            resultDialog = "恢复失败" to result.reason
+                        }
+                    } catch (cancelled: CancellationException) {
+                        state = BackupUiState.Idle
+                        throw cancelled
+                    } catch (error: Throwable) {
+                        val detail = error.message ?: "恢复失败"
+                        state = BackupUiState.Error(detail)
+                        resultDialog = "恢复失败" to detail
+                    } finally {
+                        restoreProgressGeneration++
                         progressDialog = null
-                        resultDialog = "恢复失败" to result.reason
+                        progressNumbers = null
                     }
                 }
             },
@@ -452,7 +493,15 @@ fun BackupRestoreScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         AlertDialog(
             onDismissRequest = {},
             title = { Text("正在处理") },
-            text = { Text(detail, color = TextSecondary) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(detail, color = TextSecondary)
+                    progressNumbers?.let { (done, total) ->
+                        Text("$done / $total", color = Primary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        LinearProgressIndicator(progress = { (done.toFloat() / total.coerceAtLeast(1)).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+                    }
+                }
+            },
             confirmButton = { if (exportJob != null) TextButton(onClick = { exportJob?.cancel() }) { Text("取消") } },
         )
     }
@@ -638,6 +687,9 @@ private fun BackupSelectionDialog(
         text = {
             Column(Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(description, color = TextSecondary, fontSize = 12.sp)
+                if (!normalized.media && (normalized.roles || normalized.chats || normalized.settings)) {
+                    Text("未选择“图片和头像”：角色头像、群头像、用户头像、聊天图片和背景图不会迁移。", color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
+                }
                 TextButton(onClick = { onSelectionChange(BackupContentSelection.All) }) { Text("全部选择") }
                 items.forEachIndexed { index, (label, detail) ->
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {

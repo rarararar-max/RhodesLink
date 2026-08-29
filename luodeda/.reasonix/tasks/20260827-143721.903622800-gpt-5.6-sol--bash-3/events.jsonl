@@ -1,0 +1,2 @@
+{"sequence":1,"timestamp":"2026-08-27T23:47:09.6625115+08:00","event_type":"state_change","task_id":"20260827-143721.903622800-gpt-5.6-sol--bash-3","session_id":"20260827-143721.903622800-gpt-5.6-sol","state":"running","runtime_state":"alive"}
+{"sequence":2,"timestamp":"2026-08-27T23:50:04.3265825+08:00","event_type":"state_change","task_id":"20260827-143721.903622800-gpt-5.6-sol--bash-3","session_id":"20260827-143721.903622800-gpt-5.6-sol","state":"succeeded","runtime_state":"exited"}

@@ -74,11 +74,12 @@ private fun MemoryOverview(settings: SettingsRepository) {
             Text("记忆生成和记忆注入是分开的。关闭生成不会删除已有记忆；关闭注入只会阻止某个场景读取该来源。", fontSize = 12.sp, color = TextSecondary)
             Spacer(Modifier.padding(4.dp))
             SettingsSectionTitle("总开关")
-            SettingsSwitchCard("统一记忆系统", "允许生成、索引和召回 Memory V2 记忆。关闭后已有记忆保留，但不会参与对话。", settings.memoryV2Enabled) { settings.memoryV2Enabled = it }
+            SettingsSwitchCard("向量记忆", "允许生成、索引和召回 Memory V2 向量记忆。关闭后已有向量记忆保留且不参与对话；基础滚动摘要仍会按下方设置运行。", settings.memoryV2Enabled) { settings.memoryV2Enabled = it }
             SettingsSectionTitle("当前策略")
-            Text("生成开关决定是否创建新的 L1 和记忆向量；长期沉淀决定 L1 是否可合并为 L2/L3；注入开关决定每个场景可读取的来源。", fontSize = 12.sp, color = TextSecondary)
+            Text("滚动摘要是独立的基础连续性记忆；向量生成开关决定是否创建新的 L1 和记忆向量，长期沉淀决定 L1 是否可合并为 L2/L3，注入开关决定每个场景可读取的来源。", fontSize = 12.sp, color = TextSecondary)
             Spacer(Modifier.padding(4.dp))
             SettingsSwitchCard("摘要游标", "只处理上次提取后新增的消息", settings.summaryCursorEnabled) { settings.summaryCursorEnabled = it }
+            Text("滚动摘要默认保留最近25个完整互动轮次。摘要失败不会丢失历史，会在允许时后台退避重试。", fontSize = 12.sp, color = TextSecondary)
 }
 
 @Composable
@@ -103,6 +104,13 @@ private fun MemoryGeneration(settings: SettingsRepository) {
             SettingsSwitchCard("动态长期沉淀", "允许动态记忆继续合并为 L2/L3", settings.momentMemoryPromotionEnabled) { settings.momentMemoryPromotionEnabled = it }
             SettingsSwitchCard("评论长期沉淀", "允许评论记忆继续合并为 L2/L3", settings.momentCommentMemoryPromotionEnabled) { settings.momentCommentMemoryPromotionEnabled = it }
             SettingsSwitchCard("日记长期沉淀", "允许日记记忆继续合并为 L2/L3", settings.diaryMemoryPromotionEnabled) { settings.diaryMemoryPromotionEnabled = it }
+            SettingsSectionTitle("滚动摘要节奏")
+            Text("摘要在后台运行，不会打断聊天。系统默认保留最近 25 个完整互动轮次为原始上下文，其余历史按批次压缩；失败会保留待处理历史并按退避策略重试。", fontSize = 12.sp, color = TextSecondary)
+            SettingsParamSlider(settings, "private_summary_trigger_rounds", "私聊多少轮后总结", 20, 3f..200f, "完成指定次数的私聊互动后，在后台生成摘要。", step = 1f)
+            SettingsParamSlider(settings, "private_summary_raw_tail_rounds", "私聊保留最近原始轮次", 25, 1f..100f, "最近这些完整互动轮次不进入本次摘要，优先以原文参与下一次回复。默认25。", step = 1f)
+            SettingsParamSlider(settings, "group_summary_trigger_rounds", "群聊多少轮后总结", 20, 3f..200f, "完成指定次数的群聊 AI 回复轮后，在后台生成摘要。", step = 1f)
+            SettingsParamSlider(settings, "group_summary_raw_tail_rounds", "群聊保留最近原始轮次", 25, 1f..100f, "最近这些群聊互动轮次保留原文，避免多人对话被过早压缩。默认25。", step = 1f)
+            SettingsSwitchCard("摘要失败自动重试", "失败会保留历史，使用退避重试；关闭后可在后续聊天或调试页手动重试。", settings.summaryAutoRetryEnabled) { settings.summaryAutoRetryEnabled = it }
             SettingsParamSlider(settings, "memory_v2_promote_l1_threshold", "L1 合并为 L2 的阈值", 20, 5f..200f, "同一话题中，内容有效且重要度至少 20 的 L1 达到此条数后尝试合并。高重要度承诺和提醒可使用下方优先阈值。", step = 1f)
             SettingsParamSlider(settings, "memory_v2_promote_l2_threshold", "L2 合并为 L3 的阈值", 10, 3f..100f, "同一话题中，内容有效且重要度至少 20 的 L2 达到此条数后尝试合并；还需满足长期稳定性判断。", step = 1f)
             SettingsParamSlider(settings, "memory_v2_important_promotion_threshold", "重要承诺/提醒优先沉淀阈值", 2, 2f..20f, "高重要度、承诺或关怀提醒达到此条数后可优先尝试沉淀，可能早于上述常规阈值。", step = 1f)
@@ -126,7 +134,7 @@ private fun MemoryInjection(settings: SettingsRepository) {
             InjectionSwitch(settings, "group_chat", "MOMENT", "动态")
             InjectionSwitch(settings, "group_chat", "MOMENT_COMMENT", "动态评论")
             InjectionSwitch(settings, "group_chat", "RELATIONSHIP", "成员关系提示")
-            InjectionSwitch(settings, "group_chat", "MEMBER_PRIVATE_CHAT", "成员个人私聊记忆（仅点名时）")
+            InjectionSwitch(settings, "group_chat", "MEMBER_PRIVATE_CHAT", "成员可共享私聊记忆（仅点名、只读共享项）")
             SettingsParamSlider(settings, "group_member_memory_count", "群聊按需读取成员记忆数", 2, 0f..2f, "仅当用户本轮明确点名成员时，最多读取该成员多少条私聊背景。", step = 1f)
 
             SettingsSectionTitle("动态允许读取")

@@ -153,8 +153,8 @@ private fun GroupTab(settings: SettingsRepository) {
 
     Spacer(Modifier.height(12.dp)); SectionTitle("群聊旁白(线下/导演)")
     Text("只在线下和导演模式生效；线上模式固定不显示旁白。旁白用于动作、环境和气氛描写，段数或长度越高，群聊越像场景演绎，消息数量和生成消耗也会增加。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
-    ParamSlider(settings, "group_nar_seg_min", "最少旁白段数", 1, 0f..20f, "线下和导演模式每轮最少出现几段旁白。设为0时该模式可以没有旁白；线上模式始终不显示旁白。", pairKey = "group_nar_seg_max", pairDefaultVal = 1, isMinSide = true)
-    ParamSlider(settings, "group_nar_seg_max", "最多旁白段数", 1, 0f..20f, "线下和导演模式每轮最多出现几段旁白。默认1段；调高后动作和场景描写会更多。", pairKey = "group_nar_seg_min", pairDefaultVal = 1, isMinSide = false)
+    ParamSlider(settings, "group_nar_seg_min", "最少旁白段数", 1, 1f..20f, "线下和导演模式每轮至少出现1段旁白，用于承接当前动作、位置或场景变化；线上模式始终不显示旁白。", pairKey = "group_nar_seg_max", pairDefaultVal = 1, isMinSide = true)
+    ParamSlider(settings, "group_nar_seg_max", "最多旁白段数", 1, 1f..20f, "线下和导演模式每轮最多出现几段旁白。建议1-3段；调得过高会降低聊天节奏。", pairKey = "group_nar_seg_min", pairDefaultVal = 1, isMinSide = false)
     ParamSlider(settings, "group_nar_min", "旁白最小字数", 20, 0f..200f, "每段场景描写最少写几个字。建议20。太低（0）场景描写太短没画面感。", step = 5f, pairKey = "group_nar_max", pairDefaultVal = 100, isMinSide = true)
     ParamSlider(settings, "group_nar_max", "旁白最大字数", 100, 50f..300f, "每段场景描写最多写几个字。建议100。太高（超过200）群聊里大段旁白像在写小说而不是聊天。", step = 5f, pairKey = "group_nar_min", pairDefaultVal = 20, isMinSide = false)
 }

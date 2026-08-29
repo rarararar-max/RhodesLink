@@ -536,6 +536,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun getRelationship(operatorId: String, relatedOperatorId: String) = relationships.getRelationship(operatorId, relatedOperatorId)
     suspend fun insertRelationship(rel: Relationship) = relationships.insertRelationship(rel)
     suspend fun deleteRelationshipByOperator(operatorId: String) = relationships.deleteRelationshipByOperator(operatorId)
+    suspend fun replaceRelationships(operatorId: String, relationships: List<Relationship>) = this.relationships.replaceRelationships(operatorId, relationships)
     suspend fun bfsRelationGraph(centerId: String) = relationships.bfsRelationGraph(centerId)
     suspend fun getSharedMemoriesForOperator(operatorId: String) = relationships.getSharedMemoriesForOperator(operatorId)
 

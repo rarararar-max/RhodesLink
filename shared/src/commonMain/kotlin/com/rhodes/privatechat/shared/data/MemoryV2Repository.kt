@@ -52,7 +52,7 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
         db.memoryItemsQueries.getLastInsertedMemoryItemId().executeAsOne()
     }
 
-    suspend fun getMemoryItemsByOwner(ownerType: String, ownerId: String): List<MemoryItem> = withContext(Dispatchers.Default) {
+    suspend fun getMemoryItemsByOwner(ownerType: String, ownerId: String): List<MemoryItem> = withContext(DatabaseDispatcher.dispatcher) {
         db.memoryItemsQueries.getMemoryItemsByOwner(ownerType, ownerId) { id, ownerType_, ownerId_, memoryLevel, memoryType, sourceKind, sourceRefId, sessionId, content, nickname, importance, privacy, unmetNeed, location, emotionValence, eventTime, createdAt, updatedAt, expiresAt, status, scheduledTime, action, careType, topicKey, sourceActor, sourceTarget, lastUsedAt, usedCount, confidence, rawJson, vectorId ->
             MemoryItem(id, ownerType_, ownerId_, try { MemoryLevel.valueOf(memoryLevel) } catch (_: Exception) { MemoryLevel.L1 }, memoryType, try { MemorySourceKind.valueOf(sourceKind) } catch (_: Exception) { MemorySourceKind.PRIVATE_CHAT }, sourceRefId, sessionId, content, nickname, importance.toInt(), privacy, unmetNeed != 0L, location, emotionValence, eventTime, createdAt, updatedAt, expiresAt, status, scheduledTime, action, careType, topicKey, sourceActor, sourceTarget, lastUsedAt, usedCount.toInt(), confidence, rawJson, vectorId)
         }.executeAsList()

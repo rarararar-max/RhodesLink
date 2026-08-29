@@ -55,6 +55,12 @@ class KnowledgeBaseIndexService(
         return KnowledgeBaseIndexPlan(knowledgeBaseId, chunks, remote, remote)
     }
 
+    suspend fun planDirtyIndex(knowledgeBaseId: String): KnowledgeBaseIndexPlan {
+        val chunks = repository.getChunks(knowledgeBaseId).count { it.enabled && it.content.isNotBlank() && (it.indexedAt <= 0L || it.indexError.isNotBlank()) }
+        val remote = settings.vectorProviderMode == "third_party"
+        return KnowledgeBaseIndexPlan(knowledgeBaseId, chunks, remote, remote)
+    }
+
     /**
      * Starts work without tying it to a Compose screen. Remote indexing must be explicitly
      * confirmed by the UI because every chunk can make a paid API request.
@@ -131,6 +137,39 @@ class KnowledgeBaseIndexService(
         vectorService.clearOwnerMemory(OWNER_TYPE, knowledgeBaseId)
     }
 
+    suspend fun removeChunkVector(knowledgeBaseId: String, chunkId: String) {
+        cancelActiveIndex(knowledgeBaseId)
+        vectorService.clearSessionMemory(OWNER_TYPE, knowledgeBaseId, chunkId)
+    }
+
+    suspend fun markChunksPendingConfirmation(knowledgeBaseId: String) {
+        val chunks = repository.getChunks(knowledgeBaseId)
+        val hasIndexed = chunks.any { it.enabled && it.indexedAt > 0L && it.indexError.isBlank() }
+        repository.updateIndexStatus(knowledgeBaseId, if (hasIndexed) "partial_pending_confirm" else "pending_confirm", vectorService.currentEmbeddingSignature())
+    }
+
+    suspend fun enqueueDirtyChunks(knowledgeBaseId: String, remoteConfirmed: Boolean): Job {
+        val plan = planIndex(knowledgeBaseId)
+        require(!plan.requiresUserConfirmation || remoteConfirmed) { "远程向量化需要用户确认预计请求次数" }
+        return backgroundScope.launch { indexDirtyChunks(knowledgeBaseId) }
+    }
+
+    suspend fun indexDirtyChunks(knowledgeBaseId: String): KnowledgeBaseIndexResult {
+        val job = currentCoroutineContext()[Job]!!
+        stateMutex.withLock {
+            cancelledBooks.remove(knowledgeBaseId)
+            activeJobs.getOrPut(knowledgeBaseId) { mutableSetOf() } += job
+        }
+        return try {
+            index(knowledgeBaseId, rebuildAll = false) { _, _ -> }
+        } finally {
+            stateMutex.withLock {
+                activeJobs[knowledgeBaseId]?.remove(job)
+                if (activeJobs[knowledgeBaseId].isNullOrEmpty()) activeJobs.remove(knowledgeBaseId)
+            }
+        }
+    }
+
     private suspend fun index(
         knowledgeBaseId: String,
         rebuildAll: Boolean,
@@ -140,10 +179,14 @@ class KnowledgeBaseIndexService(
         if (isCancelled(knowledgeBaseId)) return@withLock KnowledgeBaseIndexResult(knowledgeBaseId, 0, 0, 0)
         val book = repository.get(knowledgeBaseId) ?: throw IllegalArgumentException("知识库不存在")
         val chunks = repository.getChunks(knowledgeBaseId).filter {
-            it.enabled && it.content.isNotBlank() && (rebuildAll || it.indexError.isNotBlank())
+            it.enabled && it.content.isNotBlank() && (rebuildAll || it.indexedAt <= 0L || it.indexError.isNotBlank())
         }
         val signature = vectorService.currentEmbeddingSignature()
-        repository.updateIndexStatus(knowledgeBaseId, "indexing:0/${chunks.size}", signature)
+        val hasUsableExistingChunks = !rebuildAll && repository.getChunks(knowledgeBaseId).any {
+            it.enabled && it.indexedAt > 0L && it.indexError.isBlank()
+        }
+        val indexingStatus = if (hasUsableExistingChunks) "partial_indexing:0/${chunks.size}" else "indexing:0/${chunks.size}"
+        repository.updateIndexStatus(knowledgeBaseId, indexingStatus, signature)
         if (rebuildAll) {
             repository.clearChunkIndexes(knowledgeBaseId)
             vectorService.clearOwnerMemory(OWNER_TYPE, knowledgeBaseId)
@@ -181,9 +224,11 @@ class KnowledgeBaseIndexService(
                 repository.updateChunkIndex(chunk.id, 0L, message)
             }
             onProgress(index + 1, chunks.size)
-            repository.updateIndexStatus(knowledgeBaseId, "indexing:${index + 1}/${chunks.size}", signature)
+            repository.updateIndexStatus(knowledgeBaseId, if (hasUsableExistingChunks) "partial_indexing:${index + 1}/${chunks.size}" else "indexing:${index + 1}/${chunks.size}", signature)
         }
+        val remainingDirty = repository.getChunks(knowledgeBaseId).any { it.enabled && (it.indexedAt <= 0L || it.indexError.isNotBlank()) }
         val status = when {
+            remainingDirty && succeeded > 0 -> "partial_pending_confirm"
             failed == 0 -> "ready"
             succeeded == 0 -> "failed"
             else -> "partial_failed"

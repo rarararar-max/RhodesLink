@@ -60,7 +60,7 @@ class BackupMediaCollector(private val context: Context) {
         val uri = Uri.parse(value)
         if (uri.scheme != "file") return null
         val file = File(uri.path ?: return null)
-        if (!file.isFile || !file.canRead()) return null
+        if (!file.isFile || !file.canRead() || file.length() <= 0L) return null
         val canonical = file.canonicalFile
         return canonical.takeIf { candidate -> ownedRoots.any { root -> candidate.path.startsWith(root.path + File.separator) } }
     }

@@ -24,7 +24,12 @@ enum class BackupRestoreStage {
     FAILED,
 }
 
-data class BackupRestoreProgress(val stage: BackupRestoreStage, val detail: String)
+data class BackupRestoreProgress(
+    val stage: BackupRestoreStage,
+    val detail: String,
+    val completed: Int? = null,
+    val total: Int? = null,
+)
 
 data class BackupRestoreResult(
     val success: Boolean,
@@ -47,11 +52,10 @@ class BackupRestoreCoordinator(
     private val fileReader: BackupFileReader = BackupFileReader(),
     private val restoreExecutor: suspend (BackupPayload, (BackupRestoreProgress) -> Unit) -> Unit,
 ) {
-    private val mutex = Mutex()
 
     suspend fun inspect(input: InputStream): BackupValidationResult = fileReader.validate(input)
 
-    suspend fun restore(openInput: () -> InputStream, onProgress: (BackupRestoreProgress) -> Unit, options: BackupRestoreOptions = BackupRestoreOptions()): BackupRestoreResult = mutex.withLock {
+    suspend fun restore(openInput: () -> InputStream, onProgress: (BackupRestoreProgress) -> Unit, options: BackupRestoreOptions = BackupRestoreOptions()): BackupRestoreResult = restoreMutex.withLock {
         var safetyBackup: File? = null
         var manifest: BackupManifest? = null
         var previousSettings: Map<String, String>? = null
@@ -193,5 +197,9 @@ class BackupRestoreCoordinator(
 
     private fun applySettings(values: Map<String, String>) {
         PortableSettings.apply(settings, values)
+    }
+
+    private companion object {
+        val restoreMutex = Mutex()
     }
 }

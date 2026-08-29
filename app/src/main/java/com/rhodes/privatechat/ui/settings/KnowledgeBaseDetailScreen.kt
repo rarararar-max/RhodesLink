@@ -73,14 +73,16 @@ fun KnowledgeBaseDetailScreen(
             Text(current.name, fontSize = 22.sp, color = TextPrimary)
             Text("${current.rawContent.length} 字 · $chunkCount 个分段 · $enabledChunkCount 个使用中 · 已关联 $roleCount 个角色", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 4.dp))
             Text("索引状态：${if (enabledChunkCount == 0) "没有可用分段" else indexStatusText(current.indexStatus)}", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 4.dp))
-            if (current.indexStatus == "pending") Text("内容已变更，需要重新索引后才能参与生成。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 4.dp))
+            if (current.indexStatus == "pending") Text("知识库或分段已变更，需要索引后才能参与生成。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 4.dp))
+            if (current.indexStatus == "partial_pending_confirm") Text("已完成索引的分段仍可使用；新增或修改的分段等待确认补充索引。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 4.dp))
             val canRetryFailed = current.indexStatus == "partial_failed"
-            DetailRow(if (indexing) "正在索引" else if (canRetryFailed) "重试失败分段" else "开始/重建索引", if (canRetryFailed) "保留已成功索引的分段，只重试失败分段" else if (settings.vectorProviderMode == "third_party") "远程模式会使用当前配置发起向量请求" else "使用当前本地向量模型建立索引", {
+            val canIndexPending = current.indexStatus == "partial_pending_confirm"
+            DetailRow(if (indexing) "正在索引" else if (canRetryFailed) "重试失败分段" else if (canIndexPending) "确认并补充索引" else "开始/重建索引", if (canRetryFailed) "保留已成功索引的分段，只重试失败分段" else if (canIndexPending) "只索引新增或修改的分段；其他已完成分段继续可用" else if (settings.vectorProviderMode == "third_party") "远程模式会使用当前配置发起向量请求" else "使用当前本地向量模型建立索引", {
                 if (indexing) return@DetailRow
                 if (settings.vectorProviderMode == "third_party") confirmRemoteIndex = true
                 else scope.launch {
                     indexing = true
-                    runCatching { if (canRetryFailed) viewModel.retryFailedKnowledgeBaseChunks(current.id) else viewModel.indexKnowledgeBase(current.id, true) }
+                    runCatching { if (canRetryFailed) viewModel.retryFailedKnowledgeBaseChunks(current.id) else if (canIndexPending) viewModel.indexPendingKnowledgeBaseChunks(current.id, true) else viewModel.indexKnowledgeBase(current.id, true) }
                         .onSuccess { message = "索引完成：成功 ${it.succeeded}，失败 ${it.failed}" }
                         .onFailure { message = "索引失败：${it.message ?: "未知错误"}" }
                     book = viewModel.getKnowledgeBase(current.id)
@@ -117,10 +119,10 @@ fun KnowledgeBaseDetailScreen(
     )
     if (confirmRemoteIndex) AlertDialog(
         onDismissRequest = { confirmRemoteIndex = false }, title = { Text("确认远程索引") },
-        text = { Text(if (current.indexStatus == "partial_failed") "将仅重试此前失败的分段，可能产生服务商费用。" else "将为 $chunkCount 个有效分段发起 Embedding 请求，可能产生服务商费用。") },
+        text = { Text(if (current.indexStatus == "partial_failed") "将仅重试此前失败的分段，可能产生服务商费用。" else if (current.indexStatus == "partial_pending_confirm") "将只为新增或修改的分段发起 Embedding 请求，已完成索引的分段不会重复请求。" else "将为 $chunkCount 个有效分段发起 Embedding 请求，可能产生服务商费用。") },
         confirmButton = { TextButton(enabled = !indexing, onClick = { scope.launch {
             indexing = true
-            runCatching { if (current.indexStatus == "partial_failed") viewModel.retryFailedKnowledgeBaseChunks(current.id) else viewModel.indexKnowledgeBase(current.id, true) }
+            runCatching { if (current.indexStatus == "partial_failed") viewModel.retryFailedKnowledgeBaseChunks(current.id) else if (current.indexStatus == "partial_pending_confirm") viewModel.indexPendingKnowledgeBaseChunks(current.id, true) else viewModel.indexKnowledgeBase(current.id, true) }
                 .onSuccess { message = "索引完成：成功 ${it.succeeded}，失败 ${it.failed}" }
                 .onFailure { message = "索引失败：${it.message ?: "未知错误"}" }
             book = viewModel.getKnowledgeBase(current.id)

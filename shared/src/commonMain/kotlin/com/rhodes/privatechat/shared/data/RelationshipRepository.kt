@@ -65,6 +65,23 @@ class RelationshipRepository(private val wrapper: DatabaseWrapper) {
         db.relationshipsQueries.deleteByOperator(operatorId)
     }
 
+    suspend fun replaceRelationships(operatorId: String, relationships: List<Relationship>) = withContext(DatabaseDispatcher.dispatcher) {
+        db.transaction {
+            db.relationshipsQueries.deleteByOperator(operatorId)
+            relationships.forEach { relationship ->
+                db.relationshipsQueries.insertRelationship(
+                    operatorId,
+                    relationship.relatedOperatorId,
+                    relationship.relatedOperatorName,
+                    relationship.type.name,
+                    relationship.intimacy.toLong(),
+                    if (relationship.isPreset) 1L else 0L,
+                    relationship.note
+                )
+            }
+        }
+    }
+
     suspend fun bfsRelationGraph(centerId: String): List<BfsNode> = withContext(Dispatchers.Default) {
         val visited = mutableSetOf(centerId)
         val queue = ArrayDeque<Pair<String, Int>>()

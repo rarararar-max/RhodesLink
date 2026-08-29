@@ -15,10 +15,10 @@ class KnowledgeBaseContextBuilder(
         val results = runCatching { vectorService.recall("knowledge_base", book.id, query, limit = 5, minScore = 0.18) }.getOrDefault(emptyList())
         var remaining = maxChars
         val blocks = results.mapNotNull { result ->
-            if (remaining < 120) return@mapNotNull null
+            if (remaining <= 0) return@mapNotNull null
             val heading = result.content.substringAfter("章节：", "").substringBefore("\n正文：").trim().escapeReservedMarkers()
             val content = result.content.substringAfter("正文：", result.content).trim().escapeReservedMarkers().take(remaining).trim()
-            if (content.length < 80) return@mapNotNull null
+            if (content.isBlank()) return@mapNotNull null
             remaining -= content.length
             "- [知识库：${book.name.escapeReservedMarkers()}]${heading.takeIf { it.isNotBlank() }?.let { "\n章节：$it" }.orEmpty()}\n$content"
         }
@@ -85,13 +85,34 @@ class KnowledgeBaseContextBuilder(
         val activeSignature = vectorService.currentEmbeddingSignature()
         val candidates = mutableListOf<KnowledgeBaseRecallPolicy.Candidate>()
         val seen = mutableSetOf<String>()
+        val queryEmbedding = withTimeoutOrNull(GROUP_QUERY_EMBEDDING_TIMEOUT_MS) {
+            try {
+                vectorService.embedForDiagnostics(query)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                emptyList()
+            }
+        }.orEmpty()
+        if (queryEmbedding.isEmpty()) return "无"
         var order = 0
         val visitedBookIds = mutableSetOf<String>()
         operatorIds.distinct().forEach { operatorId ->
             repository.getAssignments(operatorId).filter { it.enabled && it.knowledgeBaseId in allowedBookIds }.forEach { assignment ->
                 if (!visitedBookIds.add(assignment.knowledgeBaseId)) return@forEach
                 val book = books[assignment.knowledgeBaseId]?.takeIf { KnowledgeBaseRecallPolicy.isUsableIndex(it.indexStatus, it.indexedEmbeddingSignature, activeSignature) } ?: return@forEach
-                val result = runCatching { vectorService.recall("knowledge_base", book.id, query, limit = 1, minScore = 0.12) }.getOrDefault(emptyList()).firstOrNull() ?: return@forEach
+                val result = withTimeoutOrNull(GROUP_PER_BOOK_TIMEOUT_MS) {
+                    try {
+                        vectorService.searchWithEmbedding(VectorSearchRequest(
+                            ownerType = "knowledge_base", ownerId = book.id, query = query,
+                            limit = 1, minScore = GROUP_MIN_SCORE, candidateLimit = GROUP_CANDIDATE_LIMIT,
+                        ), queryEmbedding).firstOrNull()
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        throw cancelled
+                    } catch (_: Throwable) {
+                        null
+                    }
+                } ?: return@forEach
                 val text = result.content.substringAfter("正文：", result.content).trim().escapeReservedMarkers()
                 if (text.isBlank() || !seen.add(text)) return@forEach
                 candidates += KnowledgeBaseRecallPolicy.Candidate(book.name.escapeReservedMarkers(), text, result.similarity, order++)
@@ -105,10 +126,10 @@ class KnowledgeBaseContextBuilder(
         val blocks = selected.mapIndexedNotNull { index, candidate ->
             val separatorChars = if (index == 0) 0 else 1
             val remaining = maxChars - usedChars - separatorChars
-            if (remaining < 80) return@mapIndexedNotNull null
             val header = "- [知识库：${candidate.bookName.take(80)}]\n"
+            if (remaining <= header.length) return@mapIndexedNotNull null
             val excerpt = candidate.text.take(remaining - header.length).trim()
-            if (excerpt.length < 80) return@mapIndexedNotNull null
+            if (excerpt.isBlank()) return@mapIndexedNotNull null
             val block = header + excerpt
             usedChars += separatorChars + block.length
             block
@@ -118,5 +139,12 @@ class KnowledgeBaseContextBuilder(
 
     private fun String.escapeReservedMarkers(): String =
         KnowledgeBaseRecallPolicy.escapeReferenceText(this)
+
+    private companion object {
+        const val GROUP_QUERY_EMBEDDING_TIMEOUT_MS = 1_000L
+        const val GROUP_PER_BOOK_TIMEOUT_MS = 600L
+        const val GROUP_CANDIDATE_LIMIT = 60
+        const val GROUP_MIN_SCORE = 0.16
+    }
 
 }

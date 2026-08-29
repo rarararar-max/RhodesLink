@@ -73,9 +73,10 @@ object AiSupportContract {
         }.asReversed()
     }
 
-    fun historyAfter(messages: List<AiSupportMessage>, contextStartId: Long): List<AiMessage> =
+    fun historyAfter(messages: List<AiSupportMessage>, contextStartId: Long, agentId: String = ""): List<AiMessage> =
         recentHistory(messages.asSequence()
             .filter { it.id > contextStartId }
+            .filter { agentId.isBlank() || it.agentId.isBlank() || it.agentId == agentId }
             .map {
                 val content = if (it.imageSummary.isBlank()) it.text else buildString {
                     append(it.text)

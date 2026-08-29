@@ -212,36 +212,64 @@ class MainViewModel(
     suspend fun renameKnowledgeBase(id: String, name: String) = repository.knowledgeBases.rename(id, name)
     suspend fun updateKnowledgeBaseChunkEnabled(knowledgeBaseId: String, chunkId: String, enabled: Boolean) {
         repository.knowledgeBases.updateChunkEnabled(chunkId, enabled)
-        refreshKnowledgeBaseIndexAfterChunkChange(knowledgeBaseId)
+        refreshKnowledgeBaseIndexAfterChunkChange(knowledgeBaseId, chunkId, needsIndex = enabled)
     }
     suspend fun updateKnowledgeBaseChunkContent(knowledgeBaseId: String, chunkId: String, content: String) {
         repository.knowledgeBases.updateChunkContent(chunkId, content)
-        refreshKnowledgeBaseIndexAfterChunkChange(knowledgeBaseId)
+        refreshKnowledgeBaseIndexAfterChunkChange(knowledgeBaseId, chunkId, needsIndex = true)
     }
     suspend fun updateKnowledgeBaseChunk(knowledgeBaseId: String, chunkId: String, heading: String, content: String, keywords: String) {
         repository.knowledgeBases.updateChunk(chunkId, heading, content, keywords)
-        refreshKnowledgeBaseIndexAfterChunkChange(knowledgeBaseId)
+        refreshKnowledgeBaseIndexAfterChunkChange(knowledgeBaseId, chunkId, needsIndex = true)
     }
     suspend fun addKnowledgeBaseChunk(knowledgeBaseId: String, heading: String, content: String, keywords: String = "") {
-        repository.knowledgeBases.addChunk(knowledgeBaseId, heading, content, keywords)
-        refreshKnowledgeBaseIndexAfterChunkChange(knowledgeBaseId)
+        val chunk = repository.knowledgeBases.addChunk(knowledgeBaseId, heading, content, keywords)
+        refreshKnowledgeBaseIndexAfterChunkChange(knowledgeBaseId, chunk.id, needsIndex = true)
     }
     suspend fun deleteKnowledgeBaseChunk(knowledgeBaseId: String, chunkId: String) {
+        knowledgeBaseIndexService?.removeChunkVector(knowledgeBaseId, chunkId)
         repository.knowledgeBases.deleteChunk(knowledgeBaseId, chunkId)
-        refreshKnowledgeBaseIndexAfterChunkChange(knowledgeBaseId)
+        reconcileKnowledgeBaseStatus(knowledgeBaseId)
     }
-    private suspend fun refreshKnowledgeBaseIndexAfterChunkChange(knowledgeBaseId: String) {
+    private suspend fun refreshKnowledgeBaseIndexAfterChunkChange(knowledgeBaseId: String, chunkId: String, needsIndex: Boolean) {
         val service = knowledgeBaseIndexService ?: return
-        service.invalidate(knowledgeBaseId)
-        if (settings.vectorProviderMode == "local") service.enqueueIndex(knowledgeBaseId, remoteConfirmed = false)
+        service.removeChunkVector(knowledgeBaseId, chunkId)
+        if (!needsIndex) {
+            reconcileKnowledgeBaseStatus(knowledgeBaseId)
+        } else if (settings.vectorProviderMode == "local") {
+            service.enqueueDirtyChunks(knowledgeBaseId, remoteConfirmed = false)
+        } else {
+            service.markChunksPendingConfirmation(knowledgeBaseId)
+        }
+    }
+    private suspend fun reconcileKnowledgeBaseStatus(knowledgeBaseId: String) {
+        val service = knowledgeBaseIndexService ?: return
+        val chunks = repository.knowledgeBases.getChunks(knowledgeBaseId).filter { it.enabled && it.content.isNotBlank() }
+        val signature = com.rhodes.privatechat.shared.vector.EmbeddingConfigurationSignature.create(settings.vectorProviderMode, settings.vectorProvider, settings.vectorBaseUrl, settings.vectorModelName)
+        val status = when {
+            chunks.isEmpty() -> "pending"
+            chunks.all { it.indexedAt > 0L && it.indexError.isBlank() } -> "ready"
+            chunks.any { it.indexedAt > 0L && it.indexError.isBlank() } && chunks.any { it.indexError.isNotBlank() } -> "partial_failed"
+            chunks.any { it.indexedAt > 0L && it.indexError.isBlank() } -> "partial_pending_confirm"
+            else -> "pending"
+        }
+        repository.knowledgeBases.updateIndexStatus(knowledgeBaseId, status, signature)
     }
     suspend fun planKnowledgeBaseIndex(id: String): KnowledgeBaseIndexPlan =
         requireNotNull(knowledgeBaseIndexService) { "知识库索引服务不可用" }.planIndex(id)
+    suspend fun planPendingKnowledgeBaseIndex(id: String): KnowledgeBaseIndexPlan =
+        requireNotNull(knowledgeBaseIndexService) { "知识库索引服务不可用" }.planDirtyIndex(id)
     suspend fun indexKnowledgeBase(id: String, remoteConfirmed: Boolean, onProgress: (Int, Int) -> Unit = { _, _ -> }): KnowledgeBaseIndexResult {
         val service = requireNotNull(knowledgeBaseIndexService) { "知识库索引服务不可用" }
         val plan = service.planIndex(id)
         require(!plan.requiresUserConfirmation || remoteConfirmed) { "远程向量化需要用户确认预计请求次数" }
         return service.indexBook(id, onProgress)
+    }
+    suspend fun indexPendingKnowledgeBaseChunks(id: String, remoteConfirmed: Boolean): KnowledgeBaseIndexResult {
+        val service = requireNotNull(knowledgeBaseIndexService) { "知识库索引服务不可用" }
+        val plan = service.planDirtyIndex(id)
+        require(!plan.requiresUserConfirmation || remoteConfirmed) { "远程向量化需要用户确认预计请求次数" }
+        return service.indexDirtyChunks(id)
     }
     suspend fun retryFailedKnowledgeBaseChunks(id: String, onProgress: (Int, Int) -> Unit = { _, _ -> }): KnowledgeBaseIndexResult =
         requireNotNull(knowledgeBaseIndexService) { "知识库索引服务不可用" }.retryFailedChunks(id, onProgress)
@@ -543,7 +571,7 @@ class MainViewModel(
                 val validHiddenIds = settings.hiddenIds.filterTo(mutableSetOf()) { it in existingSessionIds }
                 if (validHiddenIds.size != settings.hiddenIds.size) settings.hiddenIds = validHiddenIds
                 appState.refreshAllSessions(currentSessions, validHiddenIds)
-                DebugLogger.diagnostic("Startup/RoleRecovery", "recovered=$recovered, operatorCount=${repository.getAllOperatorsSync().size}, sessionCount=${repository.getAllSessionsSync().size}")
+                DebugLogger.log("Startup/RoleRecovery", "recovered=$recovered, operatorCount=${repository.getAllOperatorsSync().size}, sessionCount=${repository.getAllSessionsSync().size}")
             } catch (e: Exception) {
                 DebugLogger.diagnostic("Startup/RoleRecoveryFailed", "error=${e.javaClass.simpleName}:${e.message?.take(180)}")
                 DebugLogger.diagnostic("Special/StartupRecoveryFailed", "error=${e.javaClass.simpleName}:${e.message?.take(180)}")
@@ -1782,13 +1810,14 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         return null
     }
 
-    fun startDispatch(id: String, task: String, duration: Int, budget: Int, operatorIds: List<String>, onSuccess: () -> Unit = {}) =
-        dispatchViewModel.startDispatch(id, task, duration, budget, operatorIds, onSuccess)
+    fun startDispatch(id: String, task: String, duration: Int, budget: Int, operatorIds: List<String>, onComplete: (String?) -> Unit = {}) =
+        dispatchViewModel.startDispatch(id, task, duration, budget, operatorIds, onComplete)
     fun finishDispatch(dispatchId: String) = dispatchViewModel.finishDispatch(dispatchId)
 
     fun deleteGroup(groupSessionId: String, onComplete: () -> Unit = {}) = groupChatViewModel.deleteGroup(groupSessionId, onComplete)
 
     fun isAutoGroupChatEnabled(groupId: String): Boolean = groupChatViewModel.isAutoGroupChatEnabled(groupId)
+    fun autoGroupChatStatus(groupId: String): String = groupChatViewModel.autoGroupChatStatus(groupId)
     fun setAutoGroupChatEnabled(groupId: String, enabled: Boolean) = groupChatViewModel.setAutoGroupChatEnabled(groupId, enabled)
     fun resetAutoGroupChatTimer(groupId: String) = groupChatViewModel.resetAutoGroupChatTimer(groupId)
     fun stopAutoGroupChat(groupId: String) = groupChatViewModel.stopAutoGroupChat(groupId)
@@ -2998,12 +3027,14 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 DebugLogger.conversationStep(debugOperationId, "日记", "准备资料", "完成", "已准备日记上下文")
                 DebugLogger.attachOperationModule(debugOperationId, "完整请求", sharedUtils.logAiCallText(diaryMessages), sensitive = true)
                 Log.d("RHODES_DIARY", "请求消息数=${diaryMessages.size}")
+                DebugLogger.conversationStep(debugOperationId, "日记", "模型请求", "进行中", "首次请求，超时25秒")
                 var text = try {
                     withTimeout(25_000) { sharedUtils.chat(diaryMessages) }.trim()
                 } catch (e: Exception) {
                     Log.e("RHODES_DIARY", "API调用失败: ${e.message}", e)
                     throw e
                 }
+                DebugLogger.conversationStep(debugOperationId, "日记", "模型请求", "成功", "首次返回${text.length}字")
                 Log.d("RHODES_DIARY", "日记生成返回 length=${text.length}")
                 DebugLogger.attachOperationModule(debugOperationId, "AI原始返回", text, sensitive = true)
                 text = PlainGeneratedContentNormalizer.normalize(
@@ -3011,24 +3042,29 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                     minChars = settings.diaryMinChars,
                     maxChars = settings.diaryMaxChars
                 ).orEmpty()
+                DebugLogger.conversationStep(debugOperationId, "日记", "返回解析", if (text.isNotBlank()) "成功" else "失败", if (text.isNotBlank()) "正文格式校验通过" else "返回为空或不符合日记长度要求")
                 if (text.isNotBlank() && looksThirdPersonDiary(text, op)) {
                     DebugLogger.conversationStep(debugOperationId, "日记", "格式检查", "重试", "首次内容不是第一人称日记")
                     val rewriteInstruction = "【重写要求】上一版像第三人称记录，不像日记。请改写成${op.name}本人第一人称日记，全篇用“我”，不要用角色名、她、他或这名干员称呼自己。直接输出日记文本。"
                     val retryMessages = diaryMessages + AiMessage("user", rewriteInstruction)
+                    DebugLogger.conversationStep(debugOperationId, "日记", "模型请求", "进行中", "格式重写，超时25秒")
                     text = PlainGeneratedContentNormalizer.normalize(
                         raw = withTimeout(25_000) { sharedUtils.chat(retryMessages) }.trim(),
                         minChars = settings.diaryMinChars,
                         maxChars = settings.diaryMaxChars
                     ).orEmpty()
+                    DebugLogger.conversationStep(debugOperationId, "日记", "返回解析", if (text.isNotBlank() && !looksThirdPersonDiary(text, op)) "成功" else "失败", "格式重写完成")
                 }
                 sharedUtils.trackTokens("diary", diaryMessages, text)
                 if (text.isNotBlank() && !looksThirdPersonDiary(text, op)) {
                     val now = System.currentTimeMillis()
+                    DebugLogger.conversationStep(debugOperationId, "日记", "本地保存", "进行中", "正在写入日记")
                     val diary = repository.insertDiary(Diary(operatorId = operatorId, operatorName = op.name, content = text, date = yesterdayStr, createdAt = now))
                     if (settings.memoryV2Enabled && settings.diaryMemoryGenerationEnabled) {
                         memoryV2Pipeline.ingestDiary(operatorId, op.name, "diary_$now", text)
                     }
                     DebugLogger.log("Diary", "日记生成成功: ${text.take(50)}")
+                    DebugLogger.conversationStep(debugOperationId, "日记", "本地保存", "成功", "日记ID=${diary.id}")
                     DebugLogger.attachOperationModule(debugOperationId, "最终保存", text, sensitive = true)
                     DebugLogger.finishOperation(debugOperationId, "成功", "已生成并保存日记")
                     return diary
@@ -3038,7 +3074,10 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 throw e
             } catch (e: Exception) {
                 DebugLogger.log("Diary", "日记生成异常: ${e.message?.take(100)}")
-                DebugLogger.finishOperation(debugOperationId, "失败", e.message?.take(120) ?: "日记生成失败")
+                val reason = if (e is kotlinx.coroutines.TimeoutCancellationException) "模型请求超时" else if (e.message?.contains("401") == true || e.message?.contains("403") == true) "模型服务认证失败" else "${e.javaClass.simpleName}:${e.message?.take(80) ?: "日记生成失败"}"
+                DebugLogger.conversationStep(debugOperationId, "日记", "本轮总览", "失败", reason)
+                DebugLogger.diagnostic("Diary/Failed", "operatorId=$operatorId,error=${e.javaClass.simpleName},reason=$reason")
+                DebugLogger.finishOperation(debugOperationId, "失败", reason)
                 return null
             }
     }

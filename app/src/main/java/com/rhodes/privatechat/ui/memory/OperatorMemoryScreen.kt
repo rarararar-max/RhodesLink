@@ -39,10 +39,23 @@ fun OperatorMemoryScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
     var levelFilter by remember { mutableStateOf("全部等级") }
     var privacyFilter by remember { mutableStateOf("全部权限") }
     var newestFirst by remember { mutableStateOf(true) }
-    LaunchedEffect(operator.id) { items = viewModel.getOperatorMemoryItems(operator.id); loading = false }
+    suspend fun loadItems() {
+        loading = true
+        message = ""
+        try {
+            items = viewModel.getOperatorMemoryItems(operator.id)
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            message = "加载记忆失败：${error.message?.take(80) ?: "未知错误"}"
+        } finally {
+            loading = false
+        }
+    }
+    LaunchedEffect(operator.id) { loadItems() }
     Scaffold(
         topBar = { TopAppBar(title = { Text("${operator.name}的记忆") }, navigationIcon = { TextButton(onClick = onBack) { Text("返回") } }, actions = {
-            TextButton(enabled = !working, onClick = { scope.launch { items = viewModel.getOperatorMemoryItems(operator.id) } }) { Text("刷新") }
+            TextButton(enabled = !working && !loading, onClick = { scope.launch { loadItems() } }) { Text("刷新") }
             TextButton(enabled = !working, onClick = { scope.launch { eligibleCount = viewModel.countEligibleMemoryIndexes(operator.id); pendingRebuild = true } }) { Text(if (working) "处理中" else "重建索引") }
             TextButton(enabled = settings.memoryV2Enabled, onClick = { showAdd = true }) { Text("新增") }
         }) }
@@ -66,7 +79,14 @@ fun OperatorMemoryScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
                         (levelFilter == "全部等级" || it.memoryLevel.name == levelFilter) &&
                         (privacyFilter == "全部权限" || privacyLabel(it.privacy) == privacyFilter)
                 }.let { if (newestFirst) it.sortedByDescending { item -> item.createdAt } else it.sortedBy { item -> item.createdAt } }
-                if (filtered.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("没有符合筛选条件的记忆", color = TextSecondary) }
+                if (filtered.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(if (message.startsWith("加载记忆失败")) "记忆加载失败" else "没有符合筛选条件的记忆", color = TextSecondary)
+                        if (message.startsWith("加载记忆失败")) {
+                            TextButton(onClick = { scope.launch { loadItems() } }) { Text("重试加载", color = Primary) }
+                        }
+                    }
+                }
                 else LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(filtered, key = { it.id }) { item ->
                         Card {

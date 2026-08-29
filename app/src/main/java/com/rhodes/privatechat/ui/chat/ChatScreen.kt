@@ -499,7 +499,9 @@ fun ChatScreen(
                     hasMore = hasMoreMessages,
                     forceScrollToLatest = rawMessages.size <= forceScrollThroughMessageCount,
                     onDisplayState = { parsedCount, displayCount ->
-                        DebugLogger.diagnostic("PrivateChat/UiRenderState", "sessionId=$displaySessionId, rawCount=${rawMessages.size}, parsedCount=$parsedCount, displayCount=$displayCount")
+                        val detail = "sessionId=$displaySessionId, rawCount=${rawMessages.size}, parsedCount=$parsedCount, displayCount=$displayCount"
+                        if (rawMessages.isNotEmpty() && parsedCount == 0) DebugLogger.diagnostic("PrivateChat/UiRenderFallback", detail)
+                        else DebugLogger.log("PrivateChat/UiRenderState", detail)
                     },
                     modifier = Modifier.weight(1f)
                 )
@@ -807,12 +809,14 @@ private fun PropShopDialog(
                         Spacer(modifier = Modifier.height(6.dp))
                         Row(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(PrimaryContainer).clickable {
                             if (balance < PROP_PRICE) { Toast.makeText(context, "余额不足", Toast.LENGTH_SHORT).show(); return@clickable }
-                            val err = viewModel.buyProp("看穿眼镜", context)
-                            if (err != null) { Toast.makeText(context, err, Toast.LENGTH_SHORT).show(); return@clickable }
-                            loading = true
-                            scope.launch {
-                                try {
-                                     val op = viewModel.selectedOperator.value
+                             val err = viewModel.buyProp("看穿眼镜", context)
+                             if (err != null) { Toast.makeText(context, err, Toast.LENGTH_SHORT).show(); return@clickable }
+                             loading = true
+                             scope.launch {
+                                 val operationId = DebugLogger.beginOperation("看穿眼镜", viewModel.selectedOperator.value?.name ?: "干员", "内心独白")
+                                 try {
+                                      DebugLogger.conversationStep(operationId, "看穿眼镜", "扣费", "成功", "已扣除${PROP_PRICE}龙门币")
+                                      val op = viewModel.selectedOperator.value
                                      val profile = viewModel.getUserProfile()
                                      val operatorName = op?.name ?: "干员"
                                      val persona = op?.privatePrompt?.ifBlank { op?.description } ?: "无"
@@ -853,34 +857,54 @@ private fun PropShopDialog(
 <recent_chat>
 ${recentChats.ifBlank { "暂无" }}
 </recent_chat>"""
-                                     val requestMessages = listOf(AiMessage("system", innerPrompt), AiMessage("user", recentChatMaterial))
-                                     var thought: String? = null
-                                     for (attempt in 0..1) {
+                                      val requestMessages = listOf(AiMessage("system", innerPrompt), AiMessage("user", recentChatMaterial))
+                                      var thought: String? = null
+                                      for (attempt in 0..1) {
                                          val messages = if (attempt == 0) requestMessages else requestMessages + AiMessage(
                                              "user", "上一版不合格。请重写：只输出100~200字、当前干员的第一人称心理独白纯文本，不要标题、旁白、第三人称、JSON或任何解释。"
                                          )
-                                          val result = withTimeoutOrNull(45_000) {
-                                              viewModel.sharedUtils.chat(
+                                          DebugLogger.conversationStep(operationId, "看穿眼镜", "模型请求", "进行中", "第${attempt + 1}次，超时45秒")
+                                           val result = withTimeoutOrNull(45_000) {
+                                               viewModel.sharedUtils.chat(
                                                   messages,
                                                   if (attempt == 0) "InnerThoughts" else "InnerThoughtsRetry",
                                                   maxOutputTokens = 300,
                                                   temperature = 0.7
                                               )
-                                          } ?: ""
-                                         viewModel.sharedUtils.trackTokens("inner_monologue", messages, result)
-                                         thought = cleanInnerThought(result, operatorName)
-                                         if (thought != null) break
-                                     }
-                                     if (thought == null) {
-                                         settings.addLmb(PROP_PRICE)
-                                         innerThoughts = "读取失败，本次费用已退回。"
-                                     } else {
-                                         innerThoughts = thought
-                                     }
+                                           }
+                                          if (result == null) {
+                                              DebugLogger.conversationStep(operationId, "看穿眼镜", "模型请求", "超时", "第${attempt + 1}次请求45秒未完成")
+                                              continue
+                                          }
+                                          DebugLogger.conversationStep(operationId, "看穿眼镜", "模型请求", "成功", "第${attempt + 1}次返回${result.length}字")
+                                          viewModel.sharedUtils.trackTokens("inner_monologue", messages, result)
+                                          thought = cleanInnerThought(result, operatorName)
+                                          if (thought == null) DebugLogger.conversationStep(operationId, "看穿眼镜", "返回解析", "失败", "返回内容不符合第一人称内心独白格式")
+                                          if (thought != null) break
+                                      }
+                                      if (thought == null) {
+                                          val refunded = settings.addLmb(PROP_PRICE)
+                                          DebugLogger.conversationStep(operationId, "看穿眼镜", "退款", "成功", "已退还${PROP_PRICE}龙门币，当前余额$refunded")
+                                          DebugLogger.finishOperation(operationId, "失败", "模型超时或返回格式不合格，费用已退回")
+                                          innerThoughts = "读取失败：模型超时或返回格式不符合要求，本次费用已退回。"
+                                      } else {
+                                          innerThoughts = thought
+                                          DebugLogger.conversationStep(operationId, "看穿眼镜", "返回解析", "成功", "第一人称内心独白校验通过")
+                                          DebugLogger.finishOperation(operationId, "成功", "已读取内心独白")
+                                      }
                                     // 内心独白只在弹窗显示，不插入聊天记录
-                                } catch (_: Exception) {
-                                    settings.addLmb(PROP_PRICE)
-                                    innerThoughts = "读取失败，本次费用已退回。"
+                                 } catch (e: Exception) {
+                                     val refunded = settings.addLmb(PROP_PRICE)
+                                     val reason = when {
+                                         e.message?.contains("401") == true || e.message?.contains("403") == true -> "模型服务认证失败，请检查 API Key"
+                                         e.message?.contains("429") == true -> "模型服务限流，请稍后重试"
+                                         e.message?.contains("quota", true) == true || e.message?.contains("insufficient", true) == true -> "模型服务额度不足"
+                                         e is kotlinx.coroutines.TimeoutCancellationException || e.message?.contains("timeout", true) == true -> "模型请求超时"
+                                         else -> "模型请求或本地处理失败"
+                                     }
+                                     DebugLogger.conversationStep(operationId, "看穿眼镜", "本轮总览", "失败", "$reason；已退还${PROP_PRICE}龙门币，当前余额$refunded")
+                                     DebugLogger.diagnostic("InnerThoughts/Failed", "operatorId=${viewModel.selectedOperator.value?.id.orEmpty()},error=${e.javaClass.simpleName},reason=$reason,refunded=$PROP_PRICE")
+                                     innerThoughts = "读取失败：$reason。本次费用已退回。"
                                 }
                                  finally {
                                      loading = false

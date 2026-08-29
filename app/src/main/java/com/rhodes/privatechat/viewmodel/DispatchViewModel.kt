@@ -16,6 +16,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -138,8 +141,11 @@ class DispatchViewModel(
         .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
         .removePrefix("下面是").removePrefix("作为AI")
 
-    fun startDispatch(id: String, task: String, duration: Int, budget: Int, operatorIds: List<String>, onSuccess: () -> Unit = {}) {
-        if (!startingLock.compareAndSet(false, true)) { Log.w(TAG, "[startDispatch] 已在启动中，忽略重复调用 id=$id"); return }
+    fun startDispatch(id: String, task: String, duration: Int, budget: Int, operatorIds: List<String>, onComplete: (String?) -> Unit = {}) {
+        if (!startingLock.compareAndSet(false, true)) {
+            scope.launch { notifyStartResult(onComplete, "已有派遣正在启动，请稍候") }
+            return
+        }
         generatingDispatchIds.add(id)
         val segmentsPerHour = mapOf(1 to 5, 3 to 8, 5 to 12)
         val totalSeg = segmentsPerHour[duration] ?: 5
@@ -152,21 +158,25 @@ class DispatchViewModel(
             try {
                 if (task.isBlank() || duration !in setOf(1, 3, 5) || budget < 100 || operatorIds.size != 5 || operatorIds.toSet().size != 5) {
                     Log.w(TAG, "[startDispatch] 派遣参数无效 task=$task duration=$duration budget=$budget ops=${operatorIds.size}")
+                    notifyStartResult(onComplete, "派遣参数无效，请重新选择任务、小队和预算")
                     return@launch
                 }
                 // Validate before creating a record or charging the player. The UI check is
                 // only a convenience; this method is also callable from other entry points.
                 sharedUtils.chatConfigurationError()?.let {
                     Log.w(TAG, "[startDispatch] AI配置无效: $it")
+                    notifyStartResult(onComplete, it)
                     return@launch
                 }
                 val activeDispatches = repository.getActiveDispatches()
                 if (activeDispatches.size >= 2) {
                     Log.w(TAG, "[startDispatch] 已有两个小队在派遣，取消")
+                    notifyStartResult(onComplete, "当前已有两支小队在派遣中")
                     return@launch
                 }
                 if (repository.getDispatch(id) != null) {
                     Log.w(TAG, "[startDispatch] 派遣ID已存在，拒绝覆盖 id=$id")
+                    notifyStartResult(onComplete, "派遣创建重复，请重新发起")
                     return@launch
                 }
                 val activeOperatorIds = activeDispatches.flatMap { it.operatorIds.split(",") }
@@ -175,6 +185,7 @@ class DispatchViewModel(
                     .toSet()
                 if (operatorIds.any { it in activeOperatorIds }) {
                     Log.w(TAG, "[startDispatch] 存在已派遣干员，取消")
+                    notifyStartResult(onComplete, "小队中有干员正在派遣中")
                     return@launch
                 }
 
@@ -198,6 +209,7 @@ class DispatchViewModel(
                             netProfit = 0
                         ))
                     }
+                    notifyStartResult(onComplete, "预算不足，请调整金额后重试")
                     return@launch
                 }
                 budgetSpent = true
@@ -205,7 +217,7 @@ class DispatchViewModel(
 
                 // 3. 导航到进度页
                 Log.d(TAG, "[startDispatch] 导航到进度页")
-                onSuccess()
+                notifyStartResult(onComplete, null)
 
                 // 3. 生成开局段（轻量，20s 超时）
                 val ops = operatorIds.mapNotNull { repository.getOperator(it) }
@@ -213,19 +225,35 @@ class DispatchViewModel(
                 val startOk = generateDispatchStartSuspend(id, task, budget, operatorIds, totalSeg, interval, dispatchStartTime)
                 if (!startOk) {
                     Log.e(TAG, "[startDispatch] 开局段生成失败，退款")
-                    settings.addLmb(budget)
-                    val failed = repository.getDispatch(id)
-                    if (failed != null) repository.insertDispatch(failed.copy(status = "cancelled", endTime = System.currentTimeMillis(), netProfit = 0))
-                    refreshAllOperatorStatus()
+                    // The user may have cancelled while the AI request was in flight. Refund
+                    // only a still-generating record so that path cannot receive a second refund.
+                    cancelGeneratingWithRefund(id, "【开局生成失败，预算已退还】")
                     return@launch
                 }
-                // 更新为 active 状态
+                // generateDispatchStartSuspend already changes the record to active. Do not
+                // overwrite a cancellation that won the race after its database update.
                 val currentRecord = repository.getDispatch(id)
-                if (currentRecord != null) {
+                if (currentRecord?.status == "generating" && currentRecord.endTime <= 0L) {
                     repository.insertDispatch(currentRecord.copy(status = "active"))
                 }
                 Log.i(TAG, "[startDispatch] 开局段生成成功，后续段落由后台生成")
             } catch (e: CancellationException) {
+                withContext(NonCancellable) {
+                    if (budgetSpent) {
+                        cancelGeneratingWithRefund(id, "【启动已取消，预算已退还】")
+                    } else {
+                        repository.getDispatch(id)?.let { record ->
+                            if (record.status == "generating" && record.endTime <= 0L) {
+                                repository.insertDispatch(record.copy(
+                                    logChain = "【启动已取消，未扣除预算】",
+                                    status = "cancelled",
+                                    endTime = System.currentTimeMillis(),
+                                    netProfit = 0
+                                ))
+                            }
+                        }
+                    }
+                }
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "[startDispatch] 启动异常: ${e.message}")
@@ -245,11 +273,16 @@ class DispatchViewModel(
                         }
                     }
                 }
+                notifyStartResult(onComplete, "派遣启动失败：${e.message?.take(60) ?: "请稍后重试"}")
             } finally {
                 startingLock.set(false)
                 generatingDispatchIds.remove(id)
             }
         }
+    }
+
+    private suspend fun notifyStartResult(onComplete: (String?) -> Unit, error: String?) {
+        withContext(Dispatchers.Main.immediate) { onComplete(error) }
     }
 
     fun finishDispatch(dispatchId: String) {

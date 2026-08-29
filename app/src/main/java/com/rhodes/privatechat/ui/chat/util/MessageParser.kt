@@ -69,6 +69,36 @@ object MessageParser {
         return parsed
     }
 
+    /** Preserve a readable history when legacy or malformed payloads cannot be expanded. */
+    fun fallbackMessages(
+        messages: List<ChatMessageEntity>,
+        isGroup: Boolean,
+        senderColor: (String) -> Color = { Primary },
+        senderAvatar: (String) -> String = { "" },
+        aiName: String = "",
+        aiAvatarUri: String = "",
+        userAvatarUri: String = "",
+        restartAt: Long = 0L
+    ): List<ChatUiMessage> = messages.map { msg ->
+        val sender = when {
+            msg.isMe -> "我"
+            isGroup -> msg.senderName.ifBlank { "群聊消息" }
+            else -> aiName.ifBlank { msg.senderName.ifBlank { "角色" } }
+        }
+        ChatUiMessage(
+            id = msg.id,
+            senderName = sender,
+            senderColor = if (isGroup) senderColor(sender) else Primary,
+            content = sanitizeVisibleSegmentContent(safeDisplayText(msg.content)).ifBlank { "[历史消息格式异常，已保留原始记录]" },
+            timestamp = msg.timestamp,
+            isMe = msg.isMe,
+            avatarUri = if (msg.isMe) userAvatarUri else if (isGroup) senderAvatar(sender) else aiAvatarUri,
+            mode = msg.mode,
+            isArchived = isArchived(msg, restartAt),
+            originalMessageId = msg.id
+        )
+    }
+
     private fun giftMsg(msg: ChatMessageEntity, avatarUri: String, restartAt: Long): ChatUiMessage {
         val root = runCatching { json.parseToJsonElement(msg.content).jsonObject }.getOrNull()
         val imageUri = root?.get("imageUri")?.jsonPrimitive?.contentOrNull.orEmpty()
@@ -129,7 +159,9 @@ object MessageParser {
             val root = json.parseToJsonElement(msg.content)
             val arr = when (root) {
                 is JsonArray -> root
-                is JsonObject -> (root["messages"] as? JsonArray) ?: (root["segments"] as? JsonArray) ?: JsonArray(emptyList())
+                is JsonObject -> (root["messages"] as? JsonArray) ?: (root["segments"] as? JsonArray)
+                    ?: root.takeIf { it["speaker"] != null || it["sender"] != null || it["name"] != null }?.let { JsonArray(listOf(it)) }
+                    ?: JsonArray(emptyList())
                 else -> JsonArray(emptyList())
             }
             val result = arr.mapIndexedNotNull { idx, el ->
@@ -151,7 +183,10 @@ object MessageParser {
                         avatarUri = senderAvatar(name), mode = msg.mode, isArchived = isArchived(msg, restartAt), originalMessageId = msg.id, segmentIndex = idx, isAiSegment = true)
                 }
             }
-            result
+            if (result.isEmpty() && msg.content.isNotBlank()) {
+                listOf(ChatUiMessage(msg.id, msg.senderName.ifBlank { "群聊消息" }, Gray100, safeDisplayText(msg.content).ifBlank { "[群聊消息格式异常]" }, msg.timestamp,
+                    avatarUri = senderAvatar(msg.senderName), mode = msg.mode, isArchived = isArchived(msg, restartAt), originalMessageId = msg.id))
+            } else result
         } catch (_: Exception) {
             listOf(ChatUiMessage(msg.id, msg.senderName, Gray100, safeDisplayText(msg.content), msg.timestamp,
                 avatarUri = senderAvatar(msg.senderName), mode = msg.mode, isArchived = isArchived(msg, restartAt), originalMessageId = msg.id))

@@ -166,6 +166,55 @@ class BackupFileContainerTest {
     }
 
     @Test
+    fun rewritesCanonicalFileAvatarUriWhenSerializedTextDiffers() {
+        val original = "file:/D:/old/images/../images/avatar.jpg"
+        val item = BackupMediaItem("avatar", "media/images/avatar.jpg", originalUri = original)
+        val payload = BackupPayload(
+            content = ExportPayload(type = "full_backup", operators = listOf(OperatorExport("amiya", "阿米娅", avatarUri = "file:///D:/old/images/avatar.jpg"))),
+            media = listOf(item),
+        )
+
+        val rewritten = BackupRestorePayloadRewriter.rewriteMediaUris(payload, mapOf("avatar" to File("D:/new/avatar.jpg")))
+
+        assertEquals(File("D:/new/avatar.jpg").toURI().toString(), rewritten.content.operators.orEmpty().single().avatarUri)
+    }
+
+    @Test
+    fun rewritesAndroidPrivateFilesAliasesForUserOperatorAndGroupAvatars() {
+        val mediaUri = "file:///data/data/com.example.app/files/images/avatar.jpg"
+        val aliasUri = "file:///data/user/0/com.example.app/files/images/avatar.jpg"
+        val item = BackupMediaItem("avatar", "media/images/avatar.jpg", originalUri = mediaUri)
+        val payload = BackupPayload(
+            content = ExportPayload(
+                type = "full_backup",
+                operators = listOf(OperatorExport("op", "角色", avatarUri = aliasUri)),
+                sessions = listOf(SessionExport("group", "group", "群聊", avatarUri = aliasUri)),
+                settings = mapOf("user_avatar_uri" to "s:$aliasUri"),
+            ),
+            media = listOf(item),
+        )
+
+        val target = File("D:/new/avatar.jpg").toURI().toString()
+        val rewritten = BackupRestorePayloadRewriter.rewriteMediaUris(payload, mapOf("avatar" to File("D:/new/avatar.jpg")))
+
+        assertEquals(target, rewritten.content.operators.orEmpty().single().avatarUri)
+        assertEquals(target, rewritten.content.sessions.orEmpty().single().avatarUri)
+        assertEquals("s:$target", rewritten.content.settings?.get("user_avatar_uri"))
+    }
+
+    @Test
+    fun doesNotMatchAndroidPrivateFilesAcrossPackages() {
+        val mediaUri = "file:///data/data/com.example.one/files/images/avatar.jpg"
+        val otherPackageUri = "file:///data/user/0/com.example.two/files/images/avatar.jpg"
+        val item = BackupMediaItem("avatar", "media/images/avatar.jpg", originalUri = mediaUri)
+        val payload = BackupPayload(content = ExportPayload(type = "full_backup", operators = listOf(OperatorExport("op", "角色", avatarUri = otherPackageUri))), media = listOf(item))
+
+        val rewritten = BackupRestorePayloadRewriter.rewriteMediaUris(payload, mapOf("avatar" to File("D:/new/avatar.jpg")))
+
+        assertEquals(otherPackageUri, rewritten.content.operators.orEmpty().single().avatarUri)
+    }
+
+    @Test
     fun restoreMaintenanceFenceAdvancesGeneration() {
         val before = BackupRestoreMaintenance.currentGeneration()
         val started = BackupRestoreMaintenance.begin()

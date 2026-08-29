@@ -321,8 +321,8 @@ private fun bfsLabel(parentName: String, childName: String, type: RelationshipTy
         RelationshipType.FAMILY -> "家人"; else -> ""
     }
     if (ch.isEmpty()) return ""
-    if (isReverse) return "${childName}把你当【$ch】"
-    return "${childName}的【$ch】"
+    if (isReverse) return "${childName}是你的【$ch】"
+    return "你是${childName}的【$ch】"
 }
 
 @Composable private fun RelationsSection(operatorName: String, graphNodes: List<BfsNode>, isLoading: Boolean, userRelation: String = "", operators: List<OperatorEntity> = emptyList(), userAvatarUri: String = "", onNameClick: (String) -> Unit = {}) {

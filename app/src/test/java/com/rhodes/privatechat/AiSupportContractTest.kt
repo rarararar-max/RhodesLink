@@ -3,12 +3,39 @@ package com.rhodes.privatechat
 import com.rhodes.privatechat.shared.model.AiMessage
 import com.rhodes.privatechat.ui.support.AiSupportContract
 import com.rhodes.privatechat.viewmodel.AiSupportMessage
+import com.rhodes.privatechat.viewmodel.sanitizeSupportConversation
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AiSupportContractTest {
+    @Test
+    fun restoredConversationRemovesInvalidAndDuplicateLazyListKeys() {
+        val restored = listOf(
+            AiSupportMessage(1, "user", "旧内容"),
+            AiSupportMessage(-1, "assistant", "无效内容"),
+            AiSupportMessage(1, "assistant", "保留这条"),
+            AiSupportMessage(2, "assistant", "正常内容"),
+        )
+
+        val sanitized = sanitizeSupportConversation(restored)
+
+        assertEquals(listOf(1L, 2L), sanitized.map { it.id })
+        assertEquals("保留这条", sanitized.first().text)
+    }
+
+    @Test
+    fun restoredConversationUsesAValidMaximumIdForFutureContext() {
+        val sanitized = sanitizeSupportConversation(listOf(
+            AiSupportMessage(-5, "user", "无效"),
+            AiSupportMessage(3, "assistant", "有效"),
+        ))
+
+        assertEquals(3L, sanitized.maxOf { it.id })
+        assertTrue(10L.coerceAtMost(sanitized.maxOf { it.id }) <= sanitized.maxOf { it.id })
+    }
+
     @Test
     fun localRetrievalNormalizesTraditionalChineseAndUsesIntentTerms() {
         val sections = listOf(
@@ -53,6 +80,19 @@ class AiSupportContractTest {
         val history = AiSupportContract.historyAfter(messages, contextStartId = 2)
 
         assertEquals(listOf("新客服问题"), history.map { it.content })
+    }
+
+    @Test
+    fun historyAfterExcludesMessagesFromOtherSupportAgents() {
+        val messages = listOf(
+            AiSupportMessage(1, "user", "旧客服问题", agentId = "nuan"),
+            AiSupportMessage(2, "assistant", "旧客服回答", agentId = "nuan"),
+            AiSupportMessage(3, "user", "当前客服问题", agentId = "yu"),
+        )
+
+        val history = AiSupportContract.historyAfter(messages, contextStartId = 0, agentId = "yu")
+
+        assertEquals(listOf("当前客服问题"), history.map { it.content })
     }
 
     @Test

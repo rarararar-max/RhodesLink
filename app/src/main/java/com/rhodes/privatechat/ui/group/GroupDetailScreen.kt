@@ -151,11 +151,16 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                 userAvatarUri = profile.avatarUri,
                 restartAt = groupRestartAt
             )
+            val safeParsed = if (parsed.isEmpty() && groupMessages.isNotEmpty()) {
+                com.rhodes.privatechat.util.DebugLogger.diagnostic("GroupChat/ParseFallback", "groupId=$groupId,rawCount=${groupMessages.size},reason=empty_parse_result")
+                MessageParser.fallbackMessages(groupMessages, isGroup = true, senderColor = senderColor, senderAvatar = ::senderAvatar, userAvatarUri = profile.avatarUri, restartAt = groupRestartAt)
+            } else parsed
             ChatTrace.d("GroupScreen", "parsed group=$groupId raw=${groupMessages.size} parsed=${parsed.size}")
-            parsed
+            safeParsed
         } catch (e: Exception) {
             ChatTrace.e("GroupScreen", "parse.ERROR group=$groupId raw=${groupMessages.size} err=${e.message}", e)
-            emptyList()
+            com.rhodes.privatechat.util.DebugLogger.diagnostic("GroupChat/ParseFallback", "groupId=$groupId,rawCount=${groupMessages.size},error=${e.javaClass.simpleName}")
+            MessageParser.fallbackMessages(groupMessages, isGroup = true, senderColor = senderColor, senderAvatar = ::senderAvatar, userAvatarUri = profile.avatarUri, restartAt = groupRestartAt)
         }
     }
 
@@ -163,25 +168,6 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
         if (groupId.isNotBlank()) displayEvents = kotlinx.coroutines.withTimeoutOrNull(1_500L) { viewModel.getDisplayEvents(groupId) }.orEmpty()
     }
 
-    LaunchedEffect(uiMessages, voiceEnabled, allOperators) {
-        val unseen = uiMessages.filter { message ->
-            val key = "${message.originalMessageId}:${message.segmentIndex}:${message.id}"
-            key !in seenSpeechKeys
-        }
-        if (unseen.isNotEmpty()) {
-            seenSpeechKeys = seenSpeechKeys + unseen.map { "${it.originalMessageId}:${it.segmentIndex}:${it.id}" }
-            if (voiceEnabled) {
-                val speeches = unseen
-                    .filter { !it.isMe && !it.isSystem && !it.isNarration && it.timestamp >= enteredAt }
-                    .mapNotNull { message ->
-                        allOperators.find { it.name == message.senderName }?.takeIf { it.voiceName.isNotBlank() }?.let { op ->
-                            ChatSpeech(message.content, op.voiceName, op.voiceSpeed.toDoubleOrNull() ?: 1.0, settings.getOperatorVoiceVolume(op.id), "${message.originalMessageId}:${message.segmentIndex}:${message.id}")
-                        }
-                    }
-                if (speeches.isNotEmpty()) chatTtsPlayer.enqueue(speeches)
-            }
-        }
-    }
 
     LaunchedEffect(groupMessages.size, uiMessages.size, groupLoading) {
         ChatTrace.d("GroupScreen", "group=$groupId raw=${groupMessages.size} parsed=${uiMessages.size} loading=$groupLoading")
@@ -280,12 +266,25 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                         displayEvents = viewModel.getDisplayEvents(groupId)
                         order
                     },
+                    onSegmentRevealed = { message ->
+                        val key = "${message.originalMessageId}:${message.segmentIndex}:${message.id}"
+                        if (key !in seenSpeechKeys) {
+                            seenSpeechKeys = seenSpeechKeys + key
+                            if (voiceEnabled && !message.isMe && !message.isSystem && !message.isNarration && message.timestamp >= enteredAt) {
+                                allOperators.find { it.name == message.senderName }?.takeIf { it.voiceName.isNotBlank() }?.let { op ->
+                                    chatTtsPlayer.enqueue(listOf(ChatSpeech(message.content, op.voiceName, op.voiceSpeed.toDoubleOrNull() ?: 1.0, settings.getOperatorVoiceVolume(op.id), key)))
+                                }
+                            }
+                        }
+                    },
                     onLoadOlder = { viewModel.loadOlderGroupMessages() },
                     isLoadingOlder = isLoadingOlder,
                     hasMore = hasMoreMessages,
                     forceScrollToLatest = groupMessages.size <= forceScrollThroughMessageCount,
                     onDisplayState = { parsedCount, displayCount ->
-                        com.rhodes.privatechat.util.DebugLogger.diagnostic("GroupChat/UiRenderState", "groupId=$groupId, rawCount=${groupMessages.size}, parsedCount=$parsedCount, displayCount=$displayCount")
+                        val detail = "groupId=$groupId, rawCount=${groupMessages.size}, parsedCount=$parsedCount, displayCount=$displayCount"
+                        if (groupMessages.isNotEmpty() && parsedCount == 0) com.rhodes.privatechat.util.DebugLogger.diagnostic("GroupChat/UiRenderFallback", detail)
+                        else com.rhodes.privatechat.util.DebugLogger.log("GroupChat/UiRenderState", detail)
                     },
                     modifier = Modifier.weight(1f)
                 )

@@ -44,3 +44,6 @@ docker-compose.override.yml
 *.swp
 *.swo
 *~
+
+# Reasonix 会话记录
+/罗德岛/

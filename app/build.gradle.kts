@@ -1,9 +1,18 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
 }
+
+// 从本地 local.properties 读取签名密码（该文件被 .gitignore 忽略，不会进仓库）
+val localProperties = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+val keystorePassword = localProperties.getProperty("KEYSTORE_PASSWORD") ?: ""
 
 kotlin {
     compilerOptions {
@@ -35,10 +44,10 @@ android {
 
     signingConfigs {
         create("release") {
-            storeFile = rootProject.file("release-key.jks")
-            storePassword = "rhodes2026"
-            keyAlias = "rhodesChat"
-            keyPassword = "rhodes2026"
+            storeFile = rootProject.file("release-key-v2.jks")
+            storePassword = keystorePassword
+            keyAlias = "rhodeschat"
+            keyPassword = keystorePassword
         }
     }
 

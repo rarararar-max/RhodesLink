@@ -79,6 +79,8 @@ class MemoryV2Pipeline(
     suspend fun ingestPrivateChat(sessionId: String, operatorId: String, operatorName: String, messages: List<ChatMessage>, currentRound: Int): Boolean {
         if (!settings.memoryV2Enabled || !settings.privateMemoryGenerationEnabled) return false
         if (messages.isEmpty()) return true
+        val operationId = DebugLogger.beginOperation("私聊记忆提取", operatorName, sessionId)
+        DebugLogger.conversationStep(operationId, "私聊记忆提取", "提取窗口", "进行中", "消息=${messages.size}，范围=${messages.first().id}-${messages.last().id}，阈值=${settings.privateMemoryExtractionThreshold}")
         val sourceText = messages.joinToString("\n") { formatPrivateMessage(it) }
         val source = MemorySourceItem(
             sourceKind = MemorySourceKind.PRIVATE_CHAT,
@@ -90,9 +92,15 @@ class MemoryV2Pipeline(
             createdAt = System.currentTimeMillis()
         )
         val sourceId = repository.insertMemorySource(source)
-        if (repository.isMemorySourceFinished(sourceId)) return true
+        if (repository.isMemorySourceFinished(sourceId)) {
+            DebugLogger.conversationStep(operationId, "私聊记忆提取", "本轮总览", "成功", "重复窗口已处理")
+            return true
+        }
         val claimToken = sourceId.takeIf { it > 0 }?.let { repository.claimMemorySource(it, System.currentTimeMillis()) }
-            ?: return false
+            ?: run {
+                DebugLogger.conversationStep(operationId, "私聊记忆提取", "本轮总览", "失败", "记忆队列正被其他任务处理")
+                return false
+            }
         val leaseRenewal = launchLeaseRenewal(sourceId, claimToken)
         kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]?.invokeOnCompletion { leaseRenewal.cancel() }
 
@@ -110,6 +118,7 @@ class MemoryV2Pipeline(
             com.rhodes.privatechat.util.DebugLogger.log("MemoryV2", "私聊L1提取失败，已保留队列等待重试: ${e.message?.take(80)}")
             leaseRenewal.cancel()
             repository.retryMemorySource(sourceId, claimToken, System.currentTimeMillis() + 60_000L, e.message?.take(160) ?: "提取失败")
+            DebugLogger.conversationStep(operationId, "私聊记忆提取", "本轮总览", "失败", "${e.javaClass.simpleName}；已进入队列，60秒后至少重试一次")
             return false
         }
         if (settings.getMemoryTimelineEpoch(sessionId) > source.createdAt) {
@@ -118,7 +127,8 @@ class MemoryV2Pipeline(
             return false
         }
         if (l1.isNotEmpty()) {
-            saveMemoryItems(l1)
+            val saved = saveMemoryItems(l1)
+            DebugLogger.conversationStep(operationId, "私聊记忆提取", "本地保存", "成功", "模型有效=${l1.size}条，新增=${saved.size}条，重复=${l1.size - saved.size}条")
             repository.saveMemoryBatch(MemoryBatch(
                 ownerType = "operator",
                 ownerId = operatorId,
@@ -137,12 +147,15 @@ class MemoryV2Pipeline(
             maybePromotePrivateMemory(operatorId, thresholdL1 = settings.memoryV2PromoteL1Threshold, thresholdL2 = settings.memoryV2PromoteL2Threshold)
         }
         leaseRenewal.cancel()
+        DebugLogger.conversationStep(operationId, "私聊记忆提取", "本轮总览", "成功", if (l1.isEmpty()) "提取完成，本批没有值得长期保存的信息" else "提取完成，已保存${l1.size}条有效记忆")
         return true
     }
 
     suspend fun ingestGroupChat(groupId: String, groupName: String, messages: List<ChatMessage>, memberIds: List<String>): Boolean {
         if (!settings.memoryV2Enabled || !settings.groupMemoryGenerationEnabled) return false
         if (messages.isEmpty()) return true
+        val operationId = DebugLogger.beginOperation("群聊记忆提取", groupName, groupId)
+        DebugLogger.conversationStep(operationId, "群聊记忆提取", "提取窗口", "进行中", "消息=${messages.size}，范围=${messages.first().id}-${messages.last().id}，阈值=${settings.groupMemoryExtractionThreshold}")
         val sourceText = messages.joinToString("\n") { formatGroupMessage(groupName, it) }
         // A group has many extraction windows.  Use the window identity rather than the group
         // identity so deleting one source in memory management cannot purge the whole group.
@@ -157,9 +170,15 @@ class MemoryV2Pipeline(
             createdAt = System.currentTimeMillis()
         )
         val sourceId = repository.insertMemorySource(source)
-        if (repository.isMemorySourceFinished(sourceId)) return true
+        if (repository.isMemorySourceFinished(sourceId)) {
+            DebugLogger.conversationStep(operationId, "群聊记忆提取", "本轮总览", "成功", "重复窗口已处理")
+            return true
+        }
         val claimToken = sourceId.takeIf { it > 0 }?.let { repository.claimMemorySource(it, System.currentTimeMillis()) }
-            ?: return false
+            ?: run {
+                DebugLogger.conversationStep(operationId, "群聊记忆提取", "本轮总览", "失败", "记忆队列正被其他任务处理")
+                return false
+            }
         val leaseRenewal = launchLeaseRenewal(sourceId, claimToken)
         kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]?.invokeOnCompletion { leaseRenewal.cancel() }
         val l1 = try {
@@ -168,6 +187,7 @@ class MemoryV2Pipeline(
             com.rhodes.privatechat.util.DebugLogger.log("MemoryV2", "群聊L1提取失败，已保留队列等待重试: ${e.message?.take(80)}")
             leaseRenewal.cancel()
             repository.retryMemorySource(sourceId, claimToken, System.currentTimeMillis() + 60_000L, e.message?.take(160) ?: "提取失败")
+            DebugLogger.conversationStep(operationId, "群聊记忆提取", "本轮总览", "失败", "${e.javaClass.simpleName}；已进入队列，60秒后至少重试一次")
             return false
         }
         if (settings.getMemoryTimelineEpoch(groupId) > source.createdAt) {
@@ -177,6 +197,7 @@ class MemoryV2Pipeline(
         }
         if (l1.isNotEmpty()) {
             val savedGroupItems = saveMemoryItems(l1)
+            DebugLogger.conversationStep(operationId, "群聊记忆提取", "本地保存", "成功", "模型有效=${l1.size}条，新增=${savedGroupItems.size}条，重复=${l1.size - savedGroupItems.size}条")
             repository.saveMemoryBatch(MemoryBatch(
                 ownerType = "group",
                 ownerId = groupId,
@@ -196,6 +217,7 @@ class MemoryV2Pipeline(
             maybePromoteOwnerMemory("group", groupId, MemorySourceKind.GROUP_CHAT, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
         }
         leaseRenewal.cancel()
+        DebugLogger.conversationStep(operationId, "群聊记忆提取", "本轮总览", "成功", if (l1.isEmpty()) "提取完成，本批没有值得长期保存的信息" else "提取完成，已保存${l1.size}条有效记忆")
         return true
     }
 
@@ -1107,13 +1129,8 @@ class MemoryV2Pipeline(
 
 
     private fun expiresAtFor(type: String, level: MemoryLevel): Long {
-        if (level == MemoryLevel.L3 || type in setOf("preference_expression", "agreement_commitment")) return Long.MAX_VALUE
-        val days = when (type) {
-            "emotion_state", "behavior_state", "physiological_state" -> 21L
-            "intent_wish", "care_reminder" -> 30L
-            else -> 30L
-        }
-        return System.currentTimeMillis() + days * 86_400_000L
+        val configuredDays = settings.cleanDaysMemoryItems
+        return if (configuredDays < 0) Long.MAX_VALUE else System.currentTimeMillis() + configuredDays * 86_400_000L
     }
 
     private data class PromotionTopic(val topicKey: String, val items: List<MemoryItem>)

@@ -213,6 +213,13 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
         db.memoryItemsQueries.updateMemoryItemContent(content, updatedAt, id)
     }
 
+    suspend fun updateActiveMemoryExpiry(expiresAt: Long, updatedAt: Long) = withContext(Dispatchers.Default) {
+        db.transaction {
+            db.memoryItemsQueries.updateActiveMemoryItemExpiry(expiresAt, updatedAt)
+            db.vectorMemoriesQueries.updateMemoryItemVectorExpiry(expiresAt)
+        }
+    }
+
     suspend fun clearAllMemoryItemVectorIds() = withContext(Dispatchers.Default) {
         db.memoryItemsQueries.clearAllMemoryItemVectorIds()
     }

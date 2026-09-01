@@ -2746,6 +2746,8 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
 
     // === Data delegation ===
     suspend fun getDataStats(): DataViewModel.DataStats = dataViewModel.getDataStats(_operators.value.size, _moments.value.size)
+
+    suspend fun updateMemoryRetention(days: Int) = dataViewModel.updateMemoryRetention(days)
     suspend fun cleanupAllExpired() = dataViewModel.cleanupAllExpired()
     suspend fun getMessageRanking(): List<SenderCount> = dataViewModel.getMessageRanking()
     suspend fun getDailyRanking(): List<SenderCount> = dataViewModel.getDailyRanking()

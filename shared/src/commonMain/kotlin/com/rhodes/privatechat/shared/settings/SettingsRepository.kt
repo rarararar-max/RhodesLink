@@ -906,35 +906,41 @@ class SettingsRepository(private val settings: ObservableSettings) {
     /** Migrates only Data Management's historical unsupported zero values to the permanent sentinel. */
     fun normalizeDataManagementRetentionValues() {
         listOf(
-            "clean_days_messages" to 30,
-            "clean_days_anchors" to 7,
-            "clean_days_diaries" to 30,
-            "clean_days_moments" to 7,
-            "clean_days_dispatches" to 30,
+            "clean_days_messages" to -1,
+            "clean_days_anchors" to -1,
+            "clean_days_diaries" to -1,
+            "clean_days_moments" to -1,
+            "clean_days_dispatches" to -1,
+            "clean_days_memory_items" to -1,
         ).forEach { (key, defaultDays) ->
             if (settings.getInt(key, defaultDays) == 0) settings.putInt(key, -1)
         }
     }
 
     var cleanDaysMessages: Int
-        get() = cleanupRetentionDays("clean_days_messages", 30)
+        get() = cleanupRetentionDays("clean_days_messages", -1)
         set(value) = settings.putInt("clean_days_messages", value.coerceIn(-1, 3650))
 
     var cleanDaysAnchors: Int
-        get() = cleanupRetentionDays("clean_days_anchors", 7)
+        get() = cleanupRetentionDays("clean_days_anchors", -1)
         set(value) = settings.putInt("clean_days_anchors", value.coerceIn(-1, 3650))
 
     var cleanDaysDiaries: Int
-        get() = cleanupRetentionDays("clean_days_diaries", 30)
+        get() = cleanupRetentionDays("clean_days_diaries", -1)
         set(value) = settings.putInt("clean_days_diaries", value.coerceIn(-1, 3650))
 
     var cleanDaysMoments: Int
-        get() = cleanupRetentionDays("clean_days_moments", 7)
+        get() = cleanupRetentionDays("clean_days_moments", -1)
         set(value) = settings.putInt("clean_days_moments", value.coerceIn(-1, 3650))
 
     var cleanDaysDispatches: Int
-        get() = cleanupRetentionDays("clean_days_dispatches", 30)
+        get() = cleanupRetentionDays("clean_days_dispatches", -1)
         set(value) = settings.putInt("clean_days_dispatches", value.coerceIn(-1, 3650))
+
+    /** Retention for structured L1/L2/L3 vector memories. -1 keeps them permanently. */
+    var cleanDaysMemoryItems: Int
+        get() = cleanupRetentionDays("clean_days_memory_items", -1)
+        set(value) = settings.putInt("clean_days_memory_items", value.coerceIn(-1, 3650))
 
     // === 催眠设置 ===
     var hypnosisCmd: String

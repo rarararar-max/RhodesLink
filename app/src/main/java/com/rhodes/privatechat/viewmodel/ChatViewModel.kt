@@ -45,6 +45,7 @@ import com.rhodes.privatechat.viewmodel.shared.MemorySurface
 import com.rhodes.privatechat.viewmodel.shared.MemoryV2Pipeline
 import com.rhodes.privatechat.viewmodel.shared.UnifiedMemoryContext
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -173,6 +174,7 @@ class ChatViewModel(
     private val chatAiJobs = ConcurrentHashMap<String, Job>()
     private val promptBuildJobs = ConcurrentHashMap<String, Job>()
     private val privateMaintenanceJobs = ConcurrentHashMap<String, Job>()
+    private val privateMaintenancePending = ConcurrentHashMap.newKeySet<String>()
     private val privateSummaryRetryJobs = ConcurrentHashMap<String, Job>()
     private val privateSummaryMutexes = ConcurrentHashMap<String, Mutex>()
     private val pendingUserMessageIds = ConcurrentHashMap<String, MutableSet<Long>>()
@@ -2385,27 +2387,36 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
 
     /** Maintenance must never keep the visible chat turn or its per-session lock alive. */
     private fun schedulePrivatePostReplyMaintenance(session: ChatSession) {
+        privateMaintenancePending.add(session.id)
         if (privateMaintenanceJobs[session.id]?.isActive == true) return
-        viewModelScope.launch(Dispatchers.Default) {
-            privateMaintenanceJobs[session.id] = coroutineContext[Job]!!
-            runCatching {
-                val sessionCounter = settings.getSessionMessageCounter(session.id) + 1
-                settings.putSessionMessageCounter(session.id, sessionCounter)
-                if (sessionCounter >= shortTermThreshold && generateShortTermSummary(session)) {
-                    settings.putSessionMessageCounter(session.id, 0)
-                } else {
-                    val status = settings.getRollingSummaryStatus(session.id)
-                    if (status.state == "failed" && settings.summaryAutoRetryEnabled && status.nextRetryAt > System.currentTimeMillis()) {
-                        schedulePrivateSummaryRetry(session, status.nextRetryAt)
+        val job = viewModelScope.launch(Dispatchers.Default, start = CoroutineStart.LAZY) {
+            try {
+                // A reply can arrive while extraction is waiting on the model. Drain the pending
+                // marker before exiting so that fast consecutive chats never lose an extraction pass.
+                while (privateMaintenancePending.remove(session.id)) {
+                    runCatching {
+                        val sessionCounter = settings.getSessionMessageCounter(session.id) + 1
+                        settings.putSessionMessageCounter(session.id, sessionCounter)
+                        if (sessionCounter >= shortTermThreshold && generateShortTermSummary(session)) {
+                            settings.putSessionMessageCounter(session.id, 0)
+                        } else {
+                            val status = settings.getRollingSummaryStatus(session.id)
+                            if (status.state == "failed" && settings.summaryAutoRetryEnabled && status.nextRetryAt > System.currentTimeMillis()) {
+                                schedulePrivateSummaryRetry(session, status.nextRetryAt)
+                            }
+                        }
+                        extractPrivateMemoryIfNeeded(session)
+                    }.onFailure { error ->
+                        DebugLogger.diagnostic("PrivateChat/PostReplyMaintenanceFailed", "sessionId=${session.id},error=${error.javaClass.simpleName}")
                     }
                 }
-                extractPrivateMemoryIfNeeded(session)
-            }.onFailure { error ->
-                DebugLogger.diagnostic("PrivateChat/PostReplyMaintenanceFailed", "sessionId=${session.id},error=${error.javaClass.simpleName}")
-            }.also {
-                if (privateMaintenanceJobs[session.id] == coroutineContext[Job]) privateMaintenanceJobs.remove(session.id)
+            } finally {
+                privateMaintenanceJobs.remove(session.id, coroutineContext[Job])
+                // Close the small race between the last pending check and removing this job.
+                if (privateMaintenancePending.contains(session.id)) schedulePrivatePostReplyMaintenance(session)
             }
         }
+        if (privateMaintenanceJobs.putIfAbsent(session.id, job) == null) job.start() else job.cancel()
     }
 
     private fun schedulePrivateSummaryRetry(session: ChatSession, retryAt: Long) {

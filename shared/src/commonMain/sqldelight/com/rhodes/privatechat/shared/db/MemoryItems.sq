@@ -101,6 +101,9 @@ SELECT last_insert_rowid();
 updateMemoryItemVectorId:
 UPDATE memory_items SET vectorId = ?, updatedAt = ? WHERE id = ?;
 
+updateActiveMemoryItemExpiry:
+UPDATE memory_items SET expiresAt = ?, updatedAt = ? WHERE status = 'active';
+
 updateMemoryItemContent:
 UPDATE memory_items SET content = ?, updatedAt = ? WHERE id = ?;
 

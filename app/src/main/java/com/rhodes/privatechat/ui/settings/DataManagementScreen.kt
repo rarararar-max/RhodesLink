@@ -62,11 +62,12 @@ fun DataManagementScreen(
 
     val items = remember(stats) {
         listOf(
-            CleanupItem(Icons.Default.AutoDelete, "记忆锚点", stats.anchors, "clean_days_anchors", 7),
-            CleanupItem(Icons.Default.Forum, "聊天记录", stats.messages, "clean_days_messages", 30),
-            CleanupItem(Icons.AutoMirrored.Filled.MenuBook, "干员日记", stats.diaries, "clean_days_diaries", 30),
-            CleanupItem(Icons.Default.Share, "动态记录", stats.moments, "clean_days_moments", 7),
-            CleanupItem(Icons.AutoMirrored.Filled.SendToMobile, "派遣历史", stats.dispatches, "clean_days_dispatches", 30)
+            CleanupItem(Icons.Default.AutoDelete, "记忆锚点", stats.anchors, "clean_days_anchors", -1),
+            CleanupItem(Icons.Default.Psychology, "向量记忆", stats.memoryItems, "clean_days_memory_items", -1),
+            CleanupItem(Icons.Default.Forum, "聊天记录", stats.messages, "clean_days_messages", -1),
+            CleanupItem(Icons.AutoMirrored.Filled.MenuBook, "干员日记", stats.diaries, "clean_days_diaries", -1),
+            CleanupItem(Icons.Default.Share, "动态记录", stats.moments, "clean_days_moments", -1),
+            CleanupItem(Icons.AutoMirrored.Filled.SendToMobile, "派遣历史", stats.dispatches, "clean_days_dispatches", -1)
         )
     }
 
@@ -114,6 +115,7 @@ fun DataManagementScreen(
             items.forEach { item ->
                 val current = when (item.prefKey) {
                     "clean_days_anchors" -> settings.cleanDaysAnchors
+                    "clean_days_memory_items" -> settings.cleanDaysMemoryItems
                     "clean_days_messages" -> settings.cleanDaysMessages
                     "clean_days_diaries" -> settings.cleanDaysDiaries
                     "clean_days_moments" -> settings.cleanDaysMoments
@@ -144,10 +146,13 @@ fun DataManagementScreen(
                                 modifier = Modifier.clip(RoundedCornerShape(6.dp))
                                      .background(if (selected) PrimaryContainer else Color.Transparent)
                                      .clickable {
-                                         settings.putInt(item.prefKey, days)
-                                         refreshKey++
-                                         android.widget.Toast.makeText(context, "已保存新的保留规则", android.widget.Toast.LENGTH_SHORT).show()
-                                     }.padding(horizontal = 8.dp, vertical = 4.dp)
+                                          scope.launch {
+                                              if (item.prefKey == "clean_days_memory_items") viewModel.updateMemoryRetention(days)
+                                              else settings.putInt(item.prefKey, days)
+                                              refreshKey++
+                                              android.widget.Toast.makeText(context, "已保存新的保留规则", android.widget.Toast.LENGTH_SHORT).show()
+                                          }
+                                      }.padding(horizontal = 8.dp, vertical = 4.dp)
                             )
                         }
                     }

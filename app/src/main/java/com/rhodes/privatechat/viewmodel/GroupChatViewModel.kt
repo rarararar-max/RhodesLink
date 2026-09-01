@@ -162,6 +162,7 @@ class GroupChatViewModel(
     private val retryingMessageIds = ConcurrentHashMap.newKeySet<Long>()
     private val restartCleanupJobs = ConcurrentHashMap<String, Job>()
     private val groupMaintenanceJobs = ConcurrentHashMap<String, Job>()
+    private val groupMaintenancePending = ConcurrentHashMap.newKeySet<String>()
     private val groupSummaryRetryJobs = ConcurrentHashMap<String, Job>()
     private val groupSummaryMutexes = ConcurrentHashMap<String, Mutex>()
 
@@ -2378,34 +2379,40 @@ $text"""
 
     /** Memory extraction and summaries are best-effort maintenance, not part of a visible turn. */
     private fun scheduleGroupPostReplyMaintenance(groupSessionId: String, groupName: String) {
+        groupMaintenancePending.add(groupSessionId)
         if (groupMaintenanceJobs[groupSessionId]?.isActive == true) return
-        scope.launch(Dispatchers.Default) {
-            groupMaintenanceJobs[groupSessionId] = coroutineContext[Job]!!
-            runCatching {
-                extractGroupMemoryIfNeeded(groupSessionId, groupName)
-                val summaryCursor = if (settings.summaryCursorEnabled) settings.getSummaryCursor(groupSessionId) else 0L
-                val unsummarized = repository.getMessagesSync(groupSessionId).count { message ->
-                    message.id > summaryCursor && message.type == "ai_json"
-                }
-                val status = settings.getRollingSummaryStatus(groupSessionId)
-                val retryAllowed = status.state != "failed" || !settings.summaryAutoRetryEnabled || System.currentTimeMillis() >= status.nextRetryAt
-                if (unsummarized >= settings.groupSummaryTriggerRounds && retryAllowed && groupSessionId.isNotBlank()) {
-                    repository.getSession(groupSessionId)?.let { session ->
-                        if (generateGroupShortTermSummary(groupSessionId, session.operatorName)) {
-                            sessionMessageCounter.remove(groupSessionId)
-                        } else {
-                            val failed = settings.getRollingSummaryStatus(groupSessionId)
-                            if (failed.state == "failed" && failed.nextRetryAt > System.currentTimeMillis()) scheduleGroupSummaryRetry(groupSessionId, session.operatorName, failed.nextRetryAt)
+        val job = scope.launch(Dispatchers.Default, start = CoroutineStart.LAZY) {
+            try {
+                while (groupMaintenancePending.remove(groupSessionId)) {
+                    runCatching {
+                        extractGroupMemoryIfNeeded(groupSessionId, groupName)
+                        val summaryCursor = if (settings.summaryCursorEnabled) settings.getSummaryCursor(groupSessionId) else 0L
+                        val unsummarized = repository.getMessagesSync(groupSessionId).count { message ->
+                            message.id > summaryCursor && message.type == "ai_json"
                         }
-                        generateGroupDailySummary(groupSessionId, session.operatorName)
+                        val status = settings.getRollingSummaryStatus(groupSessionId)
+                        val retryAllowed = status.state != "failed" || !settings.summaryAutoRetryEnabled || System.currentTimeMillis() >= status.nextRetryAt
+                        if (unsummarized >= settings.groupSummaryTriggerRounds && retryAllowed && groupSessionId.isNotBlank()) {
+                            repository.getSession(groupSessionId)?.let { session ->
+                                if (generateGroupShortTermSummary(groupSessionId, session.operatorName)) {
+                                    sessionMessageCounter.remove(groupSessionId)
+                                } else {
+                                    val failed = settings.getRollingSummaryStatus(groupSessionId)
+                                    if (failed.state == "failed" && failed.nextRetryAt > System.currentTimeMillis()) scheduleGroupSummaryRetry(groupSessionId, session.operatorName, failed.nextRetryAt)
+                                }
+                                generateGroupDailySummary(groupSessionId, session.operatorName)
+                            }
+                        }
+                    }.onFailure { error ->
+                        DebugLogger.diagnostic("GroupChat/PostReplyMaintenanceFailed", "groupId=$groupSessionId,error=${error.javaClass.simpleName}")
                     }
                 }
-            }.onFailure { error ->
-                DebugLogger.diagnostic("GroupChat/PostReplyMaintenanceFailed", "groupId=$groupSessionId,error=${error.javaClass.simpleName}")
-            }.also {
-                if (groupMaintenanceJobs[groupSessionId] == coroutineContext[Job]) groupMaintenanceJobs.remove(groupSessionId)
+            } finally {
+                groupMaintenanceJobs.remove(groupSessionId, coroutineContext[Job])
+                if (groupMaintenancePending.contains(groupSessionId)) scheduleGroupPostReplyMaintenance(groupSessionId, groupName)
             }
         }
+        if (groupMaintenanceJobs.putIfAbsent(groupSessionId, job) == null) job.start() else job.cancel()
     }
 
     private fun scheduleGroupSummaryRetry(groupSessionId: String, groupName: String, retryAt: Long) {

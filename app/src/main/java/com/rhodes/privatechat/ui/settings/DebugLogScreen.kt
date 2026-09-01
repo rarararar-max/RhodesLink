@@ -455,9 +455,9 @@ private fun DetailLine(label: String, value: String, color: Color = TextPrimary)
 }
 
 private fun operationFilter(operation: DebugOperation): OperationFilter = when {
-    operation.result == "失败" -> OperationFilter.SPECIAL
     operation.surface.contains("客服") -> OperationFilter.SUPPORT
     operation.surface.contains("记忆") || operation.surface.contains("知识库") -> OperationFilter.MEMORY
+    operation.result == "失败" -> OperationFilter.SPECIAL
     operation.surface.contains("动态") || operation.surface.contains("日记") || operation.surface.contains("派遣") -> OperationFilter.CONTENT
     else -> OperationFilter.CHAT
 }

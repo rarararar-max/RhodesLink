@@ -25,7 +25,8 @@ class DataViewModel(
 
     data class DataStats(
         val chatSessions: Int, val groups: Int, val diaries: Int, val anchors: Int,
-        val messages: Int, val operators: Int, val moments: Int = 0, val dispatches: Int = 0
+        val messages: Int, val operators: Int, val moments: Int = 0, val dispatches: Int = 0,
+        val memoryItems: Int = 0,
     )
 
     suspend fun getDataStats(operatorsCount: Int, momentsCount: Int): DataStats = DataStats(
@@ -36,7 +37,8 @@ class DataViewModel(
         messages = repository.getMessageCount(),
         operators = operatorsCount,
         moments = momentsCount,
-        dispatches = repository.getHistoryDispatches().size
+        dispatches = repository.getHistoryDispatches().size,
+        memoryItems = repository.getAllMemoryItems().size,
     )
 
     suspend fun cleanupAllExpired() {
@@ -60,6 +62,14 @@ class DataViewModel(
             DebugLogger.log("Data/Cleanup", "清理过期数据: messages=${msgDays}天, anchors=${anchorDays}天, diaries=${diaryDays}天, moments=${momentDays}天, dispatches=${dispatchDays}天")
             lastCleanupLogAt = now
         }
+    }
+
+    suspend fun updateMemoryRetention(days: Int) {
+        settings.cleanDaysMemoryItems = days
+        val now = System.currentTimeMillis()
+        val expiresAt = if (days < 0) Long.MAX_VALUE else now + days * 86_400_000L
+        repository.updateActiveMemoryExpiry(expiresAt, now)
+        DebugLogger.log("Data/MemoryRetention", "向量记忆保留期已更新: ${if (days < 0) "永不" else "${days}天"}")
     }
 
     suspend fun getMessageRanking(): List<SenderCount> = repository.getMessageCountPerSender()

@@ -101,6 +101,12 @@ DELETE FROM vector_memories WHERE id = ?;
 deleteExpiredVectorMemories:
 DELETE FROM vector_memories WHERE expiresAt < ?;
 
+updateMemoryItemVectorExpiry:
+UPDATE vector_memories SET expiresAt = ?
+WHERE id IN (
+    SELECT vectorId FROM memory_items WHERE status = 'active' AND vectorId != ''
+);
+
 deleteVectorMemoriesByOwner:
 DELETE FROM vector_memories WHERE ownerType = ? AND ownerId = ?;
 

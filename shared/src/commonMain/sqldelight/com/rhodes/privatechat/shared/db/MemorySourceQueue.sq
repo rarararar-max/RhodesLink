@@ -93,6 +93,11 @@ UPDATE memory_source_queue
 SET status = 'retry_waiting', retryCount = retryCount + 1, nextRetryAt = ?, leaseUntil = 0, claimToken = '', lastError = ?
 WHERE id = ? AND claimToken = ?;
 
+releaseMemorySource:
+UPDATE memory_source_queue
+SET status = 'pending', nextRetryAt = ?, leaseUntil = 0, claimToken = '', lastError = ?
+WHERE id = ? AND claimToken = ?;
+
 skipMemorySource:
 UPDATE memory_source_queue
 SET status = 'skipped', leaseUntil = 0, claimToken = '', lastError = ?

@@ -105,7 +105,7 @@ class GroupChatViewModel(
         private const val MAX_MERGED_USER_CHARS = 600
         private const val GROUP_MESSAGE_WRITE_TIMEOUT_MS = 15_000L
         private const val GROUP_RESTART_CLEANUP_WAIT_MS = 2_000L
-        private const val GROUP_PROMPT_TIMEOUT_MS = 30_000L
+        private const val GROUP_PROMPT_TIMEOUT_MS = 60_000L
         private const val GROUP_MODEL_TIMEOUT_MS = 150_000L
         private const val GROUP_REPLY_TIMEOUT_MS = 210_000L
         private const val GROUP_RULES_MAX_CHARS = 3_000
@@ -773,8 +773,59 @@ class GroupChatViewModel(
                 turnStartedAtMs = android.os.SystemClock.elapsedRealtime()
                 fun turnElapsedMs(): Long = (android.os.SystemClock.elapsedRealtime() - turnStartedAtMs).coerceAtLeast(0L)
                 fun remainingTurnBudget(): Long = (GROUP_REPLY_TIMEOUT_MS - turnElapsedMs()).coerceAtLeast(1L)
+                suspend fun <T> optionalGroupContext(
+                    label: String,
+                    module: String,
+                    budgetMs: Long,
+                    fallback: T,
+                    block: suspend () -> T,
+                ): T {
+                    val startedAt = android.os.SystemClock.elapsedRealtime()
+                    val remainingPromptBudget = (GROUP_PROMPT_TIMEOUT_MS - turnElapsedMs() - 2_000L).coerceAtLeast(0L)
+                    val effectiveBudget = minOf(budgetMs, remainingPromptBudget)
+                    if (effectiveBudget < 1_000L) {
+                        DebugLogger.conversationStep(debugRoundId, "群聊", "上下文/$label", "已跳过", "耗时=0ms；剩余提示词预算不足，未注入本轮提示词，不影响正常回复")
+                        return fallback
+                    }
+                    DebugLogger.conversationStep(debugRoundId, "群聊", "上下文/$label", "开始", "预算=${effectiveBudget}ms")
+                    return try {
+                        withChatStageTimeout("group", module, effectiveBudget, block).also {
+                            val elapsed = (android.os.SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0L)
+                            DebugLogger.conversationStep(debugRoundId, "群聊", "上下文/$label", "完成", "耗时=${elapsed}ms")
+                        }
+                    } catch (error: Exception) {
+                        if (error is kotlinx.coroutines.CancellationException) throw error
+                        val elapsed = (android.os.SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0L)
+                        val status = if (error is ChatStageTimeoutException) "超时已跳过" else "已跳过"
+                        val reason = if (error is ChatStageTimeoutException) "该增强上下文超时" else "读取失败"
+                        DebugLogger.conversationStep(debugRoundId, "群聊", "上下文/$label", status, "耗时=${elapsed}ms；$reason，未注入本轮提示词，不影响正常回复")
+                        DebugLogger.log("GroupChat/OptionalContext", "groupId=$groupSessionId,module=$module,reason=${error.javaClass.simpleName}; skipped")
+                        fallback
+                    }
+                }
+                suspend fun <T> requiredGroupContext(
+                    label: String,
+                    module: String,
+                    budgetMs: Long,
+                    block: suspend () -> T,
+                ): T {
+                    val startedAt = android.os.SystemClock.elapsedRealtime()
+                    DebugLogger.conversationStep(debugRoundId, "群聊", "上下文/$label", "开始", "预算=${budgetMs}ms")
+                    return try {
+                        withChatStageTimeout("group", module, budgetMs, block).also {
+                            val elapsed = (android.os.SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0L)
+                            DebugLogger.conversationStep(debugRoundId, "群聊", "上下文/$label", "完成", "耗时=${elapsed}ms")
+                        }
+                    } catch (error: Exception) {
+                        if (error is kotlinx.coroutines.CancellationException) throw error
+                        val elapsed = (android.os.SystemClock.elapsedRealtime() - startedAt).coerceAtLeast(0L)
+                        val status = if (error is ChatStageTimeoutException) "超时" else "失败"
+                        DebugLogger.conversationStep(debugRoundId, "群聊", "上下文/$label", status, "耗时=${elapsed}ms；${error.javaClass.simpleName}")
+                        throw error
+                    }
+                }
                 pipelineStage = "session_read"
-                val session = withChatStageTimeout("group", "session_read", 5_000L) { repository.getSession(groupSessionId) }
+                val session = requiredGroupContext("群会话读取", "session_read", 10_000L) { repository.getSession(groupSessionId) }
                     ?: appState.allSessions.value.firstOrNull { it.id == groupSessionId }
                     ?: run {
                     DebugLogger.log("GroupChat", "⚠️ 群session不存在: $groupSessionId")
@@ -790,7 +841,7 @@ class GroupChatViewModel(
                 val allOps = if (memberIds.all { id -> stateOperators.any { it.id == id || it.name == id } }) {
                     stateOperators
                 } else {
-                    withChatStageTimeout("group", "member_profiles_read", 5_000L) { repository.getAllOperatorsSync() }
+                    requiredGroupContext("成员资料读取", "member_profiles_read", 10_000L) { repository.getAllOperatorsSync() }
                 }
                 val opsById = allOps.associateBy { it.id }
                 val opsByName = allOps.associateBy { it.name }
@@ -819,14 +870,14 @@ class GroupChatViewModel(
 
                 // The reply emits state together with dialogue; only accepted replies may update it.
                 pipelineStage = "group_turn_state_read"
-                val groupTurnState = withChatStageTimeout("group", "group_turn_state_read", 5_000L) { settings.getGroupTurnState(groupSessionId) }
+                val groupTurnState = requiredGroupContext("群聊连续性读取", "group_turn_state_read", 10_000L) { settings.getGroupTurnState(groupSessionId) }
                 val groupPlotSummary = groupTurnState?.currentTopic?.ifBlank { null }
-                    ?: withChatStageTimeout("group", "group_turn_state_read", 5_000L) { settings.getGroupPlotSummary(groupSessionId) }.orEmpty()
+                    ?: requiredGroupContext("群聊主线读取", "group_turn_state_read", 10_000L) { settings.getGroupPlotSummary(groupSessionId) }.orEmpty()
 
                 val profile = getUserProfile()
                 val promptUserName = profile.nickname.trim().ifBlank { "来访者" }
                 val relContext = if (settings.isMemoryInjectionAllowed("group_chat", "RELATIONSHIP"))
-                    withChatStageTimeout("group", "group_relationship_read", 10_000L) { getGroupRelationshipContext(activeMembers) }
+                    optionalGroupContext("群成员关系", "group_relationship_read", 20_000L, "") { getGroupRelationshipContext(activeMembers) }
                 else ""
                 val relationHints = if (relContext.isNotBlank()) relContext else "无"
                 // Personal chat background becomes shared only when the user explicitly names
@@ -836,7 +887,7 @@ class GroupChatViewModel(
                 }.take(settings.groupMemberMemoryCount.coerceAtMost(2))
                 val restartAt = settings.getSessionRestartAt(groupSessionId)
                 pipelineStage = "group_summary_read"
-                val groupSummary = withChatStageTimeout("group", "group_summary_read", 5_000L) { repository.getShortTermMemory(groupSessionId) }
+                val groupSummary = optionalGroupContext("群聊滚动摘要", "group_summary_read", 10_000L, null as com.rhodes.privatechat.shared.model.Memory?) { repository.getShortTermMemory(groupSessionId) }
                     ?.takeIf { restartAt <= 0L || it.createdAt >= restartAt }
                     ?.content?.takeIf { it.isNotBlank() } ?: ""
                 val memberMemoryContext = ""
@@ -846,7 +897,7 @@ class GroupChatViewModel(
                         buildString {
                             recalledMembers.forEach { member ->
                                 val knowledge = if (settings.isMemoryInjectionAllowed("group_chat", "MEMBER_PRIVATE_CHAT")) {
-                                    withChatStageTimeout("group", "member_private_memory_read", 10_000L) { memoryV2Pipeline.buildPrivateMemoryContext(
+                                    optionalGroupContext("成员私聊背景", "member_private_memory_read", 20_000L, "") { memoryV2Pipeline.buildPrivateMemoryContext(
                                         member.id, 1, 1, 1, requestText,
                                         allowedSources = setOf(MemorySourceKind.PRIVATE_CHAT.name),
                                         visibilities = listOf("shared"),
@@ -863,7 +914,7 @@ class GroupChatViewModel(
                         if (!settings.isMemoryInjectionAllowed("group_chat", "GROUP_CHAT")) return@async "无"
                         val memoryRestartAt = settings.getSessionRestartAt(groupSessionId)
                         val memoryQuery = requestText.ifBlank { groupPlotSummary.ifBlank { groupSummary }.ifBlank { "最近群聊进展" } }
-                        withChatStageTimeout("group", "group_memory_read", 10_000L) { memoryV2Pipeline.buildOwnerMemoryContext(
+                        optionalGroupContext("群聊向量记忆", "group_memory_read", 20_000L, "无") { memoryV2Pipeline.buildOwnerMemoryContext(
                             ownerType = "group", ownerId = groupSessionId, limitL1 = 2, limitL2 = 1, limitL3 = 1,
                             query = memoryQuery, minCreatedAt = memoryRestartAt,
                         ) }.ifBlank { "无" }
@@ -874,22 +925,26 @@ class GroupChatViewModel(
                             if (settings.isMemoryInjectionAllowed("group_chat", "MOMENT")) add(MemorySourceKind.MOMENT.name)
                             if (settings.isMemoryInjectionAllowed("group_chat", "MOMENT_COMMENT")) add(MemorySourceKind.MOMENT_COMMENT.name)
                         }
-                        withChatStageTimeout("group", "group_public_memory_read", 10_000L) { memoryV2Pipeline.buildPublicMemoryContext(requestText, limit = 2, allowedSources = publicSources) }
+                        optionalGroupContext("动态评论公开记忆", "group_public_memory_read", 20_000L, "无") { memoryV2Pipeline.buildPublicMemoryContext(requestText, limit = 2, allowedSources = publicSources) }
                             .ifBlank { "无" }
                     }
                     Triple(memberPrivate.await(), groupMemory.await(), publicMemory.await())
                 }
-                val recentSocialContext = sharedUtils.buildRecentSocialContext(
-                    activeMembers.map { it.id }.toSet(),
-                    requestText,
-                    limit = if (isAuto) 2 else 3,
-                    surface = "group_chat"
-                )
-                 val groupDailySummary = if (UnifiedMemoryContext.shouldIncludeTimeSummary(text)) {
+                val recentSocialContext = optionalGroupContext("近期动态上下文", "recent_social_context_read", 20_000L, "无") {
+                    sharedUtils.buildRecentSocialContext(
+                        activeMembers.map { it.id }.toSet(),
+                        requestText,
+                        limit = if (isAuto) 2 else 3,
+                        surface = "group_chat"
+                    )
+                }
+                 val groupDailySummary = if (UnifiedMemoryContext.shouldIncludeTimeSummary(text)) optionalGroupContext(
+                     "群聊每日摘要", "group_daily_summary_read", 10_000L, "无"
+                 ) {
                      repository.getLatestDailyBySession(groupSessionId)
-                         ?.takeIf { restartAt <= 0L || it.createdAt >= restartAt }
-                         ?.content ?: "无"
-                } else "无"
+                          ?.takeIf { restartAt <= 0L || it.createdAt >= restartAt }
+                          ?.content ?: "无"
+                 } else "无"
                 val legacyMemberMemory = ""
                 val unifiedGroupMemory = UnifiedMemoryContext.mergeBlocks(
                     maxChars = sharedUtils.contextBlockLimit(2),
@@ -914,7 +969,7 @@ class GroupChatViewModel(
                     }
                 }
                  val groupKnowledgeBaseContext = run {
-                     val memberBookIds = withChatStageTimeout("group", "knowledge_bindings_read", 5_000L) {
+                      val memberBookIds = optionalGroupContext("知识库绑定", "knowledge_bindings_read", 10_000L, emptySet()) {
                          activeMembers.flatMap { member ->
                              repository.knowledgeBases.getAssignments(member.id)
                                  .filter { it.enabled && settings.isKnowledgeBaseEnabledForBook(it.knowledgeBaseId, "group_chat") }
@@ -922,7 +977,7 @@ class GroupChatViewModel(
                          }.toSet()
                       }
                     val query = requestText.ifBlank { groupPlotSummary.ifBlank { groupSummary } }
-                      if (memberBookIds.isEmpty()) "无" else withChatStageTimeout("group", "knowledge_recall", 15_000L) {
+                      if (memberBookIds.isEmpty()) "无" else optionalGroupContext("知识库向量召回", "knowledge_recall", 30_000L, "无") {
                           knowledgeBaseContextBuilder?.forOperators(activeMembers.map { it.id }, query, 2, 720, memberBookIds).orEmpty()
                       }.ifBlank { "无" }
                  }

@@ -115,6 +115,7 @@ class MemoryV2Pipeline(
                 operatorName = operatorName
             )
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             com.rhodes.privatechat.util.DebugLogger.log("MemoryV2", "私聊L1提取失败，已保留队列等待重试: ${e.message?.take(80)}")
             leaseRenewal.cancel()
             repository.retryMemorySource(sourceId, claimToken, System.currentTimeMillis() + 60_000L, e.message?.take(160) ?: "提取失败")
@@ -124,31 +125,44 @@ class MemoryV2Pipeline(
         if (settings.getMemoryTimelineEpoch(sessionId) > source.createdAt) {
             repository.skipMemorySource(sourceId, claimToken, "会话时间线已失效")
             leaseRenewal.cancel()
+            DebugLogger.conversationStep(operationId, "私聊记忆提取", "本轮总览", "已跳过", "会话时间线已变化，本批记忆不再保存")
             return false
         }
-        if (l1.isNotEmpty()) {
-            val saved = saveMemoryItems(l1)
-            DebugLogger.conversationStep(operationId, "私聊记忆提取", "本地保存", "成功", "模型有效=${l1.size}条，新增=${saved.size}条，重复=${l1.size - saved.size}条")
-            repository.saveMemoryBatch(MemoryBatch(
-                ownerType = "operator",
-                ownerId = operatorId,
-                sourceKind = MemorySourceKind.PRIVATE_CHAT,
-                targetLevel = MemoryLevel.L1,
-                inputCount = messages.size,
-                outputCount = l1.size,
-                windowStart = messages.first().timestamp,
-                windowEnd = messages.last().timestamp,
-                promptVersion = "memory_v2_l1_v2",
-                createdAt = System.currentTimeMillis()
-            ))
+        return try {
+            if (l1.isNotEmpty()) {
+                val saved = saveMemoryItems(l1)
+                DebugLogger.conversationStep(operationId, "私聊记忆提取", "本地保存", "成功", "模型有效=${l1.size}条，新增=${saved.size}条，重复=${l1.size - saved.size}条")
+                repository.saveMemoryBatch(MemoryBatch(
+                    ownerType = "operator",
+                    ownerId = operatorId,
+                    sourceKind = MemorySourceKind.PRIVATE_CHAT,
+                    targetLevel = MemoryLevel.L1,
+                    inputCount = messages.size,
+                    outputCount = l1.size,
+                    windowStart = messages.first().timestamp,
+                    windowEnd = messages.last().timestamp,
+                    promptVersion = "memory_v2_l1_v2",
+                    createdAt = System.currentTimeMillis()
+                ))
+            }
+            repository.completeMemorySource(sourceId, claimToken)
+            if (settings.privateMemoryPromotionEnabled) {
+                runCatching {
+                    maybePromotePrivateMemory(operatorId, thresholdL1 = settings.memoryV2PromoteL1Threshold, thresholdL2 = settings.memoryV2PromoteL2Threshold)
+                }.onFailure { error ->
+                    DebugLogger.log("MemoryV2", "私聊长期沉淀失败，将在后续提取时重试: ${error.message?.take(80)}")
+                }
+            }
+            DebugLogger.conversationStep(operationId, "私聊记忆提取", "本轮总览", "成功", if (l1.isEmpty()) "提取完成，本批没有值得长期保存的信息" else "提取完成，已保存${l1.size}条有效记忆")
+            true
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            repository.retryMemorySource(sourceId, claimToken, System.currentTimeMillis() + 60_000L, e.message?.take(160) ?: "记忆保存失败")
+            DebugLogger.conversationStep(operationId, "私聊记忆提取", "本轮总览", "失败", "${e.javaClass.simpleName}；保存失败，已进入队列，60秒后至少重试一次")
+            false
+        } finally {
+            leaseRenewal.cancel()
         }
-        repository.completeMemorySource(sourceId, claimToken)
-        if (settings.privateMemoryPromotionEnabled) {
-            maybePromotePrivateMemory(operatorId, thresholdL1 = settings.memoryV2PromoteL1Threshold, thresholdL2 = settings.memoryV2PromoteL2Threshold)
-        }
-        leaseRenewal.cancel()
-        DebugLogger.conversationStep(operationId, "私聊记忆提取", "本轮总览", "成功", if (l1.isEmpty()) "提取完成，本批没有值得长期保存的信息" else "提取完成，已保存${l1.size}条有效记忆")
-        return true
     }
 
     suspend fun ingestGroupChat(groupId: String, groupName: String, messages: List<ChatMessage>, memberIds: List<String>): Boolean {
@@ -184,6 +198,7 @@ class MemoryV2Pipeline(
         val l1 = try {
             extractGroupL1(groupId, groupName, sourceText, sourceRefId)
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             com.rhodes.privatechat.util.DebugLogger.log("MemoryV2", "群聊L1提取失败，已保留队列等待重试: ${e.message?.take(80)}")
             leaseRenewal.cancel()
             repository.retryMemorySource(sourceId, claimToken, System.currentTimeMillis() + 60_000L, e.message?.take(160) ?: "提取失败")
@@ -193,32 +208,45 @@ class MemoryV2Pipeline(
         if (settings.getMemoryTimelineEpoch(groupId) > source.createdAt) {
             repository.skipMemorySource(sourceId, claimToken, "群聊时间线已失效")
             leaseRenewal.cancel()
+            DebugLogger.conversationStep(operationId, "群聊记忆提取", "本轮总览", "已跳过", "群聊时间线已变化，本批记忆不再保存")
             return false
         }
-        if (l1.isNotEmpty()) {
-            val savedGroupItems = saveMemoryItems(l1)
-            DebugLogger.conversationStep(operationId, "群聊记忆提取", "本地保存", "成功", "模型有效=${l1.size}条，新增=${savedGroupItems.size}条，重复=${l1.size - savedGroupItems.size}条")
-            repository.saveMemoryBatch(MemoryBatch(
-                ownerType = "group",
-                ownerId = groupId,
-                sourceKind = MemorySourceKind.GROUP_CHAT,
-                targetLevel = MemoryLevel.L1,
-                inputCount = messages.size,
-                outputCount = l1.size,
-                windowStart = messages.first().timestamp,
-                windowEnd = messages.last().timestamp,
-                promptVersion = "memory_v2_group_l1_v2",
-                createdAt = System.currentTimeMillis()
-            ))
-            copyGroupMemoriesToMembers(savedGroupItems, memberIds)
+        return try {
+            if (l1.isNotEmpty()) {
+                val savedGroupItems = saveMemoryItems(l1)
+                DebugLogger.conversationStep(operationId, "群聊记忆提取", "本地保存", "成功", "模型有效=${l1.size}条，新增=${savedGroupItems.size}条，重复=${l1.size - savedGroupItems.size}条")
+                repository.saveMemoryBatch(MemoryBatch(
+                    ownerType = "group",
+                    ownerId = groupId,
+                    sourceKind = MemorySourceKind.GROUP_CHAT,
+                    targetLevel = MemoryLevel.L1,
+                    inputCount = messages.size,
+                    outputCount = l1.size,
+                    windowStart = messages.first().timestamp,
+                    windowEnd = messages.last().timestamp,
+                    promptVersion = "memory_v2_group_l1_v2",
+                    createdAt = System.currentTimeMillis()
+                ))
+                copyGroupMemoriesToMembers(savedGroupItems, memberIds)
+            }
+            repository.completeMemorySource(sourceId, claimToken)
+            if (settings.groupMemoryPromotionEnabled) {
+                runCatching {
+                    maybePromoteOwnerMemory("group", groupId, MemorySourceKind.GROUP_CHAT, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
+                }.onFailure { error ->
+                    DebugLogger.log("MemoryV2", "群聊长期沉淀失败，将在后续提取时重试: ${error.message?.take(80)}")
+                }
+            }
+            DebugLogger.conversationStep(operationId, "群聊记忆提取", "本轮总览", "成功", if (l1.isEmpty()) "提取完成，本批没有值得长期保存的信息" else "提取完成，已保存${l1.size}条有效记忆")
+            true
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            repository.retryMemorySource(sourceId, claimToken, System.currentTimeMillis() + 60_000L, e.message?.take(160) ?: "记忆保存失败")
+            DebugLogger.conversationStep(operationId, "群聊记忆提取", "本轮总览", "失败", "${e.javaClass.simpleName}；保存失败，已进入队列，60秒后至少重试一次")
+            false
+        } finally {
+            leaseRenewal.cancel()
         }
-        repository.completeMemorySource(sourceId, claimToken)
-        if (settings.groupMemoryPromotionEnabled) {
-            maybePromoteOwnerMemory("group", groupId, MemorySourceKind.GROUP_CHAT, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
-        }
-        leaseRenewal.cancel()
-        DebugLogger.conversationStep(operationId, "群聊记忆提取", "本轮总览", "成功", if (l1.isEmpty()) "提取完成，本批没有值得长期保存的信息" else "提取完成，已保存${l1.size}条有效记忆")
-        return true
     }
 
     suspend fun ingestMoment(moment: Moment, contextGroup: String = "") {
@@ -883,6 +911,18 @@ class MemoryV2Pipeline(
                 }
             }
             try {
+            val generationDisabled = when (source.sourceKind) {
+                MemorySourceKind.PRIVATE_CHAT -> !settings.privateMemoryGenerationEnabled
+                MemorySourceKind.GROUP_CHAT -> !settings.groupMemoryGenerationEnabled
+                else -> false
+            }
+            if (generationDisabled) {
+                // Keep the durable window for a later re-enable, but never make a model request
+                // while the user has disabled generation for this source.
+                repository.releaseMemorySource(source.id, token, System.currentTimeMillis() + 60_000L, "该来源的记忆生成已关闭")
+                DebugLogger.log("MemoryV2", "记忆队列暂停 id=${source.id}: 该来源的记忆生成已关闭")
+                return@coroutineScope
+            }
             val completed = runCatching {
                 when (source.sourceKind) {
                     MemorySourceKind.PRIVATE_CHAT -> {

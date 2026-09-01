@@ -621,6 +621,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun markMemorySourceProcessedVector(id: Long) = memoryV2.markSourceProcessedVector(id)
     suspend fun completeMemorySource(id: Long, token: String) = memoryV2.completeSource(id, token)
     suspend fun retryMemorySource(id: Long, token: String, nextRetryAt: Long, error: String) = memoryV2.retrySource(id, token, nextRetryAt, error)
+    suspend fun releaseMemorySource(id: Long, token: String, nextRetryAt: Long, reason: String) = memoryV2.releaseSource(id, token, nextRetryAt, reason)
     suspend fun skipMemorySource(id: Long, token: String, error: String) = memoryV2.skipSource(id, token, error)
     suspend fun updateMemoryItemVectorId(id: Long, vectorId: String, updatedAt: Long) = memoryV2.updateMemoryItemVectorId(id, vectorId, updatedAt)
     suspend fun updateMemoryItemContent(id: Long, content: String, updatedAt: Long) = memoryV2.updateMemoryItemContent(id, content, updatedAt)

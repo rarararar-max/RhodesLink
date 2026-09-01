@@ -100,7 +100,7 @@ class ChatViewModel(
         private const val MAX_MERGED_USER_MESSAGES = 2
         private const val MAX_MERGED_USER_CHARS = 600
         private const val PRIVATE_REPLY_TIMEOUT_MS = 180_000L
-        private const val PRIVATE_PROMPT_TIMEOUT_MS = 25_000L
+        private const val PRIVATE_PROMPT_TIMEOUT_MS = 50_000L
         private const val PRIVATE_MODEL_TIMEOUT_MS = 120_000L
         private const val MESSAGE_WRITE_TIMEOUT_MS = 15_000L
         private const val PRIVATE_PERSONA_MAX_CHARS = 3_000
@@ -1286,11 +1286,16 @@ ${text}"""
                             val base = stage.removeSuffix("_done").removeSuffix("_degraded").removeSuffix("_timeout")
                             val elapsed = (now - (contextStageStarted.remove(base) ?: now)).coerceAtLeast(0L)
                             val status = when {
-                                stage.endsWith("_timeout") -> "超时"
-                                stage.endsWith("_degraded") -> "已降级"
+                                stage.endsWith("_timeout") -> "超时已跳过"
+                                stage.endsWith("_degraded") -> "已跳过"
                                 else -> "完成"
                             }
-                            DebugLogger.conversationStep(debugRoundId, "私聊", "上下文/$base", status, "耗时=${elapsed}ms")
+                            val detail = when {
+                                stage.endsWith("_timeout") -> "耗时=${elapsed}ms；该增强上下文超时，未注入本轮提示词，不影响正常回复"
+                                stage.endsWith("_degraded") -> "耗时=${elapsed}ms；读取失败或剩余预算不足，已跳过，不影响正常回复"
+                                else -> "耗时=${elapsed}ms"
+                            }
+                            DebugLogger.conversationStep(debugRoundId, "私聊", "上下文/$base", status, detail)
                         }
                     }
                 }
@@ -2575,6 +2580,37 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         }
     }
 
+    /** Optional context must never prevent a normal reply when local recall is slow or unavailable. */
+    private suspend fun <T> optionalContextRead(
+        sessionId: String,
+        module: String,
+        stage: String,
+        budgetMs: Long,
+        remainingPromptBudgetMs: () -> Long,
+        fallback: T,
+        onStage: ((String) -> Unit)? = null,
+        block: suspend () -> T,
+    ): T {
+        onStage?.invoke("${stage}_start")
+        // Keep time for template assembly and the essential recent-history context.
+        val effectiveBudget = minOf(budgetMs, (remainingPromptBudgetMs() - 2_000L).coerceAtLeast(0L))
+        if (effectiveBudget < 1_000L) {
+            onStage?.invoke("${stage}_degraded")
+            DebugLogger.log("PrivateChat/OptionalContext", "sessionId=$sessionId,module=$module,reason=prompt_budget_exhausted")
+            return fallback
+        }
+        return try {
+            withChatStageTimeout("private", module, effectiveBudget, block).also {
+                onStage?.invoke("${stage}_done")
+            }
+        } catch (error: Exception) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            DebugLogger.log("PrivateChat/OptionalContext", "sessionId=$sessionId,module=$module,reason=${error.javaClass.simpleName}; skipped")
+            onStage?.invoke(if (error is ChatStageTimeoutException) "${stage}_timeout" else "${stage}_degraded")
+            fallback
+        }
+    }
+
     private suspend fun buildApiMessages(
         session: ChatSession,
         userContent: String = "",
@@ -2584,11 +2620,14 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         mode: String = _currentMode.value,
         onStage: ((String) -> Unit)? = null,
     ): List<AiMessage> {
+        val promptStartedAt = TimeSource.Monotonic.markNow()
+        fun remainingPromptBudgetMs(): Long =
+            (PRIVATE_PROMPT_TIMEOUT_MS - promptStartedAt.elapsedNow().inWholeMilliseconds).coerceAtLeast(0L)
         onStage?.invoke("prompt_operator_state_start")
-        val op = withChatStageTimeout("private", "operator_read", 5_000L) { repository.getOperator(session.operatorId) }
+        val op = withChatStageTimeout("private", "operator_read", 10_000L) { repository.getOperator(session.operatorId) }
             ?: appState.operators.value.firstOrNull { it.id == session.operatorId }
         val restartAt = settings.getSessionRestartAt(session.id)
-        val shortTerm = contextRead(session.id, "short_term_memory_read", "prompt_short_term_memory", 5_000L, onStage) { repository.getShortTermMemory(session.id) }
+        val shortTerm = contextRead(session.id, "short_term_memory_read", "prompt_short_term_memory", 10_000L, onStage) { repository.getShortTermMemory(session.id) }
             ?.takeIf { restartAt <= 0L || it.createdAt >= restartAt }
         val profile = appState.userProfile.value
         val promptUserName = profile.nickname.trim().ifBlank { "来访者" }
@@ -2603,7 +2642,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         val transitionNotice = transition.takeIf { it.isNotBlank() }?.let { "【本轮互动变化】\n$it\n请从本轮开始按这项变化自然回应。" }.orEmpty()
         onStage?.invoke("prompt_operator_state_done")
         val wantsRecall = UnifiedMemoryContext.shouldIncludeTimeSummary(userContent)
-        val recallQuery = contextRead(session.id, "history_read", "prompt_history_read", 5_000L, onStage) { repository.getMessagesSync(session.id) }
+        val recallQuery = contextRead(session.id, "history_read", "prompt_history_read", 10_000L, onStage) { repository.getMessagesSync(session.id) }
             .orEmpty()
             .takeLast(3)
             .map { message ->
@@ -2622,17 +2661,23 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         // A loaded save must not be spoiled by later group or public events from the old timeline.
         onStage?.invoke("prompt_memory_context_start")
         onStage?.invoke("prompt_group_context_start")
-        val groupContext = if (archiveContextActive || !allowGroupRecall) "无" else
-            withChatStageTimeout("private", "group_context_read", 5_000L) { buildPrivateGroupContext(session.operatorId, userContent) }
+        val groupContext = if (archiveContextActive || !allowGroupRecall) "无" else optionalContextRead(
+            session.id, "group_context_read", "prompt_group_context", 10_000L,
+            ::remainingPromptBudgetMs, "无", onStage
+        ) { buildPrivateGroupContext(session.operatorId, userContent) }
         onStage?.invoke("prompt_group_context_done")
         val allowPrivateRecall = !archiveContextActive || archivePrivateRecallReady
         onStage?.invoke("prompt_stable_impression_start")
-        val stableImpression = if (allowPrivateRecall && settings.isMemoryInjectionAllowed("private_chat", "PRIVATE_CHAT")) {
-            withChatStageTimeout("private", "stable_impression_read", 5_000L) { memoryV2Pipeline.buildPrivateStableImpression(session.operatorId) }
-        } else ""
+        val stableImpression = if (allowPrivateRecall && settings.isMemoryInjectionAllowed("private_chat", "PRIVATE_CHAT")) optionalContextRead(
+            session.id, "stable_impression_read", "prompt_stable_impression", 10_000L,
+            ::remainingPromptBudgetMs, "", onStage
+        ) { memoryV2Pipeline.buildPrivateStableImpression(session.operatorId) } else ""
         onStage?.invoke("prompt_stable_impression_done")
         onStage?.invoke("prompt_private_memory_start")
-        val personalMemoryContext = if (allowPrivateRecall && privateRecallSources.isNotEmpty()) withChatStageTimeout("private", "private_memory_read", 10_000L) {
+        val personalMemoryContext = if (allowPrivateRecall && privateRecallSources.isNotEmpty()) optionalContextRead(
+            session.id, "private_memory_read", "prompt_private_memory", 20_000L,
+            ::remainingPromptBudgetMs, "", onStage
+        ) {
             memoryV2Pipeline.buildPrivateChatMemoryContext(
                 operatorId = session.operatorId,
                 query = recallQuery,
@@ -2642,7 +2687,10 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         } else ""
         onStage?.invoke("prompt_private_memory_done")
         onStage?.invoke("prompt_relationship_memory_start")
-        val relationshipMemoryContext = if (!archiveContextActive && allowRelationshipRecall) withChatStageTimeout("private", "relationship_memory_read", 10_000L) {
+        val relationshipMemoryContext = if (!archiveContextActive && allowRelationshipRecall) optionalContextRead(
+            session.id, "relationship_memory_read", "prompt_relationship_memory", 20_000L,
+            ::remainingPromptBudgetMs, "", onStage
+        ) {
             memoryV2Pipeline.buildRelationshipPrivateMemoryContext(
                 operatorId = session.operatorId,
                 query = recallQuery,
@@ -2663,8 +2711,10 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         ))
         onStage?.invoke("prompt_public_memory_start")
         val publicMemoryContext = if (!archiveContextActive && settings.globalPublicMemoryEnabled && publicMemorySources.isNotEmpty()) {
-            withChatStageTimeout("private", "public_memory_read", 10_000L) { memoryV2Pipeline.buildPublicMemoryContext(recallQuery, limit = 2, allowedSources = publicMemorySources) }
-                .ifBlank { "无" }
+            optionalContextRead(
+                session.id, "public_memory_read", "prompt_public_memory", 20_000L,
+                ::remainingPromptBudgetMs, "无", onStage
+            ) { memoryV2Pipeline.buildPublicMemoryContext(recallQuery, limit = 2, allowedSources = publicMemorySources) }.ifBlank { "无" }
         } else "无"
         onStage?.invoke("prompt_public_memory_done")
         val recallMemoryContext = UnifiedMemoryContext.mergeBlocks(
@@ -2675,14 +2725,20 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         onStage?.invoke("prompt_memory_context_done")
         onStage?.invoke("prompt_knowledge_context_start")
         onStage?.invoke("prompt_knowledge_assignments_start")
-        val privateKnowledgeBooks = contextRead(session.id, "knowledge_bindings_read", "prompt_knowledge_assignments", 5_000L, onStage) {
+        val privateKnowledgeBooks = optionalContextRead(
+            session.id, "knowledge_bindings_read", "prompt_knowledge_assignments", 10_000L,
+            ::remainingPromptBudgetMs, emptySet(), onStage
+        ) {
             repository.knowledgeBases.getAssignments(session.operatorId)
                 .filter { it.enabled && settings.isKnowledgeBaseEnabledForBook(it.knowledgeBaseId, "private_chat") }
                 .mapTo(mutableSetOf()) { it.knowledgeBaseId }
         }
         onStage?.invoke("prompt_knowledge_assignments_done")
         onStage?.invoke("prompt_knowledge_vector_start")
-        val knowledgeBaseContext = if (privateKnowledgeBooks.isEmpty()) "无" else contextRead(session.id, "knowledge_recall", "prompt_knowledge_vector", 15_000L, onStage) {
+        val knowledgeBaseContext = if (privateKnowledgeBooks.isEmpty()) "无" else optionalContextRead(
+            session.id, "knowledge_recall", "prompt_knowledge_vector", 30_000L,
+            ::remainingPromptBudgetMs, "无", onStage
+        ) {
             knowledgeBaseContextBuilder?.forOperator(
                 session.operatorId,
                 recallQuery,

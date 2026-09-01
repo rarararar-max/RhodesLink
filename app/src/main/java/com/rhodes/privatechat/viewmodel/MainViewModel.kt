@@ -622,14 +622,24 @@ class MainViewModel(
         // 每日龙门币刷新（麻将干员保底）
         viewModelScope.launch { refreshDailyLmb() }
         viewModelScope.launch {
+            logMemoryStartupSnapshot("before_retention_repair")
+            dataViewModel.restorePermanentMemoryRetentionIfNeeded()
+            logMemoryStartupSnapshot("after_retention_repair")
             recoverMissingMemoryIndexes()
             memoryV2Pipeline.retryPendingSources()
         }
         // 每天执行一次自动保留期清理；启动时仍会先执行一次。
         viewModelScope.launch {
             while (true) {
+                val cleanupBefore = logMemoryStartupSnapshot("before_cleanup")
+                dataViewModel.restorePermanentMemoryRetentionIfNeeded()
                 dataViewModel.cleanupAllExpired()
                 try { repository.cleanupExpiredData() } catch (_: Exception) { }
+                val cleanupAfter = logMemoryStartupSnapshot("after_cleanup")
+                if (cleanupAfter.total < cleanupBefore.total || cleanupAfter.privateItems < cleanupBefore.privateItems) {
+                    DebugLogger.diagnostic("Memory/StartupCountDrop", "beforeTotal=${cleanupBefore.total},afterTotal=${cleanupAfter.total},beforePrivate=${cleanupBefore.privateItems},afterPrivate=${cleanupAfter.privateItems}")
+                }
+                settings.putString("memory_startup_snapshot_v1", "${cleanupAfter.total},${cleanupAfter.privateItems}")
                 recoverMissingMemoryIndexes(limit = 50)
                 memoryV2Pipeline.retryPendingSources(limit = 20)
                 // 每个干员保留最多 200 条锚点
@@ -656,6 +666,32 @@ class MainViewModel(
     }
 
     private suspend fun refreshDailyLmb() = mahjongViewModel.refreshDailyLmb()
+
+    private data class MemoryStartupStats(val total: Int, val privateItems: Int)
+
+    private suspend fun logMemoryStartupSnapshot(stage: String): MemoryStartupStats {
+        val now = System.currentTimeMillis()
+        val items = repository.getAllMemoryItems()
+        val active = items.count { it.status == "active" }
+        val archived = items.count { it.status == "archived" }
+        val expired = items.count { it.status == "expired" }
+        val privateItems = items.count { it.sourceKind == MemorySourceKind.PRIVATE_CHAT }
+        val indexed = items.count { it.status == "active" && it.expiresAt > now && it.vectorId.isNotBlank() }
+        DebugLogger.diagnostic(
+            "Memory/StartupSnapshot",
+            "stage=$stage,total=${items.size},active=$active,archived=$archived,expired=$expired,private=$privateItems,indexed=$indexed,retentionDays=${settings.cleanDaysMemoryItems}"
+        )
+        if (stage == "before_retention_repair") {
+            settings.getString("memory_startup_snapshot_v1", "").split(',').let { previous ->
+                val previousTotal = previous.getOrNull(0)?.toIntOrNull()
+                val previousPrivate = previous.getOrNull(1)?.toIntOrNull()
+                if ((previousTotal != null && items.size < previousTotal) || (previousPrivate != null && privateItems < previousPrivate)) {
+                    DebugLogger.diagnostic("Memory/StartupCountDrop", "previousTotal=$previousTotal,currentTotal=${items.size},previousPrivate=$previousPrivate,currentPrivate=$privateItems,stage=$stage")
+                }
+            }
+        }
+        return MemoryStartupStats(items.size, privateItems)
+    }
 
     fun saveMahjongGame(json: String, ruleType: String) = mahjongViewModel.saveMahjongGame(json, ruleType)
 

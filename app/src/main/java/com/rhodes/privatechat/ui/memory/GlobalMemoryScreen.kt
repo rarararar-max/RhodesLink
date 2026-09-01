@@ -100,6 +100,7 @@ fun GlobalMemoryScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             "全部状态" -> true
             "正在使用" -> item.status == "active"
             "已归档" -> item.status == "archived"
+            "已过期" -> item.status == "expired"
             else -> true
         }
         val sourceMatches = sourceFilter == "全部来源" || sourceLabel(item) == sourceFilter
@@ -128,7 +129,7 @@ fun GlobalMemoryScreen(viewModel: MainViewModel, onBack: () -> Unit) {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
                 MemoryFilterMenu(ownerFilter, ownerOptions) { ownerFilter = it }
                 MemoryFilterMenu(levelFilter, listOf("全部等级", "L1", "L2", "L3")) { levelFilter = it }
-                MemoryFilterMenu(statusFilter, listOf("正在使用", "已归档", "全部状态")) { statusFilter = it }
+                MemoryFilterMenu(statusFilter, listOf("正在使用", "已归档", "已过期", "全部状态")) { statusFilter = it }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
                 MemoryFilterMenu(sourceFilter, listOf("全部来源", "私聊", "群聊", "动态", "评论", "日记", "手动添加")) { sourceFilter = it }
@@ -144,7 +145,13 @@ fun GlobalMemoryScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                         Column(Modifier.padding(12.dp)) {
                             Text(item.content, fontSize = 14.sp, color = TextPrimary)
                             Spacer(Modifier.height(5.dp))
-                            Text("${levelLabel(item.memoryLevel)} · ${ownerLabel(item, operatorNames, groupNames)} · ${sourceLabel(item)} · ${if (item.status == "active") "正在使用" else "已归档"}", fontSize = 11.sp, color = TextSecondary)
+                            val statusLabel = when (item.status) {
+                                "active" -> "正在使用"
+                                "archived" -> "已归档"
+                                "expired" -> "已过期"
+                                else -> item.status
+                            }
+                            Text("${levelLabel(item.memoryLevel)} · ${ownerLabel(item, operatorNames, groupNames)} · ${sourceLabel(item)} · $statusLabel", fontSize = 11.sp, color = TextSecondary)
                             if (item.eventTime?.isNotBlank() == true || item.scheduledTime?.isNotBlank() == true) {
                                 Text(listOfNotNull(item.eventTime?.takeIf { it.isNotBlank() }, item.scheduledTime?.takeIf { it.isNotBlank() }?.let { "约定：$it" }).joinToString(" · "), fontSize = 11.sp, color = TextSecondary)
                             }

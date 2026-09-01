@@ -195,6 +195,7 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
     suspend fun completeSource(id: Long, token: String) = withContext(Dispatchers.Default) { db.memorySourceQueueQueries.completeMemorySource(id, token) }
     suspend fun retrySource(id: Long, token: String, nextRetryAt: Long, error: String) = withContext(Dispatchers.Default) { db.memorySourceQueueQueries.retryMemorySource(nextRetryAt, error, id, token) }
     suspend fun releaseSource(id: Long, token: String, nextRetryAt: Long, reason: String) = withContext(Dispatchers.Default) { db.memorySourceQueueQueries.releaseMemorySource(nextRetryAt, reason, id, token) }
+    suspend fun failSource(id: Long, token: String, error: String) = withContext(Dispatchers.Default) { db.memorySourceQueueQueries.failMemorySource(error, id, token) }
     suspend fun skipSource(id: Long, token: String, error: String) = withContext(Dispatchers.Default) { db.memorySourceQueueQueries.skipMemorySource(error, id, token) }
     suspend fun renewSourceLease(id: Long, token: String, now: Long, leaseMs: Long = 10 * 60_000L) = withContext(Dispatchers.Default) {
         db.memorySourceQueueQueries.renewMemorySourceLease(now + leaseMs, id, token)
@@ -219,6 +220,10 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
             db.memoryItemsQueries.updateActiveMemoryItemExpiry(expiresAt, updatedAt)
             db.vectorMemoriesQueries.updateMemoryItemVectorExpiry(expiresAt)
         }
+    }
+
+    suspend fun restoreExpiredMemoryItems(expiresAt: Long, updatedAt: Long) = withContext(Dispatchers.Default) {
+        db.memoryItemsQueries.restoreExpiredMemoryItems(expiresAt, updatedAt)
     }
 
     suspend fun clearAllMemoryItemVectorIds() = withContext(Dispatchers.Default) {

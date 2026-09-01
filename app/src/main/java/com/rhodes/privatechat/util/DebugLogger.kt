@@ -88,7 +88,7 @@ object DebugLogger {
         val normalized = tag.removePrefix("Diagnostic/")
         return listOf(
             "Crash/", "Failed", "Failure", "Error", "Timeout", "ParseFallback",
-            "LeaseDenied", "NoActiveMembers", "Blocked", "Unavailable", "SessionMissing",
+            "LeaseDenied", "NoActiveMembers", "Blocked", "Unavailable", "SessionMissing", "CountDrop",
             "Database/Compatibility", "Database/UpgradeVerification"
         ).any { marker -> normalized.contains(marker, ignoreCase = true) }
     }

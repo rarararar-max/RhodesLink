@@ -69,7 +69,16 @@ class DataViewModel(
         val now = System.currentTimeMillis()
         val expiresAt = if (days < 0) Long.MAX_VALUE else now + days * 86_400_000L
         repository.updateActiveMemoryExpiry(expiresAt, now)
+        if (days < 0) repository.restoreExpiredMemoryItems(expiresAt, now)
         DebugLogger.log("Data/MemoryRetention", "向量记忆保留期已更新: ${if (days < 0) "永不" else "${days}天"}")
+    }
+
+    /** Old builds assigned short expiries before permanent retention became the default. */
+    suspend fun restorePermanentMemoryRetentionIfNeeded() {
+        if (settings.cleanDaysMemoryItems >= 0) return
+        val now = System.currentTimeMillis()
+        repository.updateActiveMemoryExpiry(Long.MAX_VALUE, now)
+        repository.restoreExpiredMemoryItems(Long.MAX_VALUE, now)
     }
 
     suspend fun getMessageRanking(): List<SenderCount> = repository.getMessageCountPerSender()

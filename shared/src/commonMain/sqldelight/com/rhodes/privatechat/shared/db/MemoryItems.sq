@@ -104,6 +104,10 @@ UPDATE memory_items SET vectorId = ?, updatedAt = ? WHERE id = ?;
 updateActiveMemoryItemExpiry:
 UPDATE memory_items SET expiresAt = ?, updatedAt = ? WHERE status = 'active';
 
+restoreExpiredMemoryItems:
+UPDATE memory_items SET status = 'active', expiresAt = ?, updatedAt = ?
+WHERE status = 'expired';
+
 updateMemoryItemContent:
 UPDATE memory_items SET content = ?, updatedAt = ? WHERE id = ?;
 

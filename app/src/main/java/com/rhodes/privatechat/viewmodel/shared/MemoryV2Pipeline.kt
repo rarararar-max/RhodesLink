@@ -45,6 +45,18 @@ class MemoryV2Pipeline(
     private val userNicknameProvider: () -> String,
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
+    private val memoryRetryDelaysMs = longArrayOf(10_000L, 60_000L, 300_000L)
+
+    private suspend fun scheduleMemoryRetry(sourceId: Long, token: String, priorFailures: Int, reason: String): String {
+        return if (priorFailures < memoryRetryDelaysMs.size) {
+            val delayMs = memoryRetryDelaysMs[priorFailures]
+            repository.retryMemorySource(sourceId, token, System.currentTimeMillis() + delayMs, reason)
+            "将在${delayMs / 1000}秒后进行第${priorFailures + 1}/${memoryRetryDelaysMs.size}次自动重试"
+        } else {
+            repository.failMemorySource(sourceId, token, reason)
+            "已完成${memoryRetryDelaysMs.size}次自动重试，停止自动请求，保留失败窗口"
+        }
+    }
 
     private suspend fun requestMemoryModel(messages: List<AiMessage>, requestType: String): String {
         val startedAt = TimeSource.Monotonic.markNow()
@@ -118,8 +130,8 @@ class MemoryV2Pipeline(
             if (e is kotlinx.coroutines.CancellationException) throw e
             com.rhodes.privatechat.util.DebugLogger.log("MemoryV2", "私聊L1提取失败，已保留队列等待重试: ${e.message?.take(80)}")
             leaseRenewal.cancel()
-            repository.retryMemorySource(sourceId, claimToken, System.currentTimeMillis() + 60_000L, e.message?.take(160) ?: "提取失败")
-            DebugLogger.conversationStep(operationId, "私聊记忆提取", "本轮总览", "失败", "${e.javaClass.simpleName}；已进入队列，60秒后至少重试一次")
+            val retryMessage = scheduleMemoryRetry(sourceId, claimToken, priorFailures = 0, e.message?.take(160) ?: "提取失败")
+            DebugLogger.conversationStep(operationId, "私聊记忆提取", "本轮总览", "失败", "${e.javaClass.simpleName}；$retryMessage")
             return false
         }
         if (settings.getMemoryTimelineEpoch(sessionId) > source.createdAt) {
@@ -157,8 +169,8 @@ class MemoryV2Pipeline(
             true
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            repository.retryMemorySource(sourceId, claimToken, System.currentTimeMillis() + 60_000L, e.message?.take(160) ?: "记忆保存失败")
-            DebugLogger.conversationStep(operationId, "私聊记忆提取", "本轮总览", "失败", "${e.javaClass.simpleName}；保存失败，已进入队列，60秒后至少重试一次")
+            val retryMessage = scheduleMemoryRetry(sourceId, claimToken, priorFailures = 0, e.message?.take(160) ?: "记忆保存失败")
+            DebugLogger.conversationStep(operationId, "私聊记忆提取", "本轮总览", "失败", "${e.javaClass.simpleName}；保存失败，$retryMessage")
             false
         } finally {
             leaseRenewal.cancel()
@@ -201,8 +213,8 @@ class MemoryV2Pipeline(
             if (e is kotlinx.coroutines.CancellationException) throw e
             com.rhodes.privatechat.util.DebugLogger.log("MemoryV2", "群聊L1提取失败，已保留队列等待重试: ${e.message?.take(80)}")
             leaseRenewal.cancel()
-            repository.retryMemorySource(sourceId, claimToken, System.currentTimeMillis() + 60_000L, e.message?.take(160) ?: "提取失败")
-            DebugLogger.conversationStep(operationId, "群聊记忆提取", "本轮总览", "失败", "${e.javaClass.simpleName}；已进入队列，60秒后至少重试一次")
+            val retryMessage = scheduleMemoryRetry(sourceId, claimToken, priorFailures = 0, e.message?.take(160) ?: "提取失败")
+            DebugLogger.conversationStep(operationId, "群聊记忆提取", "本轮总览", "失败", "${e.javaClass.simpleName}；$retryMessage")
             return false
         }
         if (settings.getMemoryTimelineEpoch(groupId) > source.createdAt) {
@@ -241,8 +253,8 @@ class MemoryV2Pipeline(
             true
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
-            repository.retryMemorySource(sourceId, claimToken, System.currentTimeMillis() + 60_000L, e.message?.take(160) ?: "记忆保存失败")
-            DebugLogger.conversationStep(operationId, "群聊记忆提取", "本轮总览", "失败", "${e.javaClass.simpleName}；保存失败，已进入队列，60秒后至少重试一次")
+            val retryMessage = scheduleMemoryRetry(sourceId, claimToken, priorFailures = 0, e.message?.take(160) ?: "记忆保存失败")
+            DebugLogger.conversationStep(operationId, "群聊记忆提取", "本轮总览", "失败", "${e.javaClass.simpleName}；保存失败，$retryMessage")
             false
         } finally {
             leaseRenewal.cancel()
@@ -950,9 +962,8 @@ class MemoryV2Pipeline(
             }.getOrElse { error ->
                 if (error is kotlinx.coroutines.CancellationException) throw error
                 val reason = error.message?.take(160) ?: "未知错误"
-                val retryDelay = (60_000L * (1L shl source.retryCount.coerceAtMost(5))).coerceAtMost(60 * 60_000L)
-                repository.retryMemorySource(source.id, token, System.currentTimeMillis() + retryDelay, reason)
-                DebugLogger.log("MemoryV2", "记忆队列重试失败 id=${source.id}: $reason")
+                val retryMessage = scheduleMemoryRetry(source.id, token, source.retryCount, reason)
+                DebugLogger.log("MemoryV2", "记忆队列重试失败 id=${source.id}: $reason；$retryMessage")
                 false
             }
             if (completed) {

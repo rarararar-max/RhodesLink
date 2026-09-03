@@ -341,8 +341,11 @@ class MainViewModel(
     val moments: StateFlow<List<Moment>> get() = appState.moments
     private val _isLoadingMoments = MutableStateFlow(false)
     val isLoadingMoments: StateFlow<Boolean> = _isLoadingMoments.asStateFlow()
+    private val _momentLoadError = MutableStateFlow("")
+    val momentLoadError: StateFlow<String> = _momentLoadError.asStateFlow()
     private val _hasMoreMoments = MutableStateFlow(true)
     val hasMoreMoments: StateFlow<Boolean> = _hasMoreMoments.asStateFlow()
+    private val momentsLoadMutex = Mutex()
 
     fun getPrivateTurnStateForHeader(sessionId: String) = chatViewModel.getPrivateTurnStateForHeader(sessionId)
     fun observePrivateTurnStateForHeader(sessionId: String) = chatViewModel.observePrivateTurnStateForHeader(sessionId)
@@ -1092,8 +1095,8 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     private suspend fun autoGenerateTodayMoments() {
         if (!settings.autoAiEnabled) return
         if (!settings.dailyAutoMomentEnabled) return
-        val weekAgo = System.currentTimeMillis() - 7 * 24 * 60 * 60 * 1000L
-        repository.deleteExpiredSocialContent(momentCutoff = weekAgo, commentCutoff = null, userName = getUserProfile().nickname)
+        // Retention is controlled exclusively by Data Management. Auto generation must never
+        // silently remove existing moments with its own fixed seven-day policy.
         if (!autoGenerating.compareAndSet(false, true)) return
         DebugLogger.log("MomentGen", "autoGenerating=true")
         viewModelScope.launch {
@@ -2801,11 +2804,28 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                 var cacheHitTokens = 0
                 var cacheMissTokens = 0
                 var cacheStatisticsUnavailable = 0
-                val candidates = _operators.value.filter {
+                val inMemoryOperators = _operators.value
+                val sourceOperators = inMemoryOperators.ifEmpty {
+                    runCatching { repository.getAllOperatorsSync() }
+                        .onFailure { error -> DebugLogger.diagnostic("Moment/ForceCandidatesReadFailed", "error=${error.javaClass.simpleName}:${error.message?.take(120)}") }
+                        .getOrDefault(emptyList())
+                }
+                val candidates = sourceOperators.filter {
                     settings.getOperatorDynPermission(it.id)
                 }.shuffled()
-                val skipped = _operators.value.size - candidates.size
-                DebugLogger.conversationStep(debugOperationId, "动态催发", "筛选角色", "完成", "候选 ${candidates.size} 名，跳过未开动态权限 ${skipped} 名")
+                val skipped = sourceOperators.size - candidates.size
+                val configError = sharedUtils.chatConfigurationError()
+                DebugLogger.conversationStep(debugOperationId, "动态催发", "筛选角色", if (candidates.isEmpty() || configError != null) "失败" else "完成", "内存角色=${inMemoryOperators.size}，数据库/候选源=${sourceOperators.size}，候选=${candidates.size}，跳过未开动态权限=$skipped${if (configError != null) "，模型配置=$configError" else ""}")
+                if (configError != null) {
+                    _momentGenerateStatus.value = MomentGenerateStatus(running = false, msg = "模型配置不可用")
+                    DebugLogger.finishOperation(debugOperationId, "失败", "动态催发未开始：$configError")
+                    return@launch
+                }
+                if (candidates.isEmpty()) {
+                    _momentGenerateStatus.value = MomentGenerateStatus(running = false, msg = if (sourceOperators.isEmpty()) "未找到可用角色" else "没有开启动态权限的角色")
+                    DebugLogger.finishOperation(debugOperationId, "失败", "没有可发布动态的角色：角色=${sourceOperators.size}，动态权限开启=0")
+                    return@launch
+                }
                 Log.d("RHODES_MOMENT", "forceGenerateMoments: 候选干员 ${candidates.size}人")
                 for (op in candidates) {
                     _momentGenerateStatus.value = MomentGenerateStatus(running = true, msg = "${op.name}发布中...")
@@ -2864,10 +2884,19 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
 
     fun refreshMomentsNow() {
         viewModelScope.launch(Dispatchers.IO) {
-            val limit = appState.moments.value.size.coerceAtLeast(MOMENT_PAGE_SIZE)
-            val fresh = repository.getMomentsPaged(limit + 1, 0)
-            _hasMoreMoments.value = fresh.size > limit
-            appState.refreshMoments(fresh.take(limit))
+            momentsLoadMutex.withLock {
+                runCatching {
+                    val limit = appState.moments.value.size.coerceAtLeast(MOMENT_PAGE_SIZE)
+                    val fresh = repository.getMomentsPaged(limit + 1, 0)
+                    _hasMoreMoments.value = fresh.size > limit
+                    appState.refreshMoments(fresh.take(limit))
+                    _momentLoadError.value = ""
+                }.onFailure { error ->
+                    if (error is CancellationException) throw error
+                    _momentLoadError.value = "动态读取失败：${error.javaClass.simpleName}"
+                    DebugLogger.diagnostic("Moment/LoadFailed", "action=refresh,error=${error.javaClass.simpleName}:${error.message?.take(160)}")
+                }
+            }
         }
     }
 
@@ -2876,9 +2905,17 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         viewModelScope.launch(Dispatchers.IO) {
             _isLoadingMoments.value = true
             try {
-                val firstPage = repository.getMomentsPaged(MOMENT_PAGE_SIZE + 1, 0)
-                _hasMoreMoments.value = firstPage.size > MOMENT_PAGE_SIZE
-                appState.refreshMoments(firstPage.take(MOMENT_PAGE_SIZE))
+                momentsLoadMutex.withLock {
+                    val firstPage = repository.getMomentsPaged(MOMENT_PAGE_SIZE + 1, 0)
+                    _hasMoreMoments.value = firstPage.size > MOMENT_PAGE_SIZE
+                    appState.refreshMoments(firstPage.take(MOMENT_PAGE_SIZE))
+                    _momentLoadError.value = ""
+                }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                // Preserve the previous in-memory feed instead of presenting a database failure as an empty feed.
+                _momentLoadError.value = "动态读取失败：${error.javaClass.simpleName}"
+                DebugLogger.diagnostic("Moment/LoadFailed", "action=initial,error=${error.javaClass.simpleName}:${error.message?.take(160)},loaded=${appState.moments.value.size}")
             } finally {
                 _isLoadingMoments.value = false
             }
@@ -2890,14 +2927,21 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         viewModelScope.launch(Dispatchers.IO) {
             _isLoadingMoments.value = true
             try {
-                val current = appState.moments.value
-                val cursor = current.minWithOrNull(compareBy<Moment> { it.createdAt }.thenBy { it.id })
-                val more = cursor?.let { repository.getMomentsBefore(it.createdAt, it.id, MOMENT_PAGE_SIZE + 1) }.orEmpty()
-                _hasMoreMoments.value = more.size > MOMENT_PAGE_SIZE
-                if (more.isNotEmpty()) {
-                    val latest = appState.moments.value
-                    appState.refreshMoments((latest + more.take(MOMENT_PAGE_SIZE)).distinctBy { it.id }.sortedWith(compareByDescending<Moment> { it.createdAt }.thenByDescending { it.id }))
+                momentsLoadMutex.withLock {
+                    val current = appState.moments.value
+                    val cursor = current.minWithOrNull(compareBy<Moment> { it.createdAt }.thenBy { it.id })
+                    val more = cursor?.let { repository.getMomentsBefore(it.createdAt, it.id, MOMENT_PAGE_SIZE + 1) }.orEmpty()
+                    _hasMoreMoments.value = more.size > MOMENT_PAGE_SIZE
+                    if (more.isNotEmpty()) {
+                        val latest = appState.moments.value
+                        appState.refreshMoments((latest + more.take(MOMENT_PAGE_SIZE)).distinctBy { it.id }.sortedWith(compareByDescending<Moment> { it.createdAt }.thenByDescending { it.id }))
+                    }
+                    _momentLoadError.value = ""
                 }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                _momentLoadError.value = "动态读取失败：${error.javaClass.simpleName}"
+                DebugLogger.diagnostic("Moment/LoadFailed", "action=more,error=${error.javaClass.simpleName}:${error.message?.take(160)},loaded=${appState.moments.value.size}")
             } finally {
                 _isLoadingMoments.value = false
             }

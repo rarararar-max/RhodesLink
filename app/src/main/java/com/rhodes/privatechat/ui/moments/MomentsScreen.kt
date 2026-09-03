@@ -54,6 +54,7 @@ import com.rhodes.privatechat.viewmodel.MainViewModel
 fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick: (String) -> Unit = {}, onUnreadMessages: () -> Unit = {}, onMomentClick: (Long, Long, String) -> Unit = { _, _, _ -> }, modifier: Modifier = Modifier) {
     val moments by viewModel.moments.collectAsState()
     val isLoadingMoments by viewModel.isLoadingMoments.collectAsState()
+    val momentLoadError by viewModel.momentLoadError.collectAsState()
     val hasMoreMoments by viewModel.hasMoreMoments.collectAsState()
     val genStatus by viewModel.momentGenerateStatus.collectAsState()
     var showPost by rememberSaveable { mutableStateOf(false) }
@@ -117,6 +118,12 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
             IconButton(onClick = { showPost = true }) { Icon(Icons.Default.Create, "发动态", tint = Primary) }
         }
         HorizontalDivider(color = Divider)
+        if (momentLoadError.isNotBlank()) {
+            TextButton(onClick = { viewModel.loadInitialMoments() }, modifier = Modifier.fillMaxWidth().background(ErrorRed.copy(alpha = 0.08f))) {
+                Text("$momentLoadError，点击重试", fontSize = 12.sp, color = ErrorRed)
+            }
+            HorizontalDivider(color = Divider)
+        }
         if (hasNewMoments) {
             TextButton(
                 onClick = {

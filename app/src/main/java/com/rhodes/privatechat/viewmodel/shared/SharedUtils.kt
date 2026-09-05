@@ -358,30 +358,6 @@ class SharedUtils(
         temperature: Double? = null
     ): String = chatResult(messages, logTag, maxOutputTokens, temperature).content
 
-    /** Non-streaming chat with one content regeneration and one format repair when needed. */
-    suspend fun chatWithRetry(messages: List<AiMessage>, logTag: String = "Chat", mode: String = ""): com.rhodes.privatechat.shared.model.OfflineModeResponse {
-        validateChatConfiguration()
-        val temp = settings.aiTemperature
-        val prompt = messages.firstOrNull()?.content ?: ""
-        val startedAt = TimeSource.Monotonic.markNow()
-        DebugLogger.log("AI/$logTag/请求", "模型请求开始（含内容重试和格式修复）\n厂商=${settings.provider}\n模型=${settings.modelName}\n温度=$temp\n消息数=${messages.size}\n输入字符=${messages.sumOf { it.content.length }}")
-        logAiCall("→$logTag", prompt, "请求已发送。模型会在 JSON 无法解析时自动重试。", messages)
-        return try {
-            val result = aiService.chatWithRetry(
-                settings.apiKey, messages, settings.provider, settings.modelName, settings.customUrl,
-                temperature = temp, jsonMode = true, mode = mode,
-                requestType = logTag,
-                trace = { stage, detail -> DebugLogger.trace("AI/$stage", detail) }
-            )
-            DebugLogger.log("AI/$logTag/响应", "模型请求成功\n总耗时=${startedAt.elapsedNow().inWholeMilliseconds}ms\n响应段数=${result.segments.orEmpty().size}")
-            logAiCall("←$logTag", prompt, result.toString(), messages)
-            result
-        } catch (e: Exception) {
-            DebugLogger.log("AI/$logTag/错误", "模型请求失败\n总耗时=${startedAt.elapsedNow().inWholeMilliseconds}ms\n异常=${e::class.simpleName}\n原因=${e.message ?: "未知错误"}")
-            throw e
-        }
-    }
-
     fun logAiCall(tag: String, prompt: String, response: String, allMessages: List<AiMessage>? = null) {
         if (!DebugLogger.enabled) return
         val details = buildString {

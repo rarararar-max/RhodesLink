@@ -10,6 +10,9 @@ import com.rhodes.privatechat.shared.model.ChatSession
 import com.rhodes.privatechat.shared.model.MemoryAnchor
 import com.rhodes.privatechat.shared.model.MemorySourceKind
 import com.rhodes.privatechat.shared.model.Operator
+import com.rhodes.privatechat.util.ContextProvenance as Provenance
+import com.rhodes.privatechat.util.ContextProvenance.Entry as ProvenanceEntry
+import com.rhodes.privatechat.util.ContextProvenance.Outcome as ProvenanceOutcome
 import com.rhodes.privatechat.util.DebugLogger
 import com.rhodes.privatechat.util.ChatTrace
 import com.rhodes.privatechat.shared.model.RelationshipType
@@ -130,6 +133,59 @@ class GroupChatViewModel(
     }
 
     private val autoLogInstanceId = Integer.toHexString(System.identityHashCode(this))
+
+    /** 本轮群聊上下文引用记录（记忆/知识库），用于结果卡与操作详情。 */
+    private var groupKbRecall: com.rhodes.privatechat.shared.knowledge.KnowledgeBaseContextBuilder.Recall? = null
+    private var groupProvenanceEntries: List<com.rhodes.privatechat.util.ContextProvenance.Entry> = emptyList()
+
+    /**
+     * 逐条判定群聊本轮的记忆/知识库有没有生效、没生效的原因是什么。
+     * 只读已有的设置与已算出的上下文，不产生额外的数据库或模型调用。
+     */
+    private fun buildGroupProvenance(
+        relationHints: String,
+        privateContext: String,
+        groupMemory: String,
+        groupSummary: String,
+        groupDailySummary: String,
+        publicMemory: String,
+        knowledgeRecall: com.rhodes.privatechat.shared.knowledge.KnowledgeBaseContextBuilder.Recall?,
+    ): List<com.rhodes.privatechat.util.ContextProvenance.Entry> {
+        val entries = mutableListOf<ProvenanceEntry>()
+        fun entry(channel: String, source: String, generationOn: Boolean, data: String) {
+            val allowed = settings.isMemoryInjectionAllowed("group_chat", source)
+            entries += ProvenanceEntry(
+                channel = channel,
+                outcome = Provenance.memoryOutcome(
+                    totalSwitchOn = settings.memoryV2Enabled,
+                    sourceAllowed = allowed,
+                    generationOn = generationOn,
+                    hasData = data.isNotBlank() && data != "无",
+                    injected = data.isNotBlank() && data != "无",
+                ),
+            )
+        }
+        entry("群聊记忆", "GROUP_CHAT", settings.groupMemoryGenerationEnabled, groupMemory)
+        entry("群聊滚动摘要", "GROUP_CHAT", settings.groupSummaryGenerationEnabled, groupSummary)
+        entry("群聊每日摘要", "GROUP_CHAT", settings.groupDailySummaryGenerationEnabled, groupDailySummary)
+        entry("成员私聊背景", "MEMBER_PRIVATE_CHAT", settings.privateMemoryGenerationEnabled, privateContext)
+        entry("关系网传递", "RELATIONSHIP", settings.privateMemoryPromotionEnabled, relationHints)
+        entry("公开动态与评论", "MOMENT", settings.momentMemoryGenerationEnabled, publicMemory)
+        val recall = knowledgeRecall
+        entries += ProvenanceEntry(
+            channel = "知识库引用",
+            outcome = if (recall == null) ProvenanceOutcome.TIMEOUT else Provenance.knowledgeOutcome(recall.reason, recall.hits.size, recall.injectedHits.size),
+            detail = recall?.let { r ->
+                when {
+                    r.injectedHits.isNotEmpty() -> r.injectedHits.take(3).joinToString("、") { "${it.book}（相似 ${(it.score * 100).toInt() / 100.0}）" }
+                    r.hits.isNotEmpty() -> "命中 ${r.hits.size} 段但未进入提示词"
+                    r.assignedBooks > 0 -> "已关联 ${r.assignedBooks} 本知识库"
+                    else -> ""
+                }
+            }.orEmpty(),
+        )
+        return entries
+    }
 
     /** 当前厂商与开关是否真的会让本次请求走深度思考。 */
     private val deepseekThinkingActive: Boolean
@@ -1057,8 +1113,12 @@ class GroupChatViewModel(
                          }.toSet()
                       }
                     val query = requestText.ifBlank { groupPlotSummary.ifBlank { groupSummary } }
-                      if (memberBookIds.isEmpty()) "无" else optionalGroupContext("知识库向量召回", "knowledge_recall", 30_000L, "无") {
-                          knowledgeBaseContextBuilder?.forOperators(activeMembers.map { it.id }, query, 2, 720, memberBookIds).orEmpty()
+                      if (memberBookIds.isEmpty()) {
+                          groupKbRecall = com.rhodes.privatechat.shared.knowledge.KnowledgeBaseContextBuilder.Recall("无", reason = "no_assignment")
+                          "无"
+                      } else optionalGroupContext("知识库向量召回", "knowledge_recall", 30_000L, "无") {
+                          knowledgeBaseContextBuilder?.forOperatorsRecall(activeMembers.map { it.id }, query, 2, 720, memberBookIds)
+                              ?.also { groupKbRecall = it }?.text.orEmpty()
                       }.ifBlank { "无" }
                  }
                  DebugLogger.contextUsed(
@@ -1066,6 +1126,15 @@ class GroupChatViewModel(
                      memoryCount = DebugLogger.countContextBlocks(unifiedGroupMemory),
                      knowledgeCount = DebugLogger.countContextBlocks(groupKnowledgeBaseContext),
                      injectedCount = listOf(unifiedGroupMemory, groupKnowledgeBaseContext).count { it.isNotBlank() && it != "无" }
+                 )
+                 groupProvenanceEntries = buildGroupProvenance(
+                     relationHints = relationHints,
+                     privateContext = memberPrivateContext,
+                     groupMemory = unifiedGroupMemory,
+                     groupSummary = groupSummary,
+                     groupDailySummary = groupDailySummary,
+                     publicMemory = groupPublicMemories,
+                     knowledgeRecall = groupKbRecall,
                  )
                 val userMessage = if (isAuto) "（用户没有新发言。请只根据最近群聊自然延续话题，不要替用户发言。）" else if (autoSpeak) "（群聊已空闲一段时间，干员们自然地闲聊起来，无需等待用户发言。）" else requestText
                 // Automatic rounds have their own prompt: no user message exists and the group
@@ -1311,6 +1380,22 @@ class GroupChatViewModel(
                 """.trimIndent()))
                 DebugLogger.chatEvent("群聊", "请求模型", "开始", "群=$groupName，模式=$mode，成员=${activeMembers.size}，自动=$isAuto")
                 DebugLogger.attachOperationModule(debugRoundId, "完整请求", sharedUtils.logAiCallText(apiMessages), sensitive = true)
+                if (groupProvenanceEntries.isNotEmpty()) {
+                    val provenanceSummary = com.rhodes.privatechat.util.ContextProvenance.compactSummary(groupProvenanceEntries)
+                    DebugLogger.conversationStep(debugRoundId, "群聊", "上下文引用", "本轮", provenanceSummary)
+                    // 只用一个模块：详情页的标签页是模块名，模块太多会把标签挤到显示不出来。
+                    DebugLogger.attachOperationModule(
+                        debugRoundId, "上下文引用",
+                        com.rhodes.privatechat.util.ContextProvenance.detail(
+                            "群聊", groupProvenanceEntries,
+                            if (DebugLogger.allowSensitiveTrace) {
+                                groupKbRecall?.hits?.map { "【知识库：${it.book}】${it.snippet.take(160)}（相似 ${(it.score * 100).toInt() / 100.0}）" }.orEmpty()
+                            } else {
+                                emptyList()
+                            },
+                        ),
+                    )
+                }
                 DebugLogger.conversationStep(debugRoundId, "群聊", "模型请求", "开始", "成员=${activeMembers.joinToString("、") { it.name }}，自动=$isAuto，消息数=${apiMessages.size}")
                 // In automatic mode, send requested history first and retry only after the
                 // provider reports its real context limit.

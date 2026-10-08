@@ -14,6 +14,7 @@ fun SettingsRepository.voiceCallSetupMessage(voiceId: String): String? = when {
     !hasAsrConfiguration() -> "请先在模型设置中填写语音识别模型和密钥。"
     !hasTtsConfiguration() -> "请先在模型设置中填写文字转语音模型和密钥。"
     ttsProvider == "vocu" && voiceId.isBlank() -> "Vocu 需要在角色编辑页填写音色 ID。"
+    ttsProvider == "volcano" && voiceId.isBlank() -> "火山引擎需要在角色编辑页填写音色 ID（控制台音色库里的 Speaker ID，S_ 开头）。"
     else -> null
 }
 
@@ -24,14 +25,18 @@ fun defaultTtsVoiceId(provider: String): String =
     when (provider) {
         "xiaomi" -> "mimo_default"
         "vocu" -> ""
+        // 火山没有公共默认音色：必须用玩家自己复刻得到的 Speaker ID。
+        "volcano" -> ""
         else -> "male-qn-qingse"
     }
 
 fun createTtsGateway(endpoint: String, apiKey: String, modelName: String, provider: String = ""): TtsGateway {
     val isVocu = provider == "vocu" || endpoint.contains("vocu.ai")
+    val isVolcano = provider == "volcano" || endpoint.contains("openspeech.bytedance.com")
     return if (endpoint.isNotBlank() && apiKey.isNotBlank() && (isVocu || modelName.isNotBlank())) {
         when {
             isVocu -> VocuTtsGateway(endpoint, apiKey)
+            isVolcano -> VolcanoTtsGateway(endpoint, apiKey, resourceId = modelName)
             provider == "xiaomi" || endpoint.contains("api.xiaomimimo.com") -> XiaomiMimoTtsGateway(endpoint, apiKey, modelName)
             else -> MinimaxTtsGateway(endpoint = endpoint, apiKey = apiKey, modelName = modelName)
         }

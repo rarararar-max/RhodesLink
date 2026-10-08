@@ -207,10 +207,32 @@ class MainViewModel(
     }
     suspend fun importKnowledgeBase(fileName: String, bytes: ByteArray, name: String): KnowledgeBase =
         requireNotNull(knowledgeBaseImportService) { "知识库服务不可用" }.importFile(fileName, bytes, name)
+            .also { assignNewKnowledgeBaseToAllOperators(it) }
     suspend fun saveKnowledgeBaseText(name: String, content: String): KnowledgeBase =
         requireNotNull(knowledgeBaseImportService) { "知识库服务不可用" }.saveText(name, content)
+            .also { assignNewKnowledgeBaseToAllOperators(it) }
     suspend fun saveKnowledgeBaseTextInBackground(name: String, content: String): KnowledgeBase =
         requireNotNull(knowledgeBaseImportService) { "知识库服务不可用" }.saveTextInBackground(name, content)
+            .also { assignNewKnowledgeBaseToAllOperators(it) }
+
+    /**
+     * 新建的知识库默认关联所有角色。
+     *
+     * 旧行为是"默认不关联任何人"，玩家导入完资料后角色其实什么都没读到，却以为知识库已经生效；
+     * 先全关联，玩家想限制范围再到角色编辑里单独取消即可（索引未完成或话题不相关时本来也不会被检索）。
+     * 客服内置说明书不走这里，它有独立的 sourceType，不会被关联给角色。
+     */
+    private suspend fun assignNewKnowledgeBaseToAllOperators(book: KnowledgeBase) {
+        runCatching {
+            val operatorIds = repository.getAllOperatorsSync().map { it.id }
+            if (operatorIds.isEmpty()) return@runCatching
+            repository.knowledgeBases.replaceAssignmentsForKnowledgeBase(book.id, operatorIds)
+            _knowledgeBaseAssignmentRevision.value++
+            DebugLogger.log("KnowledgeBase/Assignments", "新建知识库默认关联全部角色, bookId=${book.id}, roles=${operatorIds.size}")
+        }.onFailure {
+            DebugLogger.diagnostic("KnowledgeBase/DefaultAssignFailed", "bookId=${book.id}, error=${it.javaClass.simpleName}:${it.message?.take(120)}")
+        }
+    }
     suspend fun resumeKnowledgeBaseProcessing(book: KnowledgeBase) =
         knowledgeBaseImportService?.resumeBackgroundProcessing(book)
     suspend fun updateKnowledgeBaseText(existing: KnowledgeBase, name: String, content: String): KnowledgeBase =

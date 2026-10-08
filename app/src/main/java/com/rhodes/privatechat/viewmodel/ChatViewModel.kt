@@ -31,6 +31,7 @@ import com.rhodes.privatechat.shared.vector.VectorMemory
 import com.rhodes.privatechat.shared.knowledge.KnowledgeBaseContextBuilder
 import com.rhodes.privatechat.shared.knowledge.KnowledgeBaseRecallPolicy
 import com.rhodes.privatechat.util.ChatTrace
+import com.rhodes.privatechat.util.ContextProvenance
 import com.rhodes.privatechat.util.DebugLogger
 import com.rhodes.privatechat.notification.RhodesAppVisibility
 import com.rhodes.privatechat.notification.RhodesNotificationCenter
@@ -1261,7 +1262,10 @@ ${text}"""
                 if (debugRoundFinished) return
                 val usage = cacheUsage.summary()
                 DebugLogger.attachOperationModule(debugRoundId, "模型用量", usage)
-                DebugLogger.conversationStep(debugRoundId, "私聊", "本轮总览", result, "$summary，缓存=$usage")
+                // 结果卡上直接写清"这一轮引用了什么、没引用是因为什么"，玩家不用再翻日志。
+                val provenance = provenanceSummary(session.id)
+                val fullSummary = if (provenance.isBlank()) "$summary，缓存=$usage" else "$summary，缓存=$usage\n$provenance"
+                DebugLogger.conversationStep(debugRoundId, "私聊", "本轮总览", result, fullSummary)
                 debugRoundFinished = true
             }
             try {
@@ -1458,6 +1462,7 @@ ${text}"""
                         if (promptBuildJobs[session.id] === promptBuildJob) promptBuildJobs.remove(session.id)
                         DebugLogger.diagnostic("PrivateChat/ReplyStep", "sessionId=${session.id}, messageId=$msgId, step=prompt_done, messages=${apiMessages.size}")
                         DebugLogger.attachOperationModule(debugRoundId, "完整请求", sharedUtils.logAiCallText(apiMessages), sensitive = true)
+                        attachProvenance(debugRoundId, session.id)
                         recordReplyPipeline(session.id, msgId, "prompt_ready", "messages=${apiMessages.size}")
                         DebugLogger.chatEvent("私聊", "请求模型", "开始", "会话=${session.operatorName}，模式=$mode，历史轮数=$effectiveHistoryMessages")
                         DebugLogger.conversationStep(debugRoundId, "私聊", "模型请求", "开始", "历史轮数=$effectiveHistoryMessages，消息数=${apiMessages.size}")
@@ -2889,6 +2894,10 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             ::remainingPromptBudgetMs, "无", onStage
         ) { buildPrivateGroupContext(session.operatorId, userContent) }
         val allowPrivateRecall = !archiveContextActive || archivePrivateRecallReady
+        var kbRecall: com.rhodes.privatechat.shared.knowledge.KnowledgeBaseContextBuilder.Recall? = null
+        // 本轮上下文引用记录：拼完提示词后落到操作详情与结果卡上，玩家不必再翻日志。
+        var provenanceEntries: List<ContextProvenance.Entry> = emptyList()
+        var provenanceMarkers: List<Pair<ContextProvenance.Entry, String>> = emptyList()
         val stableImpression = if (allowPrivateRecall && settings.isMemoryInjectionAllowed("private_chat", "PRIVATE_CHAT")) optionalContextRead(
             session.id, "stable_impression_read", "prompt_stable_impression", 10_000L,
             ::remainingPromptBudgetMs, "", onStage
@@ -2946,11 +2955,14 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
                 .filter { it.enabled && settings.isKnowledgeBaseEnabledForBook(it.knowledgeBaseId, "private_chat") }
                 .mapTo(mutableSetOf()) { it.knowledgeBaseId }
         }
-        val knowledgeBaseContext = if (privateKnowledgeBooks.isEmpty()) "无" else optionalContextRead(
+        val knowledgeBaseContext = if (privateKnowledgeBooks.isEmpty()) {
+            kbRecall = com.rhodes.privatechat.shared.knowledge.KnowledgeBaseContextBuilder.Recall("无", reason = "no_assignment")
+            "无"
+        } else optionalContextRead(
             session.id, "knowledge_recall", "prompt_knowledge_vector", 30_000L,
             ::remainingPromptBudgetMs, "无", onStage
         ) {
-            knowledgeBaseContextBuilder?.forOperator(
+            knowledgeBaseContextBuilder?.forOperatorRecall(
                 session.operatorId,
                 recallQuery,
                 KnowledgeBaseRecallPolicy.PRIVATE_FINAL_RESULTS,
@@ -2958,9 +2970,33 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
                 privateKnowledgeBooks,
                 KnowledgeBaseRecallPolicy.PRIVATE_PER_BOOK_RESULTS,
                 settings.knowledgeBasePrivateCandidateLimit,
-            ).orEmpty()
+            )?.also { kbRecall = it }?.text.orEmpty()
         }.ifBlank { "无" }
         onStage?.invoke("prompt_knowledge_context_done")
+        provenanceEntries = buildPrivateProvenance(
+            archiveContextActive = archiveContextActive,
+            allowPrivateRecall = allowPrivateRecall,
+            allowGroupRecall = allowGroupRecall,
+            allowRelationshipRecall = allowRelationshipRecall,
+            privateRecallSources = privateRecallSources,
+            stableImpression = stableImpression,
+            shortTerm = shortTerm?.content.orEmpty(),
+            personalMemory = personalMemoryContext,
+            relationshipMemory = relationshipMemoryContext,
+            groupContext = groupContext,
+            knowledgeRecall = kbRecall,
+        )
+        provenanceMarkers = provenanceEntries.map { entry ->
+            entry to when (entry.channel) {
+                "滚动摘要" -> shortTerm?.content.orEmpty()
+                "长期印象" -> stableImpression
+                "个人向量记忆" -> personalMemoryContext
+                "关系网传递" -> relationshipMemoryContext
+                "群聊近况" -> groupContext
+                "知识库引用" -> knowledgeBaseContext.takeIf { it != "无" }.orEmpty()
+                else -> ""
+            }
+        }
         DebugLogger.contextUsed(
             surface = "私聊",
             memoryCount = DebugLogger.countContextBlocks(recallMemoryContext),
@@ -3178,6 +3214,36 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
                 完成上述字段后，才输出${if (mode == "online") "【台词】" else "【旁白】和【台词】"}。
             """.trimIndent()))
         }
+        // 复核"读到了"与"真的进入了本轮提示词"的区别，并把结论缓存给结果卡与操作详情。
+        // 读到了却没进提示词的原因通常是长度上限裁剪，或玩家自定义模板没有引用该占位符。
+        val finalPromptText = messages.joinToString("\n") { it.content }
+        val finalized = provenanceMarkers.map { (entry, marker) ->
+            if (entry.outcome == ContextProvenance.Outcome.INJECTED && marker.isNotBlank() &&
+                !finalPromptText.contains(marker.trim().take(30))
+            ) {
+                entry.copy(
+                    outcome = ContextProvenance.Outcome.TRIMMED,
+                    detail = "读到内容但未进入本轮提示词（长度上限裁剪或自定义模板未引用该占位符）",
+                )
+            } else {
+                entry
+            }
+        }
+        val provenanceSnippets = buildList {
+            listOf(
+                "滚动摘要" to shortTerm?.content.orEmpty(),
+                "长期印象" to stableImpression,
+                "个人向量记忆" to personalMemoryContext,
+                "关系网传递" to relationshipMemoryContext,
+                "群聊近况" to groupContext,
+            ).forEach { (name, text) ->
+                if (text.isNotBlank() && text != "无") add("【$name】${text.take(300)}")
+            }
+            kbRecall?.hits?.forEach { hit ->
+                add("【知识库：${hit.book}】${hit.snippet.take(160)}（相似 ${(hit.score * 100).toInt() / 100.0}）")
+            }
+        }
+        roundProvenance[session.id] = RoundProvenance(finalized, provenanceSnippets)
         // Automatic mode sends the requested history first and lets the provider report its
         // actual capacity. The retry path then trims only older rounds.
         onStage?.invoke("prompt_token_trim_start")
@@ -3206,7 +3272,97 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         return messages
     }
 
-    /** 上一轮回复的形态摘要：段类型序列 + 台词长度。只用于让本轮改变节奏，不携带内容。 */
+    /** 本轮上下文引用（记忆/知识库）的可解释记录，缓存在内存里供结果卡与操作详情读取。 */
+    private data class RoundProvenance(
+        val entries: List<ContextProvenance.Entry>,
+        val snippets: List<String>,
+    )
+
+    private val roundProvenance = ConcurrentHashMap<String, RoundProvenance>()
+
+    /**
+     * 逐条判定私聊本轮的记忆/知识库有没有生效，没生效的原因是什么。
+     * 全部判定都是已知状态，不产生额外的数据库或模型调用。
+     */
+    private fun buildPrivateProvenance(
+        archiveContextActive: Boolean,
+        allowPrivateRecall: Boolean,
+        allowGroupRecall: Boolean,
+        allowRelationshipRecall: Boolean,
+        privateRecallSources: Set<String>,
+        stableImpression: String,
+        shortTerm: String,
+        personalMemory: String,
+        relationshipMemory: String,
+        groupContext: String,
+        knowledgeRecall: com.rhodes.privatechat.shared.knowledge.KnowledgeBaseContextBuilder.Recall?,
+    ): List<ContextProvenance.Entry> {
+        val entries = mutableListOf<ContextProvenance.Entry>()
+        val memorySwitchOn = settings.memoryV2Enabled
+        fun memoryEntry(channel: String, source: String, generationOn: Boolean, data: String) {
+            val allowed = settings.isMemoryInjectionAllowed("private_chat", source)
+            entries += ContextProvenance.Entry(
+                channel = channel,
+                outcome = ContextProvenance.memoryOutcome(
+                    totalSwitchOn = memorySwitchOn,
+                    sourceAllowed = allowed,
+                    generationOn = generationOn,
+                    hasData = data.isNotBlank() && data != "无",
+                    injected = data.isNotBlank() && data != "无",
+                ),
+                detail = if (data.isNotBlank() && data != "无") "已注入" else "",
+            )
+        }
+        memoryEntry("滚动摘要", "PRIVATE_CHAT", settings.privateSummaryGenerationEnabled, shortTerm)
+        memoryEntry("长期印象", "PRIVATE_CHAT", settings.privateMemoryGenerationEnabled, stableImpression)
+        memoryEntry("个人向量记忆", "PRIVATE_CHAT", settings.privateMemoryGenerationEnabled, personalMemory)
+        memoryEntry("关系网传递", "RELATIONSHIP", settings.privateMemoryPromotionEnabled, relationshipMemory)
+        memoryEntry("群聊近况", "GROUP_CHAT", settings.groupSummaryGenerationEnabled, groupContext)
+        if (archiveContextActive) {
+            entries += ContextProvenance.Entry("剧情存档隔离", ContextProvenance.Outcome.DISABLED_BY_SWITCH, "当前处于存档上下文，旧时间线的记忆不参与本轮")
+        }
+        if (privateRecallSources.isEmpty() && memorySwitchOn) {
+            entries += ContextProvenance.Entry("可检索来源", ContextProvenance.Outcome.DISABLED_BY_SWITCH, "所有来源都在“设置 → 记忆 → 注入”里被关闭")
+        }
+        val recall = knowledgeRecall
+        entries += ContextProvenance.Entry(
+            channel = "知识库引用",
+            outcome = if (recall == null) {
+                ContextProvenance.Outcome.TIMEOUT
+            } else {
+                ContextProvenance.knowledgeOutcome(
+                    reason = recall.reason,
+                    hitCount = recall.hits.size,
+                    injectedCount = recall.injectedHits.size,
+                )
+            },
+            detail = recall?.let { r ->
+                when {
+                    r.injectedHits.isNotEmpty() -> r.injectedHits.take(3).joinToString("、") { "${it.book}（相似 ${(it.score * 100).toInt() / 100.0}）" }
+                    r.hits.isNotEmpty() -> "命中 ${r.hits.size} 段但未进入提示词"
+                    r.assignedBooks > 0 -> "已关联 ${r.assignedBooks} 本知识库"
+                    else -> ""
+                }
+            }.orEmpty(),
+        )
+        return entries
+    }
+
+    /** 把本轮引用记录挂到调试操作上（只用一个模块，避免把详情页的标签挤爆）。 */
+    private fun attachProvenance(operationId: String, sessionId: String) {
+        val record = roundProvenance[sessionId] ?: return
+        if (record.entries.isEmpty()) return
+        // 原文片段只在玩家打开"完整模型内容"时才写入，避免默认暴露大段记忆/知识库内容。
+        val snippets = if (DebugLogger.allowSensitiveTrace) record.snippets else emptyList()
+        DebugLogger.attachOperationModule(
+            operationId, "上下文引用",
+            ContextProvenance.detail("私聊", record.entries, snippets),
+        )
+    }
+
+    private fun provenanceSummary(sessionId: String): String =
+        roundProvenance[sessionId]?.let { ContextProvenance.compactSummary(it.entries) }.orEmpty()
+
     private fun previousReplyShape(message: ChatMessage): String = runCatching {
         val parsed = json.decodeFromString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), message.content)
         val segments = parsed.segments.orEmpty().filter { it.content.isNotBlank() }

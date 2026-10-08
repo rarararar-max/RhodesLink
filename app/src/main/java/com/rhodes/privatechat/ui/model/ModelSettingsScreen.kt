@@ -262,6 +262,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 require(ttsModelName.trim().isNotBlank()) { "请填写文字转语音模型名" }
                 require(key.isNotBlank()) { "请填写文字转语音密钥，或先填写聊天密钥" }
                 require(ttsProvider != "vocu") { "Vocu 没有公共默认音色，请在角色编辑页填写音色 ID 后测试" }
+                require(ttsProvider != "volcano") { "火山引擎没有公共默认音色，请在角色编辑页填写你自己复刻的音色 ID（S_ 开头）后测试" }
                 val audioBytes = createTtsGateway(ttsBaseUrl.trim(), key, ttsModelName.trim(), ttsProvider)
                     .synthesize(TtsRequest("测试成功", defaultTtsVoiceId(ttsProvider))).audioBytes
                 if (audioBytes == null || audioBytes.isEmpty()) {
@@ -464,21 +465,30 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             }
 
             SettingsSection("文字转语音 TTS") {
-                DropDown("服务商", listOf("MiniMax", "小米 MiMo", "Vocu", "自填（MiniMax 兼容）"), when (ttsProvider) { "minimax" -> 0; "xiaomi" -> 1; "vocu" -> 2; else -> 3 }) { index ->
-                    ttsProvider = listOf("minimax", "xiaomi", "vocu", "custom")[index]
+                DropDown("服务商", listOf("MiniMax", "小米 MiMo", "Vocu", "火山引擎（豆包语音）", "自填（MiniMax 兼容）"), when (ttsProvider) { "minimax" -> 0; "xiaomi" -> 1; "vocu" -> 2; "volcano" -> 3; else -> 4 }) { index ->
+                    ttsProvider = listOf("minimax", "xiaomi", "vocu", "volcano", "custom")[index]
                     if (index == 0) { ttsBaseUrl = "wss://api.minimaxi.com/ws/v1/t2a_v2"; ttsModelName = "speech-2.8-hd" }
                     if (index == 1) { ttsBaseUrl = "https://api.xiaomimimo.com/v1/chat/completions"; ttsModelName = "mimo-v2.5-tts" }
                     if (index == 2) { ttsBaseUrl = "https://v1.vocu.ai/api/tts/simple-generate"; ttsModelName = "v3.0" }
+                    if (index == 3) { ttsBaseUrl = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"; ttsModelName = "seed-icl-2.0" }
                 }
                 Text(when (ttsProvider) {
                     "xiaomi" -> "小米 MiMo 使用 HTTP 非流式 TTS，支持 mimo_default、冰糖、茉莉、苏打等预置音色。"
                     "vocu" -> "Vocu 使用同步 HTTP TTS。请在角色编辑页填写 Vocu 的 Voice ID（UUID）并测试，生成和测试都会消耗点数。"
+                    "volcano" -> "火山引擎（豆包语音）使用 V3 单向流式合成，音色需你自己在豆包语音控制台复刻。API Key 请在控制台「API Key 管理」创建后填到这里；音色 ID 在下方「模型版本」对应控制台的「音色库 - 我的音色」里，格式 S_ 开头。"
                     else -> "自填服务必须兼容 MiniMax WebSocket TTS 协议。"
                 }, fontSize = 12.sp, color = TextSecondary)
                 Spacer(Modifier.height(10.dp))
                 LabeledField(if (ttsProvider == "minimax" || ttsProvider == "custom") "WebSocket 地址" else "API 地址") { TextInput(ttsBaseUrl, { ttsBaseUrl = it }, ctx) }
                 Spacer(Modifier.height(10.dp))
-                if (ttsProvider == "vocu") {
+                if (ttsProvider == "volcano") {
+                    // 复刻 1.0 与 2.0 的音色不能混用：版本必须与训练时一致，否则会返回 resource mismatch。
+                    DropDown("模型版本", listOf("声音复刻 2.0（情感更强，中英）", "声音复刻 1.0（低延迟，多语种）"), if (ttsModelName.startsWith("seed-icl-1.0")) 1 else 0) { index ->
+                        ttsModelName = if (index == 0) "seed-icl-2.0" else "seed-icl-1.0"
+                    }
+                    Text("音色必须与版本匹配：用 2.0 复刻的填 2.0，用 1.0 复刻的填 1.0，否则会报「音色与模型版本不匹配」。", fontSize = 11.sp, color = TextSecondary)
+                    Spacer(Modifier.height(6.dp))
+                } else if (ttsProvider == "vocu") {
                     Text("Vocu 接口不需要填写模型名。", fontSize = 12.sp, color = TextSecondary)
                 } else {
                     LabeledField("模型名") { TextInput(ttsModelName, { ttsModelName = it }, ctx, placeholder = "speech-2.8-hd") }

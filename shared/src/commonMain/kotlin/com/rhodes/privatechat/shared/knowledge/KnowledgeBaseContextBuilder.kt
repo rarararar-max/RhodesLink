@@ -25,6 +25,30 @@ class KnowledgeBaseContextBuilder(
         return KnowledgeBaseRecallPolicy.wrapReference(blocks)
     }
 
+    /**
+     * 知识库召回的结果，除了给提示词的文本，还带上"命中了哪本书哪一段"和未命中原因。
+     * 用途：调试记录里要能告诉玩家"知识库到底生效了没有、引用了哪一条、没生效是因为什么"。
+     */
+    data class Recall(
+        val text: String,
+        val hits: List<Hit> = emptyList(),
+        val reason: String = "",
+        val assignedBooks: Int = 0,
+    ) {
+        val injectedHits: List<Hit> get() = hits.filter { it.injected }
+    }
+
+    data class Hit(val book: String, val snippet: String, val score: Double, val injected: Boolean)
+
+    /** 原因码：no_assignment / blank_query / embedding_unavailable / index_not_ready / no_match */
+    private fun hitOf(candidate: KnowledgeBaseRecallPolicy.Candidate, rendered: String): Hit = Hit(
+        book = candidate.bookName,
+        snippet = candidate.text,
+        score = candidate.score,
+        // 渲染时会把资料标记转义，正常文本按前缀匹配即可判断是否真的进了提示词。
+        injected = rendered.contains(candidate.text.take(40)),
+    )
+
     suspend fun forOperator(
         operatorId: String,
         query: String,
@@ -36,13 +60,30 @@ class KnowledgeBaseContextBuilder(
         queryEmbeddingTimeoutMs: Long = KnowledgeBaseRecallPolicy.PRIVATE_QUERY_EMBEDDING_TIMEOUT_MS,
         perBookTimeoutMs: Long = KnowledgeBaseRecallPolicy.PRIVATE_PER_BOOK_TIMEOUT_MS,
         workBudgetMs: Long = KnowledgeBaseRecallPolicy.PRIVATE_WORK_BUDGET_MS,
-    ): String {
-        if (operatorId.isBlank() || query.isBlank()) return "无"
+    ): String = forOperatorRecall(
+        operatorId, query, maxEntries, maxChars, allowedBookIds, perBookResults, candidateLimit,
+        queryEmbeddingTimeoutMs, perBookTimeoutMs, workBudgetMs,
+    ).text
+
+    suspend fun forOperatorRecall(
+        operatorId: String,
+        query: String,
+        maxEntries: Int,
+        maxChars: Int,
+        allowedBookIds: Set<String>? = null,
+        perBookResults: Int = 1,
+        candidateLimit: Int = 160,
+        queryEmbeddingTimeoutMs: Long = KnowledgeBaseRecallPolicy.PRIVATE_QUERY_EMBEDDING_TIMEOUT_MS,
+        perBookTimeoutMs: Long = KnowledgeBaseRecallPolicy.PRIVATE_PER_BOOK_TIMEOUT_MS,
+        workBudgetMs: Long = KnowledgeBaseRecallPolicy.PRIVATE_WORK_BUDGET_MS,
+    ): Recall {
+        if (operatorId.isBlank() || query.isBlank()) return Recall("无", reason = "blank_query")
         val assignments = repository.getAssignments(operatorId).filter { it.enabled && (allowedBookIds == null || it.knowledgeBaseId in allowedBookIds) }
-        if (assignments.isEmpty()) return "无"
+        if (assignments.isEmpty()) return Recall("无", reason = "no_assignment")
         val activeSignature = vectorService.currentEmbeddingSignature()
         val books = repository.getAll().associateBy { it.id }
         val candidates = mutableListOf<KnowledgeBaseRecallPolicy.Candidate>()
+        var usableBooks = 0
         val deadline = System.currentTimeMillis() + workBudgetMs
         val queryEmbedding = withTimeoutOrNull(queryEmbeddingTimeoutMs) {
             try {
@@ -53,11 +94,14 @@ class KnowledgeBaseContextBuilder(
                 emptyList()
             }
         }.orEmpty()
-        if (queryEmbedding.isEmpty()) return "无"
+        if (queryEmbedding.isEmpty()) {
+            return Recall("无", reason = "embedding_unavailable", assignedBooks = assignments.size)
+        }
         assignments.forEachIndexed assignmentLoop@{ order, assignment ->
             val remaining = deadline - System.currentTimeMillis()
             if (remaining <= 0L) return@assignmentLoop
             val book = books[assignment.knowledgeBaseId]?.takeIf { KnowledgeBaseRecallPolicy.isUsableIndex(it.indexStatus, it.indexedEmbeddingSignature, activeSignature) } ?: return@assignmentLoop
+            usableBooks++
             val results = withTimeoutOrNull(minOf(perBookTimeoutMs, remaining)) {
                 try {
                     vectorService.searchWithEmbedding(VectorSearchRequest(
@@ -76,11 +120,27 @@ class KnowledgeBaseContextBuilder(
                 if (text.isNotBlank()) candidates += KnowledgeBaseRecallPolicy.Candidate(book.name.escapeReservedMarkers(), text, result.similarity, order)
             }
         }
-        return renderCandidates(KnowledgeBaseRecallPolicy.selectTop(candidates, maxEntries), maxChars)
+        if (candidates.isEmpty()) {
+            return Recall(
+                "无",
+                reason = if (usableBooks == 0) "index_not_ready" else "no_match",
+                assignedBooks = assignments.size,
+            )
+        }
+        val selected = KnowledgeBaseRecallPolicy.selectTop(candidates, maxEntries)
+        val rendered = renderCandidates(selected, maxChars)
+        return Recall(
+            text = rendered,
+            hits = selected.map { hitOf(it, rendered) },
+            assignedBooks = assignments.size,
+        )
     }
 
-    suspend fun forOperators(operatorIds: Collection<String>, query: String, maxEntries: Int, maxChars: Int, allowedBookIds: Set<String>): String {
-        if (operatorIds.isEmpty() || allowedBookIds.isEmpty() || query.isBlank()) return "无"
+    suspend fun forOperators(operatorIds: Collection<String>, query: String, maxEntries: Int, maxChars: Int, allowedBookIds: Set<String>): String =
+        forOperatorsRecall(operatorIds, query, maxEntries, maxChars, allowedBookIds).text
+
+    suspend fun forOperatorsRecall(operatorIds: Collection<String>, query: String, maxEntries: Int, maxChars: Int, allowedBookIds: Set<String>): Recall {
+        if (operatorIds.isEmpty() || allowedBookIds.isEmpty() || query.isBlank()) return Recall("无", reason = "no_assignment")
         val books = repository.getAll().associateBy { it.id }
         val activeSignature = vectorService.currentEmbeddingSignature()
         val candidates = mutableListOf<KnowledgeBaseRecallPolicy.Candidate>()
@@ -94,7 +154,7 @@ class KnowledgeBaseContextBuilder(
                 emptyList()
             }
         }.orEmpty()
-        if (queryEmbedding.isEmpty()) return "无"
+        if (queryEmbedding.isEmpty()) return Recall("无", reason = "embedding_unavailable", assignedBooks = allowedBookIds.size)
         var order = 0
         val visitedBookIds = mutableSetOf<String>()
         operatorIds.distinct().forEach { operatorId ->
@@ -118,7 +178,14 @@ class KnowledgeBaseContextBuilder(
                 candidates += KnowledgeBaseRecallPolicy.Candidate(book.name.escapeReservedMarkers(), text, result.similarity, order++)
             }
         }
-        return renderCandidates(KnowledgeBaseRecallPolicy.selectTop(candidates, maxEntries), maxChars)
+        val selected = KnowledgeBaseRecallPolicy.selectTop(candidates, maxEntries)
+        val rendered = renderCandidates(selected, maxChars)
+        return Recall(
+            text = rendered,
+            hits = selected.map { hitOf(it, rendered) },
+            assignedBooks = visitedBookIds.size,
+            reason = if (candidates.isEmpty()) "no_match" else "",
+        )
     }
 
     private fun renderCandidates(selected: List<KnowledgeBaseRecallPolicy.Candidate>, maxChars: Int): String {

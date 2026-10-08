@@ -30,6 +30,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
@@ -375,7 +376,9 @@ private fun OperationDetails(operation: DebugOperation, onDismiss: () -> Unit, o
         title = { Text(operationTitle(operation), fontSize = 18.sp) },
         text = {
             Column(Modifier.fillMaxWidth().heightIn(max = 620.dp)) {
-                TabRow(selectedTabIndex = tab) { tabs.forEachIndexed { index, title -> Tab(selected = tab == index, onClick = { tab = index }, text = { Text(title, fontSize = 12.sp) }) } }
+                // 模块名就是标签页；模块会随功能增加，等分的 TabRow 会把标签挤到显示不出来，
+                // 因此改用可横向滚动的 ScrollableTabRow。
+                ScrollableTabRow(selectedTabIndex = tab, edgePadding = 12.dp) { tabs.forEachIndexed { index, title -> Tab(selected = tab == index, onClick = { tab = index }, text = { Text(title, fontSize = 12.sp, maxLines = 1) }) } }
                 when (tabs[tab]) {
                     "概览" -> OverviewTab(operation)
                     "过程" -> StepsTab(operation)

@@ -28,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.shared.model.KnowledgeBase
+import com.rhodes.privatechat.ui.theme.AccentGreen
 import com.rhodes.privatechat.ui.theme.BG
 import com.rhodes.privatechat.ui.theme.ErrorRed
 import com.rhodes.privatechat.ui.theme.TextPrimary
@@ -72,7 +73,13 @@ fun KnowledgeBaseDetailScreen(
         Column(Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
             Text(current.name, fontSize = 22.sp, color = TextPrimary)
             Text("${current.rawContent.length} 字 · $chunkCount 个分段 · $enabledChunkCount 个使用中 · 已关联 $roleCount 个角色", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 4.dp))
-            Text("索引状态：${if (enabledChunkCount == 0) "没有可用分段" else indexStatusText(current.indexStatus)}", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 4.dp))
+            val detailIndexReady = current.indexStatus == "ready" && enabledChunkCount > 0
+            Text(
+                "索引状态：${if (enabledChunkCount == 0) "没有可用分段（等待索引）" else indexStatusText(current.indexStatus)}",
+                fontSize = 12.sp,
+                color = if (detailIndexReady) AccentGreen else ErrorRed,
+                modifier = Modifier.padding(top = 4.dp),
+            )
             if (current.indexStatus == "pending") Text("知识库或分段已变更，需要索引后才能参与生成。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 4.dp))
             if (current.indexStatus == "partial_pending_confirm") Text("已完成索引的分段仍可使用；新增或修改的分段等待确认补充索引。", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(top = 4.dp))
             val canRetryFailed = current.indexStatus == "partial_failed"

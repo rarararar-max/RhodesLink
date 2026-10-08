@@ -300,7 +300,9 @@ fun OperatorEditScreen(
             Spacer(modifier = Modifier.height(12.dp))
             SectionCard {
                 SectionTitle("语音音色")
-                Text("语音通话、陪睡和 TTS 会优先使用这里填写的音色ID；未填写时使用当前 TTS 服务商提供的默认音色。", fontSize = 12.sp, color = TextSecondary, lineHeight = 18.sp)
+                Text("语音通话、陪睡和 TTS 会优先使用这里填写的音色ID；未填写时使用当前 TTS 服务商提供的默认音色。" +
+                    if (settings.ttsProvider == "volcano") "当前是火山引擎（豆包语音）：请到豆包语音控制台「音色库 - 我的音色」复制 Speaker ID（S_ 开头）填在这里，并确保与模型设置里选的复刻版本（1.0 / 2.0）一致。" else "",
+                    fontSize = 12.sp, color = TextSecondary, lineHeight = 18.sp)
                 Spacer(modifier = Modifier.height(10.dp))
                 LabeledField("音色ID") {
                     OutlinedTextField(

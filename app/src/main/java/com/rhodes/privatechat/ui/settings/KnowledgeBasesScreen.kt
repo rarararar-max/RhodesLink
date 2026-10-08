@@ -39,6 +39,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.shared.model.KnowledgeBase
 import com.rhodes.privatechat.shared.settings.SettingsRepository
+import androidx.compose.ui.text.font.FontWeight
+import com.rhodes.privatechat.ui.theme.AccentGreen
 import com.rhodes.privatechat.ui.theme.BG
 import com.rhodes.privatechat.ui.theme.ErrorRed
 import com.rhodes.privatechat.ui.theme.Primary
@@ -221,7 +223,14 @@ fun KnowledgeBasesScreen(onBack: () -> Unit, onOpen: (String) -> Unit, modifier:
                         Text(book.name, color = TextPrimary)
                         val stats = bookStats[book.id] ?: Triple(0, 0, 0)
                         Text("${book.rawContent.length} 字 · ${stats.first} 个分段 · 关联 ${stats.second} 个角色 · ${stats.third} 个场景", fontSize = 12.sp, color = TextSecondary)
-                        Text(indexStatusText(book.indexStatus), fontSize = 12.sp, color = TextSecondary)
+                        // 只有"索引完成"才是可用状态；其余一律红色"等待索引"，否则玩家看不出差别。
+                        val indexReady = book.indexStatus == "ready"
+                        Text(
+                            text = if (indexReady) indexStatusText(book.indexStatus) else "● ${indexStatusText(book.indexStatus)}",
+                            fontSize = 12.sp,
+                            color = if (indexReady) AccentGreen else ErrorRed,
+                            fontWeight = if (indexReady) FontWeight.Normal else FontWeight.SemiBold,
+                        )
                     }
                     Text("›", color = TextSecondary, fontSize = 24.sp)
                 }
@@ -288,13 +297,15 @@ private fun KnowledgeBaseTextDialog(
 
 fun indexStatusText(status: String): String = when (status) {
     "ready" -> "索引完成"
-    "processing" -> "处理中：正在分段"
-    "pending_confirm" -> "已分段，等待确认索引"
-    "partial_pending_confirm" -> "部分内容可用，待确认补充索引"
-    "indexing" -> "索引中"
-    else -> if (status.startsWith("indexing:")) "索引中：${status.removePrefix("indexing:")}" else if (status.startsWith("partial_indexing:")) "部分内容可用，正在补充索引：${status.removePrefix("partial_indexing:")}" else when (status) {
-    "partial_failed" -> "部分失败，已完成分段可用，可点此重试失败分段"
-    "failed" -> "索引失败，可点此重建"
+    // 未完成索引的状态一律以"等待索引"开头并配红色，避免和"索引完成"看起来一样；
+    // 括号里保留当前进度或玩家需要做的动作，便于排查。
+    "processing" -> "等待索引（正在分段）"
+    "pending_confirm" -> "等待索引（需确认后开始）"
+    "partial_pending_confirm" -> "等待索引（部分可用，待确认补充）"
+    "indexing" -> "等待索引（索引中）"
+    else -> if (status.startsWith("indexing:")) "等待索引（索引中 ${status.removePrefix("indexing:")}）" else if (status.startsWith("partial_indexing:")) "等待索引（部分可用，补充中 ${status.removePrefix("partial_indexing:")}）" else when (status) {
+    "partial_failed" -> "等待索引（部分可用，可点此补充）"
+    "failed" -> "等待索引（上次失败，可点此重建）"
     else -> "等待索引"
     }
 }

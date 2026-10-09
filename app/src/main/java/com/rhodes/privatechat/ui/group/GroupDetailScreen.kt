@@ -43,6 +43,7 @@ import com.rhodes.privatechat.ui.chat.util.MessageParser
 import com.rhodes.privatechat.ui.gift.GiftDialog
 import com.rhodes.privatechat.ui.gift.GiftTarget
 import com.rhodes.privatechat.viewmodel.MainViewModel
+import com.rhodes.privatechat.viewmodel.shared.GroupEmotionRules
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.util.ChatTrace
 import com.rhodes.privatechat.shared.settings.SettingsRepository
@@ -141,7 +142,23 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
     fun senderAvatar(name: String): String = allOperators.find { it.id == name || it.name == name }?.avatarUri ?: ""
 
     // 使用 MessageParser 将原始消息转换为统一 UI 模型
-    val uiMessages = remember(groupMessages, allOperators, profile, groupRestartAt) {
+    val uiMessages = remember(groupId, groupMessages, allOperators, profile, groupRestartAt) {
+        // 群聊成员心情回退：最新一轮缺心情时先取群聊回合状态的【成员心情】快照（6 小时窗口内）。
+        // 存档隔离：剧情存档上下文不跨存档回退（与私聊 archiveContextActive 同一套判断）。
+        val emotionSeed: ((String, String, Long) -> String)? = runCatching {
+            if (settings.getBoolean("archive_context_active_$groupId", false)) return@runCatching null
+            val state = settings.getGroupTurnState(groupId)
+            val snapshot = GroupEmotionRules.parseEmotionSnapshot(state?.memberEmotions.orEmpty())
+            val snapshotAtMs = state?.updatedAt ?: 0L
+            if (snapshot.isEmpty() || snapshotAtMs <= 0L) null
+            else { speakerId: String, speakerName: String, atMs: Long ->
+                if (!GroupEmotionRules.isFallbackWithinWindow(atMs, snapshotAtMs)) ""
+                else listOf(speakerId.trim(), speakerName.trim())
+                    .filter { it.isNotBlank() }
+                    .firstNotNullOfOrNull { snapshot[it] }
+                    .orEmpty()
+            }
+        }.getOrNull()
         try {
             val parsed = MessageParser.parse(
                 messages = groupMessages,
@@ -149,7 +166,8 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                 senderColor = senderColor,
                 senderAvatar = ::senderAvatar,
                 userAvatarUri = profile.avatarUri,
-                restartAt = groupRestartAt
+                restartAt = groupRestartAt,
+                groupEmotionSeed = emotionSeed
             )
             val safeParsed = if (parsed.isEmpty() && groupMessages.isNotEmpty()) {
                 com.rhodes.privatechat.util.DebugLogger.diagnostic("GroupChat/ParseFallback", "groupId=$groupId,rawCount=${groupMessages.size},reason=empty_parse_result")

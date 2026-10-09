@@ -50,6 +50,11 @@ fun CreditsScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    // 版本号直接读安装包信息，避免每次发版忘记改这里的硬编码文案（之前停在 1.14.1）。
+    val appVersion = remember(context) {
+        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName }
+            .getOrNull().orEmpty().ifBlank { "未知" }
+    }
 
     fun openUrl(url: String) {
         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
@@ -109,7 +114,7 @@ fun CreditsScreen(
             )
             Spacer(modifier = Modifier.height(24.dp))
             HorizontalDivider(color = Color(0xFF3A3A3E))
-            Text("版本 1.14.1", fontSize = 12.sp, color = Color(0xFF636366), modifier = Modifier.padding(bottom = 2.dp))
+            Text("版本 $appVersion", fontSize = 12.sp, color = Color(0xFF636366), modifier = Modifier.padding(bottom = 2.dp))
             Text("© 2026 Rhodes Terminal", fontSize = 12.sp, color = Color(0xFF636366), modifier = Modifier.padding(bottom = 16.dp))
             SponsorSection()
         }

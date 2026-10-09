@@ -59,6 +59,7 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
@@ -375,7 +376,15 @@ private fun MessageBubble(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(message.senderName, fontSize = 12.sp, fontWeight = FontWeight.Medium,
                                 color = message.senderColor,
-                                modifier = Modifier.clickable { onSenderClick(message.senderName) })
+                                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false).clickable { onSenderClick(message.senderName) })
+                            // 群聊成员心情：本轮真实写出的用 TextSecondary，“沿用上一轮”的回退值用更淡的 TextTertiary。
+                            if (message.emotion.isNotBlank()) {
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("【${message.emotion}】", fontSize = 10.sp,
+                                    color = if (message.isEmotionFallback) TextTertiary else TextSecondary,
+                                    maxLines = 1, softWrap = false)
+                            }
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(formatChatTime(message.timestamp), fontSize = 10.sp, color = TextTertiary)
                         }

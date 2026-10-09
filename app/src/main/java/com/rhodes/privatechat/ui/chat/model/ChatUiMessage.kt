@@ -17,6 +17,8 @@ data class ChatUiMessage(
     val isNarration: Boolean = false,
     val avatarUri: String = "",
     val emotion: String = "",
+    /** 群聊心情是否为“沿用上一轮”的回退值（回退值用更淡的颜色区分）。 */
+    val isEmotionFallback: Boolean = false,
     val activity: String = "",
     val location: String = "",
     val mode: String = "online",

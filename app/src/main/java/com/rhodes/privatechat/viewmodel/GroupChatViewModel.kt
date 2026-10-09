@@ -33,6 +33,9 @@ import com.rhodes.privatechat.shared.vector.VectorMemory
 import com.rhodes.privatechat.notification.RhodesAppVisibility
 import com.rhodes.privatechat.viewmodel.shared.AppStateHolder
 import com.rhodes.privatechat.shared.settings.SettingsRepository
+import com.rhodes.privatechat.viewmodel.shared.GroupEmotionRules
+import com.rhodes.privatechat.viewmodel.shared.GroupOutputBudget
+import com.rhodes.privatechat.viewmodel.shared.GroupTaggedReplyParser
 import com.rhodes.privatechat.viewmodel.shared.SharedUtils
 import com.rhodes.privatechat.viewmodel.shared.UserProfile
 import com.rhodes.privatechat.viewmodel.shared.MemoryPolicy
@@ -72,7 +75,9 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 
-private val json = Json { ignoreUnknownKeys = true }
+// encodeDefaults 让每条群聊条目都带上 emotion / speakerId 字段（空值也写成空串），
+// ignoreUnknownKeys 保证老数据缺少这两个字段时按默认值反序列化、不抛异常。
+private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
 class GroupChatViewModel(
     private val context: Context,
@@ -389,6 +394,7 @@ class GroupChatViewModel(
             removeMessage(msgId)
             scope.launch {
                 repository.deleteMessage(msgId)
+                refreshLatestRoundEmotionSnapshot(message?.sessionId ?: _currentGroupId.value, msgId)
                 rebuildGroupContextAfterRecall(message?.sessionId ?: _currentGroupId.value)
             }
             return
@@ -398,6 +404,7 @@ class GroupChatViewModel(
             removeMessage(msgId)
             scope.launch {
                 repository.deleteMessage(msgId)
+                refreshLatestRoundEmotionSnapshot(message.sessionId, msgId)
                 rebuildGroupContextAfterRecall(message.sessionId)
             }
             return
@@ -406,8 +413,46 @@ class GroupChatViewModel(
         scope.launch {
             repository.updateMessageContentAndPreview(message.sessionId, msgId, updated, message.timestamp)
             repository.deleteDisplayEvent(msgId, segmentIndex)
+            refreshLatestRoundEmotionSnapshot(message.sessionId, msgId)
             rebuildGroupContextAfterRecall(message.sessionId)
         }
+    }
+
+    /**
+     * 撤回/删除后重算本轮成员心情快照，保证该轮消息 JSON 与群聊回合状态的【成员心情】一致。
+     * 只有被撤回的消息正是当前最新一轮时才需要动状态；整条删除时清空本轮心情快照。
+     */
+    private suspend fun refreshLatestRoundEmotionSnapshot(groupId: String, affectedMessageId: Long) {
+        if (groupId.isBlank()) return
+        runCatching {
+            val state = settings.getGroupTurnState(groupId) ?: return@runCatching
+            val restartAt = settings.getSessionRestartAt(groupId)
+            val latestAi = repository.getMessagesSync(groupId)
+                .filter { it.type == "ai_json" && !it.isMe && (restartAt <= 0L || it.timestamp >= restartAt) }
+                .maxByOrNull { it.id }
+            if (latestAi != null && latestAi.id > affectedMessageId) return@runCatching
+            if (latestAi == null || latestAi.id != affectedMessageId) {
+                settings.putGroupTurnState(groupId, state.copy(memberEmotions = "", emotionFallbackKeys = ""))
+                return@runCatching
+            }
+            val results = extractGroupResults(latestAi.content)
+                .filterIndexed { index, _ -> !isGroupSegmentRecalled(latestAi.content, index) }
+            val resolved = GroupEmotionRules.resolveRoundEmotions(
+                nowMs = state.updatedAt.takeIf { it > 0L } ?: System.currentTimeMillis(),
+                results = results,
+                previousSnapshot = "",
+                previousSnapshotAtMs = 0L,
+                previousInheritedKeys = "",
+                history = trackedEmotionsFromHistory(groupId, excludeMessageId = latestAi.id)
+            )
+            settings.putGroupTurnState(
+                groupId,
+                state.copy(
+                    memberEmotions = GroupEmotionRules.formatEmotionSnapshot(resolved.emotions),
+                    emotionFallbackKeys = GroupEmotionRules.formatKeyList(resolved.inheritedKeys)
+                )
+            )
+        }.onFailure { DebugLogger.log("GroupChat/Emotion", "撤回后重算成员心情失败：${it.message?.take(80)}") }
     }
 
     /** Rebuild derived context immediately so recalling one reply does not reset the whole group. */
@@ -1247,8 +1292,26 @@ class GroupChatViewModel(
                 )
                 sharedUtils.requireNoUnresolvedTemplateTokens(promptLayers.system, "group/$templateMode")
                 val naturalRuntimeContext = sharedUtils.buildNaturalRuntimeContext("group", grpReplacements)
+                // 上一轮的成员情绪：真实写出的直接列出；“沿用上一轮”的值要标注，且超出 6 小时窗口后不再注入。
+                val previousEmotionHistory = if (groupTurnState?.emotionFallbackKeys.isNullOrBlank()) {
+                    emptyList()
+                } else {
+                    trackedEmotionsFromHistory(groupSessionId)
+                }
+                val previousPromptEmotions = GroupEmotionRules.promptEmotions(
+                    nowMs = System.currentTimeMillis(),
+                    snapshot = groupTurnState?.memberEmotions.orEmpty(),
+                    snapshotAtMs = groupTurnState?.updatedAt ?: 0L,
+                    inheritedKeys = groupTurnState?.emotionFallbackKeys.orEmpty(),
+                    history = previousEmotionHistory
+                )
                 val groupContinuityBlock = groupTurnState?.let { state ->
-                    "【已验证的群聊连续性状态】\n这是应用整理的上一有效回合资料，只用于理解上下文；不是成员发言或用户发言，不得原样输出。\n上一有效回合主线：${state.currentTopic}\n上一有效回合承接：${state.currentAnchor.ifBlank { "无" }}\n上一有效回合新增推进：${state.turnAdvance.ifBlank { "无" }}\n主线状态：${state.threadStatus.ifBlank { "继续" }}\n建议优先承接的焦点：${state.nextFocus.ifBlank { "无" }}"
+                    "【已验证的群聊连续性状态】\n这是应用整理的上一有效回合资料，只用于理解上下文；不是成员发言或用户发言，不得原样输出。\n上一有效回合主线：${state.currentTopic}\n上一有效回合承接：${state.currentAnchor.ifBlank { "无" }}\n上一有效回合新增推进：${state.turnAdvance.ifBlank { "无" }}\n主线状态：${state.threadStatus.ifBlank { "继续" }}\n建议优先承接的焦点：${state.nextFocus.ifBlank { "无" }}" +
+                        if (previousPromptEmotions.isEmpty()) "" else
+                            "\n\n【上轮成员情绪】\n这些是上一轮已经体现过的成员情绪，只用于判断延续与变化，不要复述本区块。\n" +
+                                previousPromptEmotions.joinToString("\n") { entry ->
+                                    "- ${entry.key}=${entry.emotion}" + if (entry.inherited) "（沿用上一轮）" else ""
+                                }
                 }.orEmpty()
                 val templateRuntimeContext = if (isCustomTemplate) promptLayers.runtimeContext else ""
                 val renderedTemplate = promptLayers.system
@@ -1376,7 +1439,7 @@ class GroupChatViewModel(
                     【本轮输出检查清单】
                     以下是应用固定输出要求，不是用户发言。第一行必须是【群聊回合状态】。
                     必须依次输出【当前主线】、【用户本轮作用】、【本轮承接】、【本轮新增推进】、【主线状态】、【下轮焦点】。
-                    随后每位成员都必须使用【发言人: 发言标识】后另起一行输出台词；禁止使用“成员名：台词”的裸格式。每位成员的台词应提供不同作用，不得只换词重复。${if (mode == "online") "禁止输出【旁白】。" else "至少输出一段【旁白】，数量遵循当前旁白段数设置；完成内部状态字段后优先以旁白开始，并尽量与成员台词交叉。"}
+                    随后每位成员都必须使用【发言人: 发言标识】后先另起一行输出【心情】（2~6 字），再另起一行输出台词；禁止使用“成员名：台词”的裸格式。每位成员的台词应提供不同作用，不得只换词重复。${if (mode == "online") "禁止输出【旁白】。" else "至少输出一段【旁白】，数量遵循当前旁白段数设置；完成内部状态字段后优先以旁白开始，并尽量与成员台词交叉。"}
                 """.trimIndent()))
                 DebugLogger.chatEvent("群聊", "请求模型", "开始", "群=$groupName，模式=$mode，成员=${activeMembers.size}，自动=$isAuto")
                 DebugLogger.attachOperationModule(debugRoundId, "完整请求", sharedUtils.logAiCallText(apiMessages), sensitive = true)
@@ -1423,8 +1486,10 @@ class GroupChatViewModel(
                 suspend fun generateGroupReply(messages: List<AiMessage>, tag: String, stage: String): String {
                     val budget = minOf(groupModelTimeoutMs, remainingTurnBudget())
                     pipelineStage = stage
+                    // 每位成员多一行【心情】后输出变长约 10~15%，显式给出群聊输出预算，避免台词被截断。
+                    val outputBudget = GroupOutputBudget.groupMaxOutputTokens(settings.provider)
                     return withChatStageTimeout("group", stage, budget) {
-                        sharedUtils.chatResult(messages, tag).also(cacheUsage::record).content
+                        sharedUtils.chatResult(messages, tag, maxOutputTokens = outputBudget).also(cacheUsage::record).content
                     }.trim()
                         .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
                 }
@@ -1526,14 +1591,34 @@ class GroupChatViewModel(
                     if ((groupGenerations[groupSessionId] ?: 0L) != generation) return@launch
                     pipelineStage = "ai_reply_id"
                     val aiMsgId = withChatStageTimeout("group", "ai_reply_id", minOf(GROUP_MESSAGE_WRITE_TIMEOUT_MS, remainingTurnBudget())) { repository.getNextMessageId() }
-                    val storedContent = if (filtered.isNotEmpty()) {
+                    val storedResults = enrichGroupSpeakerIds(filtered, membersByName)
+                    val storedContent = if (storedResults.isNotEmpty()) {
                         try {
-                            json.encodeToString(filtered)
+                            json.encodeToString(storedResults)
                         } catch (_: Exception) { rawBase }
                     } else rawBase
+                    // 成员心情快照：本轮台词解析到的心情优先，其次是模型【成员心情】字段为本轮已发言成员声明的心情；
+                    // 都缺失时按 6 小时窗口回退上一轮快照或最近历史。每轮重新解析并覆盖，重新生成后快照与落库 JSON 保持一致。
                     val parsedTurnState = parseGroupTurnState(rawBase)?.let(::validateGroupTurnState)
-                    val verifiedState = parsedTurnState
-                        ?: deriveGroupTurnState(userMsg = if (isAuto) "" else text, previous = groupTurnState)
+                    val emotionResolvedAt = System.currentTimeMillis()
+                    val roundEmotions = GroupEmotionRules.resolveRoundEmotions(
+                        nowMs = emotionResolvedAt,
+                        results = storedResults,
+                        declaredSnapshot = parsedTurnState?.memberEmotions.orEmpty(),
+                        previousSnapshot = groupTurnState?.memberEmotions.orEmpty(),
+                        previousSnapshotAtMs = groupTurnState?.updatedAt ?: 0L,
+                        previousInheritedKeys = groupTurnState?.emotionFallbackKeys.orEmpty(),
+                        history = trackedEmotionsFromHistory(groupSessionId, excludeMessageId = aiMsgId)
+                    )
+                    val verifiedState = (parsedTurnState
+                        ?: deriveGroupTurnState(userMsg = if (isAuto) "" else text, previous = groupTurnState))
+                        .copy(
+                            memberEmotions = GroupEmotionRules.formatEmotionSnapshot(roundEmotions.emotions),
+                            emotionFallbackKeys = GroupEmotionRules.formatKeyList(roundEmotions.inheritedKeys)
+                        )
+                    if (roundEmotions.inheritedKeys.isNotEmpty()) {
+                        DebugLogger.log("GroupChat/Emotion", "本轮沿用上一轮心情：${roundEmotions.inheritedKeys.joinToString("、")}")
+                    }
                     if (parsedTurnState == null) {
                         DebugLogger.conversationStep(debugRoundId, "群聊", "连续性状态", "已保守降级", "模型未输出完整群聊回合状态，已使用当前用户消息和上一有效状态生成保守状态")
                     }
@@ -1545,7 +1630,7 @@ class GroupChatViewModel(
                             type = "ai_json", mode = mode, isMe = false
                         ), replyTurnId, replyLeaseToken, System.currentTimeMillis())) { "reply turn lease lost" }
                     }
-                    settings.putGroupTurnState(groupSessionId, verifiedState.copy(updatedAt = System.currentTimeMillis()))
+                    settings.putGroupTurnState(groupSessionId, verifiedState.copy(updatedAt = emotionResolvedAt))
                     settings.putGroupPlotSummary(groupSessionId, verifiedState.currentTopic)
                     DebugLogger.traceFinalSaved("群聊", debugRoundId, storedContent)
                     responseStored = true
@@ -1800,7 +1885,17 @@ class GroupChatViewModel(
                     !isGroupSegmentRecalled(msg.content, index) &&
                         (item.type.equals("narration", true) || item.speaker == "旁白" || item.speaker in activeNames)
                 }
-                    .joinToString("\n") { r -> if (r.type == "narration" || r.speaker == "旁白") "旁白：${r.message}" else "${r.speaker}：${r.message}" }
+                    .joinToString("\n") { r ->
+                        // 只有本轮真实解析到心情的历史行才带（心情：x）；回退值不写进行内，
+                        // 避免模型把陈旧情绪当成本轮事实。旁白行不加心情。
+                        if (r.type == "narration" || r.speaker == "旁白") {
+                            "旁白：${r.message}"
+                        } else {
+                            val emotion = GroupEmotionRules.cleanEmotion(r.emotion)
+                            if (emotion.isBlank()) "${r.speaker}：${r.message}"
+                            else "${r.speaker}（心情：$emotion）：${r.message}"
+                        }
+                    }
                     .ifBlank {
                         logUnavailableGroupHistoryReply(msg, "所有回复片段均已撤回或不属于当前成员")
                         "群聊回复：[上一条消息格式异常]"
@@ -1878,7 +1973,15 @@ class GroupChatViewModel(
             if (type == "narration" && containsFirstPersonNarration(message)) return@mapNotNull null
             if (mode == "online" && type == "narration") return@mapNotNull null
             if (message.isBlank() || speaker !in validSpeakers) return@mapNotNull null
-            GroupMsgResult(speaker = speaker, message = message, type = type)
+            // 心情只跟随它原本归属的成员；发言人被改名或纠正时清空标识，稍后按显示名重新补齐。
+            val speakerId = if (speaker == raw.speaker.trim()) raw.speakerId else ""
+            GroupMsgResult(
+                speaker = speaker,
+                message = message,
+                type = type,
+                emotion = if (type == "narration") "" else GroupEmotionRules.cleanEmotion(raw.emotion),
+                speakerId = if (type == "narration") "" else speakerId
+            )
         }
     }
 
@@ -2301,34 +2404,57 @@ class GroupChatViewModel(
         membersById: Map<String, Operator>,
         membersByName: Map<String, List<Operator>>,
         groupName: String
-    ): List<GroupMsgResult> {
-        val tag = Regex("""[【\[［]\s*(群聊回合状态|当前主线|用户本轮作用|本轮承接|本轮新增推进|主线状态|下轮焦点|本轮剧情简述|旁白|发言人)\s*(?:[：:]\s*([^】\]］]*))?[】\]］]""")
-        val matches = tag.findAll(raw).toList()
-        if (matches.isEmpty()) return emptyList()
-        return buildList {
-            matches.forEachIndexed { index, match ->
-                val label = match.groupValues[1]
-                val reference = match.groupValues[2].trim()
-                val content = raw.substring(match.range.last + 1, matches.getOrNull(index + 1)?.range?.first ?: raw.length).trim()
-                if (content.isBlank()) return@forEachIndexed
-                if (label in setOf("群聊回合状态", "当前主线", "用户本轮作用", "本轮承接", "本轮新增推进", "主线状态", "下轮焦点", "本轮剧情简述")) {
-                    // Continuity-only metadata is intentionally never displayed or persisted as a segment.
-                } else if (label == "旁白") {
-                    add(GroupMsgResult("旁白", content, "narration"))
-                } else {
-                    // Stable IDs are preferred. A display name is accepted only when unique.
-                    val member = membersById[reference]
-                        ?: membersByName[reference]?.singleOrNull()?.takeIf { reference != groupName }
-                    if (member != null) add(GroupMsgResult(member.name, content, "dialogue"))
-                }
+    ): List<GroupMsgResult> = GroupTaggedReplyParser.extractTagged(raw) { reference ->
+        // Stable IDs are preferred. A display name is accepted only when unique.
+        val member = membersById[reference]
+            ?: membersByName[reference]?.singleOrNull()?.takeIf { reference != groupName }
+        member?.let { GroupTaggedReplyParser.SpeakerIdentity(it.name, it.id) }
+    }
+
+    /** 把历史心情按 speakerId（老数据按显示名）整理成回退扫描用的列表。 */
+    private suspend fun trackedEmotionsFromHistory(
+        groupSessionId: String,
+        excludeMessageId: Long = -1L,
+        roundLimit: Int = 20
+    ): List<GroupEmotionRules.TrackedEmotion> {
+        // 存档隔离：剧情存档上下文与“重新开始群聊”之后都不沿用旧会话的心情（与私聊 archiveContextActive 同一套判断）。
+        if (settings.getBoolean("archive_context_active_$groupSessionId", false)) return emptyList()
+        val restartAt = settings.getSessionRestartAt(groupSessionId)
+        val rounds = repository.getMessagesSync(groupSessionId)
+            .filter {
+                it.type == "ai_json" && !it.isMe && it.id != excludeMessageId &&
+                    (restartAt <= 0L || it.timestamp >= restartAt)
             }
+            .takeLast(roundLimit)
+        return rounds.flatMap { msg ->
+            extractGroupResults(msg.content)
+                .filter { !it.type.equals("narration", true) && it.speaker != "旁白" }
+                .mapNotNull { result ->
+                    val emotion = GroupEmotionRules.cleanEmotion(result.emotion)
+                    if (emotion.isBlank()) null
+                    else GroupEmotionRules.TrackedEmotion(
+                        speakerId = result.speakerId,
+                        speakerName = result.speaker,
+                        emotion = emotion,
+                        spokenAtMs = msg.timestamp
+                    )
+                }
         }
+    }
+
+    /** 为落库的条目补齐 speakerId，便于改名后仍能按标识归属心情。 */
+    private fun enrichGroupSpeakerIds(
+        results: List<GroupMsgResult>,
+        membersByName: Map<String, List<Operator>>
+    ): List<GroupMsgResult> = results.map { result ->
+        if (result.type.equals("narration", true) || result.speakerId.isNotBlank() || result.speaker == "旁白") result
+        else result.copy(speakerId = membersByName[result.speaker]?.singleOrNull()?.id.orEmpty())
     }
 
     private fun extractGroupPlotSummary(raw: String): String {
         val tag = Regex("""[【\[［]\s*本轮剧情简述\s*(?:[：:]\s*)?[】\]］]""")
         val found = tag.find(raw) ?: return ""
-        val next = Regex("""[【\[［]\s*(?:本轮剧情简述|旁白|发言人)""").find(raw, found.range.last + 1)
+        val next = Regex(GroupTaggedReplyParser.NEXT_TAG_PATTERN).find(raw, found.range.last + 1)
         return raw.substring(found.range.last + 1, next?.range?.first ?: raw.length).trim().take(220)
     }
 
@@ -2336,7 +2462,7 @@ class GroupChatViewModel(
         fun field(name: String, maxLength: Int): String {
             val tag = Regex("""[【\[［]\s*${Regex.escape(name)}\s*(?:[：:]\s*)?[】\]］]""")
             val found = tag.find(raw) ?: return ""
-            val next = Regex("""[【\[［]\s*(?:群聊回合状态|当前主线|用户本轮作用|本轮承接|本轮新增推进|主线状态|下轮焦点|旁白|发言人)""")
+            val next = Regex(GroupTaggedReplyParser.NEXT_TAG_PATTERN)
                 .find(raw, found.range.last + 1)
             return raw.substring(found.range.last + 1, next?.range?.first ?: raw.length).trim().take(maxLength)
         }
@@ -2348,7 +2474,8 @@ class GroupChatViewModel(
             currentAnchor = field("本轮承接", 80),
             turnAdvance = field("本轮新增推进", 100),
             threadStatus = field("主线状态", 16),
-            nextFocus = field("下轮焦点", 60)
+            nextFocus = field("下轮焦点", 60),
+            memberEmotions = field("成员心情", GroupEmotionRules.SNAPSHOT_MAX_CHARS)
         )
     }
 

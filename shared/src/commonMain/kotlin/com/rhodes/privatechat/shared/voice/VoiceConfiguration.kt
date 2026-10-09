@@ -30,6 +30,19 @@ fun defaultTtsVoiceId(provider: String): String =
         else -> "male-qn-qingse"
     }
 
+/**
+ * 只用于在调试日志里把“应用实际用的 Key”和火山控制台里的 Key 对上号。
+ * 日志永远不写完整密钥：只留前 6 位和长度，足够在控制台的 Key 列表里认出来。
+ */
+fun maskedApiKey(apiKey: String): String {
+    val trimmed = apiKey.trim()
+    return when {
+        trimmed.isEmpty() -> "未填写"
+        trimmed.length <= 8 -> "长度 ${trimmed.length}（过短，可能填错）"
+        else -> "${trimmed.take(6)}…（长度 ${trimmed.length}）"
+    }
+}
+
 fun createTtsGateway(endpoint: String, apiKey: String, modelName: String, provider: String = ""): TtsGateway {
     val isVocu = provider == "vocu" || endpoint.contains("vocu.ai")
     val isVolcano = provider == "volcano" || endpoint.contains("openspeech.bytedance.com")

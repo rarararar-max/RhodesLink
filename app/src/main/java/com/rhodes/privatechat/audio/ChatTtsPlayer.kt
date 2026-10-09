@@ -93,7 +93,19 @@ class ChatTtsPlayer(
                         } catch (e: kotlinx.coroutines.CancellationException) {
                             throw e
                         } catch (e: Exception) {
-                            onError("语音播放失败：${e.message?.take(40) ?: "未知错误"}")
+                            // 聊天里的提示只是一闪而过的 Toast（且必须很短），完整原因写进调试日志便于排障：
+                            // 火山这类网关会把真实错误放在 header.code/message 里，只看 Toast 会以为是“无法解析”。
+                            // 音色 ID、服务端 LogID、请求 ID 都已经包含在网关抛出的错误详情里。
+                            val dedicatedKey = settings.ttsApiKey.trim()
+                            val usedKey = dedicatedKey.ifBlank { settings.apiKey }
+                            com.rhodes.privatechat.util.DebugLogger.diagnostic(
+                                "Voice/TTS/播放失败",
+                                "provider=${settings.ttsProvider}, baseUrl=${settings.ttsBaseUrl}, model=${settings.ttsModelName}, " +
+                                    "key来源=${if (dedicatedKey.isBlank()) "回退聊天密钥（TTS 密钥为空）" else "专用 TTS 密钥"}, " +
+                                    "key指纹=${com.rhodes.privatechat.shared.voice.maskedApiKey(usedKey)}, " +
+                                    "error=${e.message?.take(1_200) ?: e.javaClass.simpleName}"
+                            )
+                            onError("语音播放失败：${e.message?.take(60) ?: "未知错误"}")
                         }
                     }
                 }

@@ -330,19 +330,27 @@ fun OperatorEditScreen(
                 Button(
                     onClick = {
                         scope.launch {
+                            val settings = org.koin.java.KoinJavaComponent.get<com.rhodes.privatechat.shared.settings.SettingsRepository>(com.rhodes.privatechat.shared.settings.SettingsRepository::class.java)
                             try {
-                                val settings = org.koin.java.KoinJavaComponent.get<com.rhodes.privatechat.shared.settings.SettingsRepository>(com.rhodes.privatechat.shared.settings.SettingsRepository::class.java)
                                 val key = settings.ttsApiKey.ifBlank { settings.apiKey }
                                 if (settings.ttsBaseUrl.isBlank() || key.isBlank()) {
                                     android.widget.Toast.makeText(context, "请先在模型设置中配置 TTS", android.widget.Toast.LENGTH_SHORT).show()
                                     return@launch
                                 }
                                 val testVoiceId = voiceName.ifBlank {
-                                    if (settings.ttsProvider == "vocu") {
-                                        android.widget.Toast.makeText(context, "Vocu 请先填写该角色的 Voice ID", android.widget.Toast.LENGTH_SHORT).show()
+                                    // 火山/Vocu 没有公共默认音色。以前会退回 MiniMax 的 male-qn-qingse，
+                                    // 让火山拿一个不属于它的音色去合成，报出来的错和真实配置问题完全无关。
+                                    val fallback = com.rhodes.privatechat.shared.voice.defaultTtsVoiceId(settings.ttsProvider)
+                                    if (fallback.isBlank()) {
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            if (settings.ttsProvider == "volcano") "火山引擎请先填写该角色的音色 ID（控制台「音色库 - 我的音色」里的 Speaker ID，S_ 开头）"
+                                            else "Vocu 请先填写该角色的 Voice ID",
+                                            android.widget.Toast.LENGTH_LONG
+                                        ).show()
                                         return@launch
                                     }
-                                    "male-qn-qingse"
+                                    fallback
                                 }
                                 val audioBytes = com.rhodes.privatechat.shared.voice.createTtsGateway(settings.ttsBaseUrl, key, settings.ttsModelName, settings.ttsProvider)
                                     .synthesize(com.rhodes.privatechat.shared.voice.TtsRequest("你好", testVoiceId)).audioBytes
@@ -358,7 +366,20 @@ fun OperatorEditScreen(
                                     }
                                 }
                             } catch (e: Exception) {
-                                android.widget.Toast.makeText(context, "音色测试失败：${e.message?.take(180) ?: "未知错误"}", android.widget.Toast.LENGTH_LONG).show()
+                                // Toast 会截断，完整原因写进调试日志，便于对照火山控制台或直接发给客服。
+                                // 同时记录“实际用的是哪个 Key”：TTS 密钥留空时会静默回退成聊天密钥，
+                                // 那种情况下火山收到的是别家厂商的 Key，只会返回一个看不懂的 401/403。
+                                val dedicatedKey = settings.ttsApiKey.trim()
+                                val usedKey = dedicatedKey.ifBlank { settings.apiKey }
+                                com.rhodes.privatechat.util.DebugLogger.diagnostic(
+                                    "Voice/TTS/音色测试失败",
+                                    "provider=${settings.ttsProvider}, baseUrl=${settings.ttsBaseUrl}, model=${settings.ttsModelName}, " +
+                                        "voice=${voiceName.ifBlank { "未填写" }}, " +
+                                        "key来源=${if (dedicatedKey.isBlank()) "回退聊天密钥（TTS 密钥为空）" else "专用 TTS 密钥"}, " +
+                                        "key指纹=${com.rhodes.privatechat.shared.voice.maskedApiKey(usedKey)}, " +
+                                        "error=${e.message?.take(1_200) ?: e.javaClass.simpleName}"
+                                )
+                                android.widget.Toast.makeText(context, "音色测试失败：${e.message?.take(300) ?: "未知错误"}", android.widget.Toast.LENGTH_LONG).show()
                             }
                         }
                     },

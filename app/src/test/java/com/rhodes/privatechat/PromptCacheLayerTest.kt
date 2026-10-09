@@ -335,7 +335,8 @@ class PromptCacheLayerTest {
     fun promptTemplateVersionAdvancesForTheCurrentPromptRevision() {
         // 36：主动消息模板改为"必须具体、禁空泛开场、去掉本轮简述"。
         // 37：私聊/群聊模板补充语域与"只写确认过的现场"，需要推送给没有自定义过提示词的玩家。
-        assertEquals(37, PromptTemplates.VERSION)
+        // 38：群聊输出协议与固定行为加入成员【心情】/【成员情绪】，需要推送给没有自定义过提示词的玩家。
+        assertEquals(38, PromptTemplates.VERSION)
     }
 
     @Test

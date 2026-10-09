@@ -5,6 +5,7 @@ import com.rhodes.privatechat.data.db.entity.ChatMessageEntity
 import com.rhodes.privatechat.ui.chat.model.ChatUiMessage
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.util.ChatTrace
+import com.rhodes.privatechat.viewmodel.shared.GroupEmotionRules
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -27,6 +28,7 @@ object MessageParser {
      * @param aiName AI 方的名称（私聊用 operator.name，群聊不用）
      * @param aiAvatarUri AI 方的头像 URI（私聊用）
      * @param userAvatarUri 用户头像 URI
+     * @param groupEmotionSeed 群聊最新一轮的成员心情快照回退（标识/显示名 -> 心情），取不到回退值时必须返回空串
      */
     fun parse(
         messages: List<ChatMessageEntity>,
@@ -36,15 +38,22 @@ object MessageParser {
         aiName: String = "",
         aiAvatarUri: String = "",
         userAvatarUri: String = "",
-        restartAt: Long = 0L
+        restartAt: Long = 0L,
+        groupEmotionSeed: ((speakerId: String, speakerName: String, atMs: Long) -> String)? = null
     ): List<ChatUiMessage> {
         ChatTrace.d("Parser", "start isGroup=$isGroup rawCount=${messages.size} ids=${ChatTrace.ids(messages.map { it.id })}")
-        val parsed = messages.flatMap { msg ->
+        // 群聊心情回退是逐成员独立的：只认本会话已加载历史里最近一次真实心情，且不超过 6 小时窗口。
+        val emotionTracker = if (isGroup) GroupEmotionTracker() else null
+        val lastAiJsonIndex = if (isGroup) messages.indexOfLast { it.type == "ai_json" && !it.isMe } else -1
+        val parsed = messages.flatMapIndexed { index, msg ->
             try {
                 val mode = msg.mode
                 val isOnline = mode == "online"
                 val result = when {
-                    msg.type == "ai_json" && isGroup -> parseGroupAiJson(msg, isOnline, senderColor, senderAvatar, restartAt)
+                    msg.type == "ai_json" && isGroup -> parseGroupAiJson(
+                        msg, isOnline, senderColor, senderAvatar, restartAt,
+                        emotionTracker, groupEmotionSeed, index == lastAiJsonIndex
+                    )
                     msg.type == "ai_json" && !isGroup -> parsePrivateAiJson(msg, isOnline, aiName, aiAvatarUri, restartAt)
                     msg.type == "gift_hidden" || msg.type == "gift_reply_failed" -> listOf(giftMsg(msg, userAvatarUri, restartAt))
                     msg.type == "send_failed" -> listOf(userMsg(msg, userAvatarUri, restartAt).copy(isSendFailed = true))
@@ -147,13 +156,16 @@ object MessageParser {
         )
     }
 
-    /** 群聊 ai_json：解析 JSON 数组 [{speaker, message, type}] */
+    /** 群聊 ai_json：解析 JSON 数组 [{speaker, message, type, emotion, speakerId}] */
     private fun parseGroupAiJson(
         msg: ChatMessageEntity,
         isOnline: Boolean,
         senderColor: (String) -> Color,
         senderAvatar: (String) -> String,
-        restartAt: Long
+        restartAt: Long,
+        emotionTracker: GroupEmotionTracker? = null,
+        emotionSeed: ((speakerId: String, speakerName: String, atMs: Long) -> String)? = null,
+        isLatestRound: Boolean = false
     ): List<ChatUiMessage> {
         return try {
             val root = json.parseToJsonElement(msg.content)
@@ -176,11 +188,26 @@ object MessageParser {
                 if (isOnline && (msgType == "narration" || name == "旁白")) return@mapIndexedNotNull null
                 val uid = msg.id * 1000 + idx
                 if (msgType == "narration" || name == "旁白") {
+                    // 旁白不显示心情：旁白条目即使带 emotion 字段也丢弃。
                     ChatUiMessage(uid, "旁白", TextTertiary, content, msg.timestamp,
                         isSystem = true, isNarration = true, mode = msg.mode, isArchived = isArchived(msg, restartAt), originalMessageId = msg.id, segmentIndex = idx, isAiSegment = true)
                 } else {
+                    val speakerId = obj["speakerId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                    val parsedEmotion = GroupEmotionRules.cleanEmotion(obj["emotion"]?.jsonPrimitive?.contentOrNull.orEmpty())
+                    // 存档隔离：重新开始（归档）之前的轮次不参与后续心情回退。
+                    if (parsedEmotion.isNotBlank() && !isArchived(msg, restartAt)) {
+                        emotionTracker?.remember(speakerId, name, parsedEmotion, msg.timestamp)
+                    }
+                    val fallbackEmotion = if (parsedEmotion.isNotBlank()) "" else emotionTracker?.resolve(
+                        speakerId = speakerId,
+                        speakerName = name,
+                        atMs = msg.timestamp,
+                        seed = if (isLatestRound) emotionSeed else null
+                    ).orEmpty()
                     ChatUiMessage(uid, name, senderColor(name), content, msg.timestamp,
-                        avatarUri = senderAvatar(name), mode = msg.mode, isArchived = isArchived(msg, restartAt), originalMessageId = msg.id, segmentIndex = idx, isAiSegment = true)
+                        avatarUri = senderAvatar(name), mode = msg.mode, isArchived = isArchived(msg, restartAt), originalMessageId = msg.id, segmentIndex = idx, isAiSegment = true,
+                        emotion = parsedEmotion.ifBlank { fallbackEmotion },
+                        isEmotionFallback = parsedEmotion.isBlank() && fallbackEmotion.isNotBlank())
                 }
             }
             if (result.isEmpty() && msg.content.isNotBlank()) {
@@ -190,6 +217,43 @@ object MessageParser {
         } catch (_: Exception) {
             listOf(ChatUiMessage(msg.id, msg.senderName, Gray100, safeDisplayText(msg.content), msg.timestamp,
                 avatarUri = senderAvatar(msg.senderName), mode = msg.mode, isArchived = isArchived(msg, restartAt), originalMessageId = msg.id))
+        }
+    }
+
+    /**
+     * 群聊成员心情的逐成员回退跟踪：
+     * 只有本轮真实解析到的心情才会写入历史，回退值不参与后续轮次的“真实心情”来源。
+     */
+    private class GroupEmotionTracker {
+        private val byId = mutableMapOf<String, GroupEmotionRules.TrackedEmotion>()
+        private val byName = mutableMapOf<String, GroupEmotionRules.TrackedEmotion>()
+
+        fun resolve(
+            speakerId: String,
+            speakerName: String,
+            atMs: Long,
+            seed: ((speakerId: String, speakerName: String, atMs: Long) -> String)?
+        ): String {
+            val id = speakerId.trim()
+            val name = speakerName.trim()
+            val tracked = (if (id.isNotBlank()) byId[id] else null) ?: byName[name]
+            if (tracked != null && GroupEmotionRules.isFallbackWithinWindow(atMs, tracked.spokenAtMs)) {
+                remember(speakerId, speakerName, tracked.emotion, tracked.spokenAtMs)
+                return tracked.emotion
+            }
+            val seeded = seed?.invoke(id, name, atMs).orEmpty()
+            if (seeded.isNotBlank()) {
+                remember(speakerId, speakerName, seeded, atMs)
+                return seeded
+            }
+            return ""
+        }
+
+        fun remember(speakerId: String, speakerName: String, emotion: String, atMs: Long) {
+            if (emotion.isBlank()) return
+            val tracked = GroupEmotionRules.TrackedEmotion(speakerId.trim(), speakerName.trim(), emotion, atMs)
+            if (speakerId.isNotBlank()) byId[speakerId.trim()] = tracked
+            if (speakerName.isNotBlank()) byName[speakerName.trim()] = tracked
         }
     }
 

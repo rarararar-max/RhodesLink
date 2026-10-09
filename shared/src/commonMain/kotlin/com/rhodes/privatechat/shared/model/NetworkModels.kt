@@ -206,6 +206,10 @@ data class GroupTurnState(
     val turnAdvance: String = "",
     val threadStatus: String = "",
     val nextFocus: String = "",
+    /** 本轮每位已发言成员的【成员心情】快照：`标识=心情`，分号分隔。老存档没有该字段时为空。 */
+    val memberEmotions: String = "",
+    /** memberEmotions 中属于“上一轮没有写、沿用旧值”的标识，用于下一轮标注（沿用上一轮）。 */
+    val emotionFallbackKeys: String = "",
     val updatedAt: Long = 0L
 )
 
@@ -268,7 +272,11 @@ data class DispatchResponse(
 data class GroupMsgResult(
     val speaker: String = "",
     val message: String = "",
-    val type: String = "dialogue"
+    val type: String = "dialogue",
+    /** 本轮该成员的心情短词（2~6 字）。老数据缺少该字段时为空，表示本轮没有解析到心情。 */
+    val emotion: String = "",
+    /** 该成员的发言标识（稳定 id），用于改名后仍能正确归属；旁白为空。 */
+    val speakerId: String = ""
 )
 
 @Serializable

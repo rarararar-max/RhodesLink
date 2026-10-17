@@ -105,7 +105,7 @@ class KnowledgeBaseContextBuilder(
             val results = withTimeoutOrNull(minOf(perBookTimeoutMs, remaining)) {
                 try {
                     vectorService.searchWithEmbedding(VectorSearchRequest(
-                    ownerType = "knowledge_base", ownerId = book.id, query = query,
+                    ownerType = "knowledge_base", ownerId = book.id, query = query, embeddingSignature = activeSignature,
                     limit = perBookResults,
                     minScore = 0.12, candidateLimit = candidateLimit,
                 ), queryEmbedding)
@@ -164,7 +164,7 @@ class KnowledgeBaseContextBuilder(
                 val result = withTimeoutOrNull(GROUP_PER_BOOK_TIMEOUT_MS) {
                     try {
                         vectorService.searchWithEmbedding(VectorSearchRequest(
-                            ownerType = "knowledge_base", ownerId = book.id, query = query,
+                            ownerType = "knowledge_base", ownerId = book.id, query = query, embeddingSignature = activeSignature,
                             limit = 1, minScore = GROUP_MIN_SCORE, candidateLimit = GROUP_CANDIDATE_LIMIT,
                         ), queryEmbedding).firstOrNull()
                     } catch (cancelled: kotlinx.coroutines.CancellationException) {

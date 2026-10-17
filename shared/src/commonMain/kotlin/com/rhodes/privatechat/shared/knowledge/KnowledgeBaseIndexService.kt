@@ -184,21 +184,19 @@ class KnowledgeBaseIndexService(
             it.enabled && it.content.isNotBlank() && (rebuildAll || it.indexedAt <= 0L || it.indexError.isNotBlank())
         }
         val signature = vectorService.currentEmbeddingSignature()
-        val hasUsableExistingChunks = !rebuildAll && repository.getChunks(knowledgeBaseId).any {
+        val hasUsableExistingChunks = book.indexedEmbeddingSignature == signature && repository.getChunks(knowledgeBaseId).any {
             it.enabled && it.indexedAt > 0L && it.indexError.isBlank()
         }
         val indexingStatus = if (hasUsableExistingChunks) "partial_indexing:0/${chunks.size}" else "indexing:0/${chunks.size}"
         repository.updateIndexStatus(knowledgeBaseId, indexingStatus, signature)
-        if (rebuildAll) {
-            repository.clearChunkIndexes(knowledgeBaseId)
-            vectorService.clearOwnerMemory(OWNER_TYPE, knowledgeBaseId)
-        }
+        // Upsert by stable chunk ID; do not clear a working index before replacements succeed.
 
         if (chunks.isEmpty()) {
             if (rebuildAll) {
                 repository.updateIndexStatus(knowledgeBaseId, "failed", signature)
                 return@withLock KnowledgeBaseIndexResult(knowledgeBaseId, 0, 0, 0, listOf("知识库没有可索引的分段"))
             }
+            repository.updateIndexStatus(knowledgeBaseId, if (hasUsableExistingChunks) "ready" else "pending", signature)
             return@withLock KnowledgeBaseIndexResult(knowledgeBaseId, 0, 0, 0)
         }
 
@@ -206,6 +204,7 @@ class KnowledgeBaseIndexService(
         var failed = 0
         val errors = mutableListOf<String>()
         chunks.forEachIndexed { index, chunk ->
+            check(signature == vectorService.currentEmbeddingSignature()) { "向量配置已变化，请重新确认索引" }
             if (isCancelled(knowledgeBaseId) || repository.get(knowledgeBaseId) == null) {
                 // Leaving the status at "indexing:x/y" made the book unusable forever: the UI only offers
                 // resume/retry paths for pending/partial states.
@@ -228,7 +227,9 @@ class KnowledgeBaseIndexService(
                 failed++
                 val message = error.message?.take(160).orEmpty().ifBlank { error::class.simpleName ?: "索引失败" }
                 errors += "片段 ${chunk.ordinal}：$message"
-                repository.updateChunkIndex(chunk.id, 0L, message)
+                if (!(hasUsableExistingChunks && chunk.indexedAt > 0L && chunk.indexError.isBlank())) {
+                    repository.updateChunkIndex(chunk.id, 0L, message)
+                }
             }
             onProgress(index + 1, chunks.size)
             repository.updateIndexStatus(knowledgeBaseId, if (hasUsableExistingChunks) "partial_indexing:${index + 1}/${chunks.size}" else "indexing:${index + 1}/${chunks.size}", signature)
@@ -237,7 +238,7 @@ class KnowledgeBaseIndexService(
         val status = when {
             remainingDirty && succeeded > 0 -> "partial_pending_confirm"
             failed == 0 -> "ready"
-            succeeded == 0 -> "failed"
+            succeeded == 0 -> if (hasUsableExistingChunks) "partial_failed" else "failed"
             else -> "partial_failed"
         }
         repository.updateIndexStatus(knowledgeBaseId, status, signature)

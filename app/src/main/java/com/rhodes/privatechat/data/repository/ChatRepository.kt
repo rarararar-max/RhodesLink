@@ -33,8 +33,8 @@ class ChatRepository(
     suspend fun updateMessageContentAndPreview(sessionId: String, id: Long, content: String, timestamp: Long) =
         shared.updateMessageContentAndPreview(sessionId, id, content, timestamp)
     suspend fun getDisplayEvents(sessionId: String) = shared.getDisplayEvents(sessionId)
-    suspend fun addDisplayEventIfAbsent(sessionId: String, messageId: Long, segmentIndex: Int) =
-        shared.addDisplayEventIfAbsent(sessionId, messageId, segmentIndex)
+    suspend fun addDisplayEventIfAbsent(sessionId: String, messageId: Long, segmentIndex: Int, revealedAt: Long = 0L) =
+        shared.addDisplayEventIfAbsent(sessionId, messageId, segmentIndex, revealedAt)
     suspend fun deleteDisplayEvent(messageId: Long, segmentIndex: Int) = shared.deleteDisplayEvent(messageId, segmentIndex)
     suspend fun deleteMessageDisplayEvents(messageId: Long) = shared.deleteMessageDisplayEvents(messageId)
 

@@ -700,6 +700,27 @@ class SettingsRepository(private val settings: ObservableSettings) {
         return true
     }
 
+    @Synchronized
+    fun saveSupportReply(expected: String, updated: String, agentId: String, date: String, amount: Int): Boolean {
+        if (settings.getString("support_conversation", "") != expected || amount !in 0..200) return false
+        val suffix = agentId.ifBlank { "default" }
+        val sent = if (settings.getString("support_lmb_date_$suffix", "") == date) settings.getInt("support_lmb_sent_$suffix", 0) else 0
+        if (sent + amount > 500) return false
+        val backend = settings as? AtomicSettingsBatch ?: return false
+        return backend.commitSupportState(mapOf("support_conversation" to updated, "support_lmb_date_$suffix" to date),
+            mapOf("support_lmb_sent_$suffix" to sent + amount))
+    }
+
+    /** Compare the complete stored transcript, then atomically persist wallet and claim marker. */
+    @Synchronized
+    fun claimSupportPacket(expectedTranscript: String, updatedTranscript: String, amount: Int): Boolean {
+        if (amount !in 1..200 || settings.getString("support_conversation", "") != expectedTranscript) return false
+        val backend = settings as? AtomicSettingsBatch ?: return false
+        val balance = settings.getInt("lmb", 1000)
+        if (balance > Int.MAX_VALUE - amount) return false
+        return backend.commitSupportState(mapOf("support_conversation" to updatedTranscript), mapOf("lmb" to balance + amount))
+    }
+
     val lmbFlow: Flow<Int> = flowSettings.getIntFlow("lmb", 1000)
 
     var lmbRefreshDate: String
@@ -866,6 +887,26 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     fun clearKnowledgeBaseSurfaceSettings(knowledgeBaseId: String) {
         listOf("private_chat", "group_chat", "moment", "comment", "diary").forEach { remove("knowledge_base_surface_${knowledgeBaseId}_$it") }
+    }
+
+    // Absence of this key must preserve legacy independent vision settings.
+    var visionMode: String
+        get() = getString("vision_mode", if (settings.hasKey("provider") || settings.hasKey("api_key") ||
+            settings.hasKey("model_name") || settings.hasKey("vision_provider") ||
+            settings.hasKey("vision_base_url") || settings.hasKey("vision_model_name") ||
+            settings.hasKey("vision_api_key")) "independent" else "auto")
+        set(value) = putString("vision_mode", value)
+
+    fun voiceProviderConfigurations(kind: String): Map<String, com.rhodes.privatechat.shared.voice.VoiceProviderConfiguration> {
+        require(kind == "asr" || kind == "tts")
+        val saved = runCatching {
+            Json.decodeFromString<Map<String, com.rhodes.privatechat.shared.voice.VoiceProviderConfiguration>>(
+                getString("${kind}_provider_configurations", "{}"))
+        }.getOrDefault(emptyMap())
+        val provider = if (kind == "asr") asrProvider else ttsProvider
+        val current = if (kind == "asr") com.rhodes.privatechat.shared.voice.VoiceProviderConfiguration(asrBaseUrl, asrModelName, asrApiKey)
+            else com.rhodes.privatechat.shared.voice.VoiceProviderConfiguration(ttsBaseUrl, ttsModelName, ttsApiKey)
+        return saved + (provider to current)
     }
 
     var visionProvider: String
@@ -1368,8 +1409,18 @@ class SettingsRepository(private val settings: ObservableSettings) {
         ttsProvider: String,
         ttsModelName: String,
         ttsApiKey: String,
+        visionMode: String = this.visionMode,
+        asrConfigurations: Map<String, com.rhodes.privatechat.shared.voice.VoiceProviderConfiguration> = emptyMap(),
+        ttsConfigurations: Map<String, com.rhodes.privatechat.shared.voice.VoiceProviderConfiguration> = emptyMap(),
     ) {
+        val asrProfiles = voiceProviderConfigurations("asr") + asrConfigurations +
+            (asrProvider to com.rhodes.privatechat.shared.voice.VoiceProviderConfiguration(asrBaseUrl, asrModelName, asrApiKey))
+        val ttsProfiles = voiceProviderConfigurations("tts") + ttsConfigurations +
+            (ttsProvider to com.rhodes.privatechat.shared.voice.VoiceProviderConfiguration(ttsBaseUrl, ttsModelName, ttsApiKey))
         val values = mapOf(
+            "vision_mode" to visionMode,
+            "asr_provider_configurations" to Json.encodeToString(asrProfiles),
+            "tts_provider_configurations" to Json.encodeToString(ttsProfiles),
             "provider" to provider, "model_name" to normalizeDeepSeekModel(provider, modelName), "custom_url" to customUrl, "api_key" to apiKey,
             "vision_base_url" to visionBaseUrl, "vision_provider" to visionProvider, "vision_model_name" to visionModelName, "vision_api_key" to visionApiKey,
             "vector_provider_mode" to vectorProviderMode, "vector_provider" to vectorProvider, "vector_base_url" to vectorBaseUrl, "vector_model_name" to vectorModelName, "vector_api_key" to vectorApiKey,

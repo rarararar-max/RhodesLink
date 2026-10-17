@@ -108,3 +108,14 @@ WHERE triggerKind = 'manual'
 ORDER BY createdAt ASC
 LIMIT :limit;
 
+
+selectPendingMomentReplyTurns:
+SELECT id FROM reply_turns WHERE surface = 'moment_comment'
+AND status IN ('pending','running') ORDER BY createdAt ASC;
+
+getMomentReplyTurns:
+SELECT * FROM reply_turns WHERE surface = 'moment_comment' AND sessionId = ? ORDER BY createdAt ASC;
+
+resetFailedMomentReplyTurn:
+UPDATE reply_turns SET status = 'pending', attemptCount = 0, nextAttemptAt = ?, updatedAt = ?, lastError = ''
+WHERE id = ? AND surface = 'moment_comment' AND status = 'failed';

@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -45,6 +47,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -71,6 +75,10 @@ import com.rhodes.privatechat.ui.chat.model.ChatUiMessage
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.shared.data.ChatDisplayEvent
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
+import com.rhodes.privatechat.util.orderChatBubbles
+import com.rhodes.privatechat.util.chatBottomItemIndex
 import kotlin.random.Random
 
 
@@ -99,12 +107,14 @@ fun MessageList(
     displayEvents: List<ChatDisplayEvent> = emptyList(),
     displayEventsLoaded: Boolean = false,
     legacyMessageCutoff: Long = Long.MAX_VALUE,
-    onReveal: (suspend (ChatUiMessage) -> Long)? = null,
+    onReveal: (suspend (ChatUiMessage, Long) -> Long)? = null,
     onSegmentRevealed: ((ChatUiMessage) -> Unit)? = null,
     onLoadOlder: (() -> Unit)? = null,
     isLoadingOlder: Boolean = false,
     hasMore: Boolean = false,
-    forceScrollToLatest: Boolean = false,
+    scrollToLatestRequest: Long = 0L,
+    scrollToMessageId: Long? = null,
+    onScrollTargetConsumed: () -> Unit = {},
     onDisplayState: ((rawCount: Int, displayCount: Int) -> Unit)? = null,
     onPlay: ((ChatUiMessage) -> Unit)? = null,
     speakingMessageKey: String = "",
@@ -115,7 +125,7 @@ fun MessageList(
     var revealFailedReplyIds by remember(displaySessionKey) { mutableStateOf(emptySet<Long>()) }
     var lastRevealedMessage by remember(displaySessionKey) { mutableStateOf<ChatUiMessage?>(null) }
     LaunchedEffect(displayEvents) {
-        localEvents = (localEvents + displayEvents)
+        localEvents = (displayEvents + localEvents)
             .distinctBy { "${it.messageId}:${it.segmentIndex}" }
     }
 
@@ -124,11 +134,15 @@ fun MessageList(
             it.messageId == message.originalMessageId && it.segmentIndex == message.segmentIndex
         }
 
-    LaunchedEffect(displaySessionKey, displayEventsLoaded, messages) {
+    fun needsProgressiveDisplay(message: ChatUiMessage): Boolean =
+        message.isAiSegment && (message.timestamp >= legacyMessageCutoff ||
+            localEvents.any { it.messageId == message.originalMessageId && it.revealOrder >= 1_000_000_000_000L })
+
+    LaunchedEffect(displaySessionKey, displayEventsLoaded, messages, displayEvents) {
         if (!progressiveDisplay || onReveal == null || !displayEventsLoaded) return@LaunchedEffect
         while (true) {
             val message = messages.firstOrNull { candidate ->
-                candidate.timestamp >= legacyMessageCutoff && candidate.isAiSegment && !isRevealed(candidate)
+                needsProgressiveDisplay(candidate) && !isRevealed(candidate)
             } ?: return@LaunchedEffect
             val priorAiSegmentIsVisible = messages.indexOf(message).takeIf { it > 0 }?.let { index ->
                 val previous = messages[index - 1]
@@ -137,13 +151,18 @@ fun MessageList(
             if (priorAiSegmentIsVisible) delay(Random.nextLong(1_000L, 1_501L))
             if (isRevealed(message)) continue
             // Make the bubble visible first. Persisting the reveal must not delay the first frame.
-            localEvents = localEvents + ChatDisplayEvent(message.originalMessageId, message.segmentIndex, -1L)
+            val revealedAt = System.currentTimeMillis()
+            localEvents = localEvents + ChatDisplayEvent(message.originalMessageId, message.segmentIndex, revealedAt)
             lastRevealedMessage = message
             try {
-                val order = onReveal(message)
+                val order = kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                    kotlinx.coroutines.withTimeout(5_000L) { onReveal(message, revealedAt) }
+                }
                 localEvents = localEvents.filterNot {
                     it.messageId == message.originalMessageId && it.segmentIndex == message.segmentIndex
                 } + ChatDisplayEvent(message.originalMessageId, message.segmentIndex, order)
+            } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
+                revealFailedReplyIds = revealFailedReplyIds + message.originalMessageId
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
@@ -152,13 +171,21 @@ fun MessageList(
             }
         }
     }
-    val displayMessages = if (!progressiveDisplay || !displayEventsLoaded) {
+    val visibleMessages = if (!progressiveDisplay || !displayEventsLoaded) {
         messages
     } else {
         messages.filter { message ->
-            message.timestamp < legacyMessageCutoff || !message.isAiSegment || isRevealed(message)
+            !needsProgressiveDisplay(message) || isRevealed(message)
         }
     }
+    val eventTimes = localEvents.associateBy { "${it.messageId}:${it.segmentIndex}" }
+    val displayMessages = orderChatBubbles(
+        visibleMessages,
+        timestamp = { it.timestamp },
+        messageId = { it.originalMessageId },
+        segmentIndex = { it.segmentIndex },
+        revealOrder = { eventTimes[eventKey(it)]?.revealOrder },
+    )
     LaunchedEffect(lastRevealedMessage?.let(::eventKey)) {
         val message = lastRevealedMessage ?: return@LaunchedEffect
         // Let LazyColumn apply the newly visible bubble before starting speech.
@@ -178,21 +205,55 @@ fun MessageList(
     var awaitingPrepend by remember(displaySessionKey) { mutableStateOf(false) }
     var prependLoadingStarted by remember(displaySessionKey) { mutableStateOf(false) }
     var initialContentSettled by remember(displaySessionKey) { mutableStateOf(false) }
+    var followLatest by remember(displaySessionKey) { mutableStateOf(true) }
+    var hasNewMessages by remember(displaySessionKey) { mutableStateOf(false) }
+    val scrollScope = rememberCoroutineScope()
+    // Scroll to the trailing spacer, not the start of a potentially screen-tall bubble.
+    // Wait until LazyColumn has measured this revision of the content.
+    suspend fun scrollToBottom() {
+        val expectedItems = chatBottomItemIndex(displayMessages.size) + 1
+        snapshotFlow { listState.layoutInfo.totalItemsCount }
+            .first { it >= expectedItems }
+        listState.scrollToItem((listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0))
+    }
+    LaunchedEffect(displaySessionKey, listState) {
+        listState.interactionSource.interactions.collect { interaction ->
+            if (interaction is DragInteraction.Start) followLatest = false
+        }
+    }
+    LaunchedEffect(displaySessionKey, listState) {
+        snapshotFlow { !listState.isScrollInProgress && !listState.canScrollForward }.collect { atBottom ->
+            if (atBottom && initialContentSettled) {
+                followLatest = true
+                hasNewMessages = false
+            }
+        }
+    }
+    LaunchedEffect(displaySessionKey, scrollToLatestRequest) {
+        if (scrollToLatestRequest > 0L) {
+            followLatest = true
+            hasNewMessages = false
+            if (displayMessages.isNotEmpty()) scrollToBottom()
+        }
+    }
+    LaunchedEffect(displaySessionKey, scrollToMessageId, displayMessages.size, initialContentSettled) {
+        if (!initialContentSettled) return@LaunchedEffect
+        val target = scrollToMessageId ?: return@LaunchedEffect
+        val index = displayMessages.indexOfFirst { it.originalMessageId == target }
+        if (index >= 0) {
+            followLatest = false
+            listState.scrollToItem(index + 1)
+            onScrollTargetConsumed()
+        }
+    }
 
-    // Display-event hydration can update the initial list more than once. Wait for one quiet
-    // frame before positioning so those updates cannot trigger a visible second scroll.
+    // Hydration can replace the initial list. Mark positioning complete only after layout
+    // and a successful bottom scroll; cancellation leaves the next revision free to retry.
     LaunchedEffect(displaySessionKey, displayEventsLoaded, displayMessages.lastOrNull()?.id, displayMessages.size) {
         if (!initialPositioned && displayEventsLoaded && displayMessages.isNotEmpty()) {
             initialContentSettled = false
-            delay(80)
-            try {
-                // Index zero is the permanent top spacer, so the final message is size.
-                listState.scrollToItem(displayMessages.size)
-            } catch (_: Exception) {
-            }
-            // scrollToItem updates list state synchronously, but LazyColumn applies that state on
-            // the next display frame. Do not reveal the list until that frame has elapsed.
-            delay(16)
+            scrollToBottom()
+            androidx.compose.runtime.withFrameNanos { }
             initialPositioned = true
             initialContentSettled = true
         }
@@ -201,10 +262,12 @@ fun MessageList(
         val lastId = displayMessages.lastOrNull()?.id ?: return@LaunchedEffect
         val isInitial = lastBottomMessageId == null
         val isRemoval = displayMessages.size < lastDisplayMessageCount
-        val nearBottom = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= displayMessages.lastIndex - 2 } ?: true
-        if (initialContentSettled && !isRemoval && !isInitial && !isLoadingOlder && (forceScrollToLatest || nearBottom)) {
+        if (!isInitial && !isRemoval && lastId != lastBottomMessageId && !followLatest) hasNewMessages = true
+        if (initialContentSettled && !isRemoval && !isInitial && !isLoadingOlder && followLatest) {
             try {
-                listState.scrollToItem(displayMessages.size)
+                scrollToBottom()
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
             } catch (_: Exception) {}
         }
         lastBottomMessageId = lastId
@@ -215,8 +278,7 @@ fun MessageList(
     val imeBottom = WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current)
     LaunchedEffect(imeBottom) {
         if (imeBottom > 0 && displayMessages.isNotEmpty()) {
-            val nearBottom = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= displayMessages.lastIndex - 2 } ?: true
-            if (nearBottom) listState.animateScrollToItem(displayMessages.size)
+            if (initialContentSettled && followLatest) scrollToBottom()
         }
     }
 
@@ -254,31 +316,49 @@ fun MessageList(
 
     // Animation hydration must never make the conversation invisible. A delayed or failed
     // display-event query only disables polish; persisted messages remain visible.
-    LazyColumn(state = listState, modifier = modifier.fillMaxWidth()) {
-        item { Spacer(modifier = Modifier.height(8.dp)) }
-        if (isLoadingOlder) {
+    Box(modifier = modifier.fillMaxWidth()) {
+        LazyColumn(state = listState, modifier = Modifier.fillMaxSize().alpha(
+            if (displayMessages.isEmpty() || initialContentSettled) 1f else 0f
+        )) {
             item {
-                Text("加载历史消息...", fontSize = 12.sp, color = TextTertiary, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), textAlign = TextAlign.Center)
+                Spacer(modifier = Modifier.height(8.dp))
+                if (isLoadingOlder) {
+                    Text("加载历史消息...", fontSize = 12.sp, color = TextTertiary, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), textAlign = TextAlign.Center)
+                }
+            }
+            items(displayMessages.size, key = { i -> "${displayMessages[i].originalMessageId}_${displayMessages[i].segmentIndex}" }) { i ->
+                val msg = displayMessages[i]
+                val prevTime = if (i > 0) displayMessages[i - 1].timestamp else 0L
+                val showTime = prevTime == 0L || (msg.timestamp - prevTime) > 3 * 60 * 1000
+                MessageBubble(
+                    message = msg,
+                    showTime = showTime,
+                    onRecall = { onRecall(msg.originalMessageId, msg.segmentIndex) },
+                    onRegenerate = if (onRegenerate != null && !msg.isMe) { { onRegenerate(msg.originalMessageId) } } else null,
+                    onContinue = if (onContinue != null && !msg.isMe && !msg.isSystem && msg.originalMessageId == latestRoleReplyId) { { onContinue(msg.originalMessageId) } } else null,
+                    onRetry = if (onRetry != null && (msg.isSendFailed || msg.giftReplyFailed)) { { onRetry(msg.originalMessageId) } } else null,
+                    retryMayInterrupt = (msg.isSendFailed || msg.giftReplyFailed) && displayMessages.drop(i + 1).any { !it.isSendFailed && !it.giftReplyFailed && !it.isSystem },
+                    onSenderClick = onSenderClick,
+                    onPlay = onPlay,
+                    isSpeaking = speakingMessageKey == "${msg.originalMessageId}:${msg.segmentIndex}:${msg.id}",
+                )
+            }
+            item { Spacer(modifier = Modifier.height(8.dp)) }
+        }
+        if (initialContentSettled && !followLatest && listState.canScrollForward) {
+            TextButton(
+                onClick = {
+                    followLatest = true
+                    hasNewMessages = false
+                    scrollScope.launch { scrollToBottom() }
+                },
+                modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp)
+                    .background(ElevatedSurface, RoundedCornerShape(24.dp))
+                    .border(1.dp, Primary.copy(alpha = 0.4f), RoundedCornerShape(24.dp))
+            ) {
+                Text(if (hasNewMessages) "↓ 新消息" else "↓ 最新消息", color = Primary)
             }
         }
-        items(displayMessages.size, key = { i -> "${displayMessages[i].originalMessageId}_${displayMessages[i].segmentIndex}" }) { i ->
-            val msg = displayMessages[i]
-            val prevTime = if (i > 0) displayMessages[i - 1].timestamp else 0L
-            val showTime = prevTime == 0L || (msg.timestamp - prevTime) > 3 * 60 * 1000
-            MessageBubble(
-                message = msg,
-                showTime = showTime,
-                onRecall = { onRecall(msg.originalMessageId, msg.segmentIndex) },
-                onRegenerate = if (onRegenerate != null && !msg.isMe) { { onRegenerate(msg.originalMessageId) } } else null,
-                onContinue = if (onContinue != null && !msg.isMe && !msg.isSystem && msg.originalMessageId == latestRoleReplyId) { { onContinue(msg.originalMessageId) } } else null,
-                onRetry = if (onRetry != null && (msg.isSendFailed || msg.giftReplyFailed)) { { onRetry(msg.originalMessageId) } } else null,
-                retryMayInterrupt = (msg.isSendFailed || msg.giftReplyFailed) && displayMessages.drop(i + 1).any { !it.isSendFailed && !it.giftReplyFailed && !it.isSystem },
-                onSenderClick = onSenderClick,
-                onPlay = onPlay,
-                isSpeaking = speakingMessageKey == "${msg.originalMessageId}:${msg.segmentIndex}:${msg.id}",
-            )
-        }
-        item { Spacer(modifier = Modifier.height(8.dp)) }
     }
 }
 

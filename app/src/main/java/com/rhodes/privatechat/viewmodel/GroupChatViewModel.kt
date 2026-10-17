@@ -1,5 +1,6 @@
 package com.rhodes.privatechat.viewmodel
 
+import com.rhodes.privatechat.shared.modelgateway.hasVisionConfiguration
 import android.util.Log
 import android.content.Context
 import com.rhodes.privatechat.MainActivity
@@ -107,6 +108,7 @@ class GroupChatViewModel(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val knowledgeBaseContextBuilder: KnowledgeBaseContextBuilder? = try { org.koin.core.context.GlobalContext.get().get() } catch (_: Exception) { null }
     companion object {
+    private val groupSummaryMutexes = ConcurrentHashMap<String, Mutex>()
         /** A due-in-the-past auto-chat plan must not turn the scheduler loop into a hot spin. */
         private const val MIN_AUTO_LOOP_DELAY_MS = 1_000L
         const val DEBUG = false
@@ -244,7 +246,6 @@ class GroupChatViewModel(
     private val groupMaintenanceJobs = ConcurrentHashMap<String, Job>()
     private val groupMaintenancePending = ConcurrentHashMap.newKeySet<String>()
     private val groupSummaryRetryJobs = ConcurrentHashMap<String, Job>()
-    private val groupSummaryMutexes = ConcurrentHashMap<String, Mutex>()
 
     private fun logAutoInterval(groupId: String, event: String, details: String) {
         Log.d("AutoGroupInterval", "AUTO_GROUP_INTERVAL vm=$autoLogInstanceId event=$event groupId=$groupId $details")
@@ -395,7 +396,7 @@ class GroupChatViewModel(
             scope.launch {
                 repository.deleteMessage(msgId)
                 refreshLatestRoundEmotionSnapshot(message?.sessionId ?: _currentGroupId.value, msgId)
-                rebuildGroupContextAfterRecall(message?.sessionId ?: _currentGroupId.value)
+                rebuildGroupContextAfterRecall(message?.sessionId ?: _currentGroupId.value, msgId)
             }
             return
         }
@@ -405,7 +406,7 @@ class GroupChatViewModel(
             scope.launch {
                 repository.deleteMessage(msgId)
                 refreshLatestRoundEmotionSnapshot(message.sessionId, msgId)
-                rebuildGroupContextAfterRecall(message.sessionId)
+                rebuildGroupContextAfterRecall(message.sessionId, msgId)
             }
             return
         }
@@ -414,7 +415,7 @@ class GroupChatViewModel(
             repository.updateMessageContentAndPreview(message.sessionId, msgId, updated, message.timestamp)
             repository.deleteDisplayEvent(msgId, segmentIndex)
             refreshLatestRoundEmotionSnapshot(message.sessionId, msgId)
-            rebuildGroupContextAfterRecall(message.sessionId)
+            rebuildGroupContextAfterRecall(message.sessionId, msgId)
         }
     }
 
@@ -456,22 +457,80 @@ class GroupChatViewModel(
     }
 
     /** Rebuild derived context immediately so recalling one reply does not reset the whole group. */
-    private suspend fun rebuildGroupContextAfterRecall(groupId: String) {
+    private suspend fun rebuildGroupContextAfterRecall(groupId: String, changedMessageId: Long) {
         if (groupId.isBlank()) return
-        settings.advanceMemoryTimelineEpoch(groupId)
-        repository.deleteMemoryV2BySession(groupId)
-        repository.deleteMemoriesBySession(groupId)
-        settings.putMemoryExtractionCursor(groupId, 0L)
-        settings.putSummaryCursor(groupId, 0L)
-        val session = repository.getSession(groupId) ?: return
-        val restartAt = settings.getSessionRestartAt(groupId)
-        val messages = repository.getMessagesSync(groupId)
-            .filter { it.type != "system" && it.type != "send_failed" && it.type != "gift_reply_failed" && (restartAt <= 0L || it.timestamp >= restartAt) }
-        if (messages.isEmpty()) return
-        generateGroupShortTermSummary(groupId, session.operatorName)
-        if (settings.memoryV2Enabled && settings.groupMemoryGenerationEnabled && ingestGroupMemoryV2(groupId, session.operatorName, messages.takeLast(30))) {
-            settings.putMemoryExtractionCursor(groupId, messages.maxOf { it.id })
+        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+            val sessionId = groupId
+            // Persist intent before invalidation so a killed process can safely resume the repair.
+            settings.putString("context_rebuild_changed_$sessionId", changedMessageId.toString())
+            settings.putBoolean("context_rebuild_pending_$sessionId", true)
+            settings.advanceMemoryTimelineEpoch(sessionId)
+            settings.putMemoryExtractionCursor(sessionId, 0L)
+            settings.putSummaryCursor(sessionId, 0L)
+            settings.putRollingSummaryStatus(sessionId, com.rhodes.privatechat.shared.settings.SettingsRepository.RollingSummaryStatus())
+            repository.memoryV2.invalidateChangedMessage(sessionId, changedMessageId)
+            repository.getShortTermMemory(sessionId)?.let { old ->
+                settings.putString("context_rebuild_previous_summary_$sessionId", old.content)
+            }
+            repository.deleteShortTermMemory(sessionId)
+            settings.putString("context_rebuild_changed_$sessionId", "")
+            com.rhodes.privatechat.automation.ContextMaintenanceScheduler.schedule(context, sessionId, true)
         }
+    }
+
+    /** Called by durable maintenance, independent of the screen lifetime. */
+    suspend fun runContextMaintenance(session: ChatSession): Boolean {
+        val lock = com.rhodes.privatechat.viewmodel.shared.ContextMaintenanceLocks.forSession(session.id)
+        if (!lock.tryLock()) return false
+        return try { runContextMaintenanceLocked(session) } finally { lock.unlock() }
+    }
+
+    private suspend fun runContextMaintenanceLocked(session: ChatSession): Boolean {
+        val pendingKey = "context_rebuild_pending_${session.id}"
+        if (settings.getBoolean(pendingKey)) {
+            settings.getString("context_rebuild_changed_${session.id}").toLongOrNull()?.let { changedId ->
+                settings.advanceMemoryTimelineEpoch(session.id)
+                settings.putMemoryExtractionCursor(session.id, 0L)
+                settings.putSummaryCursor(session.id, 0L)
+                repository.memoryV2.invalidateChangedMessage(session.id, changedId)
+                repository.deleteShortTermMemory(session.id)
+                settings.putString("context_rebuild_changed_${session.id}", "")
+            }
+            if (settings.memoryV2Enabled && settings.groupMemoryGenerationEnabled) {
+                repeat(6) {
+                    val batchEpoch = settings.getMemoryTimelineEpoch(session.id)
+                    val cursor = settings.getMemoryExtractionCursor(session.id)
+                    val page = repository.getMessagesAfterCursor(session.id, cursor, settings.getSessionRestartAt(session.id), 30)
+                    if (page.isEmpty()) return@repeat
+                    val batch = page.filter { it.type !in setOf("system", "send_failed", "gift_reply_failed") }
+                    if (batch.isNotEmpty() && !ingestGroupMemoryV2(session.id, session.operatorName, batch)) return false
+                    if (batchEpoch != settings.getMemoryTimelineEpoch(session.id)) return false
+                    settings.putMemoryExtractionCursor(session.id, page.maxOf { it.id })
+                }
+                val more = repository.getMessagesAfterCursor(session.id, settings.getMemoryExtractionCursor(session.id), settings.getSessionRestartAt(session.id), 1)
+                if (more.isNotEmpty()) return false
+            }
+            if (settings.groupSummaryGenerationEnabled) {
+                val retryStatus = settings.getRollingSummaryStatus(session.id)
+                if (retryStatus.state == "failed" && !settings.summaryAutoRetryEnabled) {
+                    settings.putBoolean(pendingKey, false)
+                    return true
+                }
+                if (retryStatus.state == "failed" && System.currentTimeMillis() < retryStatus.nextRetryAt) return false
+                generateGroupShortTermSummary(session.id, session.operatorName)
+                if (settings.getRollingSummaryStatus(session.id).state == "failed") return false
+            }
+            if (settings.summaryCursorEnabled && settings.getRollingSummaryStatus(session.id).pendingRounds > 0) return false
+            settings.putBoolean(pendingKey, false)
+        } else {
+            val status = settings.getRollingSummaryStatus(session.id)
+            if (status.state == "failed" && settings.summaryAutoRetryEnabled) {
+                if (System.currentTimeMillis() < status.nextRetryAt) return false
+                generateGroupShortTermSummary(session.id, session.operatorName)
+                return settings.getRollingSummaryStatus(session.id).state != "failed"
+            }
+        }
+        return true
     }
 
     private fun markSegmentRecalled(content: String, segmentIndex: Int): String? {
@@ -912,7 +971,7 @@ class GroupChatViewModel(
                         runCatching { com.rhodes.privatechat.automation.ManualReplyScheduler.completeTurn(context, replyTurnId) }
                         return@launch
                     }
-                    val batch = repository.getMessagesSync(groupSessionId)
+                    val batch = candidateIds.mapNotNull { repository.getMessageById(it)?.takeIf { row -> row.sessionId == groupSessionId } }
                         .asSequence()
                         .filter { it.isMe && it.type == "text" && it.mode == mode }
                         .filter { it.id in candidateIds }
@@ -1398,6 +1457,13 @@ class GroupChatViewModel(
                         apiMessages.add(AiMessage(if (msg.isMe) "user" else "assistant", formatted))
                     }
                 }
+                var remainingHistoryCount = apiMessages.size - 1
+                val groupHistoryRows = allHistory.filter { formatGroupHistoryForPrompt(it, activeMembers.map { member -> member.name }.toSet()).isNotBlank() }
+                fun historyStats(): String {
+                    val kept = groupHistoryRows.takeLast(remainingHistoryCount)
+                    val rounds = kept.filter { it.type != "system" }.chunkedByGroupRound().size
+                    return "设置回看=${settings.historyMessages}轮，实际历史=$rounds 轮，历史消息=$remainingHistoryCount 条，附加消息=${apiMessages.size - remainingHistoryCount}条（厂商可能合并同角色消息，重试另计）"
+                }
                 if (!isAuto) {
                     val userMsg = when {
                         autoSpeak -> "（群聊已空闲一段时间，干员们自然地闲聊起来，无需等待用户发言。）"
@@ -1466,15 +1532,13 @@ class GroupChatViewModel(
                 val maxPromptTokens = (settings.maxContextTokens - sharedUtils.promptOutputReserveTokens()).coerceAtLeast(512)
                 var totalTokens = apiMessages.sumOf { estimateTokens(it.content) + 10 }
                 com.rhodes.privatechat.util.DebugLogger.log("GroupChat/Token", if (settings.automaticContextWindow) "自动上下文：跳过本地 token 裁剪，超限交由模型服务返回后重试；消息数=${apiMessages.size}" else "估算token=$totalTokens, 上限=$maxPromptTokens, ${sharedUtils.promptOutputReserveNote()}, 消息数=${apiMessages.size}")
-                if (!settings.automaticContextWindow && totalTokens > maxPromptTokens) {
-                    // Preserve runtime/task tail blocks while trimming only dialogue history.
-                    val protectedTailCount = if (!isAuto && apiMessages.size >= 4) 3 else 2
-                    while (apiMessages.size > 1 + protectedTailCount && totalTokens > maxPromptTokens) {
-                        apiMessages.removeAt(1)
-                        totalTokens = apiMessages.sumOf { estimateTokens(it.content) + 10 }
-                    }
-                    com.rhodes.privatechat.util.DebugLogger.log("GroupChat/Token", "截断后: 消息数=${apiMessages.size}, 估算token=$totalTokens")
+                if (!settings.automaticContextWindow) {
+                    val removed = com.rhodes.privatechat.shared.model.trimPromptHistory(
+                        apiMessages, remainingHistoryCount, maxPromptTokens, ::estimateTokens
+                    )
+                    remainingHistoryCount -= removed
                 }
+                DebugLogger.conversationStep(debugRoundId, "群聊", "上下文统计", "完成", historyStats())
                 val validSpeakers = activeMembers.map { it.name }.toSet() + "旁白"
                 val membersById = activeMembers.associateBy { it.id }
                 val membersByName = activeMembers.groupBy { it.name }
@@ -1489,6 +1553,7 @@ class GroupChatViewModel(
                     // 每位成员多一行【心情】后输出变长约 10~15%，显式给出群聊输出预算，避免台词被截断。
                     val outputBudget = GroupOutputBudget.groupMaxOutputTokens(settings.provider)
                     return withChatStageTimeout("group", stage, budget) {
+                        cacheUsage.recordAttempt()
                         sharedUtils.chatResult(messages, tag, maxOutputTokens = outputBudget).also(cacheUsage::record).content
                     }.trim()
                         .removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
@@ -1523,8 +1588,7 @@ class GroupChatViewModel(
                         break
                     } catch (error: Exception) {
                         if (!isContextLimitError(error) || contextRetryCount >= 6) throw error
-                        val protectedTailCount = if (!isAuto && apiMessages.size >= 4) 3 else 2
-                        val historyCount = (apiMessages.size - 1 - protectedTailCount).coerceAtLeast(0)
+                        val historyCount = remainingHistoryCount
                         if (historyCount == 0) throw error
                         // Keep the newest ten history messages where possible; group messages can
                         // contain several speakers, so round boundaries are not reliable here.
@@ -1534,7 +1598,9 @@ class GroupChatViewModel(
                             historyCount > 5 -> 5
                             else -> 1
                         }
-                        repeat((historyCount - targetHistoryCount).coerceAtLeast(1)) { apiMessages.removeAt(1) }
+                        val removeCount = (historyCount - targetHistoryCount).coerceAtLeast(1)
+                        repeat(removeCount) { apiMessages.removeAt(1) }
+                        remainingHistoryCount -= removeCount
                         contextRetryCount++
                         DebugLogger.diagnostic("Context/History/特殊", "surface=group, groupId=$groupSessionId, initialMessages=$initialMessageCount, previousHistory=$historyCount, remainingHistory=$targetHistoryCount, retry=$contextRetryCount, reason=服务端拒绝上下文长度, error=${error.message?.take(240)}")
                         DebugLogger.conversationStep(debugRoundId, "群聊", "模型请求", "重试", "上下文超限，已裁剪较早历史，保留目标=${targetHistoryCount}条")
@@ -1576,7 +1642,7 @@ class GroupChatViewModel(
                     DebugLogger.chatEvent("群聊", "返回解析", "失败", "无法得到可展示消息")
                     DebugLogger.conversationStep(debugRoundId, "群聊", "本轮结果", "失败", groupReplyFailureReason(rawBase, activeMembers, groupName, mode))
                     DebugLogger.attachOperationModule(debugRoundId, "模型用量", cacheUsage.summary())
-                    DebugLogger.conversationStep(debugRoundId, "群聊", "本轮总览", "失败", "模式=$mode，成员=${activeMembers.size}，自动=$isAuto，请求消息=${apiMessages.size}条，原始输出=${rawBase.length}字，原因=${groupReplyFailureReason(rawBase, activeMembers, groupName, mode)}，缓存=${cacheUsage.summary()}")
+                    DebugLogger.conversationStep(debugRoundId, "群聊", "本轮总览", "失败", "模式=$mode，成员=${activeMembers.size}，自动=$isAuto，构建消息=${apiMessages.size}条，${historyStats()}，原始输出=${rawBase.length}字，原因=${groupReplyFailureReason(rawBase, activeMembers, groupName, mode)}，缓存=${cacheUsage.summary()}")
                     markGroupMessagesUndelivered(groupSessionId, if (batchIds.isNotEmpty()) batchIds else failureMessageId?.let(::setOf).orEmpty(), groupName)
                 } else {
                     val dialogueCount = filtered.count { it.type == "dialogue" }
@@ -1644,7 +1710,7 @@ class GroupChatViewModel(
                     DebugLogger.chatEvent("群聊", "回复落库", "成功", "群=$groupName，条目=${filtered.size}")
                     DebugLogger.conversationStep(debugRoundId, "群聊", "本轮结果", "成功", "已保存${filtered.size}条群聊内容")
                     DebugLogger.attachOperationModule(debugRoundId, "模型用量", cacheUsage.summary())
-                    DebugLogger.conversationStep(debugRoundId, "群聊", "本轮总览", "成功", "模式=$mode，成员=${activeMembers.size}，自动=$isAuto，请求消息=${apiMessages.size}条，台词=${filtered.count { it.type == "dialogue" }}，旁白=${filtered.count { it.type == "narration" }}，内容重试=${if (contentRetried) "已执行" else "未执行"}，AI消息ID=$aiMsgId，缓存=${cacheUsage.summary()}")
+                    DebugLogger.conversationStep(debugRoundId, "群聊", "本轮总览", "成功", "模式=$mode，成员=${activeMembers.size}，自动=$isAuto，构建消息=${apiMessages.size}条，${historyStats()}，台词=${filtered.count { it.type == "dialogue" }}，旁白=${filtered.count { it.type == "narration" }}，内容重试=${if (contentRetried) "已执行" else "未执行"}，AI消息ID=$aiMsgId，缓存=${cacheUsage.summary()}")
                     // Auto messages and replies can arrive while the group is open, so unread-based
                     // restoration alone is insufficient after the user removed it from the home page.
                     unhideSession(groupSessionId)
@@ -2110,20 +2176,21 @@ class GroupChatViewModel(
     }
 
     fun sendGroupImageMessage(groupSessionId: String, groupName: String, imageUri: String, imageForModel: String?, caption: String, mode: String = "online", existingMessageId: Long? = null, replyLeaseTokenOverride: String? = null, onMessageSent: () -> Unit = {}, onResult: (Boolean) -> Unit = {}, onReplyComplete: (Boolean) -> Unit = {}) {
-        if (groupSessionId.isBlank()) { onResult(false); return }
+        val persistenceReceipt = com.rhodes.privatechat.util.MessagePersistenceReceipt(onResult)
+        if (groupSessionId.isBlank()) { persistenceReceipt.complete(false); return }
         sharedUtils.chatConfigurationError()?.let { error ->
             _lastSendError.value = error
-            onResult(false)
+            persistenceReceipt.complete(false)
             return
         }
         if (!isVisionConfigured()) {
             _lastSendError.value = "图片聊天需要先设置识图模型，请在模型设置中填写识图地址、模型名和密钥。"
-            onResult(false)
+            persistenceReceipt.complete(false)
             return
         }
         if (imageForModel.isNullOrBlank()) {
             _lastSendError.value = "无法读取这张图片，请重新选择后再试。"
-            onResult(false)
+            persistenceReceipt.complete(false)
             return
         }
         val generation = groupGenerations[groupSessionId] ?: 0L
@@ -2175,13 +2242,13 @@ class GroupChatViewModel(
                     }
                     repository.updateMessageContent(id, placeholderJson)
                 }
+                if (existingMessageId == null) onMessageSent()
+                persistenceReceipt.complete(true)
+                if (existingMessageId == null) runCatching { com.rhodes.privatechat.automation.ManualReplyScheduler.scheduleTurn(context, replyTurnId) }
                 replyLeaseToken = replyLeaseTokenOverride ?: UUID.randomUUID().toString()
-                if (replyLeaseTokenOverride == null && repository.claimReplyTurn(replyTurnId, replyLeaseToken, System.currentTimeMillis(), System.currentTimeMillis() + groupReplyTimeoutMs) == null) return@launch
-                if (existingMessageId == null) com.rhodes.privatechat.automation.ManualReplyScheduler.scheduleTurn(context, replyTurnId)
+                if (replyLeaseTokenOverride == null && repository.claimReplyTurn(replyTurnId, replyLeaseToken, System.currentTimeMillis(), System.currentTimeMillis() + groupReplyTimeoutMs) == null) { persistenceReceipt.complete(true); return@launch }
                 unhideSession(groupSessionId)
                 // The message is safely persisted now. The composer must never wait for vision/AI work.
-                if (existingMessageId == null) onMessageSent()
-                onResult(true)
                 if ((groupGenerations[groupSessionId] ?: 0L) != generation) return@launch
                 val visionText = try {
                     currentVisionGateway().analyzeImage(VisionAnalyzeRequest(
@@ -2208,7 +2275,7 @@ class GroupChatViewModel(
                     )))
                     repository.updateMessageContent(id, failedJson)
                     _lastSendError.value = "图片识别失败，请检查识图模型设置后重试。"
-                    onResult(false)
+                    persistenceReceipt.complete(false)
                     onReplyComplete(false)
                     return@launch
                 }
@@ -2248,9 +2315,10 @@ class GroupChatViewModel(
                 throw e
             } catch (e: Exception) {
                 _lastSendError.value = classifyGroupError(e)
-                onResult(false)
+                persistenceReceipt.complete(false)
                 onReplyComplete(false)
             } finally {
+                persistenceReceipt.complete(false)
                 if (!handedOffToGroupReply && replyTurnId.isNotBlank() && replyLeaseToken.isNotBlank()) {
                     runCatching { repository.releaseReplyTurn(replyTurnId, replyLeaseToken, System.currentTimeMillis(), System.currentTimeMillis(), "image_reply_not_completed") }
                 }
@@ -2276,9 +2344,7 @@ class GroupChatViewModel(
     } catch (_: Exception) { "用户发送了一张图片" }
 
     private fun isVisionConfigured(): Boolean =
-        settings.visionBaseUrl.isNotBlank() &&
-            settings.visionModelName.isNotBlank() &&
-            settings.visionApiKey.ifBlank { settings.apiKey }.isNotBlank()
+        settings.hasVisionConfiguration()
 
     private fun currentVisionGateway(): VisionGateway = createVisionGateway(settings)
 
@@ -2565,6 +2631,8 @@ class GroupChatViewModel(
             cal.set(java.util.Calendar.SECOND, 0)
             cal.set(java.util.Calendar.MILLISECOND, 0)
             val dayBegin = cal.time
+            val dateKey = sharedUtils.beijingSdf("yyyyMMdd").format(dayBegin)
+            if (repository.getDailyBySessionAndDate(groupSessionId, dateKey) != null) return
             val dayEnd = java.util.Date(dayBegin.time + 86_400_000)
             val msgs = repository.getMessagesInRange(dayBegin.time, dayEnd.time)
                 .filter { it.sessionId == groupSessionId }
@@ -2575,12 +2643,12 @@ class GroupChatViewModel(
             val prompt = "请总结${dateStr}「${groupName}」的聊天记录，生成50-150字的每日摘要。直接输出纯文本。\n${text}"
             val content = withTimeout(50_000) { sharedUtils.chat(listOf(AiMessage("system", prompt)), "Memory") }.trim()
             if (content.isNotBlank()) {
-                repository.saveMemory(com.rhodes.privatechat.shared.model.Memory(
+                repository.replaceDailyBySessionAndDate(com.rhodes.privatechat.shared.model.Memory(
                     sessionId = groupSessionId, operatorId = groupSessionId,
-                    type = com.rhodes.privatechat.shared.model.MemoryType.DAILY, content = content,
+                    type = com.rhodes.privatechat.shared.model.MemoryType.DAILY, content = content, keywords = dateKey,
                     createdAt = System.currentTimeMillis(),
                     expiresAt = MemoryPolicy.memoryExpiresAt(settings)
-                ))
+                ), dateKey)
                 DebugLogger.log("GroupChat", "群聊每日摘要已生成: $groupSessionId")
             }
         } catch (e: Exception) {
@@ -2595,6 +2663,7 @@ class GroupChatViewModel(
 
     private suspend fun generateGroupShortTermSummaryLocked(groupSessionId: String, groupName: String): Boolean {
         if (!settings.groupSummaryGenerationEnabled) return false
+        val timelineEpoch = settings.getMemoryTimelineEpoch(groupSessionId)
         var operationId = ""
         try {
             val retain = settings.groupSummaryRawTailRounds
@@ -2605,7 +2674,11 @@ class GroupChatViewModel(
             val source = if (cursor > 0L) allMessages.filter { it.id > cursor } else allMessages
             val rounds = recentGroupRounds(source, Int.MAX_VALUE).chunkedByGroupRound()
             val msgs = rounds.dropLast(retain).take(30).flatten()
-            if (msgs.size <= 2) return false
+            if (msgs.isEmpty()) {
+                settings.putRollingSummaryStatus(groupSessionId, com.rhodes.privatechat.shared.settings.SettingsRepository.RollingSummaryStatus(
+                    state = "idle", pendingRounds = 0, lastSuccessAt = settings.getRollingSummaryStatus(groupSessionId).lastSuccessAt))
+                return false
+            }
             operationId = DebugLogger.beginOperation("群聊滚动摘要", groupName, groupSessionId)
             DebugLogger.conversationStep(operationId, "群聊滚动摘要", "开始", "进行中", "处理${msgs.size}条消息，保留最近${retain}轮")
             val text = msgs.mapNotNull { formatGroupMessageForMemory(it, 120).takeIf { line -> line.isNotBlank() } }.joinToString("\n")
@@ -2632,6 +2705,7 @@ $text"""
             DebugLogger.conversationStep(operationId, "群聊滚动摘要", "模型请求", "成功", "返回${content.length}字")
             DebugLogger.trace("AI/GroupRollingSummary", "SUMMARY_REQUEST\n$prompt\n\nSUMMARY_RESPONSE\n$content")
             if (content.isNotBlank()) {
+                if (timelineEpoch != settings.getMemoryTimelineEpoch(groupSessionId)) return false
                 repository.replaceShortTermMemory(com.rhodes.privatechat.shared.model.Memory(
                     sessionId = groupSessionId,
                     operatorId = groupSessionId,
@@ -2642,21 +2716,21 @@ $text"""
                 ))
                 if (settings.summaryCursorEnabled) msgs.maxOfOrNull { it.id }?.let { settings.putSummaryCursor(groupSessionId, it) }
                 val now = System.currentTimeMillis()
-                settings.putRollingSummaryStatus(groupSessionId, com.rhodes.privatechat.shared.settings.SettingsRepository.RollingSummaryStatus(state = "idle", pendingRounds = rounds.drop(retain + 30).size, lastSuccessAt = now, lastAttemptAt = now, operationId = operationId))
+                settings.putRollingSummaryStatus(groupSessionId, com.rhodes.privatechat.shared.settings.SettingsRepository.RollingSummaryStatus(state = "idle", pendingRounds = com.rhodes.privatechat.shared.memory.MaintenancePolicy.remainingSummaryRounds(rounds.size, retain, minOf(30, (rounds.size - retain).coerceAtLeast(0))), lastSuccessAt = now, lastAttemptAt = now, operationId = operationId))
                 DebugLogger.conversationStep(operationId, "群聊滚动摘要", "本地保存", "成功", "摘要${content.length}字，游标已推进")
                 DebugLogger.finishOperation(operationId, "成功", "已总结${msgs.size}条消息，保留最近${retain}轮")
                 DebugLogger.log("GroupChat", "群聊短期摘要已生成: $groupSessionId")
                 return true
             }
             throw IllegalStateException("模型没有返回可保存摘要")
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException && e !is kotlinx.coroutines.TimeoutCancellationException) throw e
             DebugLogger.log("GroupChat", "群聊短期摘要失败: ${e.message?.take(80)}")
             val previous = settings.getRollingSummaryStatus(groupSessionId)
             val failures = previous.failureCount + 1
             val retryAt = if (settings.summaryAutoRetryEnabled) System.currentTimeMillis() + (60_000L * (1L shl (failures - 1).coerceAtMost(5))) else 0L
             settings.putRollingSummaryStatus(groupSessionId, previous.copy(state = "failed", lastAttemptAt = System.currentTimeMillis(), failureCount = failures, nextRetryAt = retryAt, failureCode = e.javaClass.simpleName))
+            if (retryAt > 0L) com.rhodes.privatechat.automation.ContextMaintenanceScheduler.schedule(context, groupSessionId, true, retryAt)
             if (retryAt > 0L) scheduleGroupSummaryRetry(groupSessionId, groupName, retryAt)
             if (operationId.isNotBlank()) {
                 DebugLogger.conversationStep(operationId, "群聊滚动摘要", "本轮总览", "失败", "${e.javaClass.simpleName}；${if (retryAt > 0L) "将在稍后重试" else "已暂停自动重试"}")
@@ -2699,22 +2773,27 @@ $text"""
     }
 
     private suspend fun extractGroupMemoryIfNeeded(groupSessionId: String, groupName: String) {
+        val maintenanceLock = com.rhodes.privatechat.viewmodel.shared.ContextMaintenanceLocks.forSession(groupSessionId)
+        if (!maintenanceLock.tryLock()) return
+        try {
         if (!settings.memoryV2Enabled || !settings.groupMemoryGenerationEnabled) return
+        if (settings.getBoolean("context_rebuild_pending_${groupSessionId}")) return
         val cursor = settings.getMemoryExtractionCursor(groupSessionId)
         val restartAt = settings.getSessionRestartAt(groupSessionId)
         val pending = repository.getMessagesSync(groupSessionId)
             .filter { it.id > cursor && it.type != "system" && it.type != "send_failed" && it.type != "gift_reply_failed" && (restartAt <= 0L || it.timestamp >= restartAt) }
-            .take(settings.groupMemoryExtractionThreshold.coerceAtMost(30))
+            .take(settings.groupMemoryExtractionThreshold.coerceAtLeast(1))
         if (pending.size < settings.groupMemoryExtractionThreshold) return
         if (ingestGroupMemoryV2(groupSessionId, groupName, pending)) {
             pending.maxOfOrNull { it.id }?.let { settings.putMemoryExtractionCursor(groupSessionId, it) }
         }
+        } finally { maintenanceLock.unlock() }
     }
 
     fun resumeImageReply(groupSessionId: String, messageId: Long, onComplete: (Boolean) -> Unit, replyLeaseToken: String? = null) {
         scope.launch {
             val session = repository.getSession(groupSessionId)
-            val message = repository.getMessagesSync(groupSessionId).firstOrNull { it.id == messageId && it.isMe && it.type == "image" }
+            val message = repository.getMessageById(messageId)?.takeIf { it.sessionId == groupSessionId && it.isMe && it.type == "image" }
             val image = message?.let { runCatching { json.parseToJsonElement(it.content).jsonObject }.getOrNull() }
             val uri = image?.get("imageUri")?.jsonPrimitive?.content.orEmpty()
             val caption = image?.get("caption")?.jsonPrimitive?.content.orEmpty()
@@ -2735,11 +2814,12 @@ $text"""
                     runCatching {
                         extractGroupMemoryIfNeeded(groupSessionId, groupName)
                         val summaryCursor = if (settings.summaryCursorEnabled) settings.getSummaryCursor(groupSessionId) else 0L
-                        val unsummarized = repository.getMessagesSync(groupSessionId).count { message ->
-                            message.id > summaryCursor && message.type == "ai_json"
-                        }
+                        val newHistory = repository.getMessagesAfterCursor(groupSessionId, summaryCursor, settings.getSessionRestartAt(groupSessionId), 20_000)
+                            .filter { it.type !in setOf("system", "send_failed", "gift_reply_failed") }
+                        val unsummarized = com.rhodes.privatechat.shared.memory.MaintenancePolicy.eligibleSummaryRounds(
+                            newHistory.chunkedByGroupRound().size, settings.groupSummaryRawTailRounds)
                         val status = settings.getRollingSummaryStatus(groupSessionId)
-                        val retryAllowed = status.state != "failed" || !settings.summaryAutoRetryEnabled || System.currentTimeMillis() >= status.nextRetryAt
+                        val retryAllowed = com.rhodes.privatechat.shared.memory.MaintenancePolicy.mayAttempt(status.state, status.nextRetryAt, System.currentTimeMillis())
                         if (unsummarized >= settings.groupSummaryTriggerRounds && retryAllowed && groupSessionId.isNotBlank()) {
                             repository.getSession(groupSessionId)?.let { session ->
                                 if (generateGroupShortTermSummary(groupSessionId, session.operatorName)) {

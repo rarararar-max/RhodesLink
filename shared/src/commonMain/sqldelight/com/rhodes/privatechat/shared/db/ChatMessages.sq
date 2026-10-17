@@ -108,3 +108,16 @@ UPDATE chat_messages SET type = ? WHERE id = ?;
 
 moveMessagesToSession:
 UPDATE chat_messages SET sessionId = ? WHERE sessionId = ?;
+
+getMessageById:
+SELECT * FROM chat_messages WHERE id = ?;
+
+countMessagesBySession:
+SELECT COUNT(*) FROM chat_messages WHERE sessionId = ?;
+
+getMessagesAfterCursor:
+SELECT * FROM chat_messages WHERE sessionId = ? AND id > ? AND timestamp >= ?
+ORDER BY id ASC LIMIT ?;
+
+replaceMessageContentIfUnchanged:
+UPDATE chat_messages SET content = ? WHERE id = ? AND content = ?;

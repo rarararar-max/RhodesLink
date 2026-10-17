@@ -2,8 +2,25 @@ package com.rhodes.privatechat.shared.voice
 
 import com.rhodes.privatechat.shared.settings.SettingsRepository
 
+@kotlinx.serialization.Serializable
+data class VoiceProviderConfiguration(val endpoint: String, val model: String, val key: String = "")
+
+fun defaultAsrConfiguration(provider: String): VoiceProviderConfiguration = when (provider) {
+    "xiaomi" -> VoiceProviderConfiguration("https://api.xiaomimimo.com/v1/chat/completions", "mimo-v2.5-asr")
+    "ali" -> VoiceProviderConfiguration("wss://dashscope.aliyuncs.com/api-ws/v1/realtime", "qwen3-asr-flash-realtime")
+    else -> VoiceProviderConfiguration("", "")
+}
+
+fun defaultTtsConfiguration(provider: String): VoiceProviderConfiguration = when (provider) {
+    "xiaomi" -> VoiceProviderConfiguration("https://api.xiaomimimo.com/v1/chat/completions", "mimo-v2.5-tts")
+    "minimax" -> VoiceProviderConfiguration("wss://api.minimaxi.com/ws/v1/t2a_v2", "speech-2.8-hd")
+    "vocu" -> VoiceProviderConfiguration("https://v1.vocu.ai/api/tts/simple-generate", "v3.0")
+    "volcano" -> VoiceProviderConfiguration("https://openspeech.bytedance.com/api/v3/tts/unidirectional", "seed-icl-2.0")
+    else -> VoiceProviderConfiguration("", "")
+}
+
 fun SettingsRepository.hasAsrConfiguration(): Boolean =
-    asrBaseUrl.isNotBlank() && asrApiKey.ifBlank { apiKey }.isNotBlank()
+    asrBaseUrl.isNotBlank() && asrModelName.isNotBlank() && asrApiKey.ifBlank { apiKey }.isNotBlank()
 
 fun SettingsRepository.hasTtsConfiguration(): Boolean =
     ttsBaseUrl.isNotBlank() &&
@@ -79,7 +96,11 @@ fun asrKeyFallbackHint(
     chatProvider: String = "",
     asrProvider: String = "",
 ): String? {
-    if (asrProvider == "xiaomi" || endpoint.contains("api.xiaomimimo.com")) return null
+    if (asrProvider == "xiaomi" || endpoint.contains("api.xiaomimimo.com")) {
+        if (asrApiKey.isNotBlank() || chatApiKey.isBlank()) return null
+        return if (chatProvider == "xiaomi") "未单独填写语音识别密钥，将复用小米聊天密钥。"
+        else "未单独填写小米语音识别密钥，将复用其它厂商的聊天密钥，可能鉴权失败。请单独填写小米 Key。"
+    }
     if (asrApiKey.isNotBlank() || chatApiKey.isBlank()) return null
     if (!endpoint.contains("dashscope.aliyuncs.com")) return "未单独填写语音识别密钥，将复用聊天密钥。"
     return if (chatProvider == "ali") {

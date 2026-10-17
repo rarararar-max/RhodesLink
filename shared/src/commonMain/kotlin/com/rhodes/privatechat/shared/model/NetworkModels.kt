@@ -3,15 +3,19 @@ package com.rhodes.privatechat.shared.model
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 @Serializable
 data class ChatCompletionRequest(
     val model: String = "deepseek-v4-flash",
     val messages: List<AiMessage>,
-    val stream: Boolean = true,
+    val stream: Boolean = false,
     val temperature: Double = 0.95,
     val max_tokens: Int? = null,
     val response_format: ResponseFormat? = null,
-    val thinking: ThinkingParam? = null
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val thinking: ThinkingParam? = null,
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val enable_thinking: Boolean? = null
 )
 
 @Serializable
@@ -215,7 +219,8 @@ data class GroupTurnState(
 
 @Serializable
 data class GoogleGenerationConfig(
-    @SerialName("maxOutputTokens") val maxOutputTokens: Int? = null
+    @SerialName("maxOutputTokens") val maxOutputTokens: Int? = null,
+    val temperature: Double = 0.95
 )
 
 @Serializable

@@ -46,6 +46,37 @@ class MessageRepository(
     private val idMutex = Mutex()
     private var nextMessageId: Long? = null
 
+    suspend fun getMessageById(id: Long): ChatMessage? = withContext(DatabaseDispatcher.dispatcher) {
+        db.chatMessagesQueries.getMessageById(id) { id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe ->
+            ChatMessage(id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange.toInt(), timestamp, isMe != 0L)
+        }.executeAsOneOrNull()
+    }
+
+    suspend fun countMessages(sessionId: String): Long = withContext(DatabaseDispatcher.dispatcher) {
+        db.chatMessagesQueries.countMessagesBySession(sessionId).executeAsOne()
+    }
+
+    suspend fun getMessagesAfterCursor(sessionId: String, cursor: Long, restartAt: Long, limit: Long): List<ChatMessage> = withContext(DatabaseDispatcher.dispatcher) {
+        db.chatMessagesQueries.getMessagesAfterCursor(sessionId, cursor, restartAt, limit) { id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe ->
+            ChatMessage(id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange.toInt(), timestamp, isMe != 0L)
+        }.executeAsList()
+    }
+
+    /** Replaced replies are committed only if the source still exists and has not changed. */
+    suspend fun replaceReplyIfUnchanged(original: ChatMessage, replacement: String): Boolean = withContext(DatabaseDispatcher.dispatcher) {
+        db.transactionWithResult {
+            val current = db.chatMessagesQueries.getMessageById(original.id) { id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe ->
+            ChatMessage(id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange.toInt(), timestamp, isMe != 0L)
+        }.executeAsOneOrNull()
+            if (current?.sessionId != original.sessionId || current.content != original.content) return@transactionWithResult false
+            db.chatMessagesQueries.replaceMessageContentIfUnchanged(replacement, original.id, original.content)
+            db.chatSessionsQueries.updateLastMessageIfNotNewer(previewFromAiJson(replacement), original.timestamp, original.sessionId, original.timestamp)
+            db.chatMessagesQueries.getMessageById(original.id) { id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe ->
+            ChatMessage(id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange.toInt(), timestamp, isMe != 0L)
+        }.executeAsOneOrNull()?.content == replacement
+        }
+    }
+
     // --- Messages ---
     fun getMessages(sessionId: String): Flow<List<ChatMessage>> =
         db.chatMessagesQueries.getMessages(sessionId) { id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe ->
@@ -107,10 +138,13 @@ class MessageRepository(
         }.executeAsList()
     }
 
-    suspend fun addDisplayEventIfAbsent(sessionId: String, messageId: Long, segmentIndex: Int): Long = idMutex.withLock {
+    suspend fun addDisplayEventIfAbsent(sessionId: String, messageId: Long, segmentIndex: Int, revealedAt: Long = 0L): Long = idMutex.withLock {
         withContext(DatabaseDispatcher.dispatcher) {
             db.chatDisplayEventsQueries.getDisplayEventOrder(messageId, segmentIndex.toLong()).executeAsOneOrNull()?.let { return@withContext it }
-            val nextOrder = (db.chatDisplayEventsQueries.getNextRevealOrder(sessionId).executeAsOne().MAX ?: 0L) + 1L
+            // Timestamp-based orders allow later-revealed bubbles to follow intervening user
+            // messages. Existing small sequence orders remain valid legacy display events.
+            val nextOrder = revealedAt.takeIf { it >= 1_000_000_000_000L }
+                ?: Clock.System.now().toEpochMilliseconds()
             db.chatDisplayEventsQueries.insertDisplayEventIfAbsent(messageId, segmentIndex.toLong(), sessionId, nextOrder)
             db.chatDisplayEventsQueries.getDisplayEventOrder(messageId, segmentIndex.toLong()).executeAsOneOrNull() ?: nextOrder
         }

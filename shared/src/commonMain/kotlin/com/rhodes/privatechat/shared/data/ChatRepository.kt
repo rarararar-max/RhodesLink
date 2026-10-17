@@ -301,6 +301,11 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
         recoveredNames.size
     }
 
+    suspend fun getMessageById(id: Long) = messages.getMessageById(id)
+    suspend fun countMessages(sessionId: String) = messages.countMessages(sessionId)
+    suspend fun getMessagesAfterCursor(sessionId: String, cursor: Long, restartAt: Long, limit: Long = 200) =
+        messages.getMessagesAfterCursor(sessionId, cursor, restartAt, limit)
+
     fun getMessages(sessionId: String) = messages.getMessages(sessionId)
     fun getRecentMessages(sessionId: String, limit: Long = 200) = messages.getRecentMessages(sessionId, limit)
     suspend fun getMessagesSync(sessionId: String) = messages.getMessagesSync(sessionId)
@@ -313,8 +318,8 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
         messages.updateMessageContentAndPreview(sessionId, id, content, timestamp)
     suspend fun repairAiSessionPreviews() = messages.repairAiSessionPreviews()
     suspend fun getDisplayEvents(sessionId: String) = messages.getDisplayEvents(sessionId)
-    suspend fun addDisplayEventIfAbsent(sessionId: String, messageId: Long, segmentIndex: Int) =
-        messages.addDisplayEventIfAbsent(sessionId, messageId, segmentIndex)
+    suspend fun addDisplayEventIfAbsent(sessionId: String, messageId: Long, segmentIndex: Int, revealedAt: Long = 0L) =
+        messages.addDisplayEventIfAbsent(sessionId, messageId, segmentIndex, revealedAt)
     suspend fun deleteDisplayEvent(messageId: Long, segmentIndex: Int) = messages.deleteDisplayEvent(messageId, segmentIndex)
     suspend fun deleteMessageDisplayEvents(messageId: Long) = messages.deleteMessageDisplayEvents(messageId)
     suspend fun sendMessage(sessionId: String, message: ChatMessage) = messages.sendMessage(sessionId, message)
@@ -609,7 +614,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun deleteOldMoments(cutoff: Long) = moments.deleteOldMoments(cutoff)
     suspend fun deleteMomentsByOperator(operatorId: String) = moments.deleteMomentsByOperator(operatorId)
 
-    suspend fun insertDiary(diary: Diary) = diaries.insertDiary(diary)
+    suspend fun insertDiary(diary: Diary, queueMemory: Boolean = false) = diaries.insertDiary(diary, queueMemory)
     suspend fun getDiary(operatorId: String, date: String) = diaries.getDiary(operatorId, date)
     fun getDiariesByOperator(operatorId: String) = diaries.getDiariesByOperator(operatorId)
     fun getLatestDiaryCreatedAtByOperator() = diaries.getLatestDiaryCreatedAtByOperator()
@@ -634,6 +639,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun cleanupExpiredData() = cleanup.cleanupExpiredData()
 
     // --- Memory v2 ---
+    suspend fun insertMemoryItemIfAbsent(item: MemoryItem, now: Long) = memoryV2.insertMemoryItemIfAbsent(item, now)
     suspend fun insertMemoryItem(item: MemoryItem) = memoryV2.insertMemoryItem(item)
     suspend fun insertMemorySource(source: MemorySourceItem) = memoryV2.insertSource(source)
     suspend fun claimPendingMemorySources(now: Long, limit: Int) = memoryV2.claimPendingSources(now, limit)

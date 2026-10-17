@@ -29,6 +29,42 @@ class MomentRepository(private val wrapper: DatabaseWrapper) {
     }
     }
 
+    private fun insertReplyIntents(turns: List<ReplyTurn>) {
+        turns.forEach { turn ->
+            db.replyTurnsQueries.insertReplyTurnIfAbsent(turn.id, turn.sessionId, turn.surface, turn.triggerKind,
+                turn.sourceMessageId, turn.autoPlanToken, turn.mode, turn.nextAttemptAt, turn.createdAt, turn.updatedAt)
+        }
+    }
+
+    /** Pure callback only: the source and every intended reply commit or roll back together. */
+    suspend fun insertMomentWithReplies(moment: Moment, makeReplies: (Long) -> List<ReplyTurn>): Pair<Long, List<ReplyTurn>> =
+        insertIdMutex.withLock { withContext(DatabaseDispatcher.dispatcher) {
+            db.transactionWithResult {
+                db.momentsQueries.insertMoment(moment.operatorId, moment.operatorName, moment.content, if (moment.isUserPost) 1L else 0L,
+                    moment.mentionedOperatorIds, moment.likeCount.toLong(), moment.commentCount.toLong(), moment.createdAt)
+                val id = db.momentsQueries.getLastInsertRowId().executeAsOne()
+                val tasks = makeReplies(id)
+                insertReplyIntents(tasks)
+                id to tasks
+            }
+        } }
+
+    suspend fun insertCommentWithReplies(comment: MomentComment, makeReplies: (Long) -> List<ReplyTurn>): Pair<Long, List<ReplyTurn>>? =
+        insertIdMutex.withLock { withContext(DatabaseDispatcher.dispatcher) {
+            db.transactionWithResult {
+                val exists = db.momentsQueries.getMoment(comment.momentId) { id, _, _, _, _, _, _, _, _ -> id }.executeAsOneOrNull() != null
+                val parentExists = comment.parentCommentId == 0L ||
+                    db.momentCommentsQueries.getCommentById(comment.parentCommentId) { _, momentId, _, _, _, _, _, _, _ -> momentId }.executeAsOneOrNull() == comment.momentId
+                if (!exists || !parentExists) return@transactionWithResult null
+                db.momentCommentsQueries.insertComment(comment.momentId, comment.operatorId, comment.operatorName, comment.content,
+                    comment.parentCommentId, comment.replyToName, comment.createdAt, if (comment.isRead) 1L else 0L)
+                val id = db.momentCommentsQueries.getLastInsertRowId().executeAsOne()
+                val tasks = makeReplies(id)
+                insertReplyIntents(tasks)
+                id to tasks
+            }
+        } }
+
     /** Restores social records with newly assigned local IDs while preserving their relationships. */
     suspend fun restoreSocialBackup(
         moments: List<Moment>,
@@ -165,6 +201,28 @@ class MomentRepository(private val wrapper: DatabaseWrapper) {
             }
         }
     }
+    }
+
+    suspend fun insertCommentForReplyTurn(comment: MomentComment, turnId: String, token: String, sourceCommentId: Long?): Long? = insertIdMutex.withLock {
+        withContext(DatabaseDispatcher.dispatcher) {
+            db.transactionWithResult {
+                if (!db.replyTurnsQueries.isReplyTurnOwned(turnId, token).executeAsOne()) return@transactionWithResult null
+                val momentExists = db.momentsQueries.getMoment(comment.momentId) { id, _, _, _, _, _, _, _, _ -> id }.executeAsOneOrNull() != null
+                val requiredComments = listOfNotNull(comment.parentCommentId.takeIf { it > 0 }, sourceCommentId).distinct()
+                val parentsExist = requiredComments.all { id ->
+                    db.momentCommentsQueries.getCommentById(id) { _, momentId, _, _, _, _, _, _, _ -> momentId }.executeAsOneOrNull() == comment.momentId
+                }
+                if (!momentExists || !parentsExist) {
+                    db.replyTurnsQueries.cancelReplyTurn(System.currentTimeMillis(), "互动来源已删除", turnId)
+                    return@transactionWithResult null
+                }
+                db.momentCommentsQueries.insertComment(comment.momentId, comment.operatorId, comment.operatorName, comment.content, comment.parentCommentId, comment.replyToName, comment.createdAt, if (comment.isRead) 1L else 0L)
+                val id = db.momentCommentsQueries.getLastInsertRowId().executeAsOne()
+                val now = System.currentTimeMillis()
+                db.replyTurnsQueries.completeReplyTurn(now, now, turnId, token)
+                id
+            }
+        }
     }
 
     suspend fun getMaxCommentId(): Long? = withContext(Dispatchers.Default) {

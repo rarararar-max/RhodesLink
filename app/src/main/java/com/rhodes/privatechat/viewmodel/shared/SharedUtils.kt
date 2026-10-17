@@ -319,6 +319,8 @@ class SharedUtils(
     }
 
     class ChatUsageSummary {
+        private var attempts = 0
+        fun recordAttempt() { attempts++ }
         private var callsWithUsage = 0L
         private var callsWithoutUsage = 0L
         private var callsWithIncompleteUsage = 0L
@@ -367,7 +369,7 @@ class SharedUtils(
                 callsWithUsage == 0L -> "成功返回调用=${callsWithoutUsage + callsWithIncompleteUsage}；服务端未返回完整提示词缓存统计"
                 else -> "本轮成功返回调用：完整统计=$callsWithUsage；未返回=$callsWithoutUsage；不完整=$callsWithIncompleteUsage；提示词缓存Token：命中=$hitTokens；未命中=$missTokens；命中率=${if (total > 0) hitTokens * 100 / total else 0}%（含重试/补全；超时或失败请求未计入）"
             }
-            return base + thinkingSuffix()
+            return (if (attempts > 0) "模型调用=$attempts 次；" else "") + base + thinkingSuffix()
         }
     }
 

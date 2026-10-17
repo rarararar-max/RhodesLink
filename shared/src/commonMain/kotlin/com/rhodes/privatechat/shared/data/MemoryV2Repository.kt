@@ -16,7 +16,53 @@ import kotlin.random.Random
 class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
     private val db: RhodesDatabase get() = wrapper.database
 
-    suspend fun insertMemoryItem(item: MemoryItem): Long = withContext(Dispatchers.Default) {
+    /** Link new conclusions only if every parent is still the same evidence we summarised. */
+    suspend fun finishPromotion(children: List<MemoryItem>, parents: List<MemoryItem>, links: List<MemoryLink>, signature: String, now: Long) =
+        withContext(DatabaseDispatcher.dispatcher) {
+            db.transaction {
+                val unchanged = parents.all { original ->
+                    db.memoryItemsQueries.getMemoryItemById(original.id).executeAsOneOrNull()?.let {
+                        it.status == "active" && it.content == original.content && it.privacy == original.privacy && it.sourceKind == original.sourceKind.name && it.sourceRefId == original.sourceRefId && it.expiresAt > now
+                    } == true
+                }
+                if (!unchanged) {
+                    children.forEach { child ->
+                        db.memoryItemsQueries.getMemoryVectorId(child.id).executeAsOneOrNull()?.takeIf { it.isNotBlank() }
+                            ?.let { db.vectorMemoriesQueries.deleteVectorMemory(it) }
+                        db.memoryItemsQueries.archiveMemoryItem(now, child.id)
+                    }
+                } else {
+                    links.forEach { link -> db.memoryLinksQueries.insertMemoryLink(link.parentMemoryId, link.childMemoryId, link.linkType, link.createdAt) }
+                    links.groupBy { it.parentMemoryId }.forEach { (parentId, evidenceLinks) ->
+                        // Missing child vectors must not remove working parent recall.
+                        val allIndexed = evidenceLinks.all { link ->
+                            db.memoryItemsQueries.hasUsableMemoryVector(link.childMemoryId, signature, now).executeAsOne()
+                        }
+                        if (allIndexed) {
+                            db.memoryItemsQueries.getMemoryVectorId(parentId).executeAsOneOrNull()?.takeIf { it.isNotBlank() }
+                                ?.let { db.vectorMemoriesQueries.deleteVectorMemory(it) }
+                            db.memoryItemsQueries.archiveMemoryItem(now, parentId)
+                        }
+                    }
+                }
+            }
+        }
+
+    suspend fun insertMemoryItem(item: MemoryItem): Long = withContext(DatabaseDispatcher.dispatcher) {
+        db.transactionWithResult { insertMemoryItemInternal(item) }
+    }
+
+    /** No check-then-insert gap; different evidence and privacy boundaries remain separate. */
+    suspend fun insertMemoryItemIfAbsent(item: MemoryItem, now: Long): Long? = withContext(DatabaseDispatcher.dispatcher) {
+        db.transactionWithResult {
+            val existing = db.memoryItemsQueries.findEquivalentLiveMemory(item.ownerType, item.ownerId,
+                item.memoryLevel.name, item.memoryType, item.content, item.sourceKind.name,
+                item.sourceRefId, item.sessionId, item.privacy, now).executeAsOneOrNull()
+            if (existing != null) null else insertMemoryItemInternal(item)
+        }
+    }
+
+    private fun insertMemoryItemInternal(item: MemoryItem): Long {
         db.memoryItemsQueries.insertMemoryItem(
             item.ownerType,
             item.ownerId,
@@ -49,7 +95,11 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
             item.rawJson,
             item.vectorId,
         )
-        db.memoryItemsQueries.getLastInsertedMemoryItemId().executeAsOne()
+        return db.memoryItemsQueries.getLastInsertedMemoryItemId().executeAsOne()
+    }
+
+    suspend fun memoryIndexStates(signature: String, now: Long): Map<Long, String> = withContext(DatabaseDispatcher.dispatcher) {
+        db.memoryItemsQueries.getMemoryIndexStates(now, signature).executeAsList().associate { it.id to it.indexState }
     }
 
     suspend fun getMemoryItemsByOwner(ownerType: String, ownerId: String): List<MemoryItem> = withContext(DatabaseDispatcher.dispatcher) {
@@ -211,8 +261,16 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
         }.executeAsList()
     }
 
-    suspend fun updateMemoryItemContent(id: Long, content: String, updatedAt: Long) = withContext(Dispatchers.Default) {
-        db.memoryItemsQueries.updateMemoryItemContent(content, updatedAt, id)
+    suspend fun updateMemoryItemContent(id: Long, content: String, updatedAt: Long) = withContext(DatabaseDispatcher.dispatcher) {
+        db.transaction {
+            db.memoryItemsQueries.getMemoryVectorId(id).executeAsOneOrNull()?.takeIf { it.isNotBlank() }
+                ?.let { db.vectorMemoriesQueries.deleteVectorMemory(it) }
+            val pending = ArrayDeque<Long>()
+            pending.addLast(id)
+            invalidateDescendantsInternal(pending).forEach { db.vectorMemoriesQueries.deleteVectorMemory(it) }
+            db.memoryItemsQueries.updateMemoryItemContent(content, updatedAt, id)
+            db.memoryItemsQueries.updateMemoryItemVectorId("", updatedAt, id)
+        }
     }
 
     suspend fun updateActiveMemoryExpiry(expiresAt: Long, updatedAt: Long) = withContext(Dispatchers.Default) {
@@ -305,6 +363,29 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
             }
         }
         return vectorIds
+    }
+
+    /** Keeps all records for audit; only affected evidence and its descendants stop being recalled. */
+    suspend fun invalidateChangedMessage(sessionId: String, messageId: Long) = withContext(DatabaseDispatcher.dispatcher) {
+        db.transaction {
+            val affected = db.memoryItemsQueries.getMemoryIdsBySessionForRepair(sessionId).executeAsList().filter { id ->
+                val item = db.memoryItemsQueries.getMemoryItemById(id).executeAsOneOrNull() ?: return@filter false
+                val evidence = runCatching {
+                    kotlinx.serialization.json.Json.parseToJsonElement(item.rawJson).let { it as? kotlinx.serialization.json.JsonObject }
+                        ?.get("sourceMessageIds") as? kotlinx.serialization.json.JsonArray
+                }.getOrNull()
+                // Old records do not have message-level evidence. Retain but conservatively invalidate them.
+                evidence == null || evidence.any { it.toString().trim('"').toLongOrNull() == messageId }
+            }
+            val pending = ArrayDeque<Long>()
+            affected.forEach { id ->
+                db.memoryItemsQueries.getMemoryVectorId(id).executeAsOneOrNull()?.takeIf { it.isNotBlank() }
+                    ?.let { db.vectorMemoriesQueries.deleteVectorMemory(it) }
+                db.memoryItemsQueries.archiveMemoryItem(System.currentTimeMillis(), id)
+                pending.addLast(id)
+            }
+            invalidateDescendantsInternal(pending).forEach { db.vectorMemoriesQueries.deleteVectorMemory(it) }
+        }
     }
 
     suspend fun invalidateDerivedBySession(sessionId: String) = withContext(Dispatchers.Default) {

@@ -1,0 +1,12 @@
+{
+  "checks": [
+    "Existing tables, indexes and migration files unchanged",
+    "Legacy sequence events and new timestamp events coexist without migration",
+    "Repeated reveal writes preserve the first persisted reveal time",
+    "Private and group display histories remain isolated",
+    "Existing backup SQL round-trips both order formats without precision loss",
+    "Removing a bubble leaves the other segment reveal times intact"
+  ],
+  "count": 6,
+  "uses_real_user_database": false
+}

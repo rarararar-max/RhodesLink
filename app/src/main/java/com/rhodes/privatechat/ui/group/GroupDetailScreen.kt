@@ -1,5 +1,6 @@
 package com.rhodes.privatechat.ui.group
 
+import com.rhodes.privatechat.shared.modelgateway.hasVisionConfiguration
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -61,9 +62,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () -> Unit, onEditGroup: (String) -> Unit, groupId: String = "", modifier: Modifier = Modifier, onOperatorClick: (String) -> Unit = {}, onViewHistory: (String) -> Unit = {}) {
     val settings: SettingsRepository = koinInject()
-    val visionReady = settings.visionBaseUrl.isNotBlank() &&
-        settings.visionModelName.isNotBlank() &&
-        settings.visionApiKey.ifBlank { settings.apiKey }.isNotBlank()
+    val visionReady = settings.hasVisionConfiguration()
     val listState = rememberLazyListState()
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -86,7 +85,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
     var pendingImageUri by rememberSaveable(groupId) { mutableStateOf("") }
     var imageSending by rememberSaveable(groupId) { mutableStateOf(false) }
     var messageSaving by rememberSaveable(groupId) { mutableStateOf(false) }
-    var forceScrollThroughMessageCount by remember(groupId) { mutableStateOf(0) }
+    var scrollToLatestRequest by remember(groupId) { mutableStateOf(0L) }
     var recordingVoice by rememberSaveable(groupId) { mutableStateOf(false) }
     val audioController = remember { LocalAudioController(ctx) }
     var voiceEnabled by rememberSaveable(groupId) { mutableStateOf(settings.getBoolean("group_tts_$groupId", false)) }
@@ -279,8 +278,8 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                     displayEvents = displayEvents,
                     displayEventsLoaded = displayEventsLoaded,
                     legacyMessageCutoff = messageListOpenedAt,
-                    onReveal = { message ->
-                        val order = viewModel.addDisplayEventIfAbsent(groupId, message.originalMessageId, message.segmentIndex)
+                    onReveal = { message, revealedAt ->
+                        val order = viewModel.addDisplayEventIfAbsent(groupId, message.originalMessageId, message.segmentIndex, revealedAt)
                         displayEvents = viewModel.getDisplayEvents(groupId)
                         order
                     },
@@ -298,7 +297,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                     onLoadOlder = { viewModel.loadOlderGroupMessages() },
                     isLoadingOlder = isLoadingOlder,
                     hasMore = hasMoreMessages,
-                    forceScrollToLatest = groupMessages.size <= forceScrollThroughMessageCount,
+                    scrollToLatestRequest = scrollToLatestRequest,
                     onDisplayState = { parsedCount, displayCount ->
                         val detail = "groupId=$groupId, rawCount=${groupMessages.size}, parsedCount=$parsedCount, displayCount=$displayCount"
                         if (groupMessages.isNotEmpty() && parsedCount == 0) com.rhodes.privatechat.util.DebugLogger.diagnostic("GroupChat/UiRenderFallback", detail)
@@ -316,16 +315,6 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                         TextButton(onClick = { pendingImageUri = "" }) { Text("移除", color = ErrorRed) }
                     }
                 }
-                // The send button is disabled while a save is in flight. Without this hint the user
-                // taps a greyed-out button and sees nothing happen at all.
-                if (messageSaving) {
-                    Text(
-                        "正在发送，请稍候…",
-                        fontSize = 11.sp,
-                        color = TextSecondary,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
-                    )
-                }
                 ChatInputBar(
                     text = inputText,
                     onTextChange = { inputText = it },
@@ -333,22 +322,27 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                         if (pendingImageUri.isNotBlank() && groupId.isNotBlank()) {
                             val imageUri = pendingImageUri
                             imageSending = true
-                            pendingImageUri = ""
-                            forceScrollThroughMessageCount = groupMessages.size + 2
-                            viewModel.groupChatViewModel.sendGroupImageMessage(groupId, groupName, imageUri, MainActivity.imageForModel(imageUri), inputText, currentMode, onMessageSent = {
-                                inputText = ""
+                            scrollToLatestRequest += 1L
+                            val submittedText = inputText
+                            viewModel.groupChatViewModel.sendGroupImageMessage(groupId, groupName, imageUri, MainActivity.imageForModel(imageUri), submittedText, currentMode, onMessageSent = {
+                                inputText = com.rhodes.privatechat.util.preserveEditedDraft(inputText, submittedText)
                             }, onResult = { success ->
                                 imageSending = false
-                                if (success) forceScrollThroughMessageCount = groupMessages.size
+                                if (success && pendingImageUri == imageUri) pendingImageUri = ""
                             })
                         } else if (text.isNotBlank() && groupId.isNotBlank()) {
                             // Keep the local user bubble and the following AI segments in view.
-                            forceScrollThroughMessageCount = groupMessages.size + 2
+                            scrollToLatestRequest += 1L
                             messageSaving = true
+                            val submittedText = inputText
+                            val saveReceipt = com.rhodes.privatechat.util.MessagePersistenceReceipt { saved ->
+                                if (saved) inputText = com.rhodes.privatechat.util.preserveEditedDraft(inputText, submittedText)
+                                messageSaving = false
+                            }
                             viewModel.groupChatViewModel.sendGroupMessage(
                                 groupId, groupName, text, currentMode,
-                                onMessageSent = { inputText = ""; messageSaving = false },
-                                onResponseComplete = { messageSaving = false }
+                                onMessageSent = { saveReceipt.complete(true) },
+                                onResponseComplete = { saveReceipt.complete(false) }
                             )
                         }
                     },

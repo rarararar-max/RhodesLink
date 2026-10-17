@@ -20,6 +20,10 @@ data class VectorMemory(
     val expiresAt: Long = Long.MAX_VALUE,
     /** Runtime-only retrieval score; not persisted by the vector store. */
     val similarity: Double = 0.0,
+    /** Optimistic source snapshot, used only while publishing a regenerated memory index. */
+    val originMemoryId: Long = 0L,
+    val originContent: String = "",
+
 )
 
 @Serializable

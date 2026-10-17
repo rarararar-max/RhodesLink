@@ -49,3 +49,6 @@ DELETE FROM diaries WHERE operatorId = ?;
 
 deleteAllDiaries:
 DELETE FROM diaries;
+
+getDiaryById:
+SELECT * FROM diaries WHERE id = ?;

@@ -50,3 +50,6 @@ docker-compose.override.yml
 
 # 编辑器/工具产生的备份文件，不得入库（曾泄漏过硬编码密钥）
 *.bak
+
+# Local build and verification logs
+/docs/*.log

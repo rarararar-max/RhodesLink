@@ -161,3 +161,27 @@ DELETE FROM memory_items;
 deleteExpiredMemoryItems:
 UPDATE memory_items SET status = 'expired', updatedAt = ?
 WHERE status = 'active' AND expiresAt < ?;
+
+getMemoryIdsBySessionForRepair:
+SELECT id FROM memory_items WHERE sessionId = ? AND sourceKind IN ('PRIVATE_CHAT', 'GROUP_CHAT');
+
+findEquivalentLiveMemory:
+SELECT id FROM memory_items
+WHERE ownerType = ? AND ownerId = ? AND memoryLevel = ? AND memoryType = ?
+AND content = ? AND sourceKind = ? AND sourceRefId = ? AND sessionId = ?
+AND privacy IS ? AND status = 'active' AND expiresAt > ?
+ORDER BY id DESC LIMIT 1;
+
+hasUsableMemoryVector:
+SELECT COUNT(*) > 0 FROM memory_items m JOIN vector_memories v ON v.id = m.vectorId
+WHERE m.id = ? AND m.status = 'active' AND v.embeddingSignature = ? AND v.expiresAt > ?;
+
+getMemoryIndexStates:
+SELECT m.id, CASE
+WHEN m.status != 'active' THEN 'inactive'
+WHEN m.expiresAt <= :now THEN 'expired'
+WHEN m.vectorId = '' OR v.id IS NULL THEN 'missing'
+WHEN v.embeddingSignature != :signature THEN 'stale'
+WHEN v.expiresAt <= :now THEN 'expired'
+ELSE 'ready' END AS indexState
+FROM memory_items m LEFT JOIN vector_memories v ON v.id = m.vectorId;

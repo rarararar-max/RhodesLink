@@ -15,6 +15,18 @@ object AndroidSettingsFactory {
         appContext = context.applicationContext
     }
 
+    private fun atomicSettings(prefs: android.content.SharedPreferences): ObservableSettings {
+        val delegate = SharedPreferencesSettings(prefs)
+        return object : ObservableSettings by delegate, AtomicSettingsBatch {
+            override fun commitSupportState(strings: Map<String, String>, ints: Map<String, Int>): Boolean {
+                val editor = prefs.edit()
+                strings.forEach { (key, value) -> editor.putString(key, value) }
+                ints.forEach { (key, value) -> editor.putInt(key, value) }
+                return editor.commit()
+            }
+        }
+    }
+
     fun createSettings(): ObservableSettings {
         val legacy = appContext.getSharedPreferences("rhodes_settings", Context.MODE_PRIVATE)
         // Diagnostic A/B switch. When the plain store is selected, every settings read/write bypasses the
@@ -24,7 +36,7 @@ object AndroidSettingsFactory {
         // can interrupt. If the app chats normally with this switch ON, the encrypted settings path is
         // proven to be the blocker - and the switch doubles as a workaround for the affected user.
         // The flag is read from the PLAIN store so it is always readable, whatever the encrypted store does.
-        if (legacy.getBoolean("diagnostic_use_plain_settings", false)) return SharedPreferencesSettings(legacy)
+        if (legacy.getBoolean("diagnostic_use_plain_settings", false)) return atomicSettings(legacy)
         return try {
             val masterKey = MasterKey.Builder(appContext).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
             val encrypted = EncryptedSharedPreferences.create(
@@ -55,7 +67,7 @@ object AndroidSettingsFactory {
                 }
                 if (!editor.commit()) throw IllegalStateException("无法提交加密设置迁移")
             }
-            SharedPreferencesSettings(encrypted).also { settings ->
+            atomicSettings(encrypted).also { settings ->
                 // A degraded Keystore can make every encrypted read/write block for seconds. Prompt
                 // assembly reads settings first, so on such a device no reply can ever be produced - it
                 // just times out. Time one real write; on a pathologically slow store fall back to the
@@ -77,7 +89,7 @@ object AndroidSettingsFactory {
             }
         } catch (_: Exception) {
             // Keystore failures must not make an upgraded user lose API configuration or UI state.
-            SharedPreferencesSettings(legacy)
+            atomicSettings(legacy)
         }
     }
 }

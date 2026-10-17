@@ -6,6 +6,7 @@ import com.rhodes.privatechat.shared.db.RhodesDatabase
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.ensureActive
 import kotlin.math.sqrt
 
 class LocalVectorStoreGateway(
@@ -34,6 +35,9 @@ class LocalVectorStoreGateway(
     ) = RawVectorRow(id, ownerType, ownerId, sourceType, sourceId, content, importance, embeddingJson, tags, visibility, embeddingSignature, createdAt, expiresAt)
 
     override suspend fun upsert(memory: VectorMemory) = withContext(DatabaseDispatcher.dispatcher) {
+        db.transaction {
+        val source = if (memory.originMemoryId > 0) db.memoryItemsQueries.getMemoryItemById(memory.originMemoryId).executeAsOneOrNull() else null
+        if (memory.originMemoryId > 0) check(source != null && source.status == "active" && source.content == memory.originContent && source.ownerType == memory.ownerType && source.ownerId == memory.ownerId && source.expiresAt == memory.expiresAt && (source.privacy == null || source.privacy == memory.visibility)) { "原记忆已修改、删除或归档，本次索引未覆盖" }
         db.vectorMemoriesQueries.insertVectorMemory(
             id = memory.id,
             ownerType = memory.ownerType,
@@ -49,9 +53,15 @@ class LocalVectorStoreGateway(
             createdAt = memory.createdAt,
             expiresAt = memory.expiresAt,
         )
+        if (source != null) {
+            db.memoryItemsQueries.updateMemoryItemVectorId(memory.id, source.updatedAt, source.id)
+            db.memorySourceQueueQueries.refreshSourceVectorCompletion(source.sourceKind, source.sourceRefId)
+        }
+        }
     }
 
     override suspend fun search(request: VectorSearchRequest): List<VectorMemory> {
+        if (request.ownerType == "knowledge_base") return searchWholeKnowledgeBase(request)
         val (rows, now, sourceKinds) = withContext(DatabaseDispatcher.dispatcher) {
             loadCandidates(request)
         }
@@ -60,6 +70,25 @@ class LocalVectorStoreGateway(
         return withContext(kotlinx.coroutines.Dispatchers.Default) {
             scoreCandidates(rows, request, now, sourceKinds)
         }
+    }
+
+    /** Scan bounded vector pages, keep only Top-K. Every chapter participates, not just newest rows. */
+    private suspend fun searchWholeKnowledgeBase(request: VectorSearchRequest): List<VectorMemory> {
+        val now = request.now.takeIf { it > 0 } ?: System.currentTimeMillis()
+        var cursor = ""
+        var top = emptyList<VectorMemory>()
+        while (true) {
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            val page = withContext(DatabaseDispatcher.dispatcher) {
+                db.vectorMemoriesQueries.getKnowledgeVectorPage(request.ownerId, request.embeddingSignature, now, cursor, 128L, ::rawRow).executeAsList()
+            }
+            if (page.isEmpty()) break
+            val ranked = withContext(kotlinx.coroutines.Dispatchers.Default) { scoreCandidates(page, request, now, request.sourceKinds) }
+            top = (top + ranked).sortedByDescending { it.similarity }.take(request.limit)
+            cursor = page.last().id
+            if (page.size < 128) break
+        }
+        return top
     }
 
     /** Read-only aggregate timing for diagnostics; never returns record IDs, text, or vectors. */

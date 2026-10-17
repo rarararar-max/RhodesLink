@@ -1,5 +1,6 @@
 package com.rhodes.privatechat.viewmodel
 
+import com.rhodes.privatechat.shared.modelgateway.hasVisionConfiguration
 import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
@@ -96,6 +97,7 @@ class ChatViewModel(
     private val knowledgeBaseContextBuilder: KnowledgeBaseContextBuilder? = try { org.koin.core.context.GlobalContext.get().get() } catch (_: Exception) { null }
     private val unavailableHistoryReplyIds = ConcurrentHashMap.newKeySet<String>()
     companion object {
+    private val privateSummaryMutexes = ConcurrentHashMap<String, Mutex>()
         const val DEBUG = false
         private const val CHAT_PAGE_SIZE = 50L
         private const val MAX_MERGED_USER_MESSAGES = 2
@@ -107,7 +109,6 @@ class ChatViewModel(
          * recall query uses the last 3 and the prompt uses at most `history_messages`), so never read a
          * whole multi-thousand-message session again.
          */
-        private const val PROMPT_HISTORY_READ_FLOOR = 200
         /** Optional (enhanced) context may only consume this much of the prompt budget in total. */
         private const val OPTIONAL_CONTEXT_POOL_MS = 12_000L
         private const val PRIVATE_MODEL_TIMEOUT_MS = 120_000L
@@ -216,7 +217,6 @@ class ChatViewModel(
     private val privateRestartCleanupJobs = ConcurrentHashMap<String, Job>()
     private val privateRestartCleanupFailures = ConcurrentHashMap<String, String>()
     private val privateSummaryRetryJobs = ConcurrentHashMap<String, Job>()
-    private val privateSummaryMutexes = ConcurrentHashMap<String, Mutex>()
     private val pendingUserMessageIds = ConcurrentHashMap<String, MutableSet<Long>>()
     private val retryingMessageIds = ConcurrentHashMap.newKeySet<Long>()
     private val sessionGenerations = ConcurrentHashMap<String, Long>()
@@ -448,6 +448,7 @@ class ChatViewModel(
 
     private suspend fun generateShortTermSummaryLocked(session: ChatSession, messageSource: List<ChatMessage>? = null): Boolean {
         if (!settings.privateSummaryGenerationEnabled) return false
+        val timelineEpoch = settings.getMemoryTimelineEpoch(session.id)
         var operationId = ""
         try {
             val restartAt = settings.getSessionRestartAt(session.id)
@@ -459,7 +460,7 @@ class ChatViewModel(
             val rounds = scopedMsgs.chunkedByPrivateRound()
             val older = rounds.dropLast(retain).take(30).flatten()
             if (older.isEmpty()) {
-                settings.putRollingSummaryStatus(session.id, com.rhodes.privatechat.shared.settings.SettingsRepository.RollingSummaryStatus(state = "idle", pendingRounds = rounds.size, lastSuccessAt = settings.getRollingSummaryStatus(session.id).lastSuccessAt))
+                settings.putRollingSummaryStatus(session.id, com.rhodes.privatechat.shared.settings.SettingsRepository.RollingSummaryStatus(state = "idle", pendingRounds = 0, lastSuccessAt = settings.getRollingSummaryStatus(session.id).lastSuccessAt))
                 DebugLogger.log("Memory/Summary", "跳过短期摘要: session=${session.id}, totalMsgs=${allMsgs.size}, rounds=${rounds.size}, retainRounds=$retain, older=0")
                 return false
             }
@@ -555,6 +556,7 @@ ${text}"""
             if (parsed.summary.isNotBlank()) {
                 val now = System.currentTimeMillis()
                 DebugLogger.log("Memory/Summary", "短期摘要已生成: session=${session.id}, summaryLen=${parsed.summary.length}, anchors=${parsed.anchors.size}, preview=${parsed.summary.take(80)}")
+                if (timelineEpoch != settings.getMemoryTimelineEpoch(session.id)) return false
                 repository.replaceShortTermMemory(Memory(
                     sessionId = session.id, operatorId = session.operatorId,
                     type = MemoryType.SHORT_TERM, content = parsed.summary,
@@ -563,20 +565,20 @@ ${text}"""
                     expiresAt = MemoryPolicy.memoryExpiresAt(settings)
                 ))
                 if (settings.summaryCursorEnabled) older.maxOfOrNull { it.id }?.let { settings.putSummaryCursor(session.id, it) }
-                settings.putRollingSummaryStatus(session.id, com.rhodes.privatechat.shared.settings.SettingsRepository.RollingSummaryStatus(state = "idle", pendingRounds = rounds.drop(retain + 30).size, lastSuccessAt = now, lastAttemptAt = now, operationId = operationId))
+                settings.putRollingSummaryStatus(session.id, com.rhodes.privatechat.shared.settings.SettingsRepository.RollingSummaryStatus(state = "idle", pendingRounds = com.rhodes.privatechat.shared.memory.MaintenancePolicy.remainingSummaryRounds(rounds.size, retain, minOf(30, (rounds.size - retain).coerceAtLeast(0))), lastSuccessAt = now, lastAttemptAt = now, operationId = operationId))
                 DebugLogger.conversationStep(operationId, "私聊滚动摘要", "本地保存", "成功", "摘要${parsed.summary.length}字，游标已推进")
                 DebugLogger.finishOperation(operationId, "成功", "已总结${older.size}条消息，保留最近${retain}轮")
                 return true
             }
             throw IllegalStateException("模型没有返回可保存摘要")
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException && e !is kotlinx.coroutines.TimeoutCancellationException) throw e
             DebugLogger.log("Memory/Summary", "短期摘要生成失败: ${e.message?.take(120)}")
             val previous = settings.getRollingSummaryStatus(session.id)
             val failures = previous.failureCount + 1
             val retryAt = if (settings.summaryAutoRetryEnabled) System.currentTimeMillis() + (60_000L * (1L shl (failures - 1).coerceAtMost(5))) else 0L
             settings.putRollingSummaryStatus(session.id, previous.copy(state = "failed", lastAttemptAt = System.currentTimeMillis(), failureCount = failures, nextRetryAt = retryAt, failureCode = e.javaClass.simpleName))
+            if (retryAt > 0L) com.rhodes.privatechat.automation.ContextMaintenanceScheduler.schedule(getApplication<Application>(), session.id, false, retryAt)
             if (operationId.isNotBlank()) {
                 DebugLogger.conversationStep(operationId, "私聊滚动摘要", "本轮总览", "失败", "${e.javaClass.simpleName}；${if (retryAt > 0L) "将在稍后重试" else "已暂停自动重试"}")
                 DebugLogger.finishOperation(operationId, "失败", "滚动摘要失败：${e.javaClass.simpleName}")
@@ -632,7 +634,7 @@ ${text}"""
             // the newest persisted row so opening a restored/large conversation never remains at
             // the first visible page because the initial layout won the race.
             _scrollToMessageId.value = initialMessages.lastOrNull()?.id
-            val databaseCount = withTimeout(8_000L) { repository.getMessagesSync(session.id).size }
+            val databaseCount = withTimeout(8_000L) { repository.countMessages(session.id) }
             DebugLogger.log("PrivateChat/InitialMessagesLoaded", "sessionId=${session.id}, databaseCount=$databaseCount, recentCount=${initialMessages.size}, stateCount=${_messages.value.size}")
             messagesJob = viewModelScope.launch {
                 try {
@@ -690,7 +692,7 @@ ${text}"""
             if (_currentSession.value?.id != session.id) return selectionId
             mergeMessagesFromDatabase(initialMessages)
             _scrollToMessageId.value = initialMessages.lastOrNull()?.id
-            val databaseCount = withTimeout(8_000L) { repository.getMessagesSync(session.id).size }
+            val databaseCount = withTimeout(8_000L) { repository.countMessages(session.id) }
             DebugLogger.log("PrivateChat/InitialMessagesLoaded", "sessionId=${session.id}, databaseCount=$databaseCount, recentCount=${initialMessages.size}, stateCount=${_messages.value.size}, source=sync")
             messagesJob = viewModelScope.launch {
                 try {
@@ -1063,6 +1065,7 @@ ${text}"""
         logTag: String = "Chat",
         debugOperationId: String = "",
         onChatResult: (SharedUtils.ChatCallResult) -> Unit = {},
+        onAttempt: () -> Unit = {},
         turnBudgetMs: Long = 0L,
     ): com.rhodes.privatechat.shared.model.OfflineModeResponse {
         // 本轮预算在进入时固化一次，避免中途切换深度思考开关导致租约/超时口径不一致。
@@ -1074,6 +1077,8 @@ ${text}"""
         suspend fun request(stage: String, requestMessages: List<AiMessage>): String = withChatStageTimeout(
             "private", stage, remainingBudget(modelBudgetMs)
         ) {
+            onAttempt()
+            DebugLogger.conversationStep(debugOperationId, "私聊", "调用统计", "开始", "阶段=$stage；本次API构建消息=${requestMessages.size}条；每次重试单独计数")
             sharedUtils.chatResult(requestMessages, if (stage == "model_primary_request") logTag else "${logTag}ContentRetry")
                 .also(onChatResult)
                 .content
@@ -1325,7 +1330,7 @@ ${text}"""
                     DebugLogger.diagnostic("PrivateChat/SendStep", "sessionId=${session.id}, messageId=$msgId, step=message_insert_done")
                     recordReplyPipeline(session.id, msgId, "user_message_stored")
                     val persisted = withTimeout(MESSAGE_WRITE_TIMEOUT_MS) {
-                        repository.getMessagesSync(session.id).any { it.id == msgId && it.isMe }
+                        repository.getMessageById(msgId)?.let { it.sessionId == session.id && it.isMe } == true
                     }
                     DebugLogger.diagnostic("PrivateChat/SendVerification", "sessionId=${session.id}, messageId=$msgId, databaseReadBack=$persisted, stateCount=${_messages.value.count { it.sessionId == session.id }}")
                     check(persisted) { "用户消息写入后无法从数据库读回" }
@@ -1399,7 +1404,7 @@ ${text}"""
                     return@launch
                 }
                 val candidateIds = listOf(msgId)
-                val batchMessages = repository.getMessagesSync(session.id)
+                val batchMessages = candidateIds.mapNotNull { repository.getMessageById(it)?.takeIf { row -> row.sessionId == session.id } }
                     .asSequence()
                     .filter { it.id in candidateIds }
                     .sortedBy { it.id }
@@ -1458,7 +1463,7 @@ ${text}"""
                             promptBuildJob.cancel()
                             throw error
                         }
-                        DebugLogger.conversationStep(debugRoundId, "私聊", "提示词总构建", "完成", "预算=${promptBudget}ms；请求消息=${apiMessages.size}条；完整上下文已注入")
+                        DebugLogger.conversationStep(debugRoundId, "私聊", "提示词总构建", "完成", "预算=${promptBudget}ms；构建消息=${apiMessages.size}条；完整上下文已注入")
                         if (promptBuildJobs[session.id] === promptBuildJob) promptBuildJobs.remove(session.id)
                         DebugLogger.diagnostic("PrivateChat/ReplyStep", "sessionId=${session.id}, messageId=$msgId, step=prompt_done, messages=${apiMessages.size}")
                         DebugLogger.attachOperationModule(debugRoundId, "完整请求", sharedUtils.logAiCallText(apiMessages), sensitive = true)
@@ -1470,7 +1475,7 @@ ${text}"""
                         DebugLogger.diagnostic("PrivateChat/ReplyStep", "sessionId=${session.id}, messageId=$msgId, step=ai_request_start")
                         recordReplyPipeline(session.id, msgId, "ai_request_started")
                         pipelineStage = "ai_request"
-                        val parsed = generateCompletePrivateReply(apiMessages, mode, "Chat#$debugRoundId", debugRoundId, cacheUsage::record, remainingTurnBudget())
+                        val parsed = generateCompletePrivateReply(apiMessages, mode, "Chat#$debugRoundId", debugRoundId, cacheUsage::record, cacheUsage::recordAttempt, remainingTurnBudget())
                         DebugLogger.attachOperationModule(debugRoundId, "解析结果", formatPrivateParsedForDebug(parsed), sensitive = true)
                         DebugLogger.diagnostic("PrivateChat/ReplyStep", "sessionId=${session.id}, messageId=$msgId, step=ai_request_done, segments=${parsed.segments.orEmpty().size}")
                         recordReplyPipeline(session.id, msgId, "ai_response_received", "segments=${parsed.segments.orEmpty().size}")
@@ -1546,7 +1551,7 @@ ${text}"""
                              }
                              DebugLogger.chatEvent("私聊", "回复落库", resultStatus, "会话=${session.operatorName}，可见段=$aiResponseCount")
                              DebugLogger.conversationStep(debugRoundId, "私聊", "本轮结果", resultStatus, resultDetail)
-                             finishDebugRound(resultStatus, "模式=$mode，用户消息=${batchIds.size}条，历史轮数=$effectiveHistoryMessages，请求消息=${apiMessages.size}条，重试=$retryCount，解析段数=${parsed.segments.orEmpty().size}，可见台词=$aiResponseCount，AI消息ID=$aiMsgId，上下文=完整，协议=${if (protocolComplete) "完整" else "降级"}")
+                             finishDebugRound(resultStatus, "模式=$mode，用户消息=${batchIds.size}条，历史轮数=$effectiveHistoryMessages，构建消息=${apiMessages.size}条，${promptHistoryStats[session.id].orEmpty()}，重试=$retryCount，解析段数=${parsed.segments.orEmpty().size}，可见台词=$aiResponseCount，AI消息ID=$aiMsgId，上下文=完整，协议=${if (protocolComplete) "完整" else "降级"}")
                             onUnhideSession(session.id)
                             notifyIfBackground(session, replyPreview(sanitizedParsed).ifBlank { "发来一条消息" })
                             DebugLogger.log("Chat/DB", "AI响应已写入, session=${session.id}, id=$aiMsgId")
@@ -1566,7 +1571,7 @@ ${text}"""
                             markPrivateMessagesUndelivered(session.id, batchIds.toSet())
                             DebugLogger.chatEvent("私聊", "回复落库", "失败", "模型输出不完整")
                             DebugLogger.conversationStep(debugRoundId, "私聊", "本轮结果", "失败", privateReplyFailureReason(parsed, mode))
-                            finishDebugRound("失败", "模式=$mode，用户消息=${batchIds.size}条，历史轮数=$effectiveHistoryMessages，请求消息=${apiMessages.size}条，重试=$retryCount，原因=${privateReplyFailureReason(parsed, mode)}")
+                            finishDebugRound("失败", "模式=$mode，用户消息=${batchIds.size}条，历史轮数=$effectiveHistoryMessages，构建消息=${apiMessages.size}条，${promptHistoryStats[session.id].orEmpty()}，重试=$retryCount，原因=${privateReplyFailureReason(parsed, mode)}")
                             if (modeTransitionRetryPending.remove(session.id) == true) {
                                 modeTransitionNotices.remove(session.id)
                             } else if (modeTransitionNotices[session.id].orEmpty().isNotBlank()) {
@@ -1700,7 +1705,7 @@ ${text}"""
     fun resumePersistedReply(sessionId: String, messageId: Long, onComplete: (Boolean) -> Unit, replyTurnId: String? = null, replyLeaseToken: String? = null) {
         viewModelScope.launch {
             val session = repository.getSession(sessionId)
-            val message = repository.getMessagesSync(sessionId).firstOrNull { it.id == messageId && it.isMe }
+            val message = repository.getMessageById(messageId)?.takeIf { it.sessionId == sessionId && it.isMe }
             if (session == null || message == null) {
                 onComplete(true)
                 return@launch
@@ -1721,30 +1726,30 @@ ${text}"""
     }
 
     fun sendImageMessage(imageUri: String, imageForModel: String?, caption: String = "", existingMessageId: Long? = null, replyLeaseTokenOverride: String? = null, targetSession: ChatSession? = null, targetMode: String? = null, onResult: (Boolean) -> Unit = {}, onReplyComplete: (Boolean) -> Unit = {}) {
+        val persistenceReceipt = com.rhodes.privatechat.util.MessagePersistenceReceipt(onResult)
         val session = targetSession ?: _currentSession.value ?: run {
-            Log.w("RHODES_DEBUG", "[Vision] sendImageMessage: session is null"); onResult(false); return
+            Log.w("RHODES_DEBUG", "[Vision] sendImageMessage: session is null"); persistenceReceipt.complete(false); return
         }
         Log.d("RHODES_DEBUG", "[Vision] sendImageMessage: sessionId=${session.id} hasCaption=${caption.isNotBlank()}")
         sharedUtils.chatConfigurationError()?.let { error ->
             Log.w("RHODES_DEBUG", "[Vision] 聊天配置无效: $error")
             onShowToast(error)
-            onResult(false)
+            persistenceReceipt.complete(false)
             return
         }
         Log.d("RHODES_VISION", "配置检查: visionBaseUrl='${settings.visionBaseUrl}' visionModelName='${settings.visionModelName}' visionApiKey=${settings.visionApiKey.isNotBlank()} apiKey=${settings.apiKey.isNotBlank()}")
         if (!isVisionConfigured()) {
             onShowToast("图片聊天需要先设置识图模型，请在模型设置中填写识图地址、模型名和密钥。")
-            onResult(false)
+            persistenceReceipt.complete(false)
             return
         }
         if (imageForModel.isNullOrBlank()) {
             Log.w("RHODES_DEBUG", "[Vision] imageForModel 为空")
             onShowToast("无法读取这张图片，请重新选择后再试。")
-            onResult(false)
+            persistenceReceipt.complete(false)
             return
         }
         Log.d("RHODES_VISION", "imageForModel 长度=${imageForModel.length}")
-        _inputText.value = ""
         generateDailyIfNeeded()
         val requestId = requestSequence.incrementAndGet()
         val generation = sessionGenerations[session.id] ?: 0L
@@ -1755,29 +1760,44 @@ ${text}"""
             var imageMsgId = 0L
             var replyTurnId = ""
             var replyLeaseToken = ""
+            var imagePersisted = false
 
             // 1. 立即保存图片消息（占位 visionSummary）
-            imageMsgId = existingMessageId ?: repository.getNextMessageId()
-            val placeholderJson = json.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), JsonObject(mapOf(
-                "imageUri" to kotlinx.serialization.json.JsonPrimitive(imageUri),
-                "caption" to kotlinx.serialization.json.JsonPrimitive(caption.trim()),
-                "visionSummary" to kotlinx.serialization.json.JsonPrimitive("")
-            )))
-            replyTurnId = "private:${session.id}:$imageMsgId"
-            val turnNow = System.currentTimeMillis()
-            if (existingMessageId == null) {
-                repository.sendMessageAndCreateReplyTurn(session.id, ChatMessage(id = imageMsgId, sessionId = session.id, senderName = "我", content = placeholderJson, type = "image", mode = mode, timestamp = turnNow, isMe = true), com.rhodes.privatechat.shared.model.ReplyTurn(replyTurnId, session.id, "private", "image", imageMsgId, "", mode, "pending", 0, turnNow, "", 0, null, "", turnNow, turnNow, 0))
-            } else {
-                if (repository.replyTurns.get(replyTurnId) == null) repository.createReplyTurn(com.rhodes.privatechat.shared.model.ReplyTurn(replyTurnId, session.id, "private", "image", imageMsgId, "", mode, "pending", 0, turnNow, "", 0, null, "", turnNow, turnNow, 0))
-                repository.updateMessageContent(imageMsgId, placeholderJson)
+            try {
+                imageMsgId = existingMessageId ?: repository.getNextMessageId()
+                val placeholderJson = json.encodeToString(kotlinx.serialization.json.JsonObject.serializer(), JsonObject(mapOf(
+                    "imageUri" to kotlinx.serialization.json.JsonPrimitive(imageUri),
+                    "caption" to kotlinx.serialization.json.JsonPrimitive(caption.trim()),
+                    "visionSummary" to kotlinx.serialization.json.JsonPrimitive("")
+                )))
+                replyTurnId = "private:${session.id}:$imageMsgId"
+                val turnNow = System.currentTimeMillis()
+                if (existingMessageId == null) {
+                    repository.sendMessageAndCreateReplyTurn(session.id, ChatMessage(id = imageMsgId, sessionId = session.id, senderName = "我", content = placeholderJson, type = "image", mode = mode, timestamp = turnNow, isMe = true), com.rhodes.privatechat.shared.model.ReplyTurn(replyTurnId, session.id, "private", "image", imageMsgId, "", mode, "pending", 0, turnNow, "", 0, null, "", turnNow, turnNow, 0))
+                } else {
+                    if (repository.replyTurns.get(replyTurnId) == null) repository.createReplyTurn(com.rhodes.privatechat.shared.model.ReplyTurn(replyTurnId, session.id, "private", "image", imageMsgId, "", mode, "pending", 0, turnNow, "", 0, null, "", turnNow, turnNow, 0))
+                    repository.updateMessageContent(imageMsgId, placeholderJson)
+                }
+                imagePersisted = true
+                if (existingMessageId == null && _currentSession.value?.id == session.id) {
+                    _inputText.value = com.rhodes.privatechat.util.preserveEditedDraft(_inputText.value, caption)
+                }
+                persistenceReceipt.complete(true)
+                if (existingMessageId == null) runCatching { com.rhodes.privatechat.automation.ManualReplyScheduler.scheduleTurn(getApplication(), replyTurnId) }
+                replyLeaseToken = replyLeaseTokenOverride ?: UUID.randomUUID().toString()
+                if (replyLeaseTokenOverride == null && repository.claimReplyTurn(replyTurnId, replyLeaseToken, System.currentTimeMillis(), System.currentTimeMillis() + privateReplyTimeoutMs) == null) { persistenceReceipt.complete(true); return@launch }
+                onUnhideSession(session.id)
+                Log.d("RHODES_VISION", "图片占位消息已保存 id=$imageMsgId")
+                // Persisting the image is enough to restore the composer. Vision/role reply continues in background.
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                persistenceReceipt.complete(false)
+                throw cancelled
+            } catch (error: Exception) {
+                onShowToast(if (imagePersisted) "图片已保存，回复暂时失败" else "图片未发送，请重试")
+                persistenceReceipt.complete(imagePersisted)
+                onReplyComplete(false)
+                return@launch
             }
-            replyLeaseToken = replyLeaseTokenOverride ?: UUID.randomUUID().toString()
-            if (replyLeaseTokenOverride == null && repository.claimReplyTurn(replyTurnId, replyLeaseToken, System.currentTimeMillis(), System.currentTimeMillis() + privateReplyTimeoutMs) == null) return@launch
-            if (existingMessageId == null) com.rhodes.privatechat.automation.ManualReplyScheduler.scheduleTurn(getApplication(), replyTurnId)
-            onUnhideSession(session.id)
-            Log.d("RHODES_VISION", "图片占位消息已保存 id=$imageMsgId")
-            // Persisting the image is enough to restore the composer. Vision/role reply continues in background.
-            onResult(true)
             var mutexLocked = false
             beginLoading(session.id, requestId)
             try {
@@ -1816,7 +1836,7 @@ ${text}"""
                     )))
                     repository.updateMessageContent(imageMsgId, failedJson)
                     onShowToast("图片已保留，但识别失败。请检查识图模型后重新发送。")
-                    onResult(false)
+                    persistenceReceipt.complete(false)
                     onReplyComplete(false)
                     return@launch
                 }
@@ -1881,7 +1901,7 @@ ${text}"""
                 Log.e("RHODES_VISION", "sendImageMessage 异常: ${e.message}", e)
                 val errId = repository.getNextMessageId()
                 savePrivateFailure(session.id, errId, mode, e)
-                onResult(false)
+                persistenceReceipt.complete(false)
                 onReplyComplete(false)
             } finally {
                 if (replyTurnId.isNotBlank() && replyLeaseToken.isNotBlank()) {
@@ -1895,9 +1915,7 @@ ${text}"""
     }
 
     private fun isVisionConfigured(): Boolean {
-        val ok = settings.visionBaseUrl.isNotBlank() &&
-            settings.visionModelName.isNotBlank() &&
-            settings.visionApiKey.ifBlank { settings.apiKey }.isNotBlank()
+        val ok = settings.hasVisionConfiguration()
         if (!ok) Log.d("RHODES_VISION", "isVisionConfigured=false baseUrl='${settings.visionBaseUrl}' model='${settings.visionModelName}' hasKey=${(settings.visionApiKey.ifBlank { settings.apiKey }).isNotBlank()}")
         return ok
     }
@@ -1981,7 +1999,7 @@ ${text}"""
         _messages.value = _messages.value.filter { it.id != msgId }
         viewModelScope.launch {
             repository.deleteMessage(msgId)
-            rebuildPrivateContextAfterRecall(sessionId ?: _currentSession.value?.id.orEmpty())
+            rebuildPrivateContextAfterRecall(sessionId ?: _currentSession.value?.id.orEmpty(), msgId)
         }
     }
 
@@ -2049,26 +2067,85 @@ ${text}"""
         viewModelScope.launch {
             repository.updateMessageContentAndPreview(message.sessionId, msgId, updated, message.timestamp)
             repository.deleteDisplayEvent(msgId, segmentIndex)
-            rebuildPrivateContextAfterRecall(message.sessionId)
+            rebuildPrivateContextAfterRecall(message.sessionId, msgId)
         }
     }
 
     /** Rebuild derived context immediately so recalling one reply does not reset the relationship. */
-    private suspend fun rebuildPrivateContextAfterRecall(sessionId: String) {
-        val session = repository.getSession(sessionId) ?: return
-        settings.advanceMemoryTimelineEpoch(sessionId)
-        repository.deleteMemoryV2BySession(sessionId)
-        repository.deleteMemoriesBySession(sessionId)
-        settings.putMemoryExtractionCursor(sessionId, 0L)
-        settings.putSummaryCursor(sessionId, 0L)
-        val restartAt = settings.getSessionRestartAt(sessionId)
-        val messages = repository.getMessagesSync(sessionId)
-            .filter { it.type != "system" && it.type != "send_failed" && it.type != "gift_reply_failed" && (restartAt <= 0L || it.timestamp >= restartAt) }
-        if (messages.isEmpty()) return
-        generateShortTermSummary(session, messages)
-        if (settings.memoryV2Enabled && settings.privateMemoryGenerationEnabled && ingestPrivateMemoryV2(session, messages.takeLast(30))) {
-            settings.putMemoryExtractionCursor(sessionId, messages.maxOf { it.id })
+    private suspend fun rebuildPrivateContextAfterRecall(sessionId: String, changedMessageId: Long) {
+        if (sessionId.isBlank()) return
+        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+            val sessionId = sessionId
+            // Persist intent before invalidation so a killed process can safely resume the repair.
+            settings.putString("context_rebuild_changed_$sessionId", changedMessageId.toString())
+            settings.putBoolean("context_rebuild_pending_$sessionId", true)
+            settings.advanceMemoryTimelineEpoch(sessionId)
+            settings.putMemoryExtractionCursor(sessionId, 0L)
+            settings.putSummaryCursor(sessionId, 0L)
+            settings.putRollingSummaryStatus(sessionId, com.rhodes.privatechat.shared.settings.SettingsRepository.RollingSummaryStatus())
+            repository.memoryV2.invalidateChangedMessage(sessionId, changedMessageId)
+            repository.getShortTermMemory(sessionId)?.let { old ->
+                settings.putString("context_rebuild_previous_summary_$sessionId", old.content)
+            }
+            repository.deleteShortTermMemory(sessionId)
+            settings.putString("context_rebuild_changed_$sessionId", "")
+            com.rhodes.privatechat.automation.ContextMaintenanceScheduler.schedule(getApplication<Application>(), sessionId, false)
         }
+    }
+
+    /** Called by durable maintenance, independent of the screen lifetime. */
+    suspend fun runContextMaintenance(session: ChatSession): Boolean {
+        val lock = com.rhodes.privatechat.viewmodel.shared.ContextMaintenanceLocks.forSession(session.id)
+        if (!lock.tryLock()) return false
+        return try { runContextMaintenanceLocked(session) } finally { lock.unlock() }
+    }
+
+    private suspend fun runContextMaintenanceLocked(session: ChatSession): Boolean {
+        val pendingKey = "context_rebuild_pending_${session.id}"
+        if (settings.getBoolean(pendingKey)) {
+            settings.getString("context_rebuild_changed_${session.id}").toLongOrNull()?.let { changedId ->
+                settings.advanceMemoryTimelineEpoch(session.id)
+                settings.putMemoryExtractionCursor(session.id, 0L)
+                settings.putSummaryCursor(session.id, 0L)
+                repository.memoryV2.invalidateChangedMessage(session.id, changedId)
+                repository.deleteShortTermMemory(session.id)
+                settings.putString("context_rebuild_changed_${session.id}", "")
+            }
+            if (settings.memoryV2Enabled && settings.privateMemoryGenerationEnabled) {
+                repeat(6) {
+                    val batchEpoch = settings.getMemoryTimelineEpoch(session.id)
+                    val cursor = settings.getMemoryExtractionCursor(session.id)
+                    val page = repository.getMessagesAfterCursor(session.id, cursor, settings.getSessionRestartAt(session.id), 30)
+                    if (page.isEmpty()) return@repeat
+                    val batch = page.filter { it.type !in setOf("system", "send_failed", "gift_reply_failed") }
+                    if (batch.isNotEmpty() && !ingestPrivateMemoryV2(session, batch)) return false
+                    if (batchEpoch != settings.getMemoryTimelineEpoch(session.id)) return false
+                    settings.putMemoryExtractionCursor(session.id, page.maxOf { it.id })
+                }
+                val more = repository.getMessagesAfterCursor(session.id, settings.getMemoryExtractionCursor(session.id), settings.getSessionRestartAt(session.id), 1)
+                if (more.isNotEmpty()) return false
+            }
+            if (settings.privateSummaryGenerationEnabled) {
+                val retryStatus = settings.getRollingSummaryStatus(session.id)
+                if (retryStatus.state == "failed" && !settings.summaryAutoRetryEnabled) {
+                    settings.putBoolean(pendingKey, false)
+                    return true
+                }
+                if (retryStatus.state == "failed" && System.currentTimeMillis() < retryStatus.nextRetryAt) return false
+                generateShortTermSummary(session)
+                if (settings.getRollingSummaryStatus(session.id).state == "failed") return false
+            }
+            if (settings.summaryCursorEnabled && settings.getRollingSummaryStatus(session.id).pendingRounds > 0) return false
+            settings.putBoolean(pendingKey, false)
+        } else {
+            val status = settings.getRollingSummaryStatus(session.id)
+            if (status.state == "failed" && settings.summaryAutoRetryEnabled) {
+                if (System.currentTimeMillis() < status.nextRetryAt) return false
+                generateShortTermSummary(session)
+                return settings.getRollingSummaryStatus(session.id).state != "failed"
+            }
+        }
+        return true
     }
 
     private fun markSegmentRecalled(content: String, segmentIndex: Int): String? {
@@ -2177,14 +2254,7 @@ ${text}"""
         chatAiJobs[session.id]?.cancel()
         val requestId = requestSequence.incrementAndGet()
         val job = viewModelScope.launch {
-            val regeneratingContent = """{"segments":[{"type":"dialogue","content":"正在重新生成..."}]}"""
-            // Replace the selected reply in place so its position and conversational turn remain stable.
-            repository.deleteMessageDisplayEvents(originalReply.id)
-            repository.updateMessageContent(originalReply.id, regeneratingContent)
-            _messages.value = _messages.value.map { message ->
-                if (message.id == originalReply.id) originalReply.copy(content = regeneratingContent) else message
-            }
-
+            // Keep the persisted original visible until the replacement is committed.
             var mutexLocked = false
             try {
                 beginLoading(session.id, requestId)
@@ -2204,27 +2274,25 @@ ${text}"""
                 val rawJson = sharedUtils.aiService.cleanJson(serializedJson)
                 if (rawJson.isNotBlank() && isCompletePrivateReply(parsed, mode)) {
                     // Preserve the original row and timestamp so regeneration stays in place.
-                    repository.updateMessageContentAndPreview(session.id, msgId, rawJson, originalReply.timestamp)
+                    check(repository.messages.replaceReplyIfUnchanged(originalReply, rawJson)) { "原回复已被修改或撤回，本次重说结果未覆盖记录" }
+                    repository.deleteMessageDisplayEvents(originalReply.id)
                     markUnreadIfNotCurrent(session.id)
                     _messages.value = _messages.value.map { message ->
                         if (message.id == msgId) originalReply.copy(content = rawJson) else message
                     }
                     // The replaced reply must also replace any summary or memory derived from it.
-                    launch { rebuildPrivateContextAfterRecall(session.id) }
+                    rebuildPrivateContextAfterRecall(session.id, msgId)
                 } else {
-                    repository.updateMessageContent(msgId, previousReply)
                     savePrivateFailure(session.id, repository.getNextMessageId(), mode)
                     _messages.value = _messages.value.map { message ->
                         if (message.id == msgId) originalReply else message
                     }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
-                repository.updateMessageContent(msgId, previousReply)
                 _messages.value = _messages.value.map { message -> if (message.id == msgId) originalReply else message }
                 throw e
             } catch (e: Exception) {
                 // Keep the original reply available when regeneration fails.
-                repository.updateMessageContent(msgId, previousReply)
                 _messages.value = _messages.value.map { message -> if (message.id == msgId) originalReply else message }
                 DebugLogger.log("Chat/Regenerate", "重新生成失败: ${e.message?.take(100)}")
                 savePrivateFailure(session.id, repository.getNextMessageId(), mode, e)
@@ -2510,12 +2578,16 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
     )).joinToString(separator = ":")
 
     private suspend fun extractPrivateMemoryIfNeeded(session: ChatSession) {
+        val maintenanceLock = com.rhodes.privatechat.viewmodel.shared.ContextMaintenanceLocks.forSession(session.id)
+        if (!maintenanceLock.tryLock()) return
+        try {
         if (!settings.memoryV2Enabled || !settings.privateMemoryGenerationEnabled) return
+        if (settings.getBoolean("context_rebuild_pending_${session.id}")) return
         val cursor = settings.getMemoryExtractionCursor(session.id)
         val restartAt = settings.getSessionRestartAt(session.id)
         val pending = repository.getMessagesSync(session.id)
             .filter { it.id > cursor && it.type != "system" && it.type != "send_failed" && it.type != "gift_reply_failed" && (restartAt <= 0L || it.timestamp >= restartAt) }
-            .take(settings.privateMemoryExtractionThreshold.coerceAtMost(30))
+            .take(settings.privateMemoryExtractionThreshold.coerceAtLeast(1))
         if (pending.size < settings.privateMemoryExtractionThreshold) return
         if (ingestPrivateMemoryV2(session, pending)) {
             pending.maxOfOrNull { it.id }?.let { settings.putMemoryExtractionCursor(session.id, it) }
@@ -2523,6 +2595,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             // timeline isolation active, but allow these newly extracted private memories.
             settings.putBoolean("archive_private_recall_ready_${session.id}", true)
         }
+        } finally { maintenanceLock.unlock() }
     }
 
     /** Rebuilds an image turn from its persisted source row; never sends raw image JSON as text. */
@@ -2530,7 +2603,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         viewModelScope.launch {
             val session = repository.getSession(sessionId)
             if (session == null) { onComplete(false); return@launch }
-            val message = repository.getMessagesSync(sessionId).firstOrNull { it.id == messageId && it.isMe && it.type == "image" }
+            val message = repository.getMessageById(messageId)?.takeIf { it.sessionId == sessionId && it.isMe && it.type == "image" }
                 ?: run { onComplete(false); return@launch }
             val image = runCatching { json.parseToJsonElement(message.content).jsonObject }.getOrNull()
             val uri = image?.get("imageUri")?.jsonPrimitive?.content.orEmpty()
@@ -2554,7 +2627,13 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
                     runCatching {
                         val sessionCounter = settings.getSessionMessageCounter(session.id) + 1
                         settings.putSessionMessageCounter(session.id, sessionCounter)
-                        if (sessionCounter >= shortTermThreshold && generateShortTermSummary(session)) {
+                        val statusBefore = settings.getRollingSummaryStatus(session.id)
+                        val retryReady = com.rhodes.privatechat.shared.memory.MaintenancePolicy.mayAttempt(statusBefore.state, statusBefore.nextRetryAt, System.currentTimeMillis())
+                        val cursor = if (settings.summaryCursorEnabled) settings.getSummaryCursor(session.id) else 0L
+                        val newHistory = repository.getMessagesAfterCursor(session.id, cursor, settings.getSessionRestartAt(session.id), 20_000)
+                            .filter { it.type !in setOf("system", "send_failed", "gift_reply_failed") }
+                        val eligibleRounds = com.rhodes.privatechat.shared.memory.MaintenancePolicy.eligibleSummaryRounds(newHistory.chunkedByPrivateRound().size, settings.privateSummaryRawTailRounds)
+                        if (eligibleRounds >= shortTermThreshold && retryReady && generateShortTermSummary(session)) {
                             settings.putSessionMessageCounter(session.id, 0)
                         } else {
                             val status = settings.getRollingSummaryStatus(session.id)
@@ -2859,14 +2938,21 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         // long session (the failing log had message id 4984) made that single read block past both the
         // inner 10s stage budget and the outer 50s prompt budget: the coroutine timeout cannot preempt a
         // running SQLite query, so users saw "提示词构建 · 超时" while the model was never called.
-        val historyReadLimit = maxOf(historyLimitOverride ?: settings.historyMessages, PROMPT_HISTORY_READ_FLOOR)
+        val historyReadLimit = historyLimitOverride ?: settings.historyMessages
         val historyReadStartedAt = android.os.SystemClock.elapsedRealtime()
         val sessionMessages = contextRead(session.id, "history_read", "prompt_history_read", 10_000L, onStage) {
             // getRecentMessagesSync returns newest-first; the rest of this build assumes oldest-first
             // (it slices the tail for the prompt and takeLast(3) for the recall query).
             // asReversed().toList() instead of reversed(): List.reversed() binds to the Java 21 member and
             // throws NoSuchMethodError on older Android runtimes (same class of bug as removeLast).
-            repository.getRecentMessagesSync(session.id, historyReadLimit.toLong()).asReversed().toList()
+            val window = com.rhodes.privatechat.shared.model.readPrivateHistoryWindow(
+                historyReadLimit, settings.getSessionRestartAt(session.id), excludeMessageIds, historyBeforeMessageId
+            ) { cursor, pageSize ->
+                if (cursor == null) repository.getRecentMessagesSync(session.id, pageSize.toLong())
+                else repository.getMessagesBefore(session.id, cursor.timestamp, cursor.id, pageSize.toLong())
+            }
+            if (window.capped) DebugLogger.diagnostic("Context/History/特殊", "私聊历史读取达到安全上限；设置回看=$historyReadLimit 轮，读取=${window.readCount}条，实际历史可能不足")
+            window.messages
         }.orEmpty()
         DebugLogger.diagnostic(
             "PrivateChat/PromptHistoryRead",
@@ -3167,11 +3253,20 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             .filter { it.isNotBlank() }
             .joinToString("\n\n")
         val messages = mutableListOf(AiMessage("system", systemContent))
+        val includedHistory = mutableListOf<ChatMessage>()
         rawMsgs.forEach { msg ->
             val formatted = formatPrivateHistoryForPrompt(msg).take(1400)
             if (formatted.isNotBlank()) {
                 messages.add(AiMessage(if (msg.isMe) "user" else "assistant", formatted))
+                includedHistory.add(msg)
             }
+        }
+        val historyMessageCount = includedHistory.size
+        fun reportHistory(removed: Int = 0) {
+            val kept = includedHistory.drop(removed)
+            val detail = "设置回看=${historyLimitOverride ?: settings.historyMessages}轮；实际纳入历史=${com.rhodes.privatechat.shared.model.privateHistoryRoundCount(kept)}轮；历史消息=${kept.size}条；附加消息=${messages.size - kept.size}条；构建消息=${messages.size}条（厂商可能合并同角色消息，重试另计）"
+            promptHistoryStats[session.id] = detail
+            DebugLogger.diagnostic("Context/History/统计", detail)
         }
         val runtimeContext = promptLayers.runtimeContext
           val customRuntime = settings.getCustomPromptModuleOrNull("runtime", "private", mode)
@@ -3251,6 +3346,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             DebugLogger.log("Chat/Token", "自动上下文：跳过本地 token 裁剪，超限交由模型服务返回后重试")
             onStage?.invoke("prompt_token_trim_done")
             onStage?.invoke("prompt_template_assemble_done")
+            reportHistory()
             return messages
         }
         // 手动上下文上限：估算总 token，超限则丢弃最早的历史消息。必须给本次输出留出余量，
@@ -3258,15 +3354,10 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         val maxPromptTokens = (settings.maxContextTokens - sharedUtils.promptOutputReserveTokens()).coerceAtLeast(512)
         var totalTokens = messages.sumOf { estimateTokens(it.content) + 10 }
         com.rhodes.privatechat.util.DebugLogger.log("Chat/Token", "估算token=$totalTokens, 上限=$maxPromptTokens, ${sharedUtils.promptOutputReserveNote()}, 消息数=${messages.size}")
-        if (totalTokens > maxPromptTokens) {
-            val protectedTailCount = listOf(trustedContext, userContent)
-                .count { it.isNotBlank() }
-            while (messages.size > 1 + protectedTailCount && totalTokens > maxPromptTokens) {
-                messages.removeAt(1)
-                totalTokens = messages.sumOf { estimateTokens(it.content) + 10 }
-            }
-            com.rhodes.privatechat.util.DebugLogger.log("Chat/Token", "截断后: 消息数=${messages.size}, 估算token=$totalTokens")
-        }
+        val removedHistory = com.rhodes.privatechat.shared.model.trimPromptHistory(
+            messages, historyMessageCount, maxPromptTokens, ::estimateTokens
+        )
+        reportHistory(removedHistory)
         onStage?.invoke("prompt_token_trim_done")
         onStage?.invoke("prompt_template_assemble_done")
         return messages
@@ -3278,6 +3369,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         val snippets: List<String>,
     )
 
+    private val promptHistoryStats = ConcurrentHashMap<String, String>()
     private val roundProvenance = ConcurrentHashMap<String, RoundProvenance>()
 
     /**
@@ -3433,7 +3525,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
 
     /** A private round starts with one user message and includes all following AI output until the next user message. */
     private fun recentPrivateRounds(messages: List<ChatMessage>, roundLimit: Int): List<ChatMessage> {
-        if (roundLimit <= 0) return messages
+        if (roundLimit <= 0) return emptyList()
         val userIndexes = messages.indices.filter { messages[it].isMe }
         if (userIndexes.isEmpty()) return messages.takeLast(roundLimit)
         val startIndex = userIndexes.getOrElse((userIndexes.size - roundLimit).coerceAtLeast(0)) { 0 }

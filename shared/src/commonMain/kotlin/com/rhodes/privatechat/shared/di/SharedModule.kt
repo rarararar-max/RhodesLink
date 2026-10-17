@@ -52,7 +52,7 @@ fun sharedModule(databaseWrapper: DatabaseWrapper) = module {
     single<AsrGateway> {
         val settings: SettingsRepository = get()
         val key = settings.asrApiKey.ifBlank { settings.apiKey }
-        if (settings.asrBaseUrl.isNotBlank() && key.isNotBlank()) AliyunDashScopeAsrGateway(apiKey = key, modelName = settings.asrModelName, endpoint = settings.asrBaseUrl) else DisabledAsrGateway()
+        com.rhodes.privatechat.shared.voice.createAsrGateway(settings.asrBaseUrl, key, settings.asrModelName, settings.asrProvider)
     }
     single { AIService(deepseekThinking = { get<SettingsRepository>().deepseekThinkingEnabled }) }
 }

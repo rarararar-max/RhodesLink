@@ -44,6 +44,8 @@ class MemoryV2Pipeline(
     private val memoryVectorService: MemoryVectorService? = null,
     private val userNicknameProvider: () -> String,
 ) {
+    private val promotionLocks get() = MemoryPromotionLocks.locks
+
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
     private val memoryRetryDelaysMs = longArrayOf(10_000L, 60_000L, 300_000L)
 
@@ -99,7 +101,7 @@ class MemoryV2Pipeline(
             sourceKind = MemorySourceKind.PRIVATE_CHAT,
             ownerType = "operator",
             ownerId = operatorId,
-            sourceRefId = sessionId,
+            sourceRefId = "$sessionId:epoch${settings.getMemoryTimelineEpoch(sessionId)}:${messages.first().id}-${messages.last().id}",
             contentText = sourceText,
             timestamp = messages.lastOrNull()?.timestamp ?: System.currentTimeMillis(),
             createdAt = System.currentTimeMillis()
@@ -123,12 +125,12 @@ class MemoryV2Pipeline(
                 text = sourceText,
                 ownerType = "operator",
                 ownerId = operatorId,
-                sourceRefId = sessionId,
+                sourceRefId = source.sourceRefId,
                 sessionId = sessionId,
                 operatorName = operatorName
             )
         } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
+            if (e is kotlinx.coroutines.CancellationException && e !is kotlinx.coroutines.TimeoutCancellationException) throw e
             com.rhodes.privatechat.util.DebugLogger.log("MemoryV2", "私聊L1提取失败，已保留队列等待重试: ${e.message?.take(80)}")
             leaseRenewal.cancel()
             val retryMessage = scheduleMemoryRetry(sourceId, claimToken, priorFailures = 0, e.message?.take(160) ?: "提取失败")
@@ -143,7 +145,7 @@ class MemoryV2Pipeline(
         }
         return try {
             if (l1.isNotEmpty()) {
-                val saved = saveMemoryItems(l1)
+                val saved = saveMemoryItems(withMessageEvidence(l1, messages))
                 DebugLogger.conversationStep(operationId, "私聊记忆提取", "本地保存", "成功", "模型有效=${l1.size}条，新增=${saved.size}条，重复=${l1.size - saved.size}条")
                 repository.saveMemoryBatch(MemoryBatch(
                     ownerType = "operator",
@@ -169,7 +171,7 @@ class MemoryV2Pipeline(
             DebugLogger.conversationStep(operationId, "私聊记忆提取", "本轮总览", "成功", if (l1.isEmpty()) "提取完成，本批没有值得长期保存的信息" else "提取完成，已保存${l1.size}条有效记忆")
             true
         } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
+            if (e is kotlinx.coroutines.CancellationException && e !is kotlinx.coroutines.TimeoutCancellationException) throw e
             val retryMessage = scheduleMemoryRetry(sourceId, claimToken, priorFailures = 0, e.message?.take(160) ?: "记忆保存失败")
             DebugLogger.conversationStep(operationId, "私聊记忆提取", "本轮总览", "失败", "${e.javaClass.simpleName}；保存失败，$retryMessage")
             false
@@ -186,7 +188,7 @@ class MemoryV2Pipeline(
         val sourceText = messages.joinToString("\n") { formatGroupMessage(groupName, it) }
         // A group has many extraction windows.  Use the window identity rather than the group
         // identity so deleting one source in memory management cannot purge the whole group.
-        val sourceRefId = "$groupId:${messages.first().id}-${messages.last().id}"
+        val sourceRefId = "$groupId:epoch${settings.getMemoryTimelineEpoch(groupId)}:${messages.first().id}-${messages.last().id}"
         val source = MemorySourceItem(
             sourceKind = MemorySourceKind.GROUP_CHAT,
             ownerType = "group",
@@ -211,7 +213,7 @@ class MemoryV2Pipeline(
         val l1 = try {
             extractGroupL1(groupId, groupName, sourceText, sourceRefId)
         } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
+            if (e is kotlinx.coroutines.CancellationException && e !is kotlinx.coroutines.TimeoutCancellationException) throw e
             com.rhodes.privatechat.util.DebugLogger.log("MemoryV2", "群聊L1提取失败，已保留队列等待重试: ${e.message?.take(80)}")
             leaseRenewal.cancel()
             val retryMessage = scheduleMemoryRetry(sourceId, claimToken, priorFailures = 0, e.message?.take(160) ?: "提取失败")
@@ -226,7 +228,7 @@ class MemoryV2Pipeline(
         }
         return try {
             if (l1.isNotEmpty()) {
-                val savedGroupItems = saveMemoryItems(l1)
+                val savedGroupItems = saveMemoryItems(withMessageEvidence(l1, messages))
                 DebugLogger.conversationStep(operationId, "群聊记忆提取", "本地保存", "成功", "模型有效=${l1.size}条，新增=${savedGroupItems.size}条，重复=${l1.size - savedGroupItems.size}条")
                 repository.saveMemoryBatch(MemoryBatch(
                     ownerType = "group",
@@ -253,7 +255,7 @@ class MemoryV2Pipeline(
             DebugLogger.conversationStep(operationId, "群聊记忆提取", "本轮总览", "成功", if (l1.isEmpty()) "提取完成，本批没有值得长期保存的信息" else "提取完成，已保存${l1.size}条有效记忆")
             true
         } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
+            if (e is kotlinx.coroutines.CancellationException && e !is kotlinx.coroutines.TimeoutCancellationException) throw e
             val retryMessage = scheduleMemoryRetry(sourceId, claimToken, priorFailures = 0, e.message?.take(160) ?: "记忆保存失败")
             DebugLogger.conversationStep(operationId, "群聊记忆提取", "本轮总览", "失败", "${e.javaClass.simpleName}；保存失败，$retryMessage")
             false
@@ -341,19 +343,33 @@ class MemoryV2Pipeline(
     }
 
     suspend fun ingestDiary(operatorId: String, operatorName: String, diaryId: String, content: String) {
-        if (!settings.memoryV2Enabled || !settings.diaryMemoryGenerationEnabled) return
-        if (content.isBlank()) return
+        if (!settings.memoryV2Enabled || !settings.diaryMemoryGenerationEnabled || content.isBlank()) return
         val now = System.currentTimeMillis()
-        val item = MemoryItem(
+        val originalDiary = diaryId.removePrefix("diary_").toLongOrNull()?.let { repository.diaries.getDiaryById(it) }
+        val sourceId = repository.insertMemorySource(MemorySourceItem(
+            sourceKind = MemorySourceKind.DIARY, ownerType = "operator", ownerId = operatorId,
+            sourceRefId = diaryId, contentText = content, timestamp = originalDiary?.createdAt ?: now, createdAt = originalDiary?.createdAt ?: now))
+        if (repository.isMemorySourceFinished(sourceId)) return
+        val token = repository.claimMemorySource(sourceId, now) ?: return
+        try {
+            saveDiaryMemory(operatorId, operatorName, diaryId, content, now)
+            repository.completeMemorySource(sourceId, token)
+        } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+        catch (error: Exception) {
+            scheduleMemoryRetry(sourceId, token, 0, error.javaClass.simpleName)
+        }
+    }
+
+    private suspend fun saveDiaryMemory(operatorId: String, operatorName: String, diaryId: String, content: String, now: Long) {
+        saveMemoryItems(listOf(MemoryItem(
             ownerType = "operator", ownerId = operatorId, memoryLevel = MemoryLevel.L1,
             memoryType = "event", sourceKind = MemorySourceKind.DIARY, sourceRefId = diaryId,
             content = "$operatorName 的日记：${content.take(180)}", importance = 45, privacy = "private",
             sourceActor = operatorName, sourceTarget = operatorId, topicKey = topicKey("event", content),
-            createdAt = now, updatedAt = now, expiresAt = now + 30L * 86_400_000L,
-        )
-        saveMemoryItems(listOf(item))
+            createdAt = now, updatedAt = now, expiresAt = now + 30L * 86_400_000L)))
         if (settings.diaryMemoryPromotionEnabled) {
-            maybePromoteOwnerMemory("operator", operatorId, MemorySourceKind.DIARY, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
+            maybePromoteOwnerMemory("operator", operatorId, MemorySourceKind.DIARY,
+                settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
         }
     }
 
@@ -362,6 +378,13 @@ class MemoryV2Pipeline(
     }
 
     private suspend fun maybePromoteOwnerMemory(ownerType: String, ownerId: String, sourceKind: MemorySourceKind, thresholdL1: Int, thresholdL2: Int) {
+        val lock = promotionLocks.computeIfAbsent("$ownerType:$ownerId:${sourceKind.name}") { kotlinx.coroutines.sync.Mutex() }
+        lock.lock()
+        try { maybePromoteOwnerMemoryLocked(ownerType, ownerId, sourceKind, thresholdL1, thresholdL2) }
+        finally { lock.unlock() }
+    }
+
+    private suspend fun maybePromoteOwnerMemoryLocked(ownerType: String, ownerId: String, sourceKind: MemorySourceKind, thresholdL1: Int, thresholdL2: Int) {
         val now = System.currentTimeMillis()
         // Promotion must preserve the source boundary. In particular, group knowledge must not
         // become a character's private-chat impression just because it has a copied owner.
@@ -738,6 +761,22 @@ class MemoryV2Pipeline(
         return content.takeIf { it.isNotBlank() }?.let { "[$time] $speaker：${it.take(240)}" }.orEmpty()
     }
 
+    private suspend fun withSourceEvidence(items: List<MemoryItem>, sourceRefId: String): List<MemoryItem> {
+        if (!sourceRefId.contains(":epoch")) return items // Legacy provenance is unknown, not fabricated.
+        val range = sourceRefId.substringAfterLast(':').split('-')
+        val first = range.getOrNull(0)?.toLongOrNull() ?: return items
+        val last = range.getOrNull(1)?.toLongOrNull() ?: return items
+        val sessionId = sourceRefId.substringBefore(":epoch")
+        val messages = repository.getMessagesAfterCursor(sessionId, first - 1, 0L, (last - first + 1).coerceAtMost(10000L))
+            .filter { it.id <= last }
+        return if (messages.isEmpty()) items else withMessageEvidence(items, messages)
+    }
+
+    private fun withMessageEvidence(items: List<MemoryItem>, messages: List<ChatMessage>): List<MemoryItem> = items.map { item ->
+        val existing = runCatching { json.parseToJsonElement(item.rawJson) as? JsonObject }.getOrNull().orEmpty()
+        item.copy(rawJson = JsonObject(existing + ("sourceMessageIds" to kotlinx.serialization.json.JsonArray(messages.map { kotlinx.serialization.json.JsonPrimitive(it.id) })) ).toString())
+    }
+
     private suspend fun extractL1(
         sourceKind: MemorySourceKind,
         text: String,
@@ -927,6 +966,7 @@ class MemoryV2Pipeline(
             val generationDisabled = when (source.sourceKind) {
                 MemorySourceKind.PRIVATE_CHAT -> !settings.privateMemoryGenerationEnabled
                 MemorySourceKind.GROUP_CHAT -> !settings.groupMemoryGenerationEnabled
+                MemorySourceKind.DIARY -> !settings.diaryMemoryGenerationEnabled
                 else -> false
             }
             if (generationDisabled) {
@@ -936,13 +976,24 @@ class MemoryV2Pipeline(
                 DebugLogger.log("MemoryV2", "记忆队列暂停 id=${source.id}: 该来源的记忆生成已关闭")
                 return@coroutineScope
             }
+            val timelineId = when (source.sourceKind) {
+                MemorySourceKind.PRIVATE_CHAT -> source.sourceRefId.substringBefore(":epoch")
+                MemorySourceKind.GROUP_CHAT -> source.ownerId
+                else -> ""
+            }
+            if (timelineId.isNotBlank() && settings.getMemoryTimelineEpoch(timelineId) > source.createdAt) {
+                repository.skipMemorySource(source.id, token, "来源时间线已失效")
+                return@coroutineScope
+            }
+            var retryScheduled = false
             val completed = runCatching {
                 when (source.sourceKind) {
                     MemorySourceKind.PRIVATE_CHAT -> {
                         val operator = repository.getOperator(source.ownerId) ?: return@runCatching false
-                        val l1 = extractL1(source.sourceKind, source.contentText, source.ownerType, source.ownerId, source.sourceRefId, source.sourceRefId, operator.name)
-                        if (settings.getMemoryTimelineEpoch(source.sourceRefId) > source.createdAt) return@runCatching false
-                        if (l1.isNotEmpty()) saveMemoryItems(l1)
+                        val sessionId = source.sourceRefId.substringBefore(":epoch")
+                        val l1 = extractL1(source.sourceKind, source.contentText, source.ownerType, source.ownerId, source.sourceRefId, sessionId, operator.name)
+                        if (settings.getMemoryTimelineEpoch(sessionId) > source.createdAt) return@runCatching false
+                        if (l1.isNotEmpty()) saveMemoryItems(withSourceEvidence(l1, source.sourceRefId))
                         if (settings.privateMemoryPromotionEnabled) maybePromotePrivateMemory(source.ownerId, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
                         true
                     }
@@ -951,18 +1002,27 @@ class MemoryV2Pipeline(
                         val l1 = extractGroupL1(source.ownerId, group.operatorName, source.contentText, source.sourceRefId)
                         if (settings.getMemoryTimelineEpoch(source.ownerId) > source.createdAt) return@runCatching false
                         if (l1.isNotEmpty()) {
-                            val saved = saveMemoryItems(l1)
+                            val saved = saveMemoryItems(withSourceEvidence(l1, source.sourceRefId))
                             val memberIds = group.members.split(',').map { it.trim() }.filter { it.isNotBlank() }
                             copyGroupMemoriesToMembers(saved, memberIds)
                         }
                         if (settings.groupMemoryPromotionEnabled) maybePromoteOwnerMemory("group", source.ownerId, source.sourceKind, settings.memoryV2PromoteL1Threshold, settings.memoryV2PromoteL2Threshold)
                         true
                     }
+                    MemorySourceKind.DIARY -> {
+                        val op = repository.getOperator(source.ownerId) ?: return@runCatching false
+                        val diary = source.sourceRefId.removePrefix("diary_").toLongOrNull()?.let { repository.diaries.getDiaryById(it) }
+                            ?: return@runCatching false
+                        if (diary.operatorId != source.ownerId) return@runCatching false
+                        saveDiaryMemory(op.id, op.name, source.sourceRefId, source.contentText, source.createdAt)
+                        true
+                    }
                     else -> false
                 }
             }.getOrElse { error ->
-                if (error is kotlinx.coroutines.CancellationException) throw error
+                if (error is kotlinx.coroutines.CancellationException && error !is kotlinx.coroutines.TimeoutCancellationException) throw error
                 val reason = error.message?.take(160) ?: "未知错误"
+                retryScheduled = true
                 val retryMessage = scheduleMemoryRetry(source.id, token, source.retryCount, reason)
                 DebugLogger.log("MemoryV2", "记忆队列重试失败 id=${source.id}: $reason；$retryMessage")
                 false
@@ -970,7 +1030,7 @@ class MemoryV2Pipeline(
             if (completed) {
                 repository.completeMemorySource(source.id, token)
                 succeeded++
-            } else {
+            } else if (!retryScheduled) {
                 repository.skipMemorySource(source.id, token, "来源已删除或类型不支持")
             }
             } finally {
@@ -1009,16 +1069,8 @@ class MemoryV2Pipeline(
     private suspend fun saveMemoryItems(items: List<MemoryItem>): List<MemoryItem> {
         val saved = mutableListOf<MemoryItem>()
         items.forEach { item ->
-            val existing = repository.getActiveMemoryItemByContent(
-                ownerType = item.ownerType,
-                ownerId = item.ownerId,
-                level = item.memoryLevel,
-                type = item.memoryType,
-                content = item.content
-            )
-            if (existing != null) return@forEach
             val id = try {
-                repository.insertMemoryItem(item)
+                repository.insertMemoryItemIfAbsent(item, System.currentTimeMillis()) ?: return@forEach
             } catch (e: Exception) {
                 DebugLogger.log("Memory/SaveError", "记忆保存失败：${e::class.simpleName}，原因=${e.message?.take(160) ?: "未知原因"}")
                 throw e
@@ -1035,19 +1087,13 @@ class MemoryV2Pipeline(
 
     private suspend fun linkAndArchiveParents(children: List<MemoryItem>, parents: List<MemoryItem>, linkType: String) {
         val now = System.currentTimeMillis()
-        val parentById = parents.filter { it.id > 0 }.associateBy { it.id }
-        children.filter { it.id > 0 }.forEach { child ->
-            val evidenceIds = evidenceIdsFrom(child.rawJson).filter { it in parentById }
-            evidenceIds.forEach { evidenceId ->
-                val parent = parentById.getValue(evidenceId)
-                repository.insertMemoryLink(MemoryLink(parentMemoryId = parent.id, childMemoryId = child.id, linkType = linkType, createdAt = now))
+        val parentIds = parents.filter { it.id > 0 }.map { it.id }.toSet()
+        val links = children.filter { it.id > 0 }.flatMap { child ->
+            evidenceIdsFrom(child.rawJson).filter { it in parentIds }.distinct().map { parentId ->
+                MemoryLink(parentMemoryId = parentId, childMemoryId = child.id, linkType = linkType, createdAt = now)
             }
         }
-        val citedParentIds = children.flatMap { child -> evidenceIdsFrom(child.rawJson) }.toSet()
-        parents.filter { it.id in citedParentIds }.forEach { parent ->
-            repository.archiveMemoryItem(parent.id, now)
-            parent.vectorId.takeIf { it.isNotBlank() }?.let { memoryVectorService?.deleteMemory(it) }
-        }
+        repository.memoryV2.finishPromotion(children, parents, links, memoryVectorService?.currentEmbeddingSignature().orEmpty(), now)
     }
 
     /** Public social activity is recorded directly.  It does not spend an AI call per post. */
@@ -1125,7 +1171,7 @@ class MemoryV2Pipeline(
                     ownerId = item.ownerId,
                     sourceType = MemoryVectorFormatter.sourceType(indexed),
                     sourceId = item.sourceRefId.ifBlank { item.sessionId },
-                    content = MemoryVectorFormatter.content(indexed),
+                    content = MemoryVectorFormatter.content(indexed), originMemoryId = id, originContent = item.content,
                     importance = item.importance.coerceIn(0, 100) / 100.0,
                     tags = MemoryVectorFormatter.tags(indexed),
                     visibility = item.privacy ?: defaultPrivacy(item.sourceKind),
@@ -1133,7 +1179,8 @@ class MemoryV2Pipeline(
                     expiresAt = item.expiresAt,
                 )
             )
-            repository.updateMemoryItemVectorId(id, vectorId, System.currentTimeMillis())
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             com.rhodes.privatechat.util.DebugLogger.log("Vector/Save", "记忆向量写入失败 owner=${item.ownerId} level=${item.memoryLevel} err=${e.message?.take(80)}")
         }

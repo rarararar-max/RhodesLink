@@ -1,0 +1,20 @@
+{
+  "checks": [
+    "Existing table/index definitions and migrations unchanged from 1.14.17",
+    "Dedup rejects only live identical evidence; expired/private/public/session/source boundaries remain separate",
+    "Nullable legacy privacy fields remain readable and deduplicated safely",
+    "Opening upgraded schema preserves old memory rows exactly",
+    "Session purge removes old and epoch-window identities without wildcard/adjacent-session over-deletion",
+    "Diary source and memory intent commit/roll back together, preserving real diary ID",
+    "New diary versions increment within one day while original versions remain unchanged",
+    "New moment and reply intents roll back together on interruption",
+    "New comment task survives restart lookup and repeated insert cannot duplicate it",
+    "L1 success does not falsely mark missing vectors complete; completion updates only after all source vectors exist",
+    "Index metadata distinguishes usable, mismatched and missing vectors without network requests",
+    "Daily summary selection respects exact target date instead of latest unrelated day"
+  ],
+  "count": 12,
+  "baseline": "C:\\Users\\Administrator\\Documents\\ChatGPT\\mingrifangzhoutest2\\baseline-1.14.17-memory",
+  "real_device_upgrade_tested": false,
+  "uses_user_database": false
+}

@@ -458,9 +458,9 @@ class AIService(
                 // allowed to use it (see allowsDeepSeekThinking); everything else is opted out
                 // explicitly so a forgotten call site can never silently burn reasoning tokens.
                 // Reasoning is never surfaced to the user.
-                thinking = if (config.id == "deepseek") {
-                    ThinkingParam(if (deepseekThinking() && allowsDeepSeekThinking(requestType)) "enabled" else "disabled")
-                } else null
+                thinking = ModelCapabilities.thinkingParameter(config.id, model,
+                    deepseekThinking() && allowsDeepSeekThinking(requestType)),
+                enable_thinking = ModelCapabilities.enableThinkingParameter(config.id, model)
             )
             val response: HttpResponse = client.post(url) {
                 contentType(ContentType.Application.Json)
@@ -512,7 +512,7 @@ class AIService(
                 promptCacheHitTokens = completion.usage?.promptCacheHitTokens,
                 promptCacheMissTokens = completion.usage?.promptCacheMissTokens,
                 reasoningContent = reasoning,
-                thinkingDisabled = config.id == "deepseek",
+                thinkingDisabled = requestBody.thinking?.type == "disabled" || requestBody.enable_thinking == false,
                 reasoningTokens = reasoningTokens,
                 reasoningChars = reasoning?.length ?: 0,
                 finishReason = finishReason,
@@ -598,7 +598,7 @@ class AIService(
                 systemInstruction = systemMsg?.let { content ->
                     GoogleContent(parts = listOf(GooglePart(text = content)))
                 },
-                generationConfig = maxOutputTokens?.let(::GoogleGenerationConfig)
+                generationConfig = GoogleGenerationConfig(maxOutputTokens, temperature)
             )
             val googleUrl = "${url}/${model}:generateContent"
             val response: HttpResponse = client.post(googleUrl) {
@@ -680,7 +680,8 @@ class AIService(
             messages = messages,
             stream = true,
             temperature = temperature,
-            thinking = if (config.id == "deepseek") ThinkingParam("disabled") else null
+            thinking = ModelCapabilities.thinkingParameter(config.id, model),
+            enable_thinking = ModelCapabilities.enableThinkingParameter(config.id, model)
         )
 
         var finalUrl = url
@@ -693,6 +694,8 @@ class AIService(
             header("Accept", "text/event-stream")
             if (config.id == "google") {
                 header("X-Goog-Api-Key", apiKey)
+            } else if (config.id == "xiaomi") {
+                header("api-key", apiKey)
             } else {
                 header("Authorization", "Bearer $apiKey")
             }

@@ -23,6 +23,7 @@ class OpenAiCompatVisionGateway(
     private val apiKey: String,
     private val modelName: String,
     private val useApiKeyHeader: Boolean = false,
+    private val providerId: String = if (endpoint.contains("deepseek", ignoreCase = true)) "deepseek" else "",
 ) : VisionGateway {
     private val client = createHttpClient()
 
@@ -33,7 +34,8 @@ class OpenAiCompatVisionGateway(
             setBody(VisionChatRequest(modelName, listOf(VisionChatMessage(content = listOf(
                 VisionPart(type = "image_url", imageUrl = VisionImageUrl(request.imageUrlOrBase64)),
                 VisionPart(type = "text", text = request.prompt)
-            ))), thinking = visionThinkingParam()))
+            ))), thinking = visionThinkingParam(),
+                enable_thinking = com.rhodes.privatechat.shared.network.ModelCapabilities.enableThinkingParameter(providerId, modelName)))
         }
         val raw = response.bodyAsText()
         if (!response.status.isSuccess()) {
@@ -48,11 +50,10 @@ class OpenAiCompatVisionGateway(
 
     /**
      * 识图只是一次工具调用，不是角色回复：DeepSeek 默认开启思考模式，会明显变慢变贵，
-     * 而且一旦 content 为空，下面的兜底逻辑会把思维链当成“画面描述”交给角色和用户看。
-     * 因此对 DeepSeek 显式关闭思考；其它服务商保持不传该字段（与原行为一致）。
+     * 对已适配的型号显式关闭思考；思维链永远不作为识图结果回传。
      */
     private fun visionThinkingParam(): ThinkingParam? =
-        if (endpoint.contains("deepseek", ignoreCase = true)) ThinkingParam("disabled") else null
+        com.rhodes.privatechat.shared.network.ModelCapabilities.thinkingParameter(providerId, modelName)
 
     private fun extractText(raw: String): String {
         val message = json.parseToJsonElement(raw).jsonObject["choices"]
@@ -69,9 +70,8 @@ class OpenAiCompatVisionGateway(
             }
             else -> ""
         }
-        // 最后兜底：个别服务商只把答案放在 reasoning_content 里。这里只在 content 完全为空时使用，
-        // 并且现在 DeepSeek 已关闭思考，所以不会把思维链当作画面描述展示给用户。
-        return content.ifBlank { message["reasoning_content"]?.jsonPrimitive?.textOrEmpty().orEmpty() }
+        // Reasoning is never a picture description, even when the visible answer is empty.
+        return content
     }
 
     private companion object {
@@ -81,10 +81,15 @@ class OpenAiCompatVisionGateway(
 
 private fun JsonPrimitive.textOrEmpty(): String = if (this is JsonNull) "" else content
 
+@OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
 @Serializable private data class VisionChatRequest(
     val model: String,
     val messages: List<VisionChatMessage>,
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
     val thinking: ThinkingParam? = null,
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val enable_thinking: Boolean? = null,
+    val stream: Boolean = false,
 )
 @Serializable private data class VisionChatMessage(val role: String = "user", val content: List<VisionPart>)
 @Serializable private data class VisionPart(val type: String, val text: String? = null, @kotlinx.serialization.SerialName("image_url") val imageUrl: VisionImageUrl? = null)

@@ -74,6 +74,18 @@ class ReplyTurnRepository(private val wrapper: DatabaseWrapper) {
         orphanCount
     }
 
+    suspend fun momentTurns(momentId: Long): List<ReplyTurn> = withContext(DatabaseDispatcher.dispatcher) {
+        db.replyTurnsQueries.getMomentReplyTurns("moment:$momentId", ::map).executeAsList()
+    }
+
+    suspend fun resetFailedMomentTurn(id: String, now: Long) = withContext(DatabaseDispatcher.dispatcher) {
+        db.replyTurnsQueries.resetFailedMomentReplyTurn(now, now, id)
+    }
+
+    suspend fun pendingMomentTurnIds(): List<String> = withContext(DatabaseDispatcher.dispatcher) {
+        db.replyTurnsQueries.selectPendingMomentReplyTurns().executeAsList()
+    }
+
     suspend fun deleteAll() = withContext(DatabaseDispatcher.dispatcher) { db.replyTurnsQueries.deleteAllReplyTurns() }
 
     /**

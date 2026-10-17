@@ -57,6 +57,7 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
     val momentLoadError by viewModel.momentLoadError.collectAsState()
     val hasMoreMoments by viewModel.hasMoreMoments.collectAsState()
     val genStatus by viewModel.momentGenerateStatus.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
     var showPost by rememberSaveable { mutableStateOf(false) }
     var showReplyDialog by rememberSaveable { mutableStateOf(false) }
     var showCommentDialog by rememberSaveable { mutableStateOf(false) }
@@ -65,10 +66,25 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
     var replyParentId by rememberSaveable { mutableLongStateOf(0L) }
     var replyParentName by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
-    val prevCount = remember { mutableIntStateOf(0) }
     var scrollToTopAfterPost by remember { mutableStateOf(false) }
     var unreadMsgCount by remember { mutableIntStateOf(0) }
     var hasNewMoments by remember { mutableStateOf(false) }
+    val latestMoments by rememberUpdatedState(moments)
+    var followForcedPosts by remember { mutableStateOf(false) }
+    val feedScope = rememberCoroutineScope()
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions.collect { interaction ->
+            if (interaction is androidx.compose.foundation.interaction.DragInteraction.Start) {
+                followForcedPosts = false
+            }
+        }
+    }
+    LaunchedEffect(moments.firstOrNull()?.id) {
+        hasNewMoments = false
+        if (followForcedPosts && moments.isNotEmpty()) {
+            listState.scrollToItem(0)
+        }
+    }
     LaunchedEffect(Unit) { unreadMsgCount = viewModel.getUnreadCommentCountSuspend() }
     val lifecycleOwner = LocalLifecycleOwner.current
     LaunchedEffect(lifecycleOwner) {
@@ -77,7 +93,7 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
             delay(30_000)
             if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
                 unreadMsgCount = viewModel.getUnreadCommentCountSuspend()
-                val latestLoadedId = moments.firstOrNull()?.id ?: 0L
+                val latestLoadedId = latestMoments.firstOrNull()?.id ?: 0L
                 if (viewModel.hasNewMomentsSince(latestLoadedId)) {
                     hasNewMoments = true
                 }
@@ -92,12 +108,11 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
         }
     }
 
-    LaunchedEffect(moments.size) {
+    LaunchedEffect(moments.firstOrNull()?.id, scrollToTopAfterPost) {
         if (scrollToTopAfterPost && moments.isNotEmpty()) {
             listState.animateScrollToItem(0)
             scrollToTopAfterPost = false
         }
-        prevCount.intValue = moments.size
     }
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -109,7 +124,12 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
                 Text(if (unreadMsgCount > 0) "互动消息 $unreadMsgCount" else "互动消息", fontSize = 12.sp, color = if (unreadMsgCount > 0) AccentOrange else TextSecondary, fontWeight = if (unreadMsgCount > 0) FontWeight.Bold else FontWeight.Normal)
             }
             if (!genStatus.running) {
-                TextButton(onClick = { viewModel.forceGenerateMoments() }) {
+                TextButton(onClick = {
+                    followForcedPosts = true
+                    hasNewMoments = false
+                    feedScope.launch { listState.scrollToItem(0) }
+                    viewModel.forceGenerateMoments()
+                }) {
                     Text(if (!genStatus.running && genStatus.msg != "全部完成" && genStatus.msg != "开始生成..." && genStatus.msg.isNotBlank()) "重新催发" else "催发", fontSize = 12.sp, color = AccentOrange, fontWeight = FontWeight.SemiBold)
                 }
             } else {
@@ -161,7 +181,7 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
             }
     }
     }
-    if (showPost) PostDialog(operators = viewModel.operators.collectAsState().value, onDismiss = { showPost = false }, onPost = { content, mentionedIds -> scrollToTopAfterPost = true; viewModel.postUserMoment(content, mentionedIds); showPost = false })
+    if (showPost) PostDialog(operators = viewModel.operators.collectAsState().value, onDismiss = { showPost = false }, onPost = { content, mentionedIds, done -> viewModel.postUserMoment(content, mentionedIds) { ok -> if (ok) { scrollToTopAfterPost = true; showPost = false }; done(ok) } })
 
     // Reply dialog at screen level
     // Reply dialog - with key to prevent flash
@@ -178,8 +198,11 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
             TextButton(enabled = !replySending && replyText.isNotBlank(), onClick = {
                 if (replyText.isBlank() || replySending) return@TextButton
                 replySending = true
-                viewModel.commentOnMoment(momentId, "user", viewModel.getUserProfile().nickname, replyText, parentId, parentName)
-                replyText = ""; showReplyDialog = false
+                viewModel.commentOnMoment(momentId, "user", viewModel.getUserProfile().nickname, replyText, parentId, parentName) { ok ->
+                    replySending = false
+                    if (ok) { replyText = ""; showReplyDialog = false }
+                    else android.widget.Toast.makeText(context, "保存失败，草稿已保留，请重试", android.widget.Toast.LENGTH_SHORT).show()
+                }
             }) { Text("发送", color = Primary) }
         }, dismissButton = { TextButton(onClick = { showReplyDialog = false }) { Text("取消", color = TextSecondary) } })
     }
@@ -195,8 +218,11 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
             TextButton(enabled = !commentSending && commentText.isNotBlank(), onClick = {
                 if (commentText.isBlank() || commentSending) return@TextButton
                 commentSending = true
-                viewModel.commentOnMoment(commentMomentId, "user", viewModel.getUserProfile().nickname, commentText, 0, "")
-                commentText = ""; showCommentDialog = false
+                viewModel.commentOnMoment(commentMomentId, "user", viewModel.getUserProfile().nickname, commentText, 0, "") { ok ->
+                    commentSending = false
+                    if (ok) { commentText = ""; showCommentDialog = false }
+                    else android.widget.Toast.makeText(context, "保存失败，草稿已保留，请重试", android.widget.Toast.LENGTH_SHORT).show()
+                }
             }) { Text("发布", color = Primary) }
         }, dismissButton = { TextButton(onClick = { showCommentDialog = false }) { Text("取消", color = TextSecondary) } })
     }
@@ -283,19 +309,21 @@ private fun MomentCardWithInteraction(moment: MomentEntity, viewModel: MainViewM
     HorizontalDivider(color = Divider, thickness = 6.dp)
 }
 
-@Composable private fun PostDialog(operators: List<com.rhodes.privatechat.data.db.entity.OperatorEntity>, onDismiss: () -> Unit, onPost: (String, List<String>) -> Unit) {
+@Composable private fun PostDialog(operators: List<com.rhodes.privatechat.data.db.entity.OperatorEntity>, onDismiss: () -> Unit, onPost: (String, List<String>, (Boolean) -> Unit) -> Unit) {
     var text by remember { mutableStateOf("") }
     var showAtPicker by remember { mutableStateOf(false) }
     var selectedMentionIds by remember { mutableStateOf(setOf<String>()) }
     var insertedMentionIds by remember { mutableStateOf(setOf<String>()) }
     var draftMentionIds by remember { mutableStateOf(setOf<String>()) }
     var isPosting by remember { mutableStateOf(false) }
+    var postError by remember { mutableStateOf(false) }
     val mentionableOperators = remember(operators) { operators.filter { it.name != "系统" } }
     val selectedNames = remember(selectedMentionIds, mentionableOperators) {
         mentionableOperators.filter { it.id in selectedMentionIds }.map { it.name }
     }
-    AlertDialog(onDismissRequest = onDismiss, title = { Text("发布动态", color = TextPrimary) }, text = {
+    AlertDialog(onDismissRequest = { if (!isPosting) onDismiss() }, title = { Text("发布动态", color = TextPrimary) }, text = {
         Column {
+            if (postError) Text("保存失败，草稿已保留，请重试", color = ErrorRed, fontSize = 12.sp)
             OutlinedTextField(value = text, onValueChange = { text = it }, modifier = Modifier.fillMaxWidth().height(100.dp), placeholder = { Text("选择干员即可艾特，可编辑正文", color = TextTertiary) }, colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Primary, unfocusedBorderColor = Divider))
             Spacer(Modifier.height(8.dp)); Row(verticalAlignment = Alignment.CenterVertically) { Text("艾特好友：", fontSize = 12.sp, color = TextSecondary); Spacer(Modifier.weight(1f)); TextButton(onClick = { draftMentionIds = selectedMentionIds; showAtPicker = true }) { Text("选择干员", fontSize = 13.sp, color = Primary) } }
             if (selectedNames.isNotEmpty()) {
@@ -306,7 +334,8 @@ private fun MomentCardWithInteraction(moment: MomentEntity, viewModel: MainViewM
     }, confirmButton = { TextButton(enabled = text.isNotBlank() && !isPosting, onClick = {
         if (text.isNotBlank() && !isPosting) {
             isPosting = true
-            onPost(text, selectedMentionIds.toList())
+            postError = false
+            onPost(text, selectedMentionIds.toList()) { ok -> isPosting = false; postError = !ok }
         } else onDismiss()
     }) { Text("发布", color = if (text.isNotBlank()) Primary else TextTertiary) } }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消", color = TextSecondary) } })
     if (showAtPicker) {

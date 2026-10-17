@@ -56,6 +56,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -87,13 +91,17 @@ fun AiSupportScreen(onBack: () -> Unit, viewModel: AiSupportViewModel = koinView
     val remote by viewModel.remoteConfirmation.collectAsState()
     val currentAgent by viewModel.currentAgent.collectAsState()
     val settings: SettingsRepository = koinInject()
-    var input by remember { mutableStateOf("") }
+    var input by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("") }
     var showAgentPicker by remember { mutableStateOf(false) }
     var showClearConfirmation by remember { mutableStateOf(false) }
     var pendingImageUri by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+    var preparingImage by remember { mutableStateOf(false) }
+    var diagnosticPreview by remember { mutableStateOf<String?>(null) }
+    var visibleCount by remember { mutableStateOf(100) }
     val listState = rememberLazyListState()
     LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
+        if (messages.isNotEmpty()) listState.animateScrollToItem(minOf(messages.size, visibleCount))
     }
     Scaffold(
         topBar = {
@@ -101,8 +109,9 @@ fun AiSupportScreen(onBack: () -> Unit, viewModel: AiSupportViewModel = koinView
                 title = { Row(verticalAlignment = Alignment.CenterVertically) { AgentAvatar(agent = currentAgent, size = 30.dp); Spacer(Modifier.width(8.dp)); Text(currentAgent.name, fontWeight = FontWeight.Bold) } },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) } },
                 actions = {
-                    IconButton(onClick = { showAgentPicker = true }, enabled = !busy) { Icon(Icons.Default.SwapHoriz, "切换客服", tint = if (busy) TextTertiary else TextPrimary) }
-                    IconButton(onClick = { showClearConfirmation = true }) { Icon(Icons.Default.DeleteSweep, "清空聊天记录", tint = TextPrimary) }
+                    TextButton(onClick = { diagnosticPreview = viewModel.safeDiagnosticSummary() }, enabled = !busy) { Text("诊断摘要", fontSize = 11.sp) }
+                    IconButton(onClick = { showAgentPicker = true }, enabled = !busy && !preparingImage) { Icon(Icons.Default.SwapHoriz, "切换客服", tint = if (busy) TextTertiary else TextPrimary) }
+                    IconButton(onClick = { showClearConfirmation = true }, enabled = !preparingImage) { Icon(Icons.Default.DeleteSweep, "清空聊天记录", tint = TextPrimary) }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Surface)
             )
@@ -120,18 +129,23 @@ fun AiSupportScreen(onBack: () -> Unit, viewModel: AiSupportViewModel = koinView
                             ),
                             agent = currentAgent,
                             userAvatarUri = settings.userAvatarUri,
-                            onClaimRedPacket = viewModel::claimRedPacket
+                            onClaimRedPacket = viewModel::claimRedPacket,
+                            onRestoreQuestion = { id -> viewModel.failedQuestionDraft(id)?.let { (text, image) -> input = text; pendingImageUri = image } }
                         )
                     }
                 }
             } else {
                 LazyColumn(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 10.dp), state = listState, reverseLayout = false) {
-                    items(items = messages, key = { it.id }) { message ->
+                    item(key = "older_support_messages") {
+                        if (messages.size > visibleCount) TextButton(onClick = { visibleCount += 100 }) { Text("加载更早记录", color = Primary) }
+                    }
+                    items(items = messages.takeLast(visibleCount), key = { it.id }) { message ->
                         SupportBubble(
                             message = message,
                             agent = currentAgent,
                             userAvatarUri = settings.userAvatarUri,
-                            onClaimRedPacket = viewModel::claimRedPacket
+                            onClaimRedPacket = viewModel::claimRedPacket,
+                            onRestoreQuestion = { id -> viewModel.failedQuestionDraft(id)?.let { (text, image) -> input = text; pendingImageUri = image } }
                         )
                     }
                 }
@@ -157,11 +171,17 @@ fun AiSupportScreen(onBack: () -> Unit, viewModel: AiSupportViewModel = koinView
                 Text("图片待发送", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.weight(1f).padding(horizontal = 8.dp))
                 TextButton(onClick = { pendingImageUri = "" }) { Text("移除", color = ErrorRed) }
             }
-            AiSupportInput(input = input, hasPendingImage = pendingImageUri.isNotBlank(), busy = busy, enabled = manualReady, onInputChange = { input = it }, onSubmit = { question ->
+            AiSupportInput(input = input, hasPendingImage = pendingImageUri.isNotBlank(), busy = busy || preparingImage, enabled = manualReady, onInputChange = { input = it }, onSubmit = { question ->
                 val imageUri = pendingImageUri
-                if (viewModel.ask(question, imageUri, imageUri.takeIf { it.isNotBlank() }?.let(MainActivity::imageForModel))) {
-                    pendingImageUri = ""
-                    input = ""
+                scope.launch {
+                    preparingImage = true
+                    try {
+                        val prepared = if (imageUri.isBlank()) null else withContext(Dispatchers.IO) { MainActivity.imageForModel(imageUri) }
+                        if (viewModel.ask(question, imageUri, prepared)) {
+                            if (pendingImageUri == imageUri) pendingImageUri = ""
+                            if (input == question) input = ""
+                        }
+                    } finally { preparingImage = false }
                 }
             }, onPickImage = {
                 MainActivity.pickImage { pendingImageUri = it }
@@ -169,6 +189,12 @@ fun AiSupportScreen(onBack: () -> Unit, viewModel: AiSupportViewModel = koinView
                 MainActivity.takePhoto { pendingImageUri = it }
             })
         }
+    }
+    diagnosticPreview?.let { preview ->
+        AlertDialog(onDismissRequest = { diagnosticPreview = null }, title = { Text("预览本机配置摘要") },
+            text = { Text(preview + "\n\n不含密钥、接口地址、私人聊天或完整日志。点击填入后仍需你手动发送，才会交给文本服务商。") },
+            confirmButton = { TextButton(onClick = { input = preview; diagnosticPreview = null }) { Text("填入输入框") } },
+            dismissButton = { TextButton(onClick = { diagnosticPreview = null }) { Text("取消") } })
     }
     if (showAgentPicker) {
         AgentPickerDialog(
@@ -183,7 +209,7 @@ fun AiSupportScreen(onBack: () -> Unit, viewModel: AiSupportViewModel = koinView
     if (showClearConfirmation) AlertDialog(
         onDismissRequest = { showClearConfirmation = false },
         title = { Text("清空客服记录？") },
-        text = { Text("将永久删除本机保存的客服文字、截图和图片摘要，且无法恢复。") },
+        text = { Text("将删除客服记录及其中的图片引用和识图摘要；不会删除相册原图或已领取的龙门币。此操作不可撤销。") },
         confirmButton = { TextButton(onClick = { viewModel.clear(); showClearConfirmation = false }) { Text("清空", color = ErrorRed) } },
         dismissButton = { TextButton(onClick = { showClearConfirmation = false }) { Text("取消") } },
     )
@@ -260,7 +286,7 @@ fun AiSupportInput(input: String, hasPendingImage: Boolean = false, busy: Boolea
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
-private fun SupportBubble(message: AiSupportMessage, agent: AgentProfile, userAvatarUri: String, onClaimRedPacket: (Long) -> Int = { 0 }) {
+private fun SupportBubble(message: AiSupportMessage, agent: AgentProfile, userAvatarUri: String, onClaimRedPacket: (Long) -> Int = { 0 }, onRestoreQuestion: (Long) -> Unit = {}) {
     val isMe = message.role == "user"
     val messageAgent = AgentProfiles.byId(message.agentId.ifBlank { agent.id })
     val context = LocalContext.current
@@ -288,6 +314,12 @@ private fun SupportBubble(message: AiSupportMessage, agent: AgentProfile, userAv
                             .background(if (isMe) BubbleMine else BubbleOther, RoundedCornerShape(if (isMe) 16.dp else 16.dp, if (isMe) 4.dp else 16.dp, if (isMe) 16.dp else 16.dp, if (isMe) 16.dp else 4.dp))
                             .padding(10.dp)
                     )
+                    if (message.isError) TextButton(onClick = { onRestoreQuestion(message.id) }) { Text("恢复问题到输入框", color = Primary, fontSize = 12.sp) }
+                    if (!isMe && message.sources.isNotEmpty()) {
+                        var expanded by remember(message.id) { mutableStateOf(false) }
+                        TextButton(onClick = { expanded = !expanded }) { Text(if (expanded) "收起参考资料" else "查看参考资料", fontSize = 11.sp, color = TextSecondary) }
+                        if (expanded) Text("内置产品说明 · ${message.manualVersion.ifBlank { "历史版本" }}\n" + message.sources.joinToString("\n"), fontSize = 11.sp, color = TextSecondary)
+                    }
                     if (!isMe && message.redPacketAmount > 0) {
                         Spacer(Modifier.height(6.dp))
                         SupportRedPacket(message = message, onClaim = onClaimRedPacket)

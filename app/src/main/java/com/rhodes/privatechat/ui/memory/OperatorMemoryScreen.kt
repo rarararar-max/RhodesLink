@@ -32,6 +32,7 @@ fun OperatorMemoryScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
     var working by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
     var pendingDelete by remember { mutableStateOf<MemoryItem?>(null) }
+    var indexLabels by remember { mutableStateOf<Map<Long, String>>(emptyMap()) }
     var pendingRebuild by remember { mutableStateOf(false) }
     var rebuildProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var eligibleCount by remember { mutableStateOf<Int?>(null) }
@@ -53,6 +54,7 @@ fun OperatorMemoryScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
         }
     }
     LaunchedEffect(operator.id) { loadItems() }
+    LaunchedEffect(items) { indexLabels = viewModel.getMemoryIndexStateLabels() }
     Scaffold(
         topBar = { TopAppBar(title = { Text("${operator.name}的记忆") }, navigationIcon = { TextButton(onClick = onBack) { Text("返回") } }, actions = {
             TextButton(enabled = !working && !loading, onClick = { scope.launch { loadItems() } }) { Text("刷新") }
@@ -93,7 +95,7 @@ fun OperatorMemoryScreen(viewModel: MainViewModel, operator: OperatorEntity, onB
                             Column(Modifier.padding(12.dp)) {
                                 Text(item.content, fontSize = 14.sp, color = TextPrimary)
                                 Spacer(Modifier.height(6.dp))
-                                Text("${when (item.memoryLevel) { com.rhodes.privatechat.shared.model.MemoryLevel.L1 -> "近期记录"; com.rhodes.privatechat.shared.model.MemoryLevel.L2 -> "长期记忆"; com.rhodes.privatechat.shared.model.MemoryLevel.L3 -> "角色记得的你" }} · 来源 ${item.sourceKind} · 重要性 ${item.importance}" + if (item.vectorId.isBlank()) " · 未建立索引" else " · 已建立索引", fontSize = 11.sp, color = TextSecondary)
+                                Text("${when (item.memoryLevel) { com.rhodes.privatechat.shared.model.MemoryLevel.L1 -> "近期记录"; com.rhodes.privatechat.shared.model.MemoryLevel.L2 -> "长期记忆"; com.rhodes.privatechat.shared.model.MemoryLevel.L3 -> "角色记得的你" }} · 来源 ${item.sourceKind} · 重要性 ${item.importance}" + " · " + (indexLabels[item.id] ?: "索引状态待刷新"), fontSize = 11.sp, color = TextSecondary)
                                 TextButton(enabled = !working, onClick = { pendingDelete = item }) { Text("删除", color = ErrorRed) }
                             }
                         }

@@ -55,10 +55,18 @@ fun MomentDetailScreen(
     val likes by viewModel.getLikes(momentId).collectAsState(initial = emptyList())
     val comments by viewModel.getCommentsForMoment(momentId).collectAsState(initial = emptyList())
     var inputText by remember { mutableStateOf("") }
+    val context = androidx.compose.ui.platform.LocalContext.current
     var isSending by remember { mutableStateOf(false) }
     var replyTarget by remember { mutableStateOf(Triple(0L, "", "")) }
     val profile by viewModel.userProfile.collectAsState()
     val userName = profile.nickname
+    var replyStatus by remember(momentId) { mutableStateOf(0 to 0) }
+    LaunchedEffect(momentId) {
+        while (true) {
+            replyStatus = viewModel.momentReplyStatus(momentId)
+            kotlinx.coroutines.delay(5_000L)
+        }
+    }
 
     LaunchedEffect(momentId) {
         loadedMoment = withContext(Dispatchers.IO) { viewModel.repository.getMoment(momentId) }
@@ -92,6 +100,10 @@ fun MomentDetailScreen(
             Text("动态详情", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)
         }
         HorizontalDivider(color = Divider)
+        if (replyStatus.first > 0) Text("${replyStatus.first} 条角色回复等待中，退出后仍会继续", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp))
+        if (replyStatus.second > 0) TextButton(onClick = { viewModel.retryMomentReplies(momentId) }) {
+            Text("${replyStatus.second} 条角色回复失败，点击重试", color = ErrorRed, fontSize = 12.sp)
+        }
 
         val operators by viewModel.operators.collectAsState()
         val momentOp = remember(moment, operators) { operators.find { it.id == moment.operatorId || it.name == moment.operatorName } }
@@ -133,9 +145,11 @@ fun MomentDetailScreen(
                 if (inputText.isBlank() || isSending) return@IconButton
                 val (pid, pName, _) = replyTarget
                 isSending = true
-                viewModel.commentOnMoment(momentId, "user", userName, inputText, pid, pName)
-                inputText = ""; replyTarget = Triple(0L, "", "")
-                isSending = false
+                viewModel.commentOnMoment(momentId, "user", userName, inputText, pid, pName) { ok ->
+                    isSending = false
+                    if (ok) { inputText = ""; replyTarget = Triple(0L, "", "") }
+                    else android.widget.Toast.makeText(context, "保存失败，草稿已保留，请重试", android.widget.Toast.LENGTH_SHORT).show()
+                }
             }) { Icon(Icons.AutoMirrored.Filled.Send, "发送", tint = if (inputText.isNotBlank()) Primary else TextSecondary) }
         }
     }

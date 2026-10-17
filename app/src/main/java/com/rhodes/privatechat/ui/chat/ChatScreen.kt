@@ -1,4 +1,5 @@
 package com.rhodes.privatechat.ui.chat
+import com.rhodes.privatechat.shared.modelgateway.hasVisionConfiguration
 import com.rhodes.privatechat.shared.model.AiMessage
 import com.rhodes.privatechat.util.DebugLogger
 
@@ -247,9 +248,7 @@ fun ChatScreen(
         }
     }
     val userProfile by viewModel.userProfile.collectAsState()
-    val visionReady = settings.visionBaseUrl.isNotBlank() &&
-        settings.visionModelName.isNotBlank() &&
-        settings.visionApiKey.ifBlank { settings.apiKey }.isNotBlank()
+    val visionReady = settings.hasVisionConfiguration()
 
     LaunchedEffect(displaySessionId) {
         val sessionId = displaySessionId.ifBlank { return@LaunchedEffect }
@@ -313,16 +312,6 @@ fun ChatScreen(
         ChatTrace.d("ChatScreen", "op=${op.id} raw=${rawMessages.size} parsed=${messages.size} loading=$isLoading")
     }
 
-    androidx.compose.runtime.LaunchedEffect(scrollToMessageId, messages.size) {
-        val target = scrollToMessageId ?: return@LaunchedEffect
-        val index = messages.indexOfFirst { it.originalMessageId == target }
-        if (index >= 0) {
-            // MessageList has a permanent spacer at index zero.
-            listState.scrollToItem(index + 1)
-            viewModel.consumeChatScrollTarget()
-        }
-    }
-
     var bgUri by remember(op.id) { mutableStateOf<String?>(settings.getString("bg_${op.id}", "")) }
     var cropTarget by remember { mutableStateOf<Uri?>(null) }
     val bgPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -344,7 +333,7 @@ fun ChatScreen(
     var showGiftDialog by rememberSaveable { mutableStateOf(false) }
     var pendingImageUri by rememberSaveable { mutableStateOf("") }
     var imageSending by rememberSaveable { mutableStateOf(false) }
-    var forceScrollThroughMessageCount by remember { mutableStateOf(0) }
+    var scrollToLatestRequest by remember(displaySessionId) { mutableStateOf(0L) }
     var recordingVoice by rememberSaveable { mutableStateOf(false) }
     val audioController = remember { LocalAudioController(context) }
     var voiceEnabled by rememberSaveable(op.id) { mutableStateOf(settings.getBoolean("chat_tts_${op.id}", false)) }
@@ -473,8 +462,8 @@ fun ChatScreen(
                     displayEvents = displayEvents,
                     displayEventsLoaded = displayEventsLoaded,
                     legacyMessageCutoff = messageListOpenedAt,
-                    onReveal = { message ->
-                        val order = viewModel.addDisplayEventIfAbsent(displaySessionId, message.originalMessageId, message.segmentIndex)
+                    onReveal = { message, revealedAt ->
+                        val order = viewModel.addDisplayEventIfAbsent(displaySessionId, message.originalMessageId, message.segmentIndex, revealedAt)
                         displayEvents = viewModel.getDisplayEvents(displaySessionId)
                         order
                     },
@@ -495,7 +484,9 @@ fun ChatScreen(
                     onLoadOlder = { viewModel.loadOlderMessages() },
                     isLoadingOlder = isLoadingOlder,
                     hasMore = hasMoreMessages,
-                    forceScrollToLatest = rawMessages.size <= forceScrollThroughMessageCount,
+                    scrollToLatestRequest = scrollToLatestRequest,
+                    scrollToMessageId = scrollToMessageId,
+                    onScrollTargetConsumed = { viewModel.consumeChatScrollTarget() },
                     onDisplayState = { parsedCount, displayCount ->
                         val detail = "sessionId=$displaySessionId, rawCount=${rawMessages.size}, parsedCount=$parsedCount, displayCount=$displayCount"
                         if (rawMessages.isNotEmpty() && parsedCount == 0) DebugLogger.diagnostic("PrivateChat/UiRenderFallback", detail)
@@ -521,16 +512,14 @@ fun ChatScreen(
                         if (pendingImageUri.isNotBlank()) {
                             val imageUri = pendingImageUri
                             imageSending = true
-                            // The persisted image card is now the send-state UI; restore the composer immediately.
-                            pendingImageUri = ""
-                            forceScrollThroughMessageCount = rawMessages.size + 2
-                            viewModel.chatViewModel.sendImageMessage(imageUri, MainActivity.imageForModel(imageUri), inputText) { success ->
+                            scrollToLatestRequest += 1L
+                            viewModel.chatViewModel.sendImageMessage(imageUri, MainActivity.imageForModel(imageUri), inputText, onResult = { success ->
                                 imageSending = false
-                                if (success) forceScrollThroughMessageCount = rawMessages.size
-                            }
+                                if (success && pendingImageUri == imageUri) pendingImageUri = ""
+                            })
                         } else {
                             // One user row and one AI container row are added for a normal turn.
-                            forceScrollThroughMessageCount = rawMessages.size + 2
+                            scrollToLatestRequest += 1L
                             viewModel.sendMessage()
                         }
                     },

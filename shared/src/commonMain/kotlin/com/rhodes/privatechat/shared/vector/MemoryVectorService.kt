@@ -7,6 +7,7 @@ import kotlinx.coroutines.sync.withLock
 class MemoryVectorService(
     private val settings: SettingsRepository,
     private val vectorStoreGateway: VectorStoreGateway,
+    private val embeddingFactory: (SettingsRepository) -> EmbeddingGateway = ::createEmbeddingGateway,
 ) {
     private var gatewaySignature = ""
     private var gateway: EmbeddingGateway? = null
@@ -15,13 +16,14 @@ class MemoryVectorService(
     }
     private val embeddingCacheMutex = Mutex()
 
-    private fun activeGateway(): EmbeddingGateway {
-        val signature = listOf(settings.vectorProviderMode, settings.vectorBaseUrl, settings.vectorModelName, settings.vectorApiKey, settings.apiKey).joinToString("|")
+    @Synchronized
+    private fun activeGateway(): Pair<String, EmbeddingGateway> {
+        val signature = listOf(settings.vectorProviderMode, settings.vectorProvider, settings.vectorBaseUrl, settings.vectorModelName, settings.vectorApiKey, settings.apiKey).joinToString("|")
         if (gateway == null || gatewaySignature != signature) {
-            gateway = createEmbeddingGateway(settings)
+            gateway = embeddingFactory(settings)
             gatewaySignature = signature
         }
-        return gateway!!
+        return signature to gateway!!
     }
 
     fun currentEmbeddingSignature(): String = EmbeddingConfigurationSignature.create(
@@ -32,9 +34,12 @@ class MemoryVectorService(
     )
 
     suspend fun saveMemory(memory: VectorMemory) {
+        val signature = currentEmbeddingSignature()
+        check(memory.embeddingSignature.isBlank() || memory.embeddingSignature == signature) { "向量模型配置已变化，请重试" }
         val embedding = embedCached(memory.content)
+        check(signature == currentEmbeddingSignature()) { "向量配置已变化，请重试；旧索引未覆盖" }
         require(embedding.isUsableEmbedding()) { "Embedding 服务没有返回有效向量" }
-        vectorStoreGateway.upsert(memory.copy(embedding = embedding, embeddingSignature = currentEmbeddingSignature()))
+        vectorStoreGateway.upsert(memory.copy(embedding = embedding, embeddingSignature = signature))
     }
 
     suspend fun saveMemoryWithEmbedding(memory: VectorMemory) {
@@ -51,7 +56,9 @@ class MemoryVectorService(
         minScore: Double = 0.0,
         now: Long = 0L,
     ): List<VectorMemory> {
+        val signature = currentEmbeddingSignature()
         val queryEmbedding = embedCached(query)
+        if (signature != currentEmbeddingSignature()) return emptyList()
         if (!queryEmbedding.isUsableEmbedding()) return emptyList()
         return vectorStoreGateway.search(
             VectorSearchRequest(
@@ -63,14 +70,16 @@ class MemoryVectorService(
                 visibilities = visibilities,
                 minScore = minScore,
                 now = now,
-                embeddingSignature = currentEmbeddingSignature(),
+                embeddingSignature = signature,
             )
         )
     }
 
     suspend fun search(request: VectorSearchRequest): List<VectorMemory> {
+        val signature = currentEmbeddingSignature()
         val queryEmbedding = embedCached(request.query)
-        return searchWithEmbedding(request, queryEmbedding)
+        if (signature != currentEmbeddingSignature()) return emptyList()
+        return searchWithEmbedding(request.copy(embeddingSignature = signature), queryEmbedding)
     }
 
     /** Keeps diagnostics able to distinguish gateway latency from local vector-store latency. */
@@ -78,7 +87,9 @@ class MemoryVectorService(
 
     suspend fun searchWithEmbedding(request: VectorSearchRequest, queryEmbedding: List<Double>): List<VectorMemory> {
         if (!queryEmbedding.isUsableEmbedding()) return emptyList()
-        return vectorStoreGateway.search(request.copy(queryEmbedding = queryEmbedding, embeddingSignature = currentEmbeddingSignature()))
+        val signature = currentEmbeddingSignature()
+        if (request.embeddingSignature.isNotBlank() && request.embeddingSignature != signature) return emptyList()
+        return vectorStoreGateway.search(request.copy(queryEmbedding = queryEmbedding, embeddingSignature = signature))
     }
 
     suspend fun clearAllMemories() = vectorStoreGateway.clearAllMemories()
@@ -97,8 +108,8 @@ class MemoryVectorService(
     private suspend fun embedCached(text: String): List<Double> {
         val normalized = text.trim()
         if (normalized.isBlank()) return emptyList()
-        val gateway = activeGateway()
-        val key = "$gatewaySignature:$normalized"
+        val (signature, gateway) = activeGateway()
+        val key = "$signature:$normalized"
         embeddingCacheMutex.withLock { embeddingCache[key] }?.let { return it }
         // Embedding belongs to its caller. A prompt timeout must also cancel this work instead of
         // leaving an application-wide request running after the reply has degraded.

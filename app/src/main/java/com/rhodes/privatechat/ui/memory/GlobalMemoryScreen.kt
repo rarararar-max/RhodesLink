@@ -59,6 +59,7 @@ fun GlobalMemoryScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     var keyword by remember { mutableStateOf("") }
     var pendingDelete by remember { mutableStateOf<MemoryItem?>(null) }
     var pendingClear by remember { mutableStateOf<List<MemoryItem>?>(null) }
+    var indexLabels by remember { mutableStateOf<Map<Long, String>>(emptyMap()) }
     var pendingRebuild by remember { mutableStateOf(false) }
     var rebuildProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
 
@@ -67,6 +68,7 @@ fun GlobalMemoryScreen(viewModel: MainViewModel, onBack: () -> Unit) {
         loading = false
     }
     LaunchedEffect(Unit) { reload() }
+    LaunchedEffect(allItems) { indexLabels = viewModel.getMemoryIndexStateLabels() }
 
     val operators by viewModel.operators.collectAsState()
     val sessions by viewModel.allSessions.collectAsState()
@@ -155,7 +157,7 @@ fun GlobalMemoryScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                             if (item.eventTime?.isNotBlank() == true || item.scheduledTime?.isNotBlank() == true) {
                                 Text(listOfNotNull(item.eventTime?.takeIf { it.isNotBlank() }, item.scheduledTime?.takeIf { it.isNotBlank() }?.let { "约定：$it" }).joinToString(" · "), fontSize = 11.sp, color = TextSecondary)
                             }
-                            Text("重要性 ${item.importance} · ${if (item.vectorId.isBlank()) "未建立索引" else "已建立索引"}", fontSize = 11.sp, color = TextSecondary)
+                            Text("重要性 ${item.importance} · ${indexLabels[item.id] ?: "索引状态待刷新"}", fontSize = 11.sp, color = TextSecondary)
                             TextButton(enabled = !working, onClick = { pendingDelete = item }) { Text("删除", color = ErrorRed) }
                         }
                     }

@@ -85,7 +85,12 @@ WHERE id = ? AND claimToken = ? AND status = 'running';
 
 completeMemorySource:
 UPDATE memory_source_queue
-SET processedL1 = 1, processedVector = 1, status = 'succeeded', leaseUntil = 0, claimToken = '', lastError = ''
+SET processedL1 = 1,
+processedVector = CASE WHEN EXISTS (
+    SELECT 1 FROM memory_items WHERE sourceKind = memory_source_queue.sourceKind
+    AND sourceRefId = memory_source_queue.sourceRefId AND status = 'active' AND vectorId = ''
+) THEN 0 ELSE 1 END,
+status = 'succeeded', leaseUntil = 0, claimToken = '', lastError = ''
 WHERE id = ? AND claimToken = ?;
 
 retryMemorySource:
@@ -118,7 +123,9 @@ deletePrivateRelationshipSources:
 DELETE FROM memory_source_queue WHERE ownerType = ? AND ownerId = ? AND sourceKind = 'PRIVATE_CHAT';
 
 deleteMemorySourcesBySession:
-DELETE FROM memory_source_queue WHERE sourceRefId = ?;
+DELETE FROM memory_source_queue
+WHERE sourceRefId = :sessionId
+OR (sourceKind = 'PRIVATE_CHAT' AND substr(sourceRefId, 1, length(:sessionId) + 6) = :sessionId || ':epoch');
 
 deleteMemorySourcesBySource:
 DELETE FROM memory_source_queue WHERE sourceKind = ? AND sourceRefId = ?;
@@ -134,3 +141,10 @@ DELETE FROM memory_source_queue;
 
 deleteProcessedMemorySourcesBefore:
 DELETE FROM memory_source_queue WHERE processedL1 = 1 AND createdAt < ?;
+
+refreshSourceVectorCompletion:
+UPDATE memory_source_queue SET processedVector =
+CASE WHEN EXISTS (SELECT 1 FROM memory_items
+    WHERE sourceKind = memory_source_queue.sourceKind AND sourceRefId = memory_source_queue.sourceRefId
+    AND status = 'active' AND vectorId = '') THEN 0 ELSE 1 END
+WHERE processedL1 = 1 AND sourceKind = ? AND sourceRefId = ?;

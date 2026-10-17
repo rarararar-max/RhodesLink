@@ -43,6 +43,14 @@ object AiSupportContract {
         "加群" to listOf("群聊", "群组", "邀请"),
     )
 
+    fun retrievalQuery(current: String, previousUserQuestions: List<String>): String =
+        if (current.length <= 40 && listOf("那", "这个", "怎么弄", "哪里", "然后", "还是", "没用").any { current.contains(it) })
+            (previousUserQuestions.takeLast(2).map { it.take(180) } + current).joinToString("\n") else current
+
+    fun visibleReply(raw: String, packetAmount: Int): String = removeRedPacketMarker(raw).let { reply ->
+        if (packetAmount == 0 && looksLikeRedPacketPromise(reply)) reply + "\n（本条未发放红包，以实际红包卡片为准。）" else reply
+    }
+
     fun localReference(manualSections: List<String>, query: String): String {
         val terms = retrievalTerms(query)
         val selected: List<Triple<String, Int, Int>> = manualSections.mapIndexed { order: Int, section: String ->
@@ -75,7 +83,7 @@ object AiSupportContract {
 
     fun historyAfter(messages: List<AiSupportMessage>, contextStartId: Long, agentId: String = ""): List<AiMessage> =
         recentHistory(messages.asSequence()
-            .filter { it.id > contextStartId }
+            .filter { it.id > contextStartId && !it.isError }
             .filter { agentId.isBlank() || it.agentId.isBlank() || it.agentId == agentId }
             .map {
                 val content = if (it.imageSummary.isBlank()) it.text else buildString {
@@ -91,8 +99,11 @@ object AiSupportContract {
         .map { it.trim() }.distinct().toList()
 
     fun userError(error: Throwable): String = when {
+        error is kotlinx.coroutines.TimeoutCancellationException -> "图片识别超时，请检查识图服务或换一张清晰图片后重试。"
+        error is SupportImageException -> error.safeMessage
         error is kotlinx.coroutines.CancellationException -> "已停止本次客服请求。"
         error.message.orEmpty().contains("API error 401") || error.message.orEmpty().contains("API error 403") -> "模型服务认证失败，请检查模型设置中的 API Key。"
+        error.message.orEmpty().contains("API error 404") -> "模型名称或接口路径不可用，请在模型设置中检查并测试。"
         error.message.orEmpty().contains("API error 429") -> "模型服务请求过于频繁，请稍后再试。"
         error.message.orEmpty().contains("API error 5") -> "模型服务暂时不可用，请稍后重试。"
         error.message.orEmpty().contains("超时", ignoreCase = true) || error.message.orEmpty().contains("timeout", ignoreCase = true) -> "请求超时，请检查网络后重试。"

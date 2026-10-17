@@ -45,21 +45,34 @@ class XiaomiMimoAsrGateway(
             })
             put("asr_options", buildJsonObject { put("language", request.language.ifBlank { "auto" }) })
         }
-        val response = createHttpClient().post(endpoint) {
-            header("api-key", apiKey)
-            contentType(ContentType.Application.Json)
-            setBody(body)
+        require(request.sampleRate > 0 && request.pcm16kMonoAudio.size % 2 == 0) { "录音格式无效：需要单声道16位 PCM" }
+        val client = createHttpClient()
+        val raw = try {
+            val response = client.post(endpoint) {
+                header("api-key", apiKey)
+                contentType(ContentType.Application.Json)
+                setBody(body)
+            }
+            val text = response.bodyAsText()
+            if (!response.status.isSuccess()) error("小米 MiMo ASR 错误 ${response.status.value}: ${text.take(300)}；音频=${wav.size}字节，采样率=${request.sampleRate}")
+            text
+        } finally {
+            client.close()
         }
-        val raw = response.bodyAsText()
-        if (!response.status.isSuccess()) error("小米 MiMo ASR 错误 ${response.status.value}: ${raw.take(500)}")
-        val content = json.parseToJsonElement(raw).jsonObject["choices"]?.jsonArray
-            ?.firstOrNull()?.jsonObject?.get("message")?.jsonObject?.get("content")?.jsonPrimitive?.content.orEmpty()
-        return AsrResult(content.trim())
+        return AsrResult(parseMimoAsrText(raw))
     }
 
-    private companion object {
-        val json = Json { ignoreUnknownKeys = true }
+}
+
+fun parseMimoAsrText(raw: String): String {
+    val root = Json.parseToJsonElement(raw).jsonObject
+    val message = root["choices"]?.jsonArray?.firstOrNull()?.jsonObject?.get("message")?.jsonObject
+        ?: error("小米 MiMo ASR 响应缺少识别结果，请检查模型名与接口协议")
+    val value = message["content"]
+    require(value is kotlinx.serialization.json.JsonPrimitive && value !is kotlinx.serialization.json.JsonNull) {
+        "小米 MiMo ASR 响应的文字格式无效"
     }
+    return value.content.trim()
 }
 
 private fun pcm16ToWav(pcm: ByteArray, sampleRate: Int): ByteArray {

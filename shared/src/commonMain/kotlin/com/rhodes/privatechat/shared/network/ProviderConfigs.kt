@@ -7,7 +7,7 @@ val providers = mapOf(
         id = "deepseek",
         name = "DeepSeek",
         baseUrl = "https://api.deepseek.com/chat/completions",
-        models = listOf("deepseek-v4-flash", "deepseek-v4-pro")
+        models = listOf("deepseek-flash", "deepseek-v4-pro", "deepseek-v4-flash")
     ),
     "minimax" to ProviderConfig(
         id = "minimax",
@@ -39,13 +39,13 @@ val providers = mapOf(
         id = "ali",
         name = "阿里千问",
         baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-        models = listOf("qwen-flash", "qwen-plus", "qwen3-max")
+        models = listOf("qwen3.8-flash", "qwen3.8-max", "qwen3.8-omni-flash", "qwen-flash", "qwen-plus", "qwen3-max")
     ),
     "zhipu" to ProviderConfig(
         id = "zhipu",
         name = "智谱AI",
         baseUrl = "https://open.bigmodel.cn/api/paas/v4/chat/completions",
-        models = listOf("glm-4", "glm-3-turbo", "glm-4v")
+        models = listOf("glm-5.3-flash", "glm-5.3", "glm-5.3-flashx", "glm-5.2", "glm-4", "glm-3-turbo", "glm-4v")
     ),
     "siliconflow" to ProviderConfig(
         id = "siliconflow",
@@ -57,7 +57,7 @@ val providers = mapOf(
         id = "xiaomi",
         name = "小米 MiMo",
         baseUrl = "https://api.xiaomimimo.com/v1/chat/completions",
-        models = listOf("mimo-v2.5", "mimo-v2.5-pro")
+        models = listOf("mimo-v2.6-flash", "mimo-v2.6-pro", "mimo-v2.6-pro-ultraspeed", "mimo-v2.5", "mimo-v2.5-pro")
     ),
     "openai_compat" to ProviderConfig(
         id = "openai_compat",

@@ -11,7 +11,7 @@ object KnowledgeBaseRecallPolicy {
     const val PRIVATE_PER_BOOK_TIMEOUT_MS = 750L
 
     fun isUsableIndex(status: String, indexedSignature: String, activeSignature: String): Boolean =
-        status in USABLE_INDEX_STATUSES && indexedSignature == activeSignature
+        status.substringBefore(':') in USABLE_INDEX_STATUSES && indexedSignature == activeSignature
 
     data class Candidate(
         val bookName: String,

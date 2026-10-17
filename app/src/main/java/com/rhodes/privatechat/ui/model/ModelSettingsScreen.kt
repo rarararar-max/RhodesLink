@@ -27,6 +27,11 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.rhodes.privatechat.shared.network.ModelCapabilities
+import com.rhodes.privatechat.shared.modelgateway.resolveVisionConfiguration
+import com.rhodes.privatechat.shared.voice.VoiceProviderConfiguration
+import com.rhodes.privatechat.shared.voice.defaultAsrConfiguration
+import com.rhodes.privatechat.shared.voice.defaultTtsConfiguration
 import com.rhodes.privatechat.shared.network.providers
 import com.rhodes.privatechat.shared.network.AIService
 import com.rhodes.privatechat.shared.model.AiMessage
@@ -72,6 +77,10 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     var customModelName by remember { mutableStateOf(savedModel) }
     var customUrl by remember { mutableStateOf(settings.customUrl) }
     var apiKey by remember { mutableStateOf(settings.apiKey) }
+    var visionMode by remember { mutableStateOf(settings.visionMode) }
+    val asrProfiles = remember { settings.voiceProviderConfigurations("asr").toMutableMap() }
+    val ttsProfiles = remember { settings.voiceProviderConfigurations("tts").toMutableMap() }
+    var testVoiceId by remember { mutableStateOf("") }
     var visionBaseUrl by remember { mutableStateOf(settings.visionBaseUrl) }
     var visionProvider by remember { mutableStateOf(settings.visionProvider) }
     var visionModelName by remember { mutableStateOf(settings.visionModelName) }
@@ -111,6 +120,8 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     val modelOptions = if (isCustom) listOf("自填") else currentConfig.models + "自填"
     val currentModelName = if (isCustom || selectedModelIdx >= currentConfig.models.size) customModelName.trim() else currentConfig.models[selectedModelIdx].trim()
     val hasChanges = currentProviderId != settings.provider || currentModelName != settings.modelName || customUrl.trim() != settings.customUrl || apiKey.trim() != settings.apiKey ||
+        visionMode != settings.visionMode ||
+        asrProfiles != settings.voiceProviderConfigurations("asr") || ttsProfiles != settings.voiceProviderConfigurations("tts") ||
         visionProvider != settings.visionProvider || visionBaseUrl.trim() != settings.visionBaseUrl || visionModelName.trim() != settings.visionModelName || visionApiKey.trim() != settings.visionApiKey ||
         vectorProviderMode != settings.vectorProviderMode || vectorProvider != settings.vectorProvider || vectorBaseUrl.trim() != settings.vectorBaseUrl || vectorModelName.trim() != settings.vectorModelName || vectorApiKey.trim() != settings.vectorApiKey ||
         asrProvider != settings.asrProvider || asrBaseUrl.trim() != settings.asrBaseUrl || asrModelName.trim() != settings.asrModelName || asrApiKey.trim() != settings.asrApiKey ||
@@ -167,6 +178,9 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 ttsProvider = ttsProvider,
                 ttsModelName = ttsModelName.trim(),
                 ttsApiKey = ttsApiKey.trim(),
+                visionMode = visionMode,
+                asrConfigurations = asrProfiles.toMap(),
+                ttsConfigurations = ttsProfiles.toMap(),
         )
         val newVectorSignature = com.rhodes.privatechat.shared.vector.EmbeddingConfigurationSignature.create(vectorProviderMode, vectorProvider, vectorBaseUrl, vectorModelName)
         val previousVectorSignature = com.rhodes.privatechat.shared.vector.EmbeddingConfigurationSignature.create(prevVectorMode, prevVectorProvider, prevVectorUrl, prevVectorModel)
@@ -223,10 +237,9 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         visionTestResult = "正在测试..."
         scope.launch {
             try {
-                val key = visionApiKey.trim().ifBlank { apiKey.trim() }
-                require(visionBaseUrl.trim().startsWith("http")) { "请填写正确的识图 API 地址" }
-                require(visionModelName.trim().isNotBlank()) { "请填写识图模型名" }
-                require(key.isNotBlank()) { "请填写识图密钥，或先填写聊天密钥" }
+                val config = resolveVisionConfiguration(visionMode, currentProviderId, currentModelName, apiKey.trim(),
+                    visionProvider, visionBaseUrl.trim(), visionApiKey.trim(), visionModelName.trim())
+                require(config.configured) { "当前对话模型尚未验证识图能力，请选择独立识图配置并填写接口、模型和密钥" }
                 val testImage = runCatching {
                     val bmp = android.graphics.BitmapFactory.decodeResource(ctx.resources, com.rhodes.privatechat.R.drawable.sleep_idle_001)
                     val out = java.io.ByteArrayOutputStream()
@@ -234,7 +247,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                     if (bmp == null) throw IllegalStateException("null")
                     "data:image/jpeg;base64," + android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
                 }.getOrNull() ?: throw IllegalStateException("无法加载测试图片")
-                val result = createVisionGateway(visionProvider, visionBaseUrl.trim(), key, visionModelName.trim()).analyzeImage(
+                val result = createVisionGateway(config.provider, config.endpoint, config.apiKey, config.model).analyzeImage(
                     VisionAnalyzeRequest(testImage, "请用中文描述这张图片中的内容，只输出描述文字。")
                 )
                 val display = result.text.take(300)
@@ -261,10 +274,10 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 require(ttsBaseUrl.trim().isNotBlank()) { "请填写文字转语音地址" }
                 require(ttsModelName.trim().isNotBlank()) { "请填写文字转语音模型名" }
                 require(key.isNotBlank()) { "请填写文字转语音密钥，或先填写聊天密钥" }
-                require(ttsProvider != "vocu") { "Vocu 没有公共默认音色，请在角色编辑页填写音色 ID 后测试" }
-                require(ttsProvider != "volcano") { "火山引擎没有公共默认音色，请在角色编辑页填写你自己复刻的音色 ID（S_ 开头）后测试" }
+                val voiceId = testVoiceId.trim().ifBlank { defaultTtsVoiceId(ttsProvider) }
+                require(voiceId.isNotBlank()) { "请填写测试音色 ID，此测试不会修改角色音色" }
                 val audioBytes = createTtsGateway(ttsBaseUrl.trim(), key, ttsModelName.trim(), ttsProvider)
-                    .synthesize(TtsRequest("测试成功", defaultTtsVoiceId(ttsProvider))).audioBytes
+                    .synthesize(TtsRequest("测试成功", voiceId)).audioBytes
                 if (audioBytes == null || audioBytes.isEmpty()) {
                     ttsTestResult = "测试失败：服务没有返回音频数据"
                 } else {
@@ -318,8 +331,13 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 require(if (asrProvider == "xiaomi") asrBaseUrl.trim().startsWith("http") else asrBaseUrl.trim().startsWith("ws")) { if (asrProvider == "xiaomi") "小米语音识别地址需要以 http:// 或 https:// 开头" else "语音识别地址需要以 ws:// 或 wss:// 开头" }
                 require(asrModelName.trim().isNotBlank()) { "请填写语音识别模型配置" }
                 require(key.isNotBlank()) { "请填写语音识别密钥，或先填写聊天密钥" }
-                createAsrGateway(asrBaseUrl.trim(), key, asrModelName.trim(), asrProvider).transcribe(AsrRequest(ByteArray(3200)))
-                asrTestResult = "连接成功"
+                val pcm = ctx.assets.open("diagnostics/asr_test_16k.pcm").use { it.readBytes() }
+                val result = createAsrGateway(asrBaseUrl.trim(), key, asrModelName.trim(), asrProvider).transcribe(AsrRequest(pcm))
+                require(result.text.isNotBlank()) { "接口已返回，但未识别到文字；请检查模型和音频协议" }
+                val normalized = result.text.replace(Regex("[\\s，。！？、,.!?]"), "")
+                val expected = "今天下午三点请提醒我喝水"
+                asrTestResult = if (normalized == expected) "识别成功：${result.text}（已验证测试语音）"
+                    else "接口已返回，但测试语音不匹配：${result.text.take(100)}；预期：今天下午三点，请提醒我喝水。"
             } catch (e: Exception) {
                 asrTestResult = "测试失败：${e.message?.take(100) ?: "请检查语音识别配置"}"
             } finally { testing = null }
@@ -365,6 +383,16 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 Spacer(Modifier.height(12.dp))
             }
 
+            val automaticImages = ModelCapabilities.supportsImages(currentProviderId, currentModelName)
+            Text(if (automaticImages) {
+                if (visionMode == "auto") "此模型是多模态模型，已自动用于图片识别。图片聊天仍会分别调用识图和角色回复。"
+                else "此模型支持图片识别；当前使用独立识图配置，可在下方切换为自动复用。"
+            } else "当前型号尚未通过自动识图验证，可在下方使用独立识图配置。", fontSize = 11.sp, color = TextSecondary)
+            Text("文字回复默认完整接收后展示；支持关闭思考的已适配型号默认关闭思考。", fontSize = 11.sp, color = TextSecondary)
+            if (currentProviderId == "zhipu" && currentModelName.startsWith("glm-5.3")) {
+                Text("GLM 5.3 和 5.3 Flash 已确认不支持关闭思考；5.3 系列不发送关闭参数。", fontSize = 11.sp, color = TextSecondary)
+            }
+            Spacer(Modifier.height(10.dp))
             // 深度思考：仅在 DeepSeek 服务商下显示。默认关闭；打开后更慢更贵，思考过程不会展示给用户。
             if (currentProviderId == "deepseek") {
                 var deepseekThinking by remember { mutableStateOf(settings.deepseekThinkingEnabled) }
@@ -391,11 +419,20 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             Spacer(Modifier.height(12.dp))
 
             SettingsSection("识图模型") {
-                DropDown("服务商", listOf("阿里千问", "DeepSeek Vision", "豆包", "小米 MiMo", "Anthropic Claude", "硅基流动", "OpenAI 兼容/自填"), when (visionProvider) { "ali" -> 0; "deepseek" -> 1; "doubao" -> 2; "xiaomi" -> 3; "anthropic" -> 4; "siliconflow" -> 5; else -> 6 }) { index ->
+                DropDown("使用方式", listOf("自动使用对话模型", "独立识图配置"), if (visionMode == "auto") 0 else 1) {
+                    visionMode = if (it == 0) "auto" else "independent"
+                    visionTestResult = ""
+                }
+                if (visionMode == "auto") {
+                    Text(if (automaticImages) "已自动复用对话模型的厂商、模型和密钥；旧的独立识图配置仍保留。"
+                        else "当前型号尚未验证图片识别能力，请选择已验证的型号或使用独立识图配置。", fontSize = 12.sp, color = TextSecondary)
+                    TestButton("测试自动识图", testing == "vision", visionTestResult, onClick = ::testVision)
+                } else {
+                DropDown("服务商", listOf("阿里千问", "DeepSeek", "豆包", "小米 MiMo", "Anthropic Claude", "硅基流动", "OpenAI 兼容/自填"), when (visionProvider) { "ali" -> 0; "deepseek" -> 1; "doubao" -> 2; "xiaomi" -> 3; "anthropic" -> 4; "siliconflow" -> 5; else -> 6 }) { index ->
                     visionProvider = listOf("ali", "deepseek", "doubao", "xiaomi", "anthropic", "siliconflow", "openai")[index]
                     when (visionProvider) {
                         "ali" -> { visionBaseUrl = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"; visionModelName = "qwen3-vl-plus" }
-                        "deepseek" -> { visionBaseUrl = "https://api.deepseek.com/chat/completions"; visionModelName = "deepseek-v4-flash-vision-exp" }
+                        "deepseek" -> { visionBaseUrl = "https://api.deepseek.com/chat/completions"; visionModelName = "deepseek-flash" }
                         "doubao" -> { visionBaseUrl = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"; visionModelName = "" }
                         "xiaomi" -> { visionBaseUrl = "https://api.xiaomimimo.com/v1/chat/completions"; visionModelName = "mimo-v2.5" }
                         "anthropic" -> { visionBaseUrl = "https://api.anthropic.com/v1/messages"; visionModelName = "claude-sonnet-4-20250514" }
@@ -405,7 +442,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 Spacer(Modifier.height(10.dp))
                 Text(when (visionProvider) {
                     "ali" -> "使用阿里千问视觉接口。"
-                    "deepseek" -> "使用 DeepSeek OpenAI 兼容视觉接口，图片会以 Base64 image_url 发送；请使用 deepseek-v4-flash-vision-exp。"
+                    "deepseek" -> "使用 DeepSeek OpenAI 兼容视觉接口，图片会以 Base64 image_url 发送；Flash 已通过图片测试；旧实验模型配置会保留。"
                     "xiaomi" -> "使用小米 MiMo 图片理解接口，API Key 使用 api-key 请求头。"
                     "anthropic" -> "使用 Anthropic Messages 图片理解接口，要求传入 Base64 图片。"
                     "siliconflow" -> "使用硅基流动 OpenAI 兼容多模态接口，支持 Qwen3-VL 等视觉模型。"
@@ -418,6 +455,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 Spacer(Modifier.height(10.dp))
                 LabeledField("API Key（空则复用聊天 API Key）") { SecretInput(visionApiKey, { visionApiKey = it }, ctx) }
                 TestButton("测试识图模型", testing == "vision", visionTestResult, onClick = ::testVision)
+                }
             }
 
             SettingsSection("向量模型") {
@@ -447,8 +485,13 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
 
             SettingsSection("语音识别 ASR") {
                 DropDown("服务商", listOf("阿里千问实时识别", "小米 MiMo", "自填（阿里兼容）"), when (asrProvider) { "ali" -> 0; "xiaomi" -> 1; else -> 2 }) { index ->
+                    asrProfiles[asrProvider] = VoiceProviderConfiguration(asrBaseUrl, asrModelName, asrApiKey)
                     asrProvider = listOf("ali", "xiaomi", "custom")[index]
-                    if (asrProvider == "xiaomi") { asrBaseUrl = "https://api.xiaomimimo.com/v1/chat/completions"; asrModelName = "mimo-v2.5-asr" }
+                    val config = asrProfiles[asrProvider] ?: defaultAsrConfiguration(asrProvider)
+                    asrBaseUrl = config.endpoint
+                    asrModelName = config.model
+                    asrApiKey = config.key
+                    asrTestResult = ""
                 }
                 Text(if (asrProvider == "xiaomi") "小米 MiMo 使用 HTTP 非流式识别，应用会将录音 PCM 自动封装为 WAV 后上传。" else "自填服务必须兼容阿里实时 WebSocket 协议与音频格式。", fontSize = 12.sp, color = TextSecondary)
                 Spacer(Modifier.height(10.dp))
@@ -466,11 +509,14 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
 
             SettingsSection("文字转语音 TTS") {
                 DropDown("服务商", listOf("MiniMax", "小米 MiMo", "Vocu", "火山引擎（豆包语音）", "自填（MiniMax 兼容）"), when (ttsProvider) { "minimax" -> 0; "xiaomi" -> 1; "vocu" -> 2; "volcano" -> 3; else -> 4 }) { index ->
+                    ttsProfiles[ttsProvider] = VoiceProviderConfiguration(ttsBaseUrl, ttsModelName, ttsApiKey)
                     ttsProvider = listOf("minimax", "xiaomi", "vocu", "volcano", "custom")[index]
-                    if (index == 0) { ttsBaseUrl = "wss://api.minimaxi.com/ws/v1/t2a_v2"; ttsModelName = "speech-2.8-hd" }
-                    if (index == 1) { ttsBaseUrl = "https://api.xiaomimimo.com/v1/chat/completions"; ttsModelName = "mimo-v2.5-tts" }
-                    if (index == 2) { ttsBaseUrl = "https://v1.vocu.ai/api/tts/simple-generate"; ttsModelName = "v3.0" }
-                    if (index == 3) { ttsBaseUrl = "https://openspeech.bytedance.com/api/v3/tts/unidirectional"; ttsModelName = "seed-icl-2.0" }
+                    val config = ttsProfiles[ttsProvider] ?: defaultTtsConfiguration(ttsProvider)
+                    ttsBaseUrl = config.endpoint
+                    ttsModelName = config.model
+                    ttsApiKey = config.key
+                    testVoiceId = ""
+                    ttsTestResult = ""
                 }
                 Text(when (ttsProvider) {
                     "xiaomi" -> "小米 MiMo 使用 HTTP 非流式 TTS，支持 mimo_default、冰糖、茉莉、苏打等预置音色。"
@@ -495,6 +541,9 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 }
                 Spacer(Modifier.height(10.dp))
                 LabeledField("API Key（空则复用聊天 API Key）") { SecretInput(ttsApiKey, { ttsApiKey = it }, ctx) }
+                if (ttsProvider == "vocu" || ttsProvider == "volcano") {
+                    LabeledField("测试音色 ID（仅用于本次测试，不修改角色）") { TextInput(testVoiceId, { testVoiceId = it }, ctx) }
+                }
                 TestButton("测试文字转语音", testing == "tts", ttsTestResult, onClick = ::testTts)
             }
         }

@@ -1,0 +1,14 @@
+{
+  "baseline": "C:\\Users\\Administrator\\Documents\\ChatGPT\\mingrifangzhoutest2\\baseline-1.14.15",
+  "project": "D:\\anzhuo\\mingrifangzhou\\mingrifangzhoutest2",
+  "checks": [
+    "All existing SQL table/index definitions unchanged from 1.14.15",
+    "Opening current schema preserves old chat rows byte-for-byte",
+    "Conditional regeneration rejects stale edits and never resurrects deleted messages",
+    "Cursor paging and count operate on real surviving records",
+    "Duplicate scheduling and concurrent claim produce only one task owner",
+    "Comment+completion rollback together; completed moment task is not reclaimed or orphan-cleaned",
+    "Knowledge paging covers all 350 chunks with no omissions, duplicates or wrong-model vectors"
+  ],
+  "device_upgrade_tested": false
+}

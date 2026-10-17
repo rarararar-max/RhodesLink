@@ -55,7 +55,7 @@ class ManualReplyWorker(context: Context, params: WorkerParameters) : CoroutineW
             val messageId = inputData.getLong("messageId", 0L)
             if (messageId <= 0L) return Result.success()
             val isGroup = inputData.getBoolean("isGroup", false)
-            val message = repository.getMessagesSync(sessionId).firstOrNull { it.id == messageId && it.isMe }
+            val message = repository.getMessageById(messageId)?.takeIf { it.sessionId == sessionId && it.isMe }
                 ?: return Result.success()
             // Upgrades can still have old WorkManager input. Convert it to the durable turn
             // protocol instead of guessing completion from the timestamp of another AI row.

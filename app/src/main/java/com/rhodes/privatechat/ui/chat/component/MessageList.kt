@@ -356,7 +356,7 @@ fun MessageList(
                     .background(ElevatedSurface, RoundedCornerShape(24.dp))
                     .border(1.dp, Primary.copy(alpha = 0.4f), RoundedCornerShape(24.dp))
             ) {
-                Text(if (hasNewMessages) "↓ 新消息" else "↓ 最新消息", color = Primary)
+                Text(if (hasNewMessages) "↓ 新消息 · 回到底部" else "↓ 回到底部", color = Primary)
             }
         }
     }

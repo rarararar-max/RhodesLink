@@ -1,0 +1,10 @@
+{
+  "checks": [
+    "Both initial-load paths leave bottom positioning to MessageList",
+    "Only explicit message navigation sets a non-null scroll target",
+    "History navigation still resolves the requested original message",
+    "Bottom scrolling targets the footer and the action has explicit wording"
+  ],
+  "real_device_tested": false,
+  "method": "static regression guard"
+}

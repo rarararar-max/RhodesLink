@@ -630,10 +630,8 @@ ${text}"""
             val initialMessages = withTimeout(8_000L) { repository.getRecentMessagesSync(session.id, pageSize) }
             if (_currentSession.value?.id != session.id) return@launch
             mergeMessagesFromDatabase(initialMessages)
-            // LazyColumn starts at its spacer while data arrives asynchronously. Explicitly target
-            // the newest persisted row so opening a restored/large conversation never remains at
-            // the first visible page because the initial layout won the race.
-            _scrollToMessageId.value = initialMessages.lastOrNull()?.id
+            // Normal entry is positioned at the bottom by MessageList. Only explicit
+            // history/search navigation may set a message target.
             val databaseCount = withTimeout(8_000L) { repository.countMessages(session.id) }
             DebugLogger.log("PrivateChat/InitialMessagesLoaded", "sessionId=${session.id}, databaseCount=$databaseCount, recentCount=${initialMessages.size}, stateCount=${_messages.value.size}")
             messagesJob = viewModelScope.launch {
@@ -691,7 +689,8 @@ ${text}"""
             val initialMessages = withTimeout(8_000L) { repository.getRecentMessagesSync(session.id, pageSize) }
             if (_currentSession.value?.id != session.id) return selectionId
             mergeMessagesFromDatabase(initialMessages)
-            _scrollToMessageId.value = initialMessages.lastOrNull()?.id
+            // Normal entry is positioned at the bottom by MessageList. Only explicit
+            // history/search navigation may set a message target.
             val databaseCount = withTimeout(8_000L) { repository.countMessages(session.id) }
             DebugLogger.log("PrivateChat/InitialMessagesLoaded", "sessionId=${session.id}, databaseCount=$databaseCount, recentCount=${initialMessages.size}, stateCount=${_messages.value.size}, source=sync")
             messagesJob = viewModelScope.launch {

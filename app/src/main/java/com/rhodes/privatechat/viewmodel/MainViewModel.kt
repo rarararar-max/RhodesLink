@@ -461,7 +461,7 @@ class MainViewModel(
             .map { it.groupValues[1].trim() }
             .filter { it !in allowed }
             .distinct().sorted()
-            .map { "{{$it}} 当前不会自动替换，发送给 AI 时会保留原样。" }
+            .map { PromptPlaceholderRegistry.unsupportedWarning(it) }
         val reserved = when (type) {
             "private" -> setOf("状态", "心情", "位置", "私聊回合状态", "当前主线", "用户本轮作用", "本轮承接", "本轮新增推进", "主线状态", "未收束事项", "本轮简述", "旁白", "台词", "台詞")
             "group" -> setOf("群聊回合状态", "当前主线", "用户本轮作用", "本轮承接", "本轮新增推进", "主线状态", "下轮焦点", "本轮剧情简述", "旁白", "发言人", "台词", "台詞")
@@ -516,7 +516,7 @@ class MainViewModel(
         if (errors.isNotEmpty()) return errors
         val tokens = Regex("\\{\\{([^{}\\r\\n]+)\\}\\}").findAll(value).map { it.groupValues[1].trim() }.toSet()
         val warnings = tokens.filter { it !in PromptPlaceholderRegistry.allowed(type, mode) }
-            .sorted().map { "{{$it}} 当前不会自动替换，发送给 AI 时会保留原样。" }
+            .sorted().map { PromptPlaceholderRegistry.unsupportedWarning(it) }
         settings.savePromptModule(module, type, mode, value, PromptTemplates.VERSION)
         return warnings
     }

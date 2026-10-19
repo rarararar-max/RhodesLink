@@ -1,0 +1,12 @@
+{
+  "unit_tests": {
+    "tests": 266,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "group_runtime_assembly_sites": 1,
+  "shared_module_unchanged": true,
+  "real_device_tested": false,
+  "api_keys_used": false
+}

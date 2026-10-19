@@ -781,7 +781,7 @@ fun PromptEditorScreen(
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     Text(
-                        "每个模式都有独立的角色规则模板。模板不是发送给 AI 的全部内容：应用还会自动加入系统固定规则、运行时资料、历史 user/assistant 消息、本轮输入和输出协议。私聊用户本轮消息通常单独作为 user 消息发送；{{USER_MESSAGE}} 是群聊用户最新发言。占位符必须使用 {{大写英文_数字}} 格式，错误或不适用的占位符不能保存。",
+                        "每个模式都有独立的角色规则模板。模板不是发送给 AI 的全部内容：应用还会自动加入系统固定规则、运行时资料、历史 user/assistant 消息、本轮输入和输出协议。私聊用户本轮消息通常单独作为 user 消息发送；{{USER_MESSAGE}} 是群聊用户最新发言。占位符必须使用 {{大写英文_数字}} 格式，语法错误的占位符不能保存；未知占位符可以保存并保留原样，旧版兼容字段可能仍替换为默认值，请以保存提示为准。",
                         fontSize = 13.sp,
                         color = TextSecondary,
                         modifier = Modifier.padding(bottom = 8.dp)

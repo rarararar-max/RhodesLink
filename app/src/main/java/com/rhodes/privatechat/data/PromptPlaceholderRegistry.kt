@@ -2,6 +2,28 @@ package com.rhodes.privatechat.data
 
 /** Single source of truth for placeholders accepted by the template editor. */
 object PromptPlaceholderRegistry {
+    /** Legacy substitutions can still run outside a scene's supported data fields. */
+    val legacyCompatibilityKeys: Set<String> = setOf(
+        "MEMORY_INJECTION", "MEMORY_V2_CONTEXT", "GROUP_INJECTION", "INJECTION",
+        "GROUP_RELATION_HINTS", "RELATION_CONTEXT", "RELATION_SHARED_MEMORIES", "RELATION_RULES",
+        "OPERATOR_USER_RELATION", "MODE_RULES", "OUTPUT_FORMAT", "MIND_READ",
+        "HYPNOSIS", "PRIVATE_CONTINUITY_STATE", "TRANSITION_NOTICE", "PROACTIVE_TRIGGER_TYPE",
+        "PROACTIVE_TRIGGER_CONTEXT", "PROACTIVE_CURRENT_TIME", "PROACTIVE_LAST_USER_MESSAGE", "PROACTIVE_LAST_USER_TIME",
+        "PROACTIVE_LAST_AI_MESSAGE", "PROACTIVE_LAST_AI_TIME", "PROACTIVE_LAST_INTERACTION_TIME", "PROACTIVE_IDLE_DURATION",
+        "PROACTIVE_TIME_RELATION", "PROACTIVE_CONTEXT_MODE", "PROACTIVE_UNRESOLVED_TOPIC", "PROACTIVE_RECENT_HISTORY",
+        "USER_CONTENT", "SOURCE_AWARE_RULES", "KNOWN_FROM_CONTEXT", "GROUP_MODE_FORMAT",
+        "GROUP_PLOT_SUMMARY", "USER_OBSERVING", "AUTO_REASON", "AUTO_REASON_TEXT",
+        "MOMENT_TRIGGER_TYPE", "RECENT_POSTS", "RECENT_SOCIAL_CONTEXT", "RECENT_DAILY_SUMMARY",
+        "WORLD_TODAY_STATE", "PRIVATE_DAILY_SUMMARY", "PRIVATE_SUMMARY", "GROUP_SUMMARIES",
+        "RECENT_MEMORIES", "SELF_STATUS_CHANGES", "RELATION_EVENTS",
+    )
+
+    fun unsupportedWarning(key: String): String = if (key in legacyCompatibilityKeys) {
+        "{{$key}} 是旧版兼容字段；当前场景未声明提供该资料，运行时仍可能替换为默认值（如“无”）或兼容资料。请优先使用当前场景列出的占位符。"
+    } else {
+        "{{$key}} 当前不会自动替换，发送给 AI 时会保留原样。"
+    }
+
     private val private = setOf(
         "OPERATOR_NAME", "OPERATOR_TITLE", "OPERATOR_PERSONA", "OPERATOR_GENDER",
         "USER_NAME", "USER_GENDER", "USER_BIO", "CURRENT_TIME", "CURRENT_DATE",

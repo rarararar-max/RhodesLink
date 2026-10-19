@@ -26,7 +26,7 @@ internal object CachePromptLayering {
         "USER_RELATION" to "与用户的关系",
         "PRIVATE_CONTINUITY_STATE" to "当前对话进展",
         "MEMORY_V2_CONTEXT" to "可能相关的过往经历",
-        "MEMORY_ANCHORS" to "可能相关的过往经历",
+        "MEMORY_ANCHORS" to "最近记住的事",
         "SOURCE_AWARE_MEMORIES" to "可能相关的背景",
         "GROUP_CONTEXT" to "从群聊得知的近况",
         "GROUP_SUMMARY" to "最近群聊进展",
@@ -72,12 +72,18 @@ internal object CachePromptLayering {
                 else -> value
             }
         }
+        val runtime = runtimeContext(template, replacements, dynamicKeys)
+        return SharedUtils.CachePromptLayers(render(stableReplacements), runtime.ifBlank { "【本轮资料】\n暂无与本轮相关的补充资料。" })
+    }
+
+    fun runtimeContext(template: String, replacements: Map<String, String>, dynamicKeys: Set<String>, excluded: Set<String> = emptySet(), deduplicateAliases: Boolean = false): String {
         val referencedKeys = placeholderPattern.findAll(template).map { it.groupValues[1] }.toSet()
-        val runtime = dynamicKeys.intersect(referencedKeys).sorted().mapNotNull { key ->
+        val seenAliases = mutableSetOf<Pair<String, String>>()
+        return (dynamicKeys.intersect(referencedKeys) - excluded).sorted().mapNotNull { key ->
             replacements[key]?.takeIf { it.isNotBlank() && key !in setOf("USER_CONTENT", "USER_MESSAGE") }
+                ?.takeIf { value -> !deduplicateAliases || GroupRuntimeContext.claimAlias(seenAliases, key, value) }
                 ?.let { "【${runtimeLabel(key)}】\n$it" }
         }.joinToString("\n")
-        return SharedUtils.CachePromptLayers(render(stableReplacements), runtime.ifBlank { "【本轮资料】\n暂无与本轮相关的补充资料。" })
     }
 }
 

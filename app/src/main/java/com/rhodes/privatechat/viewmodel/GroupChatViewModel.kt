@@ -1372,7 +1372,7 @@ class GroupChatViewModel(
                                     "- ${entry.key}=${entry.emotion}" + if (entry.inherited) "（沿用上一轮）" else ""
                                 }
                 }.orEmpty()
-                val templateRuntimeContext = if (isCustomTemplate) promptLayers.runtimeContext else ""
+
                 val renderedTemplate = promptLayers.system
                 // "auto" selects the continuation template, while behavior must follow the
                 // actual interaction medium so online groups never receive offline narration rules.
@@ -1464,6 +1464,21 @@ class GroupChatViewModel(
                     val rounds = kept.filter { it.type != "system" }.chunkedByGroupRound().size
                     return "设置回看=${settings.historyMessages}轮，实际历史=$rounds 轮，历史消息=$remainingHistoryCount 条，附加消息=${apiMessages.size - remainingHistoryCount}条（厂商可能合并同角色消息，重试另计）"
                 }
+                val runtimeContext = com.rhodes.privatechat.viewmodel.shared.GroupRuntimeContext.build(
+                    continuity = groupContinuityBlock,
+                    customRuntime = settings.getCustomPromptModuleOrNull("runtime", "group", templateMode),
+                    naturalRuntime = naturalRuntimeContext,
+                    replacements = grpReplacements,
+                    render = { sharedUtils.applyTemplate(it, grpReplacements) },
+                    memberIdentifiers = activeMembers.sortedBy { it.id }.joinToString("；") { "${it.name}=${it.id}" },
+                    templateRuntime = { excluded ->
+                        if (isCustomTemplate) com.rhodes.privatechat.viewmodel.shared.CachePromptLayering.runtimeContext(
+                            grpTpl, grpReplacements,
+                            com.rhodes.privatechat.data.PromptPlaceholderRegistry.runtimeKeys("group", templateMode),
+                            excluded, deduplicateAliases = true,
+                        ) else ""
+                    },
+                )
                 if (!isAuto) {
                     val userMsg = when {
                         autoSpeak -> "（群聊已空闲一段时间，干员们自然地闲聊起来，无需等待用户发言。）"
@@ -1472,11 +1487,7 @@ class GroupChatViewModel(
                     }
                     val transitionContext = pendingModeTransition.takeIf { it.isNotBlank() }
                         ?.let { "【本轮互动变化】\n$it\n请从本轮开始按这项变化自然回应。\n" }.orEmpty()
-                    val memberRoster = "【当前成员与发言标识】\n$memberProfiles"
-                      val customRuntime = settings.getCustomPromptModuleOrNull("runtime", "group", templateMode)
-                          ?.let { sharedUtils.applyTemplate(it, grpReplacements) }
-                    val runtimeContext = listOf(groupContinuityBlock, customRuntime ?: naturalRuntimeContext, memberRoster, templateRuntimeContext)
-                        .filter { it.isNotBlank() }.joinToString("\n\n")
+
                     val hasManualRuntimeContext = (transitionContext + runtimeContext).isNotBlank()
                     // A mode transition belongs to this turn, not to the cacheable system prefix.
                     if (hasManualRuntimeContext) apiMessages.add(AiMessage("user", "$transitionContext$runtimeContext".trim()))
@@ -1487,18 +1498,8 @@ class GroupChatViewModel(
                     }
                 } else if (pendingModeTransition.isNotBlank()) {
                     // Auto turns still need the transition, but it must not destabilize the system prefix.
-                    val memberRoster = "【当前成员与发言标识】\n$memberProfiles"
-                      val customRuntime = settings.getCustomPromptModuleOrNull("runtime", "group", templateMode)
-                          ?.let { sharedUtils.applyTemplate(it, grpReplacements) }
-                    val runtimeContext = listOf(groupContinuityBlock, customRuntime ?: naturalRuntimeContext, memberRoster, templateRuntimeContext)
-                        .filter { it.isNotBlank() }.joinToString("\n\n")
                     apiMessages.add(AiMessage("user", "【本轮互动变化】\n$pendingModeTransition\n请从本轮开始按这项变化自然回应。$runtimeContext"))
                 } else if (isAuto) {
-                    val memberRoster = "【当前成员与发言标识】\n$memberProfiles"
-                      val customRuntime = settings.getCustomPromptModuleOrNull("runtime", "group", templateMode)
-                          ?.let { sharedUtils.applyTemplate(it, grpReplacements) }
-                    val runtimeContext = listOf(groupContinuityBlock, customRuntime ?: naturalRuntimeContext, memberRoster, templateRuntimeContext)
-                        .filter { it.isNotBlank() }.joinToString("\n\n")
                     apiMessages.add(AiMessage("user", runtimeContext))
                 }
                 apiMessages.add(AiMessage("user", """

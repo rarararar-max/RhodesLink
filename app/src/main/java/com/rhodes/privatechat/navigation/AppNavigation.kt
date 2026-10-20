@@ -209,6 +209,10 @@ private fun ContactsTabContent(navigator: Navigator) {
 @Composable
 private fun FeaturesTabContent(navigator: Navigator) {
     val viewModel: MainViewModel = koinViewModel()
+    val newspaperSettings: com.rhodes.privatechat.shared.settings.SettingsRepository = org.koin.compose.koinInject()
+    val newspaperContext = LocalContext.current.applicationContext
+    val newspaperService = remember { com.rhodes.privatechat.newspaper.NewspaperService.get(newspaperContext, newspaperSettings) }
+    val newspaperState by newspaperService.state.collectAsState()
     var momentBadge by remember { mutableIntStateOf(0) }
     var commentBadge by remember { mutableIntStateOf(0) }
     var diaryBadge by remember { mutableIntStateOf(0) }
@@ -225,6 +229,12 @@ private fun FeaturesTabContent(navigator: Navigator) {
         momentBadge = momentBadge,
         commentBadge = commentBadge,
         diaryBadge = diaryBadge,
+        newspaperStatus = when {
+            newspaperState.running -> "正在购买报纸… 可稍后回来阅读"
+            newspaperState.error.isNotBlank() -> "购报未完成，点击查看"
+            newspaperState.stage == "本期已出版" -> "报纸已送达，点击阅读"
+            else -> "购买今日报纸，阅读泰拉见闻"
+        },
         onMoments = {
             // Keep navigation responsive when the shared database lane is busy. The immediate
             // local badge acknowledgement is followed by the durable checkpoint write.
@@ -237,6 +247,7 @@ private fun FeaturesTabContent(navigator: Navigator) {
             }
         },
         onDiary = { navigator.push(DiaryRoute) },
+        onNewspaper = { navigator.push(NewspaperRoute) },
         onRanking = { navigator.push(RankingRoute) },
         onImpressions = { navigator.push(ImpressionsRoute) },
         onDispatch = { navigator.push(DispatchRoute) },

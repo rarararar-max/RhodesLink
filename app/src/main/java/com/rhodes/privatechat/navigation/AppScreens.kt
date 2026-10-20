@@ -456,6 +456,15 @@ data object DiaryRoute : Screen {
     }
 }
 
+data object NewspaperRoute : Screen {
+    @Composable
+    override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        val settings: SettingsRepository = koinInject()
+        com.rhodes.privatechat.ui.newspaper.NewspaperScreen(settings, onBack = { navigator.pop() })
+    }
+}
+
 data object RankingRoute : Screen {
     @Composable
     override fun Content() {

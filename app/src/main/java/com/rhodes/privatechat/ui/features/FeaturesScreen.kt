@@ -61,6 +61,8 @@ fun FeaturesScreen(
     diaryBadge: Int = 0,
     onMoments: () -> Unit = {},
     onDiary: () -> Unit = {},
+    onNewspaper: () -> Unit = {},
+    newspaperStatus: String = "购买今日报纸，阅读泰拉见闻",
     onRanking: () -> Unit = {},
     onImpressions: () -> Unit = {},
     onDispatch: () -> Unit = {},
@@ -77,6 +79,7 @@ fun FeaturesScreen(
             WechatListGroup {
                 FeatureButton(FeatureEntry(Icons.Default.Share, "动态广场", "查看所有干员发布的动态", badge = momentBadge, iconColor = Color(0xFF07C160)), commentBadge = commentBadge, onClick = onMoments)
                 FeatureButton(FeatureEntry(Icons.AutoMirrored.Filled.MenuBook, "干员日记", "查看干员们的内心独白", badge = diaryBadge, iconColor = Color(0xFF1989FA)), diaryBadge = diaryBadge, onClick = onDiary)
+                FeatureButton(FeatureEntry(Icons.AutoMirrored.Filled.MenuBook, "泰拉见闻报", newspaperStatus, iconColor = Primary), onClick = onNewspaper)
                 FeatureButton(FeatureEntry(Icons.AutoMirrored.Filled.Assignment, "大家的印象", "干员对你的长期印象总结", iconColor = Color(0xFFFF9500)), onClick = onImpressions)
             }
             Spacer(Modifier.height(8.dp))

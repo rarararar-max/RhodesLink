@@ -1,0 +1,52 @@
+{
+  "date": "2026-10-20",
+  "search_calls": 3,
+  "cached_material_reuse": true,
+  "valid_sources": 8,
+  "model": "deepseek-flash",
+  "finish_reason": "stop",
+  "usage": {
+    "prompt_tokens": 5532,
+    "completion_tokens": 1222,
+    "total_tokens": 6754,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    },
+    "prompt_cache_hit_tokens": 0,
+    "prompt_cache_miss_tokens": 5532
+  },
+  "articles": [
+    {
+      "title": "社区敬老服务日走进移动城市老城区 助浴与送餐成高频需求",
+      "section": "今日头条",
+      "chars": 472,
+      "sourceIds": [
+        1
+      ]
+    },
+    {
+      "title": "轨道车站边角空间改造为便民服务点 通勤路上多了早餐与歇脚处",
+      "section": "世间百态",
+      "chars": 373,
+      "sourceIds": [
+        6
+      ]
+    },
+    {
+      "title": "轻量化无线介观显微镜问世 工造巡检与野外医疗或可用上便携设备",
+      "section": "技术与工造",
+      "chars": 408,
+      "sourceIds": [
+        4
+      ]
+    },
+    {
+      "title": "城际陆行运输节点增开敬老专线 秋末出行高峰实行分时接驳",
+      "section": "城际短讯",
+      "chars": 328,
+      "sourceIds": [
+        7
+      ]
+    }
+  ]
+}

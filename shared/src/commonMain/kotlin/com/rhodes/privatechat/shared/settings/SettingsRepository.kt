@@ -723,6 +723,22 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     val lmbFlow: Flow<Int> = flowSettings.getIntFlow("lmb", 1000)
 
+    /** Publish the purchase marker and wallet debit together after the edition file is durable. */
+    @Synchronized
+    fun purchaseNewspaper(date: String, price: Int): Boolean {
+        if (!Regex("\\d{4}-\\d{2}-\\d{2}(?:_[a-f0-9]{12})?").matches(date) || price <= 0 ||
+            runCatching { kotlinx.datetime.LocalDate.parse(date.take(10)) }.isFailure) return false
+        val marker = "newspaper_purchased_$date"
+        if (settings.getString(marker, "") == "paid") return true
+        val balance = settings.getInt("lmb", 1000)
+        if (balance < price) return false
+        val backend = settings as? AtomicSettingsBatch ?: return false
+        return backend.commitSupportState(mapOf(marker to "paid"), mapOf("lmb" to balance - price))
+    }
+
+    fun isNewspaperPurchased(date: String): Boolean =
+        settings.getString("newspaper_purchased_$date", "") == "paid"
+
     var lmbRefreshDate: String
         get() = settings.getString("lmb_refresh_date", "")
         set(value) = settings.putString("lmb_refresh_date", value)

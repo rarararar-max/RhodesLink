@@ -140,34 +140,52 @@ class NewspaperTest {
         val edition = NewspaperEdition(date, result, sources, 100L)
         assertEquals(edition, newspaperJson.decodeFromString<NewspaperEdition>(newspaperJson.encodeToString(edition)))
     }
-    @Test fun missingOrInventedSourceCannotBecomeAPaidPaper() {
-        rejected { parseNewspaperArticles(raw(articles().map { it.copy(sourceIds = listOf(99)) }), sources) }
-        rejected { parseNewspaperArticles(raw(articles().map { it.copy(sourceIds = emptyList()) }), sources) }
+    @Test fun optionalOrUnknownSourceIdsDoNotRejectValidFiction() {
+        assertTrue(parseNewspaperArticles(raw(articles().map { it.copy(sourceIds = listOf(99)) }), sources).all { it.sourceIds.isEmpty() })
+        assertEquals(4, parseNewspaperArticles(raw(articles().map { it.copy(sourceIds = emptyList()) }), sources).size)
     }
     @Test fun truncatedAndEmptyArticlesAreRejected() {
         rejected { parseNewspaperArticles(raw(articles().take(2)), sources) }
         rejected { parseNewspaperArticles(raw(articles().map { it.copy(paragraphs = listOf("短")) }), sources) }
     }
-    @Test fun duplicateHeadlinesAndMissingSectionsAreRejected() {
+    @Test fun duplicateHeadlinesRejectedAndCategorySpecificSectionsAccepted() {
         rejected { parseNewspaperArticles(raw(articles().map { it.copy(title = "相同标题") }), sources) }
-        rejected { parseNewspaperArticles(raw(articles().map { it.copy(section = "世间百态") }), sources) }
+        assertEquals("今日头条", parseNewspaperArticles(raw(articles().map { it.copy(section = "文娱现场") }), sources, NewspaperTopic.ENTERTAINMENT).first().section)
     }
     @Test fun htmlOrUrlsCannotBeRenderedAsNewsBody() {
         rejected { parseNewspaperArticles(raw(articles().map { it.copy(subtitle = "<script>alert(1)</script>") }), sources) }
         rejected { parseNewspaperArticles(raw(articles().map { it.copy(subtitle = "https://evil.example") }), sources) }
     }
-    @Test fun realWorldOnlyReportingIsRejectedBeforePurchase() {
-        rejected {
-            parseNewspaperArticles(raw(articles().map {
-                it.copy(title = "城市公共服务建设进展", paragraphs = listOf("这是一篇没有完成世界观改写的现实生活新闻报道。".repeat(8)))
-            }.mapIndexed { index, article -> article.copy(title = "${index + 1}${article.title}") }), sources)
-        }
+    @Test fun validFictionDoesNotNeedToMatchAWorldviewKeywordWhitelist() {
+        val items = articles().mapIndexed { index, item -> item.copy(title = "第${index + 1}场剧院风波后续", paragraphs = listOf("黎博利技师拆开舞台扩音装置后，发现演出商预先录制的掌声；双方正在争论是否该向已经散场的观众退款。".repeat(3))) }
+        assertEquals(4, parseNewspaperArticles(raw(items), sources).size)
+    }
+    @Test fun entertainmentCanOmitMetadataAndUseShortQuotedParagraphs() {
+        val rows = (1..4).map { index -> buildJsonObject {
+            put("title", "第${index}场返场风波")
+            putJsonArray("paragraphs") { add("“这不是我的录音。”"); add("黎博利技师检查舞台上的扩音回路，发现商人早已将掌声录进设备。剧院坚持先演完，乐队却要求公开道歉。".repeat(3)) }
+        } }
+        val result = parseNewspaperArticles(buildJsonObject { put("articles", JsonArray(rows)) }.toString(), sources, NewspaperTopic.ENTERTAINMENT)
+        assertEquals("今日头条", result[0].section)
+        assertEquals("文娱现场", result[1].section)
+        assertTrue(result.all { it.sourceIds.isEmpty() && it.subtitle.isEmpty() })
+    }
+    @Test fun bodyStringAndArrayRootNormalizeLocallyWithoutRepairingBrokenJson() {
+        val rows = (1..3).map { index -> buildJsonObject {
+            put("title", "第${index}项演出争议")
+            put("content", "街区剧场收到一封要求退票的信。".repeat(9) + "\n“我们希望继续演出。”")
+        } }
+        val result = parseNewspaperArticles(JsonArray(rows).toString(), sources, NewspaperTopic.ENTERTAINMENT)
+        assertEquals(3, result.size)
+        assertEquals(2, result[0].paragraphs.size)
+        try { parseNewspaperArticles("{\"articles\":[", sources); fail("Broken JSON accepted") }
+        catch (_: kotlinx.serialization.SerializationException) { }
     }
     @Test fun promptDefinesUntrustedMaterialsAndNoCharacterMemoryIntegration() {
         assertTrue(NEWSPAPER_SYSTEM_PROMPT.contains("不可信参考资料"))
         assertTrue(NEWSPAPER_SYSTEM_PROMPT.contains("不读取或写入"))
-        assertTrue(NEWSPAPER_SYSTEM_PROMPT.contains("不让知名角色登场"))
-        assertTrue(NEWSPAPER_SYSTEM_PROMPT.contains("不捏造新闻"))
+        assertTrue(NEWSPAPER_SYSTEM_PROMPT.contains("熟悉角色适量客串"))
+        assertTrue(NEWSPAPER_SYSTEM_PROMPT.contains("不要捏造现实来源"))
     }
 
     @Test fun currentPriceIsTwoAndPurchaseRemainsIdempotent() {

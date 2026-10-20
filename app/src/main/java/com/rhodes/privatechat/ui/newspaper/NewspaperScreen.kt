@@ -22,7 +22,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -143,7 +142,7 @@ fun NewspaperScreen(settings: SettingsRepository, onBack: () -> Unit) {
                             Text(formatPaperDate(edition?.date ?: today), color = TextSecondary, fontSize = 11.sp, modifier = Modifier.weight(1f))
                             Text("${edition?.let { NewspaperTopic.from(it.topic).label } ?: "今日"} 刊", color = TextSecondary, fontSize = 11.sp)
                         }
-                        Text("社会见闻   /   技术与工造   /   城际短讯", color = TextSecondary,
+                        Text("街巷见闻   /   势力风云   /   泰拉故事", color = TextSecondary,
                             fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
                         Spacer(Modifier.height(10.dp))
                         Text(NEWSPAPER_DISCLAIMER, color = TextTertiary, fontSize = 11.sp,
@@ -271,7 +270,7 @@ fun NewspaperScreen(settings: SettingsRepository, onBack: () -> Unit) {
                             color = TextTertiary, fontSize = 11.sp)
                     }
                     itemsIndexed(edition.articles, key = { index, _ -> "${edition.id}-$index" }) { index, article ->
-                        NewspaperArticleView(article, index, edition, fontSize)
+                        NewspaperArticleView(article, index, fontSize)
                     }
                     item {
                         Column(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
@@ -280,6 +279,7 @@ fun NewspaperScreen(settings: SettingsRepository, onBack: () -> Unit) {
                                 modifier = Modifier.fillMaxWidth().padding(18.dp), textAlign = TextAlign.Center)
                             Button(onClick = { selected = null; showPurchase = true }, enabled = !state.running, modifier = Modifier.fillMaxWidth(),
                                 colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary)) { Text("再来一份 · ${NewspaperService.PRICE} 龙门币") }
+                            NewspaperInspirationView(edition)
                             Text("$NEWSPAPER_DISCLAIMER\n再次阅读无需重新购买。", color = TextTertiary, fontSize = 11.sp, lineHeight = 19.sp)
                         }
                     }
@@ -292,10 +292,7 @@ fun NewspaperScreen(settings: SettingsRepository, onBack: () -> Unit) {
 }
 
 @Composable
-private fun NewspaperArticleView(article: NewspaperArticle, index: Int, edition: NewspaperEdition, bodySize: Int) {
-    var sourcesOpen by rememberSaveable(edition.id, index) { mutableStateOf(false) }
-    val uriHandler = LocalUriHandler.current
-    var linkError by remember { mutableStateOf("") }
+private fun NewspaperArticleView(article: NewspaperArticle, index: Int, bodySize: Int) {
     Column(Modifier.fillMaxWidth().background(Surface).padding(20.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("%02d".format(index + 1), color = Primary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
@@ -315,24 +312,23 @@ private fun NewspaperArticleView(article: NewspaperArticle, index: Int, edition:
                     modifier = Modifier.padding(top = 16.dp))
             }
         }
-        TextButton(onClick = { sourcesOpen = !sourcesOpen }, contentPadding = PaddingValues(top = 12.dp)) {
-            Text(if (sourcesOpen) "收起现实来源 －" else "查看现实来源 ＋", color = Primary, fontSize = 12.sp)
+    }
+}
+
+@Composable
+private fun NewspaperInspirationView(edition: NewspaperEdition) {
+    var expanded by rememberSaveable(edition.id) { mutableStateOf(false) }
+    if (edition.sources.isNotEmpty()) {
+        TextButton(onClick = { expanded = !expanded }) {
+            Text(if (expanded) "收起现实灵感素材 －" else "现实灵感素材 ＋", color = Primary, fontSize = 12.sp)
         }
-        if (sourcesOpen) {
-            Text("以下为现实新闻来源；上方报道已作同人改编。", color = TextTertiary, fontSize = 11.sp, lineHeight = 18.sp)
-            edition.sources.filter { it.id in article.sourceIds }.forEach { source ->
-                TextButton(onClick = {
-                    runCatching { if (safeNewsUrl(source.url)) uriHandler.openUri(source.url) }
-                        .onFailure { linkError = "无法打开链接，请导出报纸后查看来源地址" }
-                }, contentPadding = PaddingValues(vertical = 5.dp)) {
-                    Column(Modifier.fillMaxWidth()) {
-                        Text(source.title, color = Primary, fontSize = 12.sp, lineHeight = 20.sp)
-                        Text("${source.site} · ${source.publishedAt.take(10)}（来源标注）",
-                            color = TextTertiary, fontSize = 10.sp)
-                    }
-                }
+        if (expanded) {
+            Text("以下仅为本期创作灵感，不与虚构情节逐项对应。", color = TextTertiary, fontSize = 11.sp)
+            edition.sources.forEach { source ->
+                Text("• ${source.title}\n${source.site} · ${source.publishedAt.take(10)}", color = TextSecondary,
+                    fontSize = 12.sp, lineHeight = 19.sp, modifier = Modifier.padding(vertical = 6.dp))
             }
-            if (linkError.isNotBlank()) Text(linkError, color = ErrorRed, fontSize = 11.sp)
+            Text("完整素材地址可随报纸导出。", color = TextTertiary, fontSize = 11.sp)
         }
     }
 }
@@ -379,9 +375,9 @@ private fun exportNewspaper(edition: NewspaperEdition): String = buildString {
     edition.articles.forEach {
         appendLine("\n【${it.section}】${it.title}\n${it.subtitle}\n")
         appendLine(it.paragraphs.joinToString("\n\n"))
-        appendLine("\n现实来源：")
-        edition.sources.filter { source -> source.id in it.sourceIds }.forEach { source ->
-            appendLine("${source.title} · ${source.site} · ${source.publishedAt}\n${source.url}")
-        }
+    }
+    appendLine("\n【本期现实灵感素材】仅作创作灵感，不与虚构情节逐项对应。")
+    edition.sources.forEach { source ->
+        appendLine("${source.title} · ${source.site} · ${source.publishedAt}\n${source.url}")
     }
 }

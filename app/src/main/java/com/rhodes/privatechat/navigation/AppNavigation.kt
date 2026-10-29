@@ -268,6 +268,7 @@ private fun SettingsTabContent(navigator: Navigator) {
         userAvatarUri = profile.avatarUri,
         onProfile = { navigator.push(ProfileSettingsRoute) },
         onAppearance = { navigator.push(AppearanceSettingsRoute) },
+        onStartup = { navigator.push(StartupSettingsRoute) },
         onModel = { navigator.push(ModelSettingsRoute) },
         onChatParams = { navigator.push(ChatSettingsRoute) },
         onMemory = { navigator.push(MemorySettingsRoute) },

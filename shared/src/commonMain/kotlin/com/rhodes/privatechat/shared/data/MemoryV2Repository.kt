@@ -374,8 +374,9 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
                     kotlinx.serialization.json.Json.parseToJsonElement(item.rawJson).let { it as? kotlinx.serialization.json.JsonObject }
                         ?.get("sourceMessageIds") as? kotlinx.serialization.json.JsonArray
                 }.getOrNull()
-                // Old records do not have message-level evidence. Retain but conservatively invalidate them.
-                evidence == null || evidence.any { it.toString().trim('"').toLongOrNull() == messageId }
+                // Records without message-level evidence cannot be proven to depend on the recalled message.
+                // Keep them active; only explicitly linked evidence is safe to invalidate.
+                evidence?.any { it.toString().trim('"').toLongOrNull() == messageId } == true
             }
             val pending = ArrayDeque<Long>()
             affected.forEach { id ->

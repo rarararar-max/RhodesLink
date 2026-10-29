@@ -472,7 +472,8 @@ class GroupChatViewModel(
             repository.getShortTermMemory(sessionId)?.let { old ->
                 settings.putString("context_rebuild_previous_summary_$sessionId", old.content)
             }
-            repository.deleteShortTermMemory(sessionId)
+            // Keep the previous summary visible while repair runs. It is replaced only after
+            // summary generation succeeds, so a failed/background repair cannot erase context.
             settings.putString("context_rebuild_changed_$sessionId", "")
             com.rhodes.privatechat.automation.ContextMaintenanceScheduler.schedule(context, sessionId, true)
         }
@@ -493,7 +494,6 @@ class GroupChatViewModel(
                 settings.putMemoryExtractionCursor(session.id, 0L)
                 settings.putSummaryCursor(session.id, 0L)
                 repository.memoryV2.invalidateChangedMessage(session.id, changedId)
-                repository.deleteShortTermMemory(session.id)
                 settings.putString("context_rebuild_changed_${session.id}", "")
             }
             if (settings.memoryV2Enabled && settings.groupMemoryGenerationEnabled) {

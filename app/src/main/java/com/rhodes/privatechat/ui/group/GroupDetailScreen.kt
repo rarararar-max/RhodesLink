@@ -141,43 +141,49 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
     fun senderAvatar(name: String): String = allOperators.find { it.id == name || it.name == name }?.avatarUri ?: ""
 
     // 使用 MessageParser 将原始消息转换为统一 UI 模型
-    val uiMessages = remember(groupId, groupMessages, allOperators, profile, groupRestartAt) {
-        // 群聊成员心情回退：最新一轮缺心情时先取群聊回合状态的【成员心情】快照（6 小时窗口内）。
-        // 存档隔离：剧情存档上下文不跨存档回退（与私聊 archiveContextActive 同一套判断）。
-        val emotionSeed: ((String, String, Long) -> String)? = runCatching {
-            if (settings.getBoolean("archive_context_active_$groupId", false)) return@runCatching null
-            val state = settings.getGroupTurnState(groupId)
-            val snapshot = GroupEmotionRules.parseEmotionSnapshot(state?.memberEmotions.orEmpty())
-            val snapshotAtMs = state?.updatedAt ?: 0L
-            if (snapshot.isEmpty() || snapshotAtMs <= 0L) null
-            else { speakerId: String, speakerName: String, atMs: Long ->
-                if (!GroupEmotionRules.isFallbackWithinWindow(atMs, snapshotAtMs)) ""
-                else listOf(speakerId.trim(), speakerName.trim())
-                    .filter { it.isNotBlank() }
-                    .firstNotNullOfOrNull { snapshot[it] }
-                    .orEmpty()
-            }
-        }.getOrNull()
-        try {
-            val parsed = MessageParser.parse(
-                messages = groupMessages,
-                isGroup = true,
-                senderColor = senderColor,
-                senderAvatar = ::senderAvatar,
-                userAvatarUri = profile.avatarUri,
-                restartAt = groupRestartAt,
-                groupEmotionSeed = emotionSeed
-            )
-            val safeParsed = if (parsed.isEmpty() && groupMessages.isNotEmpty()) {
-                com.rhodes.privatechat.util.DebugLogger.diagnostic("GroupChat/ParseFallback", "groupId=$groupId,rawCount=${groupMessages.size},reason=empty_parse_result")
+    val parsedGroupState = remember(groupId, groupRestartAt) { mutableStateOf(emptyList<ChatUiMessage>()) }
+    val uiMessages by parsedGroupState
+    LaunchedEffect(groupId, groupMessages, allOperators, profile.avatarUri, groupRestartAt, Primary) {
+        parsedGroupState.value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            // 群聊成员心情回退：最新一轮缺心情时先取群聊回合状态的【成员心情】快照（6 小时窗口内）。
+            // 存档隔离：剧情存档上下文不跨存档回退（与私聊 archiveContextActive 同一套判断）。
+            val emotionSeed: ((String, String, Long) -> String)? = runCatching {
+                if (settings.getBoolean("archive_context_active_$groupId", false)) return@runCatching null
+                val state = settings.getGroupTurnState(groupId)
+                val snapshot = GroupEmotionRules.parseEmotionSnapshot(state?.memberEmotions.orEmpty())
+                val snapshotAtMs = state?.updatedAt ?: 0L
+                if (snapshot.isEmpty() || snapshotAtMs <= 0L) null
+                else { speakerId: String, speakerName: String, atMs: Long ->
+                    if (!GroupEmotionRules.isFallbackWithinWindow(atMs, snapshotAtMs)) ""
+                    else listOf(speakerId.trim(), speakerName.trim())
+                        .filter { it.isNotBlank() }
+                        .firstNotNullOfOrNull { snapshot[it] }
+                        .orEmpty()
+                }
+            }.getOrNull()
+            try {
+                val parsed = MessageParser.parse(
+                    messages = groupMessages,
+                    isGroup = true,
+                    senderColor = senderColor,
+                    senderAvatar = ::senderAvatar,
+                    userAvatarUri = profile.avatarUri,
+                    restartAt = groupRestartAt,
+                    groupEmotionSeed = emotionSeed
+                )
+                val safeParsed = if (parsed.isEmpty() && groupMessages.isNotEmpty()) {
+                    com.rhodes.privatechat.util.DebugLogger.diagnostic("GroupChat/ParseFallback", "groupId=$groupId,rawCount=${groupMessages.size},reason=empty_parse_result")
+                    MessageParser.fallbackMessages(groupMessages, isGroup = true, senderColor = senderColor, senderAvatar = ::senderAvatar, userAvatarUri = profile.avatarUri, restartAt = groupRestartAt)
+                } else parsed
+                ChatTrace.d("GroupScreen", "parsed group=$groupId raw=${groupMessages.size} parsed=${parsed.size}")
+                safeParsed
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                ChatTrace.e("GroupScreen", "parse.ERROR group=$groupId raw=${groupMessages.size} err=${e.message}", e)
+                com.rhodes.privatechat.util.DebugLogger.diagnostic("GroupChat/ParseFallback", "groupId=$groupId,rawCount=${groupMessages.size},error=${e.javaClass.simpleName}")
                 MessageParser.fallbackMessages(groupMessages, isGroup = true, senderColor = senderColor, senderAvatar = ::senderAvatar, userAvatarUri = profile.avatarUri, restartAt = groupRestartAt)
-            } else parsed
-            ChatTrace.d("GroupScreen", "parsed group=$groupId raw=${groupMessages.size} parsed=${parsed.size}")
-            safeParsed
-        } catch (e: Exception) {
-            ChatTrace.e("GroupScreen", "parse.ERROR group=$groupId raw=${groupMessages.size} err=${e.message}", e)
-            com.rhodes.privatechat.util.DebugLogger.diagnostic("GroupChat/ParseFallback", "groupId=$groupId,rawCount=${groupMessages.size},error=${e.javaClass.simpleName}")
-            MessageParser.fallbackMessages(groupMessages, isGroup = true, senderColor = senderColor, senderAvatar = ::senderAvatar, userAvatarUri = profile.avatarUri, restartAt = groupRestartAt)
+            }
         }
     }
 

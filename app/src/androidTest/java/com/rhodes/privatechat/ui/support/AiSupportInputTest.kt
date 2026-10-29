@@ -17,7 +17,7 @@ class AiSupportInputTest {
         val draft = mutableStateOf("第二个问题")
 
         composeRule.setContent {
-            AiSupportInput(input = draft.value, busy = true, onInputChange = { draft.value = it }) { submitted++ }
+            AiSupportInput(input = draft.value, busy = true, onInputChange = { draft.value = it }, onSubmit = { submitted++ })
         }
 
         composeRule.onNodeWithText("第二个问题").assertTextEquals("第二个问题")

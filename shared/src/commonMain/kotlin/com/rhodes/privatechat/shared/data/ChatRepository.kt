@@ -340,6 +340,7 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     suspend fun deleteReplyTurnsBySession(sessionId: String) = replyTurns.deleteBySession(sessionId)
     /** Marks a turn terminal so it can never reply: its message belongs to another turn's batch. */
     suspend fun cancelReplyTurn(turnId: String, error: String) = replyTurns.cancel(turnId, error)
+    suspend fun cancelReplyTurnForSource(sessionId: String, messageId: Long, error: String = "source_message_recalled") = replyTurns.cancelBySourceMessage(sessionId, messageId, error)
     /** Turns that still need a reply but lost their worker (crash / process death). */
     suspend fun retryableReplyTurnIds(since: Long, now: Long, limit: Long = 50L): List<String> =
         replyTurns.retryableTurnIds(since, now, limit)

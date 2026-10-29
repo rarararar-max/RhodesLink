@@ -136,6 +136,7 @@ private fun SkinPreview(skin: AppearanceSkin, selected: Boolean) {
         AppearanceSkin.ClassicDark -> PreviewColors(Color(0xFF1A1A1E), Color(0xFF2E2E32), Color(0xFF6B8CFF), Color(0xFF323238), Color(0xFFE8E8EC))
         AppearanceSkin.RhodesDay -> PreviewColors(Color(0xFFE7E9E8), Color(0xFFF9FAF7), Color(0xFFD96700), Color(0xFFE1E4E1), Color(0xFF1B2020))
         AppearanceSkin.RhodesNight -> PreviewColors(Color(0xFF15171C), Color(0xFF2A3039), Color(0xFFFF7800), Color(0xFF292F38), Color(0xFFE9ECE8))
+        AppearanceSkin.FrostedGlass -> PreviewColors(Color(0xFF101820), Color(0x9940505B), Color(0xFFFFA24A), Color(0x665B7180), Color(0xFFF1F6F7))
     }
     Box(
         modifier = Modifier
@@ -169,3 +170,4 @@ private fun SkinPreview(skin: AppearanceSkin, selected: Boolean) {
 }
 
 private data class PreviewColors(val background: Color, val surface: Color, val accent: Color, val input: Color, val foreground: Color)
+

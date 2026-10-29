@@ -57,7 +57,11 @@ fun ImageCropperDialog(
     var panX by remember { mutableFloatStateOf(0f) }
     var panY by remember { mutableFloatStateOf(0f) }
     var showUseOriginal by remember { mutableStateOf(false) }
-    val bitmap = remember(imageUri) { decodeSampledBitmap(context, imageUri, 1024) }
+    var imageLoaded by remember(imageUri) { mutableStateOf(false) }
+    val bitmap by androidx.compose.runtime.produceState<Bitmap?>(null, imageUri) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { decodeSampledBitmap(context, imageUri, 1024) }
+        imageLoaded = true
+    }
 
     fun confirmOriginal() {
         val safeUri = copyToCache(context, imageUri) ?: imageUri
@@ -67,6 +71,10 @@ fun ImageCropperDialog(
 
     Dialog(onDismissRequest = onCancel) {
         Box(modifier = Modifier.fillMaxWidth().background(Color(0xFF1C1C1E)).padding(8.dp)) {
+            if (!imageLoaded) {
+                Text("正在加载图片…", color = Color.White, modifier = Modifier.padding(16.dp))
+                return@Dialog
+            }
             if (bitmap == null) {
                 androidx.compose.foundation.layout.Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
                     Text("加载图片失败", color = Color.White, modifier = Modifier.padding(bottom = 12.dp))
@@ -77,7 +85,7 @@ fun ImageCropperDialog(
                 }
                 return@Dialog
             }
-            val bmp = bitmap
+            val bmp = bitmap ?: return@Dialog
             var viewSize by remember { mutableStateOf(IntSize.Zero) }
             Box(
                 modifier = Modifier.fillMaxWidth().height(450.dp).background(Color.Black)

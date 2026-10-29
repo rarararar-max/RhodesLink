@@ -10,7 +10,16 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.collectAsState
+import androidx.compose.foundation.background
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.activity.enableEdgeToEdge
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 import androidx.core.content.FileProvider
 import com.rhodes.privatechat.navigation.AppNavigation
 import com.rhodes.privatechat.notification.RhodesAppVisibility
@@ -28,20 +37,30 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 class MainActivity : ComponentActivity() {
+    private var showStartup by androidx.compose.runtime.mutableStateOf(false)
+    private var startupSound = false
     private var imageResultHandler: ((String) -> Unit)? = null
     private var pendingCameraUri: Uri? = null
     private var pendingTakePhotoHandler: ((String) -> Unit)? = null
     private var pendingMicrophoneHandler: ((Boolean) -> Unit)? = null
 
     private val pickImageLauncher = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        uri?.let { imageResultHandler?.invoke(copyChatImageToFiles(it).toString()) }
+        val handler = imageResultHandler
         imageResultHandler = null
+        if (uri != null && handler != null) lifecycleScope.launch {
+            val copied = withContext(Dispatchers.IO) { copyChatImageToFiles(uri) }
+            handler(copied.toString())
+        }
     }
     private val takePictureLauncher = registerForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
         val uri = pendingCameraUri
-        if (ok && uri != null) pendingTakePhotoHandler?.invoke(copyChatImageToFiles(uri).toString())
+        val handler = pendingTakePhotoHandler
         pendingCameraUri = null
         pendingTakePhotoHandler = null
+        if (ok && uri != null && handler != null) lifecycleScope.launch {
+            val copied = withContext(Dispatchers.IO) { copyChatImageToFiles(uri) }
+            handler(copied.toString())
+        }
     }
     private val cameraPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         val handler = pendingTakePhotoHandler ?: return@registerForActivityResult
@@ -57,11 +76,11 @@ class MainActivity : ComponentActivity() {
         val shouldDropSavedState = consumeDropSavedStateFlag()
         super.onCreate(if (shouldDropSavedState) null else savedInstanceState)
         val settings: SettingsRepository by inject(SettingsRepository::class.java)
+        val opening = com.rhodes.privatechat.ui.startup.StartupPreferences(this)
+        startupSound = opening.sound
+        showStartup = opening.claim(savedInstanceState != null, isDirectEntry(intent))
         current = this
         RhodesNotificationCenter.ensureChannels(this)
-        if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
-        }
         currentAppearanceSkin = AppearanceSkin.fromStorage(settings.appearanceSkin, settings.darkMode)
         isDarkMode = currentAppearanceSkin.isDark
         window.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
@@ -71,7 +90,33 @@ class MainActivity : ComponentActivity() {
         )
         setContent {
             罗德岛终端Theme {
-                AppNavigation()
+                val app = application as RhodesApplication
+                val databaseReady by app.databaseReady.collectAsState()
+                val databaseError by app.databaseError.collectAsState()
+                androidx.compose.runtime.LaunchedEffect(showStartup, databaseReady) {
+                    if (!showStartup && databaseReady && android.os.Build.VERSION.SDK_INT >= 33 &&
+                        checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                        notificationPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                }
+                androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) {
+                    if (databaseReady) AppNavigation() else {
+                        androidx.compose.foundation.layout.Column(
+                            androidx.compose.ui.Modifier.fillMaxSize().background(com.rhodes.privatechat.ui.theme.BG),
+                            verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+                            horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally
+                        ) {
+                            if (databaseError) {
+                                androidx.compose.material3.Text("本地数据暂时未能打开，请重试。", color = com.rhodes.privatechat.ui.theme.TextPrimary)
+                                androidx.compose.material3.TextButton(onClick = { app.prepareDatabase() }) { androidx.compose.material3.Text("重试") }
+                            } else {
+                                androidx.compose.material3.CircularProgressIndicator(color = com.rhodes.privatechat.ui.theme.Primary)
+                                androidx.compose.material3.Text("正在准备通讯端…", color = com.rhodes.privatechat.ui.theme.TextSecondary)
+                            }
+                        }
+                    }
+                    if (showStartup) com.rhodes.privatechat.ui.startup.TerminalStartup(startupSound) { showStartup = false }
+                }
             }
         }
         publishNavigationIntent(intent)
@@ -108,6 +153,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (isDirectEntry(intent)) showStartup = false
         publishNavigationIntent(intent)
     }
 
@@ -189,6 +235,10 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+        private fun isDirectEntry(intent: android.content.Intent?): Boolean =
+            !intent?.getStringExtra("nav_session_id").isNullOrBlank() || intent?.data != null ||
+                intent?.action == android.content.Intent.ACTION_SEND || intent?.action == android.content.Intent.ACTION_SEND_MULTIPLE
+
         data class NavigationRequest(val sessionId: String, val isGroup: Boolean, val nonce: Long)
         private val _navigationRequest = MutableStateFlow<NavigationRequest?>(null)
         val navigationRequest = _navigationRequest.asStateFlow()

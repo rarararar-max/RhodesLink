@@ -99,7 +99,10 @@ fun ChatInputBar(
     }
 
     val terminal = isRhodesTerminal
-    Column(modifier = modifier.fillMaxWidth().background(ElevatedSurface.copy(alpha = 0.96f)).border(1.dp, Stroke)) {
+    Column(modifier = modifier.fillMaxWidth()
+        .clip(if (isFrostedGlass) RoundedCornerShape(28.dp) else RoundedCornerShape(0.dp))
+        .background(if (isFrostedGlass) Brush.verticalGradient(listOf(Color(0xBFFFFFFF), Color(0x66FFFFFF))) else Brush.verticalGradient(listOf(ElevatedSurface.copy(alpha = 0.96f), ElevatedSurface.copy(alpha = 0.96f))))
+        .border(1.dp, Stroke)) {
         if (terminal) {
             Row(Modifier.fillMaxWidth().height(2.dp)) {
                 Box(Modifier.weight(0.18f).fillMaxWidth().background(Primary))
@@ -167,7 +170,7 @@ fun ChatInputBar(
                     onTextChange(newValue.text)
                 }, modifier = Modifier.weight(1f),
                 placeholder = { Text(placeholder, fontSize = 14.sp, color = TextTertiary) },
-                shape = if (terminal) TerminalPanelShape else RoundedCornerShape(20.dp), singleLine = false, enabled = true,
+                shape = if (terminal && !isFrostedGlass) TerminalPanelShape else RoundedCornerShape(24.dp), singleLine = false, enabled = true,
                 minLines = 1, maxLines = 4,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
                 keyboardActions = KeyboardActions(onAny = { /* 不做任何事，防止键盘收起 */ }),

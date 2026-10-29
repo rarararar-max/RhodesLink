@@ -185,6 +185,7 @@ fun ChatScreen(
 ) {
     val settings: SettingsRepository = koinInject()
     val rawMessages by viewModel.messages.collectAsState()
+    val browsingHistory by viewModel.chatViewModel.browsingHistory.collectAsState()
     val isLoadingOlder by viewModel.isLoadingOlderMessages.collectAsState()
     val hasMoreMessages by viewModel.hasMoreMessages.collectAsState()
     val inputText by viewModel.inputText.collectAsState()
@@ -263,17 +264,45 @@ fun ChatScreen(
     }
 
     // 使用 MessageParser 将原始消息转换为统一 UI 模型
-    val messages = remember(rawMessages, op, userProfile, sessionRestartAt) {
-        try {
-            val parsed = MessageParser.parse(
-                messages = rawMessages,
-                isGroup = false,
-                aiName = op.name,
-                aiAvatarUri = op.avatarUri,
-                userAvatarUri = userProfile.avatarUri,
-                restartAt = sessionRestartAt
-            )
-            val safeParsed = if (parsed.isEmpty() && rawMessages.isNotEmpty()) {
+    val parseCache = remember(displaySessionId, op.name, op.avatarUri, userProfile.avatarUri, sessionRestartAt, Primary, TextTertiary) {
+        com.rhodes.privatechat.util.IncrementalMessageCache<Long, com.rhodes.privatechat.shared.model.ChatMessage, List<com.rhodes.privatechat.ui.chat.model.ChatUiMessage>>()
+    }
+    val parsedState = remember(displaySessionId, parseCache) { mutableStateOf(emptyList<com.rhodes.privatechat.ui.chat.model.ChatUiMessage>()) }
+    val messages by parsedState
+    LaunchedEffect(rawMessages, parseCache) {
+        parsedState.value = withContext(Dispatchers.Default) {
+            try {
+                val parsed = parseCache.map(rawMessages, { it.id }) { source ->
+                    MessageParser.parse(
+                        messages = listOf(source),
+                        isGroup = false,
+                        aiName = op.name,
+                        aiAvatarUri = op.avatarUri,
+                        userAvatarUri = userProfile.avatarUri,
+                        restartAt = sessionRestartAt
+                    )
+                }.flatten()
+                val safeParsed = if (parsed.isEmpty() && rawMessages.isNotEmpty()) {
+                    rawMessages.map { raw ->
+                        com.rhodes.privatechat.ui.chat.model.ChatUiMessage(
+                            id = raw.id,
+                            senderName = if (raw.isMe) "我" else op.name,
+                            senderColor = Primary,
+                            content = raw.content.take(1000),
+                            timestamp = raw.timestamp,
+                            isMe = raw.isMe,
+                            avatarUri = if (raw.isMe) userProfile.avatarUri else op.avatarUri,
+                            mode = raw.mode,
+                            originalMessageId = raw.id
+                        )
+                    }
+                } else parsed
+                ChatTrace.d("ChatScreen", "parsed op=${op.id} raw=${rawMessages.size} parsed=${safeParsed.size}")
+                safeParsed
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                ChatTrace.e("ChatScreen", "parse.ERROR op=${op.id} raw=${rawMessages.size} err=${e.message}", e)
                 rawMessages.map { raw ->
                     com.rhodes.privatechat.ui.chat.model.ChatUiMessage(
                         id = raw.id,
@@ -287,23 +316,6 @@ fun ChatScreen(
                         originalMessageId = raw.id
                     )
                 }
-            } else parsed
-            ChatTrace.d("ChatScreen", "parsed op=${op.id} raw=${rawMessages.size} parsed=${safeParsed.size}")
-            safeParsed
-        } catch (e: Exception) {
-            ChatTrace.e("ChatScreen", "parse.ERROR op=${op.id} raw=${rawMessages.size} err=${e.message}", e)
-            rawMessages.map { raw ->
-                com.rhodes.privatechat.ui.chat.model.ChatUiMessage(
-                    id = raw.id,
-                    senderName = if (raw.isMe) "我" else op.name,
-                    senderColor = Primary,
-                    content = raw.content.take(1000),
-                    timestamp = raw.timestamp,
-                    isMe = raw.isMe,
-                    avatarUri = if (raw.isMe) userProfile.avatarUri else op.avatarUri,
-                    mode = raw.mode,
-                    originalMessageId = raw.id
-                )
             }
         }
     }
@@ -485,6 +497,11 @@ fun ChatScreen(
                     isLoadingOlder = isLoadingOlder,
                     hasMore = hasMoreMessages,
                     scrollToLatestRequest = scrollToLatestRequest,
+                    browsingHistory = browsingHistory,
+                    onReturnToLatest = {
+                        viewModel.chatViewModel.returnToLatestMessages()
+                        scrollToLatestRequest += 1L
+                    },
                     scrollToMessageId = scrollToMessageId,
                     onScrollTargetConsumed = { viewModel.consumeChatScrollTarget() },
                     onDisplayState = { parsedCount, displayCount ->
@@ -512,6 +529,7 @@ fun ChatScreen(
                         if (pendingImageUri.isNotBlank()) {
                             val imageUri = pendingImageUri
                             imageSending = true
+                            if (browsingHistory) viewModel.chatViewModel.returnToLatestMessages()
                             scrollToLatestRequest += 1L
                             viewModel.chatViewModel.sendImageMessage(imageUri, MainActivity.imageForModel(imageUri), inputText, onResult = { success ->
                                 imageSending = false
@@ -519,6 +537,7 @@ fun ChatScreen(
                             })
                         } else {
                             // One user row and one AI container row are added for a normal turn.
+                            if (browsingHistory) viewModel.chatViewModel.returnToLatestMessages()
                             scrollToLatestRequest += 1L
                             viewModel.sendMessage()
                         }

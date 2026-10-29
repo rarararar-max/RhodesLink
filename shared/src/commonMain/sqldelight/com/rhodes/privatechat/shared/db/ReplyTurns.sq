@@ -95,6 +95,11 @@ cancelReplyTurn:
 UPDATE reply_turns SET status = 'cancelled', leaseToken = '', leaseUntil = 0, updatedAt = ?, lastError = ?
 WHERE id = ? AND status IN ('pending', 'failed', 'running');
 
+-- Recalled source messages cancel only their own active turn and invalidate a running lease.
+cancelReplyTurnBySource:
+UPDATE reply_turns SET status = 'cancelled', leaseToken = '', leaseUntil = 0, updatedAt = ?, lastError = ?
+WHERE sessionId = ? AND sourceMessageId = ? AND status IN ('pending', 'failed', 'running');
+
 -- Turns a killed process left behind: the compensation worker is only enqueued while a send is in
 -- flight, so after a crash nothing ever retries them and the user's message stays unanswered.
 -- Manual turns only, and only recent ones, so this can never resurrect an old conversation.

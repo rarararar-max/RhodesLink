@@ -61,6 +61,7 @@ fun 罗德岛终端Theme(content: @Composable () -> Unit) {
         AppearanceSkin.ClassicDark -> applyDarkTheme()
         AppearanceSkin.RhodesDay -> applyRhodesDayTheme()
         AppearanceSkin.RhodesNight -> applyRhodesNightTheme()
+        AppearanceSkin.FrostedGlass -> applyFrostedGlassTheme()
     }
     isDarkMode = currentAppearanceSkin.isDark
     val view = LocalView.current
@@ -84,3 +85,4 @@ fun 罗德岛终端Theme(content: @Composable () -> Unit) {
         }
     }
 }
+

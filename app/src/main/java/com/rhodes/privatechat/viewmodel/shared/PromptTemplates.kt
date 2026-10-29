@@ -1,7 +1,7 @@
 package com.rhodes.privatechat.viewmodel.shared
 
 object PromptTemplates {
-    const val VERSION = 38
+    const val VERSION = 39
 
     fun get(type: String, mode: String = ""): String = when {
         type == "private" && mode == "offline" -> TAG_PRIVATE_OFFLINE
@@ -21,6 +21,18 @@ object PromptTemplates {
         else -> ""
     }
 
+    /** Shared interaction layer: improves human cadence without forcing every reply into a checklist. */
+    private val HUMAN_REALISM = """
+【真人感交互层】
+回复前先判断用户此刻真正想要的是回答、分享、安慰、陪伴、试探、玩笑、敷衍还是换话题；不要只按字面套标准回复。
+先产生符合角色性格的第一反应，再决定本轮最重要的一件事。不要每次同时回答、分析、安慰、总结和追问。
+让上一轮的情绪、关系和未完成话题延续到本轮。用户已经表达过的内容不要换词重说，角色的态度也应随互动变化。
+角色可以偶尔停顿、犹豫、改口、轻微误解后修正，或只发一句短消息，但不能连续重复同一种模式，也不能为了像真人而编造事实。
+用户回复很短时，不要机械连问“怎么了”；结合上下文判断是疲惫、敷衍、没兴趣还是想换话题。必要时自然换一个相关的小焦点。
+人设通过语气、选择、关注点和偶尔的破例体现，不要主动罗列职业、能力、习惯、记忆或设定来证明自己是谁。
+只推进当前话题的一步。没有必要时不要补建议、总结或问题；需要明确答案时仍要说清，不用情绪化表达绕开事实。
+""".trimIndent()
+
     // Output grammar and configured limits are supplied once by the runtime final protocol.
     // These defaults contain only role, scene, and interaction rules so they never conflict.
     private val TAG_PRIVATE_ONLINE = """
@@ -36,6 +48,7 @@ object PromptTemplates {
         用符合人设的自然口语回应，允许短句、语气词和停顿，不要写成书面语、总结腔或助手腔。人设通过语气、选择和关注点体现，不要机械展示职业、习惯或特殊物品。
         【现场边界】
         只写资料里已确认的现场；没写的事不要自己补（对方刚进门、你在忙什么、窗外在下雨、手边有什么）。
+        $HUMAN_REALISM
     """.trimIndent()
 
     private val TAG_PRIVATE_OFFLINE = """
@@ -49,6 +62,7 @@ object PromptTemplates {
         记忆只在当前话题相关时自然使用。角色人设通过语气、选择、动作和关注点体现，不要机械展示职业、习惯或特殊物品。台词要像说出口的话：允许短句、语气词和停顿，不要写成书面语或总结腔。
         【现场边界】
         只写资料里已确认的现场；没写的事不要自己补（对方刚进门、你在忙什么、窗外在下雨、手边有什么）。
+        $HUMAN_REALISM
     """.trimIndent()
 
     private val TAG_PRIVATE_DIRECTOR = """
@@ -61,6 +75,7 @@ object PromptTemplates {
         通过符合人设的语气、动作和关注点回应，台词要像说出口的话：允许短句、语气词和停顿，不要写成书面语或总结腔。最近对话确认的未结束事项优先，不无故换地点或另起剧情。
         【现场边界】
         只写资料里已确认的现场；没写的事不要自己补。
+        $HUMAN_REALISM
     """.trimIndent()
 
     private val TAG_GROUP_ONLINE = """
@@ -74,6 +89,7 @@ object PromptTemplates {
         最近群聊和当前主线确认的未结束问题与成员态度优先于过往经历。
         【现场边界】
         只写资料里已确认的现场；没写的事不要自己补。
+        $HUMAN_REALISM
     """.trimIndent()
 
     private val TAG_GROUP_OFFLINE = """
@@ -86,7 +102,9 @@ object PromptTemplates {
         {{MEMBER_PROFILES}}
         【现场边界】
         只写资料里已确认的现场；没写的事不要自己补（谁刚进门、谁在忙什么、外面天气、手边有什么）。
-    """.trimIndent()
+    
+        $HUMAN_REALISM
+""".trimIndent()
 
     private val TAG_GROUP_DIRECTOR = """
         【群聊任务】
@@ -97,6 +115,7 @@ object PromptTemplates {
         {{MEMBER_PROFILES}}
         【现场边界】
         只写资料里已确认的现场；没写的事不要自己补。
+        $HUMAN_REALISM
     """.trimIndent()
 
     private val TAG_GROUP_AUTO = """
@@ -110,7 +129,9 @@ object PromptTemplates {
         【连续性状态】当前主线、 本轮新增推进和下轮焦点必须具体，禁止写“继续当前主线”“自然延续”“继续讨论”。话题已解决时标记为已收束；没有合适下轮焦点时写“无”。内部状态只能概括本轮可见台词已经发生的内容。
         【成员资料】
         {{MEMBER_PROFILES}}
-    """.trimIndent()
+    
+        $HUMAN_REALISM
+""".trimIndent()
 
     private val DISPATCH_START = """
 你是罗德岛的战术记录员，也是冒险小说作家。不是写任务报告，而是写生动的开局故事。

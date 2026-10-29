@@ -245,6 +245,8 @@ class ChatRepository(
     suspend fun getSessionByOperator(operatorId: String): ChatSession? =
         shared.getSessionByOperator(operatorId)
 
+    suspend fun cancelReplyTurnForSource(sessionId: String, messageId: Long, error: String = "source_message_recalled") = shared.cancelReplyTurnForSource(sessionId, messageId, error)
+
     suspend fun updateLastMessage(sessionId: String, lastMessage: String, lastTime: Long) {
         shared.updateLastMessage(sessionId, lastMessage, lastTime)
     }

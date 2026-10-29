@@ -860,7 +860,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
 
     // Empty values come from installs created before selectable appearance skins.
     var appearanceSkin: String
-        get() = settings.getString("appearance_skin", if (darkMode) "classic_dark" else "classic_light")
+        get() = settings.getString("appearance_skin", "rhodes_night")
         set(value) = settings.putString("appearance_skin", value)
 
     var vectorProviderMode: String

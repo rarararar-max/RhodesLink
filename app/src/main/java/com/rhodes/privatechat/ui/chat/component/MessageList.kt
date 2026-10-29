@@ -77,6 +77,7 @@ import com.rhodes.privatechat.shared.data.ChatDisplayEvent
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collectLatest
 import com.rhodes.privatechat.util.orderChatBubbles
 import com.rhodes.privatechat.util.chatBottomItemIndex
 import kotlin.random.Random
@@ -113,6 +114,8 @@ fun MessageList(
     isLoadingOlder: Boolean = false,
     hasMore: Boolean = false,
     scrollToLatestRequest: Long = 0L,
+    browsingHistory: Boolean = false,
+    onReturnToLatest: (() -> Unit)? = null,
     scrollToMessageId: Long? = null,
     onScrollTargetConsumed: () -> Unit = {},
     onDisplayState: ((rawCount: Int, displayCount: Int) -> Unit)? = null,
@@ -129,14 +132,19 @@ fun MessageList(
             .distinctBy { "${it.messageId}:${it.segmentIndex}" }
     }
 
-    fun isRevealed(message: ChatUiMessage): Boolean =
-        message.originalMessageId in revealFailedReplyIds || localEvents.any {
-            it.messageId == message.originalMessageId && it.segmentIndex == message.segmentIndex
+    val revealIndex by remember(displaySessionKey) {
+        androidx.compose.runtime.derivedStateOf { localEvents.associateBy { it.messageId to it.segmentIndex } }
+    }
+    val progressiveReplyIds by remember(displaySessionKey) {
+        androidx.compose.runtime.derivedStateOf {
+            localEvents.filter { it.revealOrder >= 1_000_000_000_000L }.mapTo(hashSetOf()) { it.messageId }
         }
+    }
+    fun isRevealed(message: ChatUiMessage): Boolean =
+        message.originalMessageId in revealFailedReplyIds || (message.originalMessageId to message.segmentIndex) in revealIndex
 
     fun needsProgressiveDisplay(message: ChatUiMessage): Boolean =
-        message.isAiSegment && (message.timestamp >= legacyMessageCutoff ||
-            localEvents.any { it.messageId == message.originalMessageId && it.revealOrder >= 1_000_000_000_000L })
+        message.isAiSegment && (message.timestamp >= legacyMessageCutoff || message.originalMessageId in progressiveReplyIds)
 
     LaunchedEffect(displaySessionKey, displayEventsLoaded, messages, displayEvents) {
         if (!progressiveDisplay || onReveal == null || !displayEventsLoaded) return@LaunchedEffect
@@ -171,21 +179,14 @@ fun MessageList(
             }
         }
     }
-    val visibleMessages = if (!progressiveDisplay || !displayEventsLoaded) {
-        messages
-    } else {
-        messages.filter { message ->
-            !needsProgressiveDisplay(message) || isRevealed(message)
+    val displayMessages = remember(messages, progressiveDisplay, displayEventsLoaded, legacyMessageCutoff, revealIndex, progressiveReplyIds, revealFailedReplyIds) {
+        val visible = if (!progressiveDisplay || !displayEventsLoaded) messages else messages.filter { message ->
+            !message.isAiSegment || (message.timestamp < legacyMessageCutoff && message.originalMessageId !in progressiveReplyIds) ||
+                message.originalMessageId in revealFailedReplyIds || (message.originalMessageId to message.segmentIndex) in revealIndex
         }
+        orderChatBubbles(visible, timestamp = { it.timestamp }, messageId = { it.originalMessageId },
+            segmentIndex = { it.segmentIndex }, revealOrder = { revealIndex[it.originalMessageId to it.segmentIndex]?.revealOrder })
     }
-    val eventTimes = localEvents.associateBy { "${it.messageId}:${it.segmentIndex}" }
-    val displayMessages = orderChatBubbles(
-        visibleMessages,
-        timestamp = { it.timestamp },
-        messageId = { it.originalMessageId },
-        segmentIndex = { it.segmentIndex },
-        revealOrder = { eventTimes[eventKey(it)]?.revealOrder },
-    )
     LaunchedEffect(lastRevealedMessage?.let(::eventKey)) {
         val message = lastRevealedMessage ?: return@LaunchedEffect
         // Let LazyColumn apply the newly visible bubble before starting speech.
@@ -275,11 +276,19 @@ fun MessageList(
     }
 
     // Keep a conversation already at the bottom visible when the IME reduces the viewport.
-    val imeBottom = WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current)
-    LaunchedEffect(imeBottom) {
-        if (imeBottom > 0 && displayMessages.isNotEmpty()) {
-            if (initialContentSettled && followLatest) scrollToBottom()
-        }
+    val currentBottomScroll by androidx.compose.runtime.rememberUpdatedState<suspend () -> Unit>({ scrollToBottom() })
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val imeInsets = WindowInsets.ime
+    LaunchedEffect(displaySessionKey, density) {
+        // Observe in a coroutine, not composition. Coalesce the animated height changes and
+        // position once the viewport settles instead of repeatedly cancelling scrolls.
+        snapshotFlow { imeInsets.getBottom(density) }
+            .collectLatest { bottom ->
+                if (bottom > 0) {
+                    delay(100)
+                    if (initialContentSettled && followLatest) currentBottomScroll()
+                }
+            }
     }
 
     LaunchedEffect(listState.firstVisibleItemIndex, displayMessages.size, isLoadingOlder, hasMore) {
@@ -345,18 +354,18 @@ fun MessageList(
             }
             item { Spacer(modifier = Modifier.height(8.dp)) }
         }
-        if (initialContentSettled && !followLatest && listState.canScrollForward) {
+        if (initialContentSettled && (browsingHistory || (!followLatest && listState.canScrollForward))) {
             TextButton(
                 onClick = {
                     followLatest = true
                     hasNewMessages = false
-                    scrollScope.launch { scrollToBottom() }
+                    if (browsingHistory) onReturnToLatest?.invoke() else scrollScope.launch { scrollToBottom() }
                 },
                 modifier = Modifier.align(Alignment.BottomEnd).padding(12.dp)
                     .background(ElevatedSurface, RoundedCornerShape(24.dp))
                     .border(1.dp, Primary.copy(alpha = 0.4f), RoundedCornerShape(24.dp))
             ) {
-                Text(if (hasNewMessages) "↓ 新消息 · 回到底部" else "↓ 回到底部", color = Primary)
+                Text(if (browsingHistory) "回到最新消息" else if (hasNewMessages) "↓ 新消息 · 回到底部" else "↓ 回到底部", color = Primary)
             }
         }
     }
@@ -426,7 +435,7 @@ private fun MessageBubble(
     var showRetryConfirm by remember { mutableStateOf(false) }
     val isMe = message.isMe
     val bubbleColor = if (isMe) BubbleMine else BubbleOther
-    val bubbleShape = if (isRhodesTerminal) TerminalPanelShape else if (isMe) RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp) else RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp)
+    val bubbleShape = if (isFrostedGlass) RoundedCornerShape(24.dp) else if (isRhodesTerminal) TerminalPanelShape else if (isMe) RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp) else RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp)
 
     Column(modifier = Modifier.fillMaxWidth().alpha(archivedAlpha).padding(horizontal = 12.dp, vertical = 2.dp)) {
         if (showTime) {

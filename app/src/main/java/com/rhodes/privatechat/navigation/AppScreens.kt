@@ -898,3 +898,11 @@ data object AiSupportRoute : Screen {
         com.rhodes.privatechat.ui.support.AiSupportScreen(onBack = { navigator.pop() })
     }
 }
+
+
+data object StartupSettingsRoute : Screen {
+    @Composable override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        com.rhodes.privatechat.ui.settings.StartupSettingsScreen(onBack = { navigator.pop() })
+    }
+}

@@ -70,7 +70,7 @@ fun SettingsScreen(
     onChatParams: () -> Unit = {}, onMemory: () -> Unit = {}, onDataManage: () -> Unit = {},
     onPermissions: () -> Unit = {}, onCredits: () -> Unit = {},
     onAppearance: () -> Unit = {}, onStory: () -> Unit = {}, onDailyContent: () -> Unit = {}, onKnowledgeBases: () -> Unit = {},
-    onDebugLog: () -> Unit = {}, onAiSupport: () -> Unit = {},
+    onDebugLog: () -> Unit = {}, onAiSupport: () -> Unit = {}, onStartup: () -> Unit = {},
     userNickname: String = "博士", userGender: String = "", userAvatarUri: String = "", modifier: Modifier = Modifier
 ) {
     val settings: SettingsRepository = koinInject()
@@ -127,6 +127,7 @@ fun SettingsScreen(
                 SettingItem(SettingEntry(Icons.Default.AutoFixHigh, "数据管理与备份", "统计信息、自动清理与完整备份", iconColor = Color(0xFF8B5CF6)), onClick = onDataManage)
                 SettingItem(SettingEntry(Icons.Default.Favorite, "感谢名单与联系方式", "支持股东名单与联系方式", iconColor = Primary), onClick = onCredits)
                 SettingItem(SettingEntry(Icons.Default.DarkMode, "外观设置", "白天/黑夜模式、界面外观", iconColor = Color(0xFF607D8B)), onClick = onAppearance)
+                SettingItem(SettingEntry(Icons.Default.AutoAwesome, "开屏设置", "每日首次演出、提示音与重播", iconColor = Color(0xFFFF9800)), onClick = onStartup)
             }
             Spacer(Modifier.height(8.dp))
             WechatListGroup {

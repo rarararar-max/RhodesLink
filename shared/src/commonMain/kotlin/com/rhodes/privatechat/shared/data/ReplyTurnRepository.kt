@@ -98,6 +98,10 @@ class ReplyTurnRepository(private val wrapper: DatabaseWrapper) {
             db.replyTurnsQueries.cancelReplyTurn(now, error, id)
         }
 
+    suspend fun cancelBySourceMessage(sessionId: String, messageId: Long, error: String = "source_message_recalled") = withContext(DatabaseDispatcher.dispatcher) {
+        db.replyTurnsQueries.cancelReplyTurnBySource(System.currentTimeMillis(), error.take(240), sessionId, messageId)
+    }
+
     /**
      * Ids of recent manual turns that still need a reply but have no worker left to drive them: due
      * pending/failed turns and running turns whose lease has expired. Startup re-arms these, which is

@@ -20,8 +20,33 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 
 class RhodesApplication : Application() {
+    private val startupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val _databaseReady = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val databaseReady = _databaseReady.asStateFlow()
+    private val _databaseError = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val databaseError = _databaseError.asStateFlow()
+    private var databaseWarmup: kotlinx.coroutines.Job? = null
+
+    fun prepareDatabase() {
+        if (databaseWarmup?.isActive == true || _databaseReady.value) return
+        _databaseError.value = false
+        databaseWarmup = startupScope.launch {
+            val started = android.os.SystemClock.elapsedRealtime()
+            try {
+                org.koin.java.KoinJavaComponent.get<DatabaseWrapper>(DatabaseWrapper::class.java).database
+                _databaseReady.value = true
+                android.util.Log.i("RhodesPerformance", "database_ready_ms=${android.os.SystemClock.elapsedRealtime() - started}")
+            } catch (error: Exception) {
+                _databaseError.value = true
+                android.util.Log.e("RhodesPerformance", "database_initialization_failed", error)
+            }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         DebugLogger.initialize(this)
@@ -42,14 +67,18 @@ class RhodesApplication : Application() {
             androidLogger()
             androidContext(this@RhodesApplication)
             modules(sharedModule(DatabaseWrapper(this@RhodesApplication)), appModule)
-            DailyContentScheduler.schedulePlanner(this@RhodesApplication)
         }
+        prepareDatabase()
         val repository: ChatRepository = org.koin.java.KoinJavaComponent.get(ChatRepository::class.java)
         val settings: SettingsRepository = org.koin.java.KoinJavaComponent.get(SettingsRepository::class.java)
         DebugLogger.enabled = settings.debugLogEnabled
         DebugLogger.allowSensitiveTrace = settings.debugLogEnabled && settings.debugLogPayloadsEnabled
         DebugLogger.log("Debug/Startup", "调试日志已启动 | 完整模型内容=${if (DebugLogger.allowSensitiveTrace) "开启" else "关闭"}")
-        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+        startupScope.launch {
+            databaseReady.first { it }
+            // Let first navigation and user reads precede optional maintenance.
+            kotlinx.coroutines.delay(10_000)
+            DailyContentScheduler.schedulePlanner(this@RhodesApplication)
             if (settings.autoAiEnabled) {
                 runCatching { GroupAutoChatScheduler.reconcile(this@RhodesApplication, repository, settings) }
                     .onFailure { error ->

@@ -277,8 +277,9 @@ object MessageParser {
         if (emotion.isNotBlank() || msg.location.isNotBlank() || msg.activity.isNotBlank()) {
             // 不单独添加元数据消息，而是附加到第一条 dialogue 消息上
         }
+        val recalled = recalledPrivateSegments(msg.content)
         for ((segIdx, seg) in segments.withIndex()) {
-            if (isPrivateSegmentRecalled(msg.content, segIdx)) continue
+            if (segIdx in recalled) continue
             val displayContent = sanitizeVisibleSegmentContent(seg.content)
             if (displayContent.isBlank()) continue
             if (seg.type == "narration") {
@@ -397,10 +398,14 @@ object MessageParser {
         return if (looksLikeJson(content)) "[消息格式异常，已隐藏原始结构]" else content.ifBlank { "[消息解析失败]" }
     }
 
-    private fun isPrivateSegmentRecalled(content: String, index: Int): Boolean = runCatching {
-        val segments = json.parseToJsonElement(content).jsonObject["segments"] as? JsonArray ?: return@runCatching false
-        segments.getOrNull(index)?.jsonObject?.get("recalled")?.jsonPrimitive?.content.equals("true", true)
-    }.getOrDefault(false)
+    // Read recall metadata once per reply, never once per segment.
+    private fun recalledPrivateSegments(content: String): Set<Int> = runCatching {
+        val segments = json.parseToJsonElement(content).jsonObject["segments"] as? JsonArray
+            ?: return@runCatching emptySet<Int>()
+        segments.mapIndexedNotNull { index, segment ->
+            index.takeIf { segment.jsonObject["recalled"]?.jsonPrimitive?.content.equals("true", true) }
+        }.toSet()
+    }.getOrDefault(emptySet())
 
     private fun sanitizeVisibleSegmentContent(content: String): String {
         var result = content

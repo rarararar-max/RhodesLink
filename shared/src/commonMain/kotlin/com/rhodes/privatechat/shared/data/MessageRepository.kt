@@ -106,6 +106,12 @@ class MessageRepository(
         }.executeAsList()
     }
 
+    suspend fun getMessagesAfterPosition(sessionId: String, timestamp: Long, id: Long, limit: Long): List<ChatMessage> = withContext(DatabaseDispatcher.dispatcher) {
+        db.chatMessagesQueries.getMessagesAfterPosition(sessionId, timestamp, timestamp, id, limit) { mid, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, time, isMe ->
+            ChatMessage(mid, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange.toInt(), time, isMe != 0L)
+        }.executeAsList()
+    }
+
     suspend fun getMessagesBefore(sessionId: String, beforeTimestamp: Long, beforeId: Long, limit: Long): List<ChatMessage> = withContext(DatabaseDispatcher.dispatcher) {
         db.chatMessagesQueries.getMessagesBefore(sessionId, beforeTimestamp, beforeTimestamp, beforeId, limit) { id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange, timestamp, isMe ->
             ChatMessage(id, sid, senderId, senderName, content, type, mode, emotion, activity, location, narration, segmentGroup, intimacyChange.toInt(), timestamp, isMe != 0L)
@@ -310,11 +316,11 @@ class MessageRepository(
     }
 
     suspend fun deleteMessage(id: Long) = withContext(DatabaseDispatcher.dispatcher) {
-        db.chatDisplayEventsQueries.deleteMessageDisplayEvents(id)
-        db.chatMessagesQueries.deleteMessage(id)
-        // Keep reply_turns in sync with the message rows it points at, otherwise the orphaned turn can
-        // reject the lease of a later message that reuses this id.
-        db.replyTurnsQueries.deleteReplyTurnsBySourceMessageId(id)
+        db.transaction {
+            db.chatDisplayEventsQueries.deleteMessageDisplayEvents(id)
+            db.replyTurnsQueries.deleteReplyTurnsBySourceMessageId(id)
+            db.chatMessagesQueries.deleteMessage(id)
+        }
     }
     suspend fun deleteOldMessages(cutoff: Long) = withContext(DatabaseDispatcher.dispatcher) {
         db.chatDisplayEventsQueries.deleteOldDisplayEvents(cutoff)

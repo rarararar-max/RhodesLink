@@ -133,7 +133,7 @@ object DatabaseCompatibility {
             val entries = prefs.getString(DIAGNOSTIC_KEY, "").orEmpty().lineSequence()
                 .filter { it.isNotBlank() }.toMutableList()
             entries.add(item)
-            prefs.edit().putString(DIAGNOSTIC_KEY, entries.takeLast(100).joinToString("\n")).commit()
+            prefs.edit().putString(DIAGNOSTIC_KEY, entries.takeLast(100).joinToString("\n")).apply()
         } catch (_: Exception) {
             // Diagnostics must never block opening the user's database.
         }

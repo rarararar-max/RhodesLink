@@ -121,3 +121,8 @@ ORDER BY id ASC LIMIT ?;
 
 replaceMessageContentIfUnchanged:
 UPDATE chat_messages SET content = ? WHERE id = ? AND content = ?;
+
+-- A bounded chronological window for search navigation; never load the entire conversation.
+getMessagesAfterPosition:
+SELECT * FROM chat_messages WHERE sessionId = ? AND (timestamp > ? OR (timestamp = ? AND id > ?))
+ORDER BY timestamp ASC, id ASC LIMIT ?;

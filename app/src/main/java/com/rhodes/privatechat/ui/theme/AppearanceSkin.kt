@@ -38,6 +38,13 @@ enum class AppearanceSkin(
         subtitle = "RHODES TERMINAL / NIGHT",
         description = "深蓝灰终端面板，适合沉浸式夜间使用。",
         isDark = true,
+    ),
+    FrostedGlass(
+        storageValue = "frosted_glass",
+        title = "霜璃终端",
+        subtitle = "FROSTED GLASS / TERMINAL",
+        description = "半透明磨砂玻璃面板，背景与聊天内容自然融合。",
+        isDark = false,
     );
 
     companion object {
@@ -47,7 +54,11 @@ enum class AppearanceSkin(
     }
 }
 
-var currentAppearanceSkin by mutableStateOf(AppearanceSkin.ClassicDark)
+var currentAppearanceSkin by mutableStateOf(AppearanceSkin.RhodesNight)
 
 val isRhodesTerminal: Boolean
-    get() = currentAppearanceSkin == AppearanceSkin.RhodesDay || currentAppearanceSkin == AppearanceSkin.RhodesNight
+    get() = currentAppearanceSkin == AppearanceSkin.RhodesDay || currentAppearanceSkin == AppearanceSkin.RhodesNight || currentAppearanceSkin == AppearanceSkin.FrostedGlass
+
+
+val isFrostedGlass: Boolean
+    get() = currentAppearanceSkin == AppearanceSkin.FrostedGlass

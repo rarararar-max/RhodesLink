@@ -590,7 +590,7 @@ class MainViewModel(
 
     init {
         if (startBackgroundWork) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 // Never delete, merge, or rewrite a user's chat data during an in-place upgrade.
                 // DatabaseCompatibility restores only missing rows from the pre-1.13 backup before
@@ -708,7 +708,8 @@ class MainViewModel(
         viewModelScope.launch { recoverDispatches() }
         // 每日龙门币刷新（麻将干员保底）
         viewModelScope.launch { refreshDailyLmb() }
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
+            delay(STARTUP_BACKLOG_DELAY_MS)
             logMemoryStartupSnapshot("before_retention_repair")
             dataViewModel.restorePermanentMemoryRetentionIfNeeded()
             logMemoryStartupSnapshot("after_retention_repair")

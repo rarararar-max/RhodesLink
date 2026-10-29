@@ -75,16 +75,10 @@ private fun Modifier.terminalGrid() = drawBehind {
 
 @Composable
 fun AppBackground(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    listOf(HeaderEnd.copy(alpha = 0.75f), BG, BG)
-                )
-            )
-            .then(if (isRhodesTerminal) Modifier.terminalGrid() else Modifier)
-    ) { content() }
+    Box(modifier = modifier.fillMaxSize().background(
+        if (isFrostedGlass) Brush.radialGradient(listOf(Color(0xFFE5B8F4), Color(0xFF747BD0), Color(0xFF5B62B7)))
+        else Brush.verticalGradient(listOf(HeaderEnd.copy(alpha = 0.75f), BG, BG))
+    ).then(if (isRhodesTerminal && !isFrostedGlass) Modifier.terminalGrid() else Modifier)) { content() }
 }
 
 @Composable

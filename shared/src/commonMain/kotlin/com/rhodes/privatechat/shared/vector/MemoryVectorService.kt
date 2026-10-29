@@ -18,7 +18,7 @@ class MemoryVectorService(
 
     @Synchronized
     private fun activeGateway(): Pair<String, EmbeddingGateway> {
-        val signature = listOf(settings.vectorProviderMode, settings.vectorProvider, settings.vectorBaseUrl, settings.vectorModelName, settings.vectorApiKey, settings.apiKey).joinToString("|")
+        val signature = listOf(settings.vectorProviderMode, settings.vectorProvider, settings.vectorProtocol, settings.vectorBaseUrl, settings.vectorModelName, settings.vectorApiKey, settings.apiKey).joinToString("|")
         if (gateway == null || gatewaySignature != signature) {
             gateway = embeddingFactory(settings)
             gatewaySignature = signature
@@ -31,6 +31,7 @@ class MemoryVectorService(
         settings.vectorProvider,
         settings.vectorBaseUrl,
         settings.vectorModelName,
+        settings.vectorProtocol,
     )
 
     suspend fun saveMemory(memory: VectorMemory) {

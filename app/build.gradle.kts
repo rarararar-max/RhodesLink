@@ -29,8 +29,8 @@ android {
         applicationId = "com.buzidongshouhuoji.privatechat"
         minSdk = 26
         targetSdk = 35
-        versionCode = 71
-        versionName = "1.14.24"
+        versionCode = 73
+        versionName = "1.14.26"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

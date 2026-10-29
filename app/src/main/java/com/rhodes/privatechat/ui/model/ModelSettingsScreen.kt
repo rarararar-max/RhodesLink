@@ -87,6 +87,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     var visionApiKey by remember { mutableStateOf(settings.visionApiKey) }
     var vectorProviderMode by remember { mutableStateOf(settings.vectorProviderMode) }
     var vectorProvider by remember { mutableStateOf(settings.vectorProvider) }
+    var vectorProtocol by remember { mutableStateOf(settings.vectorProtocol) }
     var vectorBaseUrl by remember { mutableStateOf(settings.vectorBaseUrl) }
     var vectorModelName by remember { mutableStateOf(settings.vectorModelName) }
     var vectorApiKey by remember { mutableStateOf(settings.vectorApiKey) }
@@ -98,6 +99,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     var rebuildVectorProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var rebuildEligibleCount by remember { mutableStateOf<Int?>(null) }
     var pendingVectorSignature by remember { mutableStateOf("") }
+    var showVectorChangeConfirm by remember { mutableStateOf(false) }
     var asrBaseUrl by remember { mutableStateOf(settings.asrBaseUrl) }
     var asrProvider by remember { mutableStateOf(settings.asrProvider) }
     var asrModelName by remember { mutableStateOf(settings.asrModelName) }
@@ -123,7 +125,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         visionMode != settings.visionMode ||
         asrProfiles != settings.voiceProviderConfigurations("asr") || ttsProfiles != settings.voiceProviderConfigurations("tts") ||
         visionProvider != settings.visionProvider || visionBaseUrl.trim() != settings.visionBaseUrl || visionModelName.trim() != settings.visionModelName || visionApiKey.trim() != settings.visionApiKey ||
-        vectorProviderMode != settings.vectorProviderMode || vectorProvider != settings.vectorProvider || vectorBaseUrl.trim() != settings.vectorBaseUrl || vectorModelName.trim() != settings.vectorModelName || vectorApiKey.trim() != settings.vectorApiKey ||
+        vectorProviderMode != settings.vectorProviderMode || vectorProvider != settings.vectorProvider || vectorProtocol != settings.vectorProtocol || vectorBaseUrl.trim() != settings.vectorBaseUrl || vectorModelName.trim() != settings.vectorModelName || vectorApiKey.trim() != settings.vectorApiKey ||
         asrProvider != settings.asrProvider || asrBaseUrl.trim() != settings.asrBaseUrl || asrModelName.trim() != settings.asrModelName || asrApiKey.trim() != settings.asrApiKey ||
         ttsProvider != settings.ttsProvider || ttsBaseUrl.trim() != settings.ttsBaseUrl || ttsModelName.trim() != settings.ttsModelName || ttsApiKey.trim() != settings.ttsApiKey
 
@@ -147,15 +149,29 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         return null
     }
 
-    val saveSettings: () -> Boolean = {
+    fun saveSettings(forceVectorChange: Boolean = false): Boolean {
         didSave = false
         // Saving is independent from connecting. Users must be able to configure providers
         // incrementally, while the individual test buttons validate the required fields.
         val prevVectorMode = settings.vectorProviderMode
         val prevVectorProvider = settings.vectorProvider
+        val prevVectorProtocol = settings.vectorProtocol
         val prevVectorUrl = settings.vectorBaseUrl
         val prevVectorModel = settings.vectorModelName
         val modelName = currentModelName
+        val newVectorSignature = com.rhodes.privatechat.shared.vector.EmbeddingConfigurationSignature.create(
+            vectorProviderMode, vectorProvider, vectorBaseUrl, vectorModelName, vectorProtocol
+        )
+        val previousVectorSignature = com.rhodes.privatechat.shared.vector.EmbeddingConfigurationSignature.create(
+            prevVectorMode, prevVectorProvider, prevVectorUrl, prevVectorModel, prevVectorProtocol
+        )
+        val firstTime = settings.vectorIndexSignature.isBlank()
+        val vectorSignatureChanged = !firstTime && previousVectorSignature != newVectorSignature
+        if (vectorSignatureChanged && !forceVectorChange) {
+            pendingVectorSignature = newVectorSignature
+            showVectorChangeConfirm = true
+            return false
+        }
         settings.saveModelConfiguration(
                 provider = currentProviderId,
                 modelName = modelName,
@@ -167,6 +183,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 visionApiKey = visionApiKey.trim(),
                 vectorProviderMode = vectorProviderMode,
                 vectorProvider = vectorProvider,
+                vectorProtocol = vectorProtocol,
                 vectorBaseUrl = vectorBaseUrl.trim(),
                 vectorModelName = vectorModelName.trim(),
                 vectorApiKey = vectorApiKey.trim(),
@@ -182,30 +199,20 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 asrConfigurations = asrProfiles.toMap(),
                 ttsConfigurations = ttsProfiles.toMap(),
         )
-        val newVectorSignature = com.rhodes.privatechat.shared.vector.EmbeddingConfigurationSignature.create(vectorProviderMode, vectorProvider, vectorBaseUrl, vectorModelName)
-        val previousVectorSignature = com.rhodes.privatechat.shared.vector.EmbeddingConfigurationSignature.create(prevVectorMode, prevVectorProvider, prevVectorUrl, prevVectorModel)
-        val firstTime = settings.vectorIndexSignature.isBlank()
-        val vectorSignatureChanged = !firstTime && previousVectorSignature != newVectorSignature
         if (firstTime) settings.vectorIndexSignature = newVectorSignature
         if (vectorSignatureChanged) {
             pendingVectorSignature = newVectorSignature
             vectorIndexFlowPending = true
-            invalidatingVectorIndex = true
+            invalidatingVectorIndex = false
             scope.launch {
-                runCatching { viewModel.invalidateAllMemoryIndexes() }
-                    .onFailure { rebuildVectorResult = "旧索引清理失败：${it.message?.take(60) ?: "未知错误"}" }
-                invalidatingVectorIndex = false
-                if (rebuildVectorResult.isBlank()) {
-                    rebuildEligibleCount = runCatching { viewModel.countEligibleMemoryIndexes() }.getOrNull()
-                    showRebuildVectorIndex = true
-                } else {
-                    vectorIndexFlowPending = false
-                }
+                runCatching { viewModel.markKnowledgeBasesNeedingReindex() }
+                rebuildEligibleCount = runCatching { viewModel.countEligibleMemoryIndexes() }.getOrNull()
+                showRebuildVectorIndex = true
             }
         }
         errorText = ""
         didSave = true
-        vectorSignatureChanged
+        return vectorSignatureChanged
     }
 
     fun requestBack() {
@@ -311,12 +318,12 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 require(vectorBaseUrl.trim().startsWith("http")) { "记忆增强地址需要以 http:// 或 https:// 开头" }
                 require(vectorModelName.trim().isNotBlank()) { "请填写记忆增强模型名" }
                 require(key.isNotBlank()) { "请填写记忆增强密钥，或先填写聊天密钥" }
-                val values = testEmbeddingGateway(vectorBaseUrl.trim(), key, vectorModelName.trim())
+                val values = testEmbeddingGateway(vectorBaseUrl.trim(), key, vectorModelName.trim(), vectorProtocol)
                 require(values.isNotEmpty()) { "服务没有返回记忆数据" }
                 require(values.all { it.isFinite() }) { "服务返回了无效的记忆数据" }
                 require(values.size >= 64) { "返回维度过低，可能不是 Embedding 模型" }
                 vectorTestResult = "连接成功：返回 ${values.size} 维向量。此测试已发起一次真实 Embedding API 请求。"
-            } catch (e: Exception) { vectorTestResult = "测试失败：${e.message?.take(100) ?: "请检查地址、模型和密钥"}" }
+            } catch (e: Exception) { vectorTestResult = "测试失败：${e.message?.take(240) ?: "请检查地址、模型和密钥"}" }
             finally { testing = null }
         }
     }
@@ -467,15 +474,42 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 else {
                 Text("会把需要建立或查询的记忆文本发送给你配置的服务，通常语义召回更准确，但可能产生供应商费用。测试、写入和检索都会发起真实请求。", fontSize = 12.sp, color = TextSecondary)
                 Spacer(Modifier.height(10.dp))
-                    DropDown("接口预设", listOf("阿里百炼兼容 Endpoint 预设", "自定义 OpenAI 兼容 Endpoint"), if (vectorProvider == "ali") 0 else 1) { index ->
-                    vectorProvider = if (index == 0) "ali" else "openai"
-                    if (index == 0) { vectorBaseUrl = "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/embeddings"; vectorModelName = "text-embedding-v4" }
+                    val vectorPreset = when {
+                        vectorProtocol == "aliyun_native" -> 0
+                        vectorProvider == "ali" -> 1
+                        else -> 2
                     }
-                    Text("两个预设当前都使用 OpenAI 兼容 Embedding 协议；阿里预设会填入推荐地址和模型名，需将 URL 中的 {WorkspaceId} 替换为实际工作区。", fontSize = 12.sp, color = TextSecondary)
+                    DropDown("接口预设", listOf("阿里百炼原生 Endpoint", "阿里百炼兼容 Endpoint", "自定义 OpenAI 兼容 Endpoint"), vectorPreset) { index ->
+                    when (index) {
+                        0 -> {
+                            vectorProvider = "ali"
+                            vectorProtocol = "aliyun_native"
+                            vectorBaseUrl = "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding"
+                            vectorModelName = "text-embedding-v4"
+                        }
+                        1 -> {
+                            vectorProvider = "ali"
+                            vectorProtocol = "openai_compat"
+                            vectorBaseUrl = "https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/embeddings"
+                            vectorModelName = "text-embedding-v4"
+                        }
+                        else -> {
+                            vectorProvider = "openai"
+                            vectorProtocol = "openai_compat"
+                        }
+                    }
+                    }
+                    Text("原生接口使用阿里 DashScope 请求格式；兼容接口保持旧用户配置不变。阿里地址中的 {WorkspaceId} 需要替换为实际工作区。", fontSize = 12.sp, color = TextSecondary)
+                Spacer(Modifier.height(10.dp))
+                val vectorModelOptions = listOf("text-embedding-v4", "qwen3.7-text-embedding", "qwen3.7-text-embedding-flash", "自定义")
+                val selectedVectorModel = vectorModelOptions.indexOf(vectorModelName).takeIf { it >= 0 } ?: 3
+                DropDown("模型预设", vectorModelOptions, selectedVectorModel) { index ->
+                    if (index < 3) vectorModelName = vectorModelOptions[index]
+                }
                 Spacer(Modifier.height(10.dp))
                 LabeledField("API 地址") { TextInput(vectorBaseUrl, { vectorBaseUrl = it }, ctx) }
                 Spacer(Modifier.height(10.dp))
-                LabeledField("模型名") { TextInput(vectorModelName, { vectorModelName = it }, ctx, placeholder = "text-embedding-v4") }
+                LabeledField("模型名") { TextInput(vectorModelName, { vectorModelName = it }, ctx, placeholder = "text-embedding-v4 / qwen3.7-text-embedding") }
                 Spacer(Modifier.height(10.dp))
                 LabeledField("API Key（空则复用聊天 API Key）") { SecretInput(vectorApiKey, { vectorApiKey = it }, ctx) }
                 TestButton("测试付费 Embedding", testing == "vector", vectorTestResult, onClick = ::testVector)
@@ -569,10 +603,27 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             }
         )
     }
+    if (showVectorChangeConfirm) AlertDialog(
+        onDismissRequest = { showVectorChangeConfirm = false },
+        title = { Text("确认切换向量配置") },
+        text = {
+            Text("向量模型或接口已改变。已有记忆需要使用新配置重新生成向量，期间可能产生 API 费用。确认后会保留旧索引，并显示重建选项。")
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                showVectorChangeConfirm = false
+                val stayForVectorFlow = saveSettings(forceVectorChange = true)
+                if (didSave && !stayForVectorFlow) onBack()
+            }) { Text("确认切换", color = Primary) }
+        },
+        dismissButton = {
+            TextButton(onClick = { showVectorChangeConfirm = false }) { Text("取消", color = TextSecondary) }
+        }
+    )
     if (invalidatingVectorIndex) AlertDialog(
         onDismissRequest = {},
         title = { Text("正在更新记忆索引") },
-        text = { Text("正在清空旧索引，请稍候。") },
+        text = { Text("正在准备新的记忆索引，请稍候。") },
         confirmButton = {}
     )
     if (showRebuildVectorIndex) AlertDialog(
@@ -585,7 +636,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 if (rebuildingVectorIndex && progress != null) {
                     "正在重建：${progress.first} / ${progress.second}"
                 } else {
-                    eligibleText + "记忆检索方式已变更，旧索引已清空。现在重建全部有效记忆索引吗？付费 Embedding 模式最多会为每条有效记忆发起一次真实 API 请求，可能产生服务商费用。"
+                    eligibleText + "记忆检索方式已变更。旧索引已保留，重建成功后才会使用新索引。现在重建全部有效记忆索引吗？付费 Embedding 模式最多会为每条有效记忆发起一次真实 API 请求，可能产生服务商费用。"
                 }
             )
         },

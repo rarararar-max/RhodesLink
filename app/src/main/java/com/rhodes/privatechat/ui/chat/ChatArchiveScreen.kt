@@ -68,7 +68,11 @@ fun ChatArchiveScreen(viewModel: MainViewModel, operator: Operator, onBack: () -
     var detailTarget by remember { mutableStateOf<ChatArchive?>(null) }
     var archiveActionRunning by remember { mutableStateOf(false) }
     var showHelp by remember { mutableStateOf(false) }
-    fun refresh() { scope.launch { archives = viewModel.getCurrentChatArchives() } }
+    fun refresh() {
+        scope.launch {
+            archives = runCatching { viewModel.getCurrentChatArchives() }.getOrDefault(emptyList())
+        }
+    }
     LaunchedEffect(Unit) { refresh(); while (true) { delay(1500); refresh() } }
     val capacity = viewModel.archiveCapacity(operator.intimacy)
     Column(Modifier.fillMaxSize().background(BG)) {

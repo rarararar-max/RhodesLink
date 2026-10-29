@@ -441,7 +441,7 @@ class AIService(
         if (config.id == "custom" && customUrl.isBlank()) {
             throw Exception("自填厂商的 URL 不能为空，请在设置中填写 API 地址")
         }
-        val url = if (config.id == "custom") customUrl else config.baseUrl
+        val url = if (config.id == "custom") customUrl else resolveProviderEndpoint(config.id, model, config.baseUrl)
 
         if (config.isOpenAICompat) {
             // OpenAI 兼容格式
@@ -460,7 +460,8 @@ class AIService(
                 // Reasoning is never surfaced to the user.
                 thinking = ModelCapabilities.thinkingParameter(config.id, model,
                     deepseekThinking() && allowsDeepSeekThinking(requestType)),
-                enable_thinking = ModelCapabilities.enableThinkingParameter(config.id, model)
+                enable_thinking = ModelCapabilities.enableThinkingParameter(config.id, model),
+                reasoning_effort = ModelCapabilities.reasoningEffort(config.id, model)
             )
             val response: HttpResponse = client.post(url) {
                 contentType(ContentType.Application.Json)
@@ -469,8 +470,9 @@ class AIService(
                 setBody(requestBody)
             }
             if (!response.status.isSuccess()) {
-                val detail = response.bodyAsText().trim().replace(Regex("\\s+"), " ").take(1000)
-                throw Exception("API error ${response.status.value}: ${ModelErrorMessages.forHttpStatus(response.status.value, detail)}")
+                val detail = ModelErrorMessages.redact(response.bodyAsText(), apiKey).trim().replace(Regex("\\s+"), " ").take(1000)
+                val endpointHint = if (config.id == "minimax") "（模型=$model，接口=$url）" else ""
+                throw Exception("API error ${response.status.value}: ${ModelErrorMessages.forHttpStatus(response.status.value, detail)}$endpointHint")
             }
             val responseBody = response.bodyAsText()
             val completion = json.decodeFromString<NonStreamResponse>(responseBody)
@@ -672,8 +674,8 @@ class AIService(
         temperature: Double = 0.95
     ): Flow<String> = flow {
         val config = providers[providerId] ?: providers["deepseek"]!!
-        val url = if (config.id == "custom") customUrl else config.baseUrl
         val model = normalizeModelName(config.id, modelName)
+        val url = if (config.id == "custom") customUrl else resolveProviderEndpoint(config.id, model, config.baseUrl)
 
         val requestBody = ChatCompletionRequest(
             model = model,
@@ -681,7 +683,8 @@ class AIService(
             stream = true,
             temperature = temperature,
             thinking = ModelCapabilities.thinkingParameter(config.id, model),
-            enable_thinking = ModelCapabilities.enableThinkingParameter(config.id, model)
+            enable_thinking = ModelCapabilities.enableThinkingParameter(config.id, model),
+            reasoning_effort = ModelCapabilities.reasoningEffort(config.id, model)
         )
 
         var finalUrl = url

@@ -284,7 +284,7 @@ class MainViewModel(
     private suspend fun reconcileKnowledgeBaseStatus(knowledgeBaseId: String) {
         val service = knowledgeBaseIndexService ?: return
         val chunks = repository.knowledgeBases.getChunks(knowledgeBaseId).filter { it.enabled && it.content.isNotBlank() }
-        val signature = com.rhodes.privatechat.shared.vector.EmbeddingConfigurationSignature.create(settings.vectorProviderMode, settings.vectorProvider, settings.vectorBaseUrl, settings.vectorModelName)
+        val signature = com.rhodes.privatechat.shared.vector.EmbeddingConfigurationSignature.create(settings.vectorProviderMode, settings.vectorProvider, settings.vectorBaseUrl, settings.vectorModelName, settings.vectorProtocol)
         val status = when {
             chunks.isEmpty() -> "pending"
             chunks.all { it.indexedAt > 0L && it.indexError.isBlank() } -> "ready"
@@ -312,6 +312,10 @@ class MainViewModel(
     }
     suspend fun retryFailedKnowledgeBaseChunks(id: String, onProgress: (Int, Int) -> Unit = { _, _ -> }): KnowledgeBaseIndexResult =
         requireNotNull(knowledgeBaseIndexService) { "知识库索引服务不可用" }.retryFailedChunks(id, onProgress)
+
+    suspend fun markKnowledgeBasesNeedingReindex() {
+        repository.markKnowledgeBasesNeedingReindex()
+    }
     private val pendingMomentPosts = ConcurrentHashMap.newKeySet<String>()
     private val commentCountMutexes = ConcurrentHashMap<Long, kotlinx.coroutines.sync.Mutex>()
     private val mentionedCommentSemaphore = Semaphore(2)

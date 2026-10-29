@@ -9,10 +9,19 @@ package com.rhodes.privatechat.shared.network
  * retry behaviour from that prefix.
  */
 object ModelErrorMessages {
-    private const val RAW_LIMIT = 160
+    private const val RAW_LIMIT = 600
+
+    fun redact(message: String, vararg secrets: String): String {
+        var safe = message
+        secrets.filter { it.isNotBlank() }.sortedByDescending { it.length }.forEach {
+            safe = safe.replace(it, "[REDACTED]")
+        }
+        return safe.replace(Regex("(?i)Bearer\\s+[^\\s\"',}]+"), "Bearer [REDACTED]")
+            .replace(Regex("sk-[A-Za-z0-9_-]{8,}"), "[REDACTED]")
+    }
 
     fun forHttpStatus(status: Int, rawBody: String): String {
-        val raw = rawBody.trim().replace(Regex("\\s+"), " ")
+        val raw = redact(rawBody).trim().replace(Regex("\\s+"), " ")
         val hint = when {
             status == 401 || status == 403 ->
                 "鉴权失败：请检查 API Key 是否正确、是否与当前服务商匹配（更换服务商后必须更换 Key）"

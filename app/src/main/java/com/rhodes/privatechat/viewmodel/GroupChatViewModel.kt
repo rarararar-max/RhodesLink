@@ -1720,7 +1720,7 @@ class GroupChatViewModel(
                     repository.updateLastMessage(groupSessionId, "${last.speaker}：${last.message.take(50)}", System.currentTimeMillis())
                     if (!isAuto) {
                         val today = sharedUtils.beijingSdf("yyyyMMdd").format(java.util.Date())
-                        settings.grantDailyLmb(today, 10)
+                        settings.grantDailyLmb(today, 50)
                     }
                 }
                 if (filtered.isNotEmpty()) markGroupUnreadIfNotCurrent(groupSessionId, visibleGroupMessageCount(filtered, mode))

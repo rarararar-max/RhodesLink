@@ -39,10 +39,11 @@ class ModelErrorMessagesTest {
 
     @Test
     fun rawPayloadIsTruncatedButNeverDroppedWhenPresent() {
-        val long = "x".repeat(500)
+        val long = "x".repeat(2000)
         val message = ModelErrorMessages.forHttpStatus(500, long)
         assertTrue("原始信息要保留", message.contains("原始信息"))
-        assertTrue("但不能把整段原文塞进界面: ${message.length}", message.length < 400)
+        assertTrue("保留足够的诊断信息", message.contains("x".repeat(600)))
+        assertTrue("仍限制错误长度: ${message.length}", message.length < 800)
     }
 
     @Test

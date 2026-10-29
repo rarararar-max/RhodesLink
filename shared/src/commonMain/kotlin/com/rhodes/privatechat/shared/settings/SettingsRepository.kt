@@ -871,6 +871,11 @@ class SettingsRepository(private val settings: ObservableSettings) {
         get() = getString("vector_provider", "ali")
         set(value) = putString("vector_provider", value)
 
+    /** Legacy installs used the OpenAI-compatible Alibaba endpoint. Keep that as the default. */
+    var vectorProtocol: String
+        get() = getString("vector_protocol", "openai_compat")
+        set(value) = putString("vector_protocol", value)
+
     var vectorModelName: String
         get() = getString("vector_model_name", "text-embedding-v4")
         set(value) = putString("vector_model_name", value)
@@ -942,7 +947,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
         set(value) = putString("vision_api_key", value)
 
     var asrModelName: String
-        get() = getString("asr_model_name", "qwen3.5-omni-flash-realtime|qwen3-asr-flash-realtime")
+        get() = getString("asr_model_name", "qwen3-asr-flash-realtime")
         set(value) = putString("asr_model_name", value)
 
     var asrBaseUrl: String
@@ -1428,6 +1433,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
         visionMode: String = this.visionMode,
         asrConfigurations: Map<String, com.rhodes.privatechat.shared.voice.VoiceProviderConfiguration> = emptyMap(),
         ttsConfigurations: Map<String, com.rhodes.privatechat.shared.voice.VoiceProviderConfiguration> = emptyMap(),
+        vectorProtocol: String = this.vectorProtocol,
     ) {
         val asrProfiles = voiceProviderConfigurations("asr") + asrConfigurations +
             (asrProvider to com.rhodes.privatechat.shared.voice.VoiceProviderConfiguration(asrBaseUrl, asrModelName, asrApiKey))
@@ -1439,7 +1445,7 @@ class SettingsRepository(private val settings: ObservableSettings) {
             "tts_provider_configurations" to Json.encodeToString(ttsProfiles),
             "provider" to provider, "model_name" to normalizeDeepSeekModel(provider, modelName), "custom_url" to customUrl, "api_key" to apiKey,
             "vision_base_url" to visionBaseUrl, "vision_provider" to visionProvider, "vision_model_name" to visionModelName, "vision_api_key" to visionApiKey,
-            "vector_provider_mode" to vectorProviderMode, "vector_provider" to vectorProvider, "vector_base_url" to vectorBaseUrl, "vector_model_name" to vectorModelName, "vector_api_key" to vectorApiKey,
+            "vector_provider_mode" to vectorProviderMode, "vector_provider" to vectorProvider, "vector_protocol" to vectorProtocol, "vector_base_url" to vectorBaseUrl, "vector_model_name" to vectorModelName, "vector_api_key" to vectorApiKey,
             "asr_base_url" to asrBaseUrl, "asr_provider" to asrProvider, "asr_model_name" to asrModelName, "asr_api_key" to asrApiKey,
             "tts_base_url" to ttsBaseUrl, "tts_provider" to ttsProvider, "tts_model_name" to ttsModelName, "tts_api_key" to ttsApiKey,
         )

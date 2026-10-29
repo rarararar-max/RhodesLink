@@ -4,6 +4,9 @@ import com.rhodes.privatechat.shared.model.ThinkingParam
 
 /** Explicit allowlists: never assume that every model from a provider accepts images or thinking flags. */
 object ModelCapabilities {
+    fun reasoningEffort(provider: String, model: String): String? =
+        if (provider == "minimax" && model in setOf("MiniMax-M3.1-Flash", "MiniMax-M3")) "max" else null
+
     fun supportsImages(provider: String, model: String): Boolean = when (provider) {
         "deepseek" -> model in setOf("deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "deepseek-chat", "deepseek-reasoner")
         "ali" -> model == "qwen3.8-flash"

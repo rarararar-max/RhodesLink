@@ -15,7 +15,9 @@ data class ChatCompletionRequest(
     @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
     val thinking: ThinkingParam? = null,
     @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
-    val enable_thinking: Boolean? = null
+    val enable_thinking: Boolean? = null,
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val reasoning_effort: String? = null
 )
 
 @Serializable

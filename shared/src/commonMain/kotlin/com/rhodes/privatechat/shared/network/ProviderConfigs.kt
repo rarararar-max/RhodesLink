@@ -12,8 +12,8 @@ val providers = mapOf(
     "minimax" to ProviderConfig(
         id = "minimax",
         name = "MiniMax",
-        baseUrl = "https://api.minimax.chat/v1/chat/completions",
-        models = listOf("abab6.5-chat", "abab5.5-chat")
+        baseUrl = "https://api.minimax.cn/v1/chat/completions",
+        models = listOf("MiniMax-M3.1-Flash", "MiniMax-M3", "abab6.5-chat", "abab5.5-chat")
     ),
     "byte" to ProviderConfig(
         id = "byte",
@@ -72,3 +72,14 @@ val providers = mapOf(
         models = listOf("自填")
     )
 )
+
+/**
+ * MiniMax changed its OpenAI-compatible endpoint for the M3 family.
+ * Keep the legacy endpoint for users who still have an abab model selected.
+ */
+fun resolveProviderEndpoint(providerId: String, modelName: String, defaultUrl: String): String =
+    if (providerId == "minimax" && modelName.startsWith("abab", ignoreCase = true)) {
+        "https://api.minimax.chat/v1/chat/completions"
+    } else {
+        defaultUrl
+    }

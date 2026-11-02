@@ -464,6 +464,7 @@ class AiSupportViewModel(
         settings.vectorProvider,
         settings.vectorBaseUrl,
         settings.vectorModelName,
+        settings.vectorProtocol,
     )
 
     private companion object {

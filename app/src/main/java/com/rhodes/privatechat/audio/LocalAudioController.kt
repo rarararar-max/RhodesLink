@@ -26,6 +26,7 @@ class LocalAudioController(private val context: Context) {
     private var startedAt: Long = 0L
     @Volatile private var isRecording = false
     private var recordingThread: Thread? = null
+    @Volatile private var recordingFailure: Throwable? = null
     private var pcmFile: File? = null
     @Volatile private var currentRecordingLevel = 0f
     @Volatile private var currentRecordingBytes = 0
@@ -35,11 +36,12 @@ class LocalAudioController(private val context: Context) {
     private var playbackCompletion: ((Boolean) -> Unit)? = null
 
     @SuppressLint("MissingPermission")
+    @Synchronized
     fun startRecording(): Boolean {
         if (context.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return false
         if (isRecording) stopRecordingInternal()
         stopPlayback()
-        val file = File(File(context.filesDir, "voice").apply { mkdirs() }, "voice_${System.currentTimeMillis()}.pcm")
+        val file = File(File(context.filesDir, "voice").apply { mkdirs() }, "voice_${java.util.UUID.randomUUID()}.pcm")
         val minBufferSize = AudioRecord.getMinBufferSize(RECORD_SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         if (minBufferSize <= 0) return false
         return runCatching {
@@ -57,13 +59,19 @@ class LocalAudioController(private val context: Context) {
             pcmFile = file
             startedAt = System.currentTimeMillis()
             lastSpeechAt = startedAt
+            recordingFailure = null
             isRecording = true
             audioRecord.startRecording()
             recordingThread = thread(name = "rhodes-audio-record") {
-                FileOutputStream(file).use { output ->
+                try { FileOutputStream(file).use { output ->
                     val buffer = ByteArray(bufferSize)
                     while (isRecording) {
                         val read = audioRecord.read(buffer, 0, buffer.size)
+                        if (read < 0) {
+                            if (isRecording) error("录音设备读取失败：$read")
+                            break
+                        }
+                        if (read == 0) { Thread.sleep(10); continue }
                         if (read > 0) {
                             val average = averageAbsPcm16(buffer, read)
                             currentRecordingLevel = (average / 4000f).coerceIn(0f, 1f)
@@ -76,6 +84,11 @@ class LocalAudioController(private val context: Context) {
                             }
                         }
                     }
+                } } catch (e: Exception) {
+                    if (isRecording) recordingFailure = e
+                } finally {
+                    isRecording = false
+                    currentRecordingLevel = 0f
                 }
             }
             true
@@ -88,13 +101,13 @@ class LocalAudioController(private val context: Context) {
         }
     }
 
+    @Synchronized
     fun stopRecording(): RecordedAudio? {
         val pcm = recordingFile ?: return null
-        val durationMs = (System.currentTimeMillis() - startedAt).coerceAtLeast(300L)
         stopRecordingInternal()
         recordingFile = null
         pcmFile = null
-        if (!pcm.exists() || pcm.length() == 0L) {
+        if (recordingFailure != null || !pcm.exists() || pcm.length() == 0L) {
             pcm.delete()
             return null
         }
@@ -105,7 +118,7 @@ class LocalAudioController(private val context: Context) {
                 FileInputStream(pcm).use { input -> input.copyTo(output) }
             }
             pcm.delete()
-            RecordedAudio(wav.absolutePath, durationMs)
+            RecordedAudio(wav.absolutePath, ((wav.length() - WAV_HEADER_SIZE) * 1000 / (RECORD_SAMPLE_RATE * 2)).coerceAtLeast(1L))
         }.getOrElse {
             pcm.delete()
             null
@@ -119,7 +132,7 @@ class LocalAudioController(private val context: Context) {
 
     fun saveTtsAudio(bytes: ByteArray, extension: String = "mp3"): RecordedAudio? {
         if (bytes.isEmpty()) return null
-        val file = File(File(context.filesDir, "voice").apply { mkdirs() }, "tts_${System.currentTimeMillis()}.$extension")
+        val file = File(File(context.filesDir, "voice").apply { mkdirs() }, "tts_${java.util.UUID.randomUUID()}.$extension")
         file.writeBytes(bytes)
         return RecordedAudio(file.absolutePath, (bytes.size / 16L).coerceIn(800L, 120_000L))
     }
@@ -132,8 +145,8 @@ class LocalAudioController(private val context: Context) {
         stopPlayback()
         val file = File(path.removePrefix("file://"))
         runCatching {
-            if (!requestPlaybackFocus()) error("无法获取音频播放焦点")
             playbackCompletion = onComplete
+            if (!requestPlaybackFocus()) error("无法获取音频播放焦点")
             player = MediaPlayer().apply {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                     setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
@@ -168,6 +181,7 @@ class LocalAudioController(private val context: Context) {
     }
 
     /** Releases recording, playback, audio focus, and transient in-memory buffers on screen exit. */
+    @Synchronized
     fun release() {
         stopRecordingInternal()
         recordingFile?.delete()
@@ -191,6 +205,8 @@ class LocalAudioController(private val context: Context) {
 
     fun hasReachedRecordingLimit(): Boolean =
         currentRecordingBytes >= MAX_RECORDING_BYTES || (startedAt > 0L && System.currentTimeMillis() - startedAt >= MAX_RECORDING_MS)
+
+    fun hasRecordingStopped(): Boolean = recordingFile != null && !isRecording
 
     fun getCurrentRecordingLevel(): Float = currentRecordingLevel
 

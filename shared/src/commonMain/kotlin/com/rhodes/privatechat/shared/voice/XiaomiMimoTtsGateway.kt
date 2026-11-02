@@ -37,7 +37,9 @@ class XiaomiMimoTtsGateway(
                 put("voice", request.voiceId.ifBlank { "mimo_default" })
             })
         }
-        val response = createHttpClient().post(endpoint) {
+        val client = createHttpClient()
+        try {
+        val response = client.post(endpoint) {
             header("api-key", apiKey)
             contentType(ContentType.Application.Json)
             setBody(body)
@@ -53,6 +55,7 @@ class XiaomiMimoTtsGateway(
         if (bytes.isEmpty()) error("小米 MiMo TTS 返回空音频")
         val durationMs = (speechText.length.coerceAtLeast(1) * 180L).coerceAtMost(60_000L)
         return TtsResult(audioBytes = bytes, durationMs = durationMs)
+        } finally { client.close() }
     }
 
     private companion object {

@@ -64,12 +64,12 @@ fun createTtsGateway(endpoint: String, apiKey: String, modelName: String, provid
     val isVocu = provider == "vocu" || endpoint.contains("vocu.ai")
     val isVolcano = provider == "volcano" || endpoint.contains("openspeech.bytedance.com")
     return if (endpoint.isNotBlank() && apiKey.isNotBlank() && (isVocu || modelName.isNotBlank())) {
-        when {
+        ReliableTtsGateway(when {
             isVocu -> VocuTtsGateway(endpoint, apiKey)
             isVolcano -> VolcanoTtsGateway(endpoint, apiKey, resourceId = modelName)
             provider == "xiaomi" || endpoint.contains("api.xiaomimimo.com") -> XiaomiMimoTtsGateway(endpoint, apiKey, modelName)
             else -> MinimaxTtsGateway(endpoint = endpoint, apiKey = apiKey, modelName = modelName)
-        }
+        }, apiKey)
     } else {
         DisabledTtsGateway()
     }

@@ -2,7 +2,6 @@ package com.rhodes.privatechat.ui.model
 
 import android.content.ClipboardManager
 import android.content.Context
-import android.media.MediaPlayer
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -60,6 +59,8 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     val viewModel: MainViewModel = koinViewModel()
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
+    val testAudio = remember { com.rhodes.privatechat.audio.LocalAudioController(ctx) }
+    DisposableEffect(testAudio) { onDispose { testAudio.release() } }
 
     val providerIds = providers.keys.toList()
     val providerNames = providerIds.map { providers.getValue(it).name }
@@ -289,18 +290,16 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 if (audioBytes == null || audioBytes.isEmpty()) {
                     ttsTestResult = "测试失败：服务没有返回音频数据"
                 } else {
-                    val file = java.io.File(ctx.cacheDir, "tts_test.mp3")
-                    file.writeBytes(audioBytes)
-                    MediaPlayer().apply {
-                        setDataSource(file.absolutePath)
-                        prepare()
-                        start()
-                        setOnCompletionListener { release(); file.delete() }
+                    val file = testAudio.saveTtsAudio(audioBytes) ?: error("无法保存测试音频")
+                    testAudio.play(file.path) { success ->
+                        testAudio.deleteAudio(file.path)
+                        ttsTestResult = if (success) "连接成功，测试语音已播放" else "测试音频播放失败，请检查格式与播放设备"
                     }
                     ttsTestResult = "连接成功（测试语音正在播放）"
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e
             } catch (e: Exception) {
-                ttsTestResult = "测试失败：${e.message?.take(100) ?: "请检查文字转语音配置"}"
+                ttsTestResult = "测试失败：${com.rhodes.privatechat.shared.network.ModelErrorMessages.redact(e.message ?: "请检查文字转语音配置", ttsApiKey, apiKey).take(400)}"
             } finally { testing = null }
         }
     }
@@ -339,15 +338,16 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 require(if (asrProvider == "xiaomi") asrBaseUrl.trim().startsWith("http") else asrBaseUrl.trim().startsWith("ws")) { if (asrProvider == "xiaomi") "小米语音识别地址需要以 http:// 或 https:// 开头" else "语音识别地址需要以 ws:// 或 wss:// 开头" }
                 require(asrModelName.trim().isNotBlank()) { "请填写语音识别模型配置" }
                 require(key.isNotBlank()) { "请填写语音识别密钥，或先填写聊天密钥" }
-                val pcm = ctx.assets.open("diagnostics/asr_test_16k.pcm").use { it.readBytes() }
+                val pcm = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { ctx.assets.open("diagnostics/asr_test_16k.pcm").use { it.readBytes() } }
                 val result = createAsrGateway(asrBaseUrl.trim(), key, asrModelName.trim(), asrProvider).transcribe(AsrRequest(pcm))
                 require(result.text.isNotBlank()) { "接口已返回，但未识别到文字；请检查模型和音频协议" }
                 val normalized = result.text.replace(Regex("[\\s，。！？、,.!?]"), "")
                 val expected = "今天下午三点请提醒我喝水"
                 asrTestResult = if (normalized == expected) "识别成功：${result.text}（已验证测试语音）"
                     else "接口已返回，但测试语音不匹配：${result.text.take(100)}；预期：今天下午三点，请提醒我喝水。"
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e
             } catch (e: Exception) {
-                asrTestResult = "测试失败：${e.message?.take(100) ?: "请检查语音识别配置"}"
+                asrTestResult = "测试失败：${com.rhodes.privatechat.shared.network.ModelErrorMessages.redact(e.message ?: "请检查语音识别配置", asrApiKey, apiKey).take(400)}"
             } finally { testing = null }
         }
     }

@@ -57,6 +57,8 @@ import com.rhodes.privatechat.shared.voice.hasAsrConfiguration
 import com.rhodes.privatechat.shared.voice.hasTtsConfiguration
 import org.koin.compose.koinInject
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 
 @Composable
@@ -86,8 +88,50 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
     var imageSending by rememberSaveable(groupId) { mutableStateOf(false) }
     var messageSaving by rememberSaveable(groupId) { mutableStateOf(false) }
     var scrollToLatestRequest by remember(groupId) { mutableStateOf(0L) }
-    var recordingVoice by rememberSaveable(groupId) { mutableStateOf(false) }
+    var recordingVoice by remember(groupId) { mutableStateOf(false) }
+    var recognizingVoice by remember(groupId) { mutableStateOf(false) }
+    var recognitionJob by remember(groupId) { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val audioController = remember { LocalAudioController(ctx) }
+    fun stopAndRecognizeVoice() {
+        if (recognizingVoice) return
+        recognizingVoice = true
+        recordingVoice = false
+        recognitionJob = scope.launch {
+            var recorded: com.rhodes.privatechat.audio.RecordedAudio? = null
+            try {
+                // Assign within NonCancellable so disposal cannot lose the generated WAV path.
+                withContext(Dispatchers.IO + kotlinx.coroutines.NonCancellable) { recorded = audioController.stopRecording() }
+                kotlinx.coroutines.yield()
+                val clip = recorded
+                if (clip == null) {
+                    android.widget.Toast.makeText(ctx, "没有录到声音，请检查麦克风后重试", android.widget.Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                val pcm = withContext(Dispatchers.IO) { audioController.readPcmFromWav(clip.path) }
+                val asr = com.rhodes.privatechat.shared.voice.createAsrGateway(settings.asrBaseUrl, settings.asrApiKey.ifBlank { settings.apiKey }, settings.asrModelName, settings.asrProvider)
+                val text = asr.transcribe(AsrRequest(pcm)).text.trim()
+                if (text.isBlank()) {
+                    android.widget.Toast.makeText(ctx, "没有识别到文字", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    inputText = if (inputText.isBlank()) text else "$inputText\n$text"
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) {
+                android.widget.Toast.makeText(ctx, "语音识别失败：${e.message?.take(240) ?: "未知错误"}", android.widget.Toast.LENGTH_LONG).show()
+            } finally {
+                recorded?.let { audioController.deleteAudio(it.path) }
+                recognizingVoice = false
+            }
+        }
+    }
+
+    LaunchedEffect(recordingVoice) {
+        while (recordingVoice) {
+            if (audioController.hasReachedRecordingLimit() || audioController.hasRecordingStopped()) { stopAndRecognizeVoice(); break }
+            kotlinx.coroutines.delay(200)
+        }
+    }
+
     var voiceEnabled by rememberSaveable(groupId) { mutableStateOf(settings.getBoolean("group_tts_$groupId", false)) }
     val enteredAt = remember(groupId) { System.currentTimeMillis() }
     var seenSpeechKeys by remember(groupId) { mutableStateOf(emptySet<String>()) }
@@ -121,6 +165,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
     DisposableEffect(groupId) {
         if (groupId.isNotBlank()) viewModel.setCurrentGroup(groupId)
         onDispose {
+            recognitionJob?.cancel()
             audioController.release()
             chatTtsPlayer.release()
             viewModel.clearCurrentGroup()
@@ -368,8 +413,10 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                             if (visionReady) MainActivity.takePhoto { pendingImageUri = it }
                             else android.widget.Toast.makeText(ctx, "图片聊天需要先设置识图模型，请在模型设置中填写识图地址、模型名和密钥。", android.widget.Toast.LENGTH_LONG).show()
                         }
-                        MenuChip(if (recordingVoice) "停止录音" else "录音", if (recordingVoice) ErrorRed else Primary) {
-                            if (!recordingVoice && !settings.hasAsrConfiguration()) {
+                        MenuChip(if (recognizingVoice) "识别中…" else if (recordingVoice) "停止录音" else "录音", if (recordingVoice) ErrorRed else Primary) {
+                            if (recognizingVoice) {
+                                // One recording/recognition at a time.
+                            } else if (!recordingVoice && !settings.hasAsrConfiguration()) {
                                 android.widget.Toast.makeText(ctx, "请先在模型设置中填写语音识别模型和密钥。", android.widget.Toast.LENGTH_LONG).show()
                             } else if (!recordingVoice) {
                                 MainActivity.requestMicrophonePermission { granted ->
@@ -380,23 +427,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                                     }
                                 }
                             } else {
-                                recordingVoice = false
-                                val recorded = audioController.stopRecording()
-                                if (recorded == null) {
-                                    android.widget.Toast.makeText(ctx, "录音为空", android.widget.Toast.LENGTH_SHORT).show()
-                                } else {
-                                    scope.launch {
-                                        try {
-                                            val asr = com.rhodes.privatechat.shared.voice.createAsrGateway(settings.asrBaseUrl, settings.asrApiKey.ifBlank { settings.apiKey }, settings.asrModelName, settings.asrProvider)
-                                            val text = asr.transcribe(AsrRequest(audioController.readPcmFromWav(recorded.path))).text
-                                            if (text.isBlank()) android.widget.Toast.makeText(ctx, "没有识别到文字", android.widget.Toast.LENGTH_SHORT).show() else inputText = text
-                                        } catch (e: Exception) {
-                                            android.widget.Toast.makeText(ctx, "语音识别失败：${e.message?.take(40) ?: "未知错误"}", android.widget.Toast.LENGTH_SHORT).show()
-                                        } finally {
-                                            audioController.deleteAudio(recorded.path)
-                                        }
-                                    }
-                                }
+                                stopAndRecognizeVoice()
                             }
                         }
                     }

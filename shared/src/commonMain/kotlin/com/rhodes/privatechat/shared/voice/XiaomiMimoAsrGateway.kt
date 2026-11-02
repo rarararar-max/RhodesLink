@@ -27,6 +27,8 @@ class XiaomiMimoAsrGateway(
     @OptIn(ExperimentalEncodingApi::class)
     override suspend fun transcribe(request: AsrRequest): AsrResult {
         if (request.pcm16kMonoAudio.isEmpty()) return AsrResult("")
+        validateAsrAudio(request)
+        require(apiKey.isNotBlank()) { "请填写语音识别密钥" }
         val wav = pcm16ToWav(request.pcm16kMonoAudio, request.sampleRate)
         val body = buildJsonObject {
             put("model", modelName)
@@ -48,14 +50,16 @@ class XiaomiMimoAsrGateway(
         require(request.sampleRate > 0 && request.pcm16kMonoAudio.size % 2 == 0) { "录音格式无效：需要单声道16位 PCM" }
         val client = createHttpClient()
         val raw = try {
-            val response = client.post(endpoint) {
-                header("api-key", apiKey)
+            kotlinx.coroutines.withTimeoutOrNull(90_000L) {
+            val response = client.post(endpoint.trim()) {
+                header("api-key", apiKey.trim())
                 contentType(ContentType.Application.Json)
                 setBody(body)
             }
             val text = response.bodyAsText()
-            if (!response.status.isSuccess()) error("小米 MiMo ASR 错误 ${response.status.value}: ${text.take(300)}；音频=${wav.size}字节，采样率=${request.sampleRate}")
+            if (!response.status.isSuccess()) error("小米 MiMo ASR 错误 ${response.status.value}: ${com.rhodes.privatechat.shared.network.ModelErrorMessages.redact(text, apiKey).take(300)}；音频=${wav.size}字节，采样率=${request.sampleRate}")
             text
+            } ?: error("语音识别超时，请检查网络后重试")
         } finally {
             client.close()
         }

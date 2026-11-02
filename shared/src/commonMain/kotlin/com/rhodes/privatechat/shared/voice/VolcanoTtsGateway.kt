@@ -38,7 +38,6 @@ class VolcanoTtsGateway(
     /** X-Api-Resource-Id：seed-icl-2.0（复刻 2.0）或 seed-icl-1.0（复刻 1.0）。 */
     private val resourceId: String,
 ) : TtsGateway {
-    private val client = createHttpClient()
 
     override suspend fun synthesize(request: TtsRequest): TtsResult {
         require(request.voiceId.isNotBlank()) {
@@ -51,8 +50,10 @@ class VolcanoTtsGateway(
         val speechRate = ((request.speed.coerceIn(0.1, 2.0) - 1.0) * 100).roundToInt().coerceIn(-50, 100)
         val audio = ArrayList<ByteArray>(segments.size)
         var billedChars = 0
+        val client = createHttpClient()
+        try {
         segments.forEach { segment ->
-            val result = synthesizeSegment(segment, request.voiceId, speechRate, request.format)
+            val result = synthesizeSegment(client, segment, request.voiceId, speechRate, request.format)
             if (result.first.isNotEmpty()) audio += result.first
             billedChars += result.second
         }
@@ -60,9 +61,10 @@ class VolcanoTtsGateway(
         if (bytes.isEmpty()) error("火山 TTS 返回空音频")
         // 时长按计费字符数估算（火山按字符计费），仅用于界面进度显示。
         return TtsResult(audioBytes = bytes, durationMs = (billedChars.coerceAtLeast(1) * 180L).coerceAtMost(120_000L))
+        } finally { client.close() }
     }
 
-    private suspend fun synthesizeSegment(text: String, speaker: String, speechRate: Int, format: String): Pair<ByteArray, Int> {
+    private suspend fun synthesizeSegment(client: io.ktor.client.HttpClient, text: String, speaker: String, speechRate: Int, format: String): Pair<ByteArray, Int> {
         val requestId = randomRequestId()
         val response = client.post(endpoint) {
             contentType(ContentType.Application.Json)
@@ -117,6 +119,7 @@ class VolcanoTtsGateway(
                 )
             }
         }
+        check(collector.sawEndFrame) { "火山 TTS 连接提前结束，未收到完整音频；请检查网络后重试" }
         val bytes = collector.audioBytes()
         if (bytes.isEmpty()) {
             error(

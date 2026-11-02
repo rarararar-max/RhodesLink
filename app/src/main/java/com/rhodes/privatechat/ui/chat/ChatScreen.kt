@@ -346,8 +346,53 @@ fun ChatScreen(
     var pendingImageUri by rememberSaveable { mutableStateOf("") }
     var imageSending by rememberSaveable { mutableStateOf(false) }
     var scrollToLatestRequest by remember(displaySessionId) { mutableStateOf(0L) }
-    var recordingVoice by rememberSaveable { mutableStateOf(false) }
+    var recordingVoice by remember(op.id) { mutableStateOf(false) }
+    var recognizingVoice by remember(op.id) { mutableStateOf(false) }
+    var recognitionJob by remember(op.id) { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val audioController = remember { LocalAudioController(context) }
+    fun stopAndRecognizeVoice() {
+        if (recognizingVoice) return
+        recognizingVoice = true
+        recordingVoice = false
+        recognitionJob = scope.launch {
+            var recorded: com.rhodes.privatechat.audio.RecordedAudio? = null
+            try {
+                // Assign within NonCancellable so disposal cannot lose the generated WAV path.
+                withContext(Dispatchers.IO + kotlinx.coroutines.NonCancellable) { recorded = audioController.stopRecording() }
+                kotlinx.coroutines.yield()
+                val clip = recorded
+                if (clip == null) {
+                    Toast.makeText(context, "没有录到声音，请检查麦克风后重试", Toast.LENGTH_SHORT).show()
+                    return@launch
+                }
+                val pcm = withContext(Dispatchers.IO) { audioController.readPcmFromWav(clip.path) }
+                val asr = com.rhodes.privatechat.shared.voice.createAsrGateway(settings.asrBaseUrl, settings.asrApiKey.ifBlank { settings.apiKey }, settings.asrModelName, settings.asrProvider)
+                val text = asr.transcribe(AsrRequest(pcm)).text.trim()
+                if (text.isBlank()) {
+                    Toast.makeText(context, "没有识别到文字", Toast.LENGTH_SHORT).show()
+                } else {
+                    if (viewModel.selectedOperator.value?.id == op.id) {
+                        val current = viewModel.inputText.value
+                        viewModel.updateInputText(if (current.isBlank()) text else "$current\n$text")
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) {
+                Toast.makeText(context, "语音识别失败：${e.message?.take(240) ?: "未知错误"}", Toast.LENGTH_LONG).show()
+            } finally {
+                recorded?.let { audioController.deleteAudio(it.path) }
+                recognizingVoice = false
+            }
+        }
+    }
+
+    LaunchedEffect(recordingVoice) {
+        while (recordingVoice) {
+            if (audioController.hasReachedRecordingLimit() || audioController.hasRecordingStopped()) { stopAndRecognizeVoice(); break }
+            kotlinx.coroutines.delay(200)
+        }
+    }
+
     var voiceEnabled by rememberSaveable(op.id) { mutableStateOf(settings.getBoolean("chat_tts_${op.id}", false)) }
     val enteredAt = remember(op.id) { System.currentTimeMillis() }
     var seenSpeechKeys by remember(op.id) { mutableStateOf(emptySet<String>()) }
@@ -364,7 +409,7 @@ fun ChatScreen(
     }
 
     DisposableEffect(audioController, chatTtsPlayer) {
-        onDispose { audioController.release(); chatTtsPlayer.release() }
+        onDispose { recognitionJob?.cancel(); audioController.release(); chatTtsPlayer.release() }
     }
 
     LaunchedEffect(messages, voiceEnabled, displayOp.voiceName, displayOp.voiceSpeed) {
@@ -567,8 +612,10 @@ fun ChatScreen(
                             if (visionReady) MainActivity.takePhoto { pendingImageUri = it }
                             else Toast.makeText(context, "图片聊天需要先设置识图模型，请在模型设置中填写识图地址、模型名和密钥。", Toast.LENGTH_LONG).show()
                         }
-                        MenuChip(if (recordingVoice) "⏹ 录音" else "🎤 输入", if (recordingVoice) ErrorRed else Primary) {
-                            if (!recordingVoice && !settings.hasAsrConfiguration()) {
+                        MenuChip(if (recognizingVoice) "识别中…" else if (recordingVoice) "⏹ 录音" else "🎤 输入", if (recordingVoice) ErrorRed else Primary) {
+                            if (recognizingVoice) {
+                                // One recording/recognition at a time.
+                            } else if (!recordingVoice && !settings.hasAsrConfiguration()) {
                                 Toast.makeText(context, "请先在模型设置中填写语音识别模型和密钥。", Toast.LENGTH_LONG).show()
                             } else if (!recordingVoice) {
                                 MainActivity.requestMicrophonePermission { granted ->
@@ -579,23 +626,7 @@ fun ChatScreen(
                                     }
                                 }
                             } else {
-                                recordingVoice = false
-                                val recorded = audioController.stopRecording()
-                                if (recorded == null) {
-                                    Toast.makeText(context, "录音为空", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    scope.launch {
-                                        try {
-                                            val asr = com.rhodes.privatechat.shared.voice.createAsrGateway(settings.asrBaseUrl, settings.asrApiKey.ifBlank { settings.apiKey }, settings.asrModelName, settings.asrProvider)
-                                            val text = asr.transcribe(AsrRequest(audioController.readPcmFromWav(recorded.path))).text
-                                            if (text.isBlank()) Toast.makeText(context, "没有识别到文字", Toast.LENGTH_SHORT).show() else viewModel.updateInputText(text)
-                                        } catch (e: Exception) {
-                                            Toast.makeText(context, "语音识别失败：${e.message?.take(40) ?: "未知错误"}", Toast.LENGTH_SHORT).show()
-                                        } finally {
-                                            audioController.deleteAudio(recorded.path)
-                                        }
-                                    }
-                                }
+                                stopAndRecognizeVoice()
                             }
                         }
                         MenuChip("📞 通话", AccentOrange) {

@@ -89,34 +89,39 @@ fun VoiceCallScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
     val settings: SettingsRepository = koinInject()
     val scope = rememberCoroutineScope()
     val audio = remember { LocalAudioController(context) }
-    var recording by rememberSaveable { mutableStateOf(false) }
+    var recording by remember { mutableStateOf(false) }
     var transcript by rememberSaveable { mutableStateOf("") }
     var reply by rememberSaveable { mutableStateOf("") }
-    var busy by rememberSaveable { mutableStateOf(false) }
-    var speaking by rememberSaveable { mutableStateOf(false) }
-    var autoMode by rememberSaveable { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var speaking by remember { mutableStateOf(false) }
+    var autoMode by remember { mutableStateOf(false) }
     var userSpeechDetected by rememberSaveable { mutableStateOf(false) }
     var hasEnded by rememberSaveable { mutableStateOf(false) }
     var level by remember { mutableFloatStateOf(0f) }
     var turns by rememberSaveable { mutableStateOf(listOf<Pair<String, String>>()) }
+    var voiceJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val callStartedAt = remember { System.currentTimeMillis() }
 
     fun finishCall() {
         if (hasEnded) return
         hasEnded = true
+        voiceJob?.cancel()
+        voiceJob = null
         if (recording) audio.stopRecording()?.let { audio.deleteAudio(it.path) }
         recording = false
         autoMode = false
         audio.stopPlayback()
         val totalSeconds = ((System.currentTimeMillis() - callStartedAt) / 1000).toInt().coerceAtLeast(1)
         scope.launch {
-            viewModel.chatViewModel.saveCallSummary(sessionId, totalSeconds)
-            onBack()
+            try { viewModel.chatViewModel.saveCallSummary(sessionId, totalSeconds) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (_: Exception) { Toast.makeText(context, "通话已结束，摘要保存失败", Toast.LENGTH_SHORT).show() }
+            finally { onBack() }
         }
     }
 
     BackHandler { finishCall() }
-    DisposableEffect(audio) { onDispose { audio.release() } }
+    DisposableEffect(audio) { onDispose { voiceJob?.cancel(); audio.release() } }
 
     suspend fun synthesizeAndPlay(tts: TtsGateway, text: String) {
         val voiceId = settings.effectiveVoiceId(operator.voiceName)
@@ -138,15 +143,20 @@ fun VoiceCallScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
                 val audioFile = currentResult.audioBytes?.let { audio.saveTtsAudio(it) }
                 Log.d("RHODES_AUDIO", "文件保存: ${audioFile?.path} 大小=${if (audioFile != null) java.io.File(audioFile.path).length() else 0}")
                 if (audioFile != null) {
-                    var done = false
-                    Log.d("RHODES_AUDIO", "开始播放: ${audioFile.path}")
-                    audio.play(audioFile.path, settings.getOperatorVoiceVolume(operator.id)) { done = true }
-                    var waited = 0L
-                    while (!done && waited < 90_000L) { delay(120); waited += 120 }
-                    Log.d("RHODES_AUDIO", "播放完成: waited=${waited}ms")
-                    audio.deleteAudio(audioFile.path)
+                    try {
+                        var done = false
+                        var success = false
+                        audio.play(audioFile.path, settings.getOperatorVoiceVolume(operator.id)) { success = it; done = true }
+                        com.rhodes.privatechat.shared.voice.withVoiceDeadline(90_000L, "语音播放") {
+                            while (!done) delay(100)
+                        }
+                        check(success) { "语音播放失败，请检查音频格式或播放设备" }
+                    } finally {
+                        audio.stopPlayback()
+                        audio.deleteAudio(audioFile.path)
+                    }
                 } else {
-                    Log.w("RHODES_AUDIO", "audioFile 为空，跳过播放")
+                    error("语音服务未返回可播放的音频")
                 }
                 if (nextResult == null) break
                 currentResult = nextResult.await()
@@ -157,14 +167,19 @@ fun VoiceCallScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
         }
     }
 
-    fun processRecording(path: String) {
-        scope.launch {
-            busy = true
+    fun processRecording() {
+        if (hasEnded || busy || voiceJob?.isActive == true) return
+        busy = true
+        voiceJob = scope.launch {
+            var recorded: com.rhodes.privatechat.audio.RecordedAudio? = null
             try {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO + kotlinx.coroutines.NonCancellable) { recorded = audio.stopRecording() }
+                kotlinx.coroutines.yield()
+                val path = recorded?.path ?: error("没有录到声音，请检查麦克风后重试")
                 val file = java.io.File(path.removePrefix("file://"))
                 Log.d("RHODES_AUDIO", "processRecording: fileExists=${file.exists()} fileSize=${if (file.exists()) file.length() else 0}")
                 transcript = "正在识别你说的话..."
-                val pcmBytes = audio.readPcmFromWav(path)
+                val pcmBytes = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { audio.readPcmFromWav(path) }
                 Log.d("RHODES_DEBUG", "[VoiceCall] PCM 数据大小=${pcmBytes.size}")
                 val asrKey = settings.asrApiKey.ifBlank { settings.apiKey }
                 val text = com.rhodes.privatechat.shared.voice.createAsrGateway(settings.asrBaseUrl, asrKey, settings.asrModelName, settings.asrProvider).transcribe(AsrRequest(pcmBytes)).text.trim()
@@ -205,10 +220,11 @@ $recent"""
                 throw e
             } catch (e: Exception) {
                 Log.e("RHODES_AUDIO", "processRecording 异常: ${e.message}", e)
-                reply = "本次通话失败"
-                Toast.makeText(context, "通话失败：${e.message?.take(40) ?: "未知错误"}", Toast.LENGTH_SHORT).show()
+                autoMode = false
+                reply = "本次通话失败，请检查配置后重试"
+                Toast.makeText(context, "通话失败：${e.message?.take(240) ?: "未知错误"}", Toast.LENGTH_SHORT).show()
             } finally {
-                audio.deleteAudio(path)
+                recorded?.let { audio.deleteAudio(it.path) }
                 busy = false
                 userSpeechDetected = false
             }
@@ -219,6 +235,11 @@ $recent"""
         while (recording) {
             level = audio.getCurrentRecordingLevel()
             if (level > 0.12f) userSpeechDetected = true
+            if (audio.hasReachedRecordingLimit() || audio.hasRecordingStopped()) {
+                recording = false
+                processRecording()
+                break
+            }
             delay(100)
         }
         level = 0f
@@ -236,12 +257,12 @@ $recent"""
             }
             if (recording && userSpeechDetected && audio.hasRecordingBeenSilent(1200L)) {
                 recording = false
-                audio.stopRecording()?.path?.let { processRecording(it) }
+                processRecording()
             }
-            if (recording && audio.hasReachedRecordingLimit()) {
+            if (recording && (audio.hasReachedRecordingLimit() || audio.hasRecordingStopped())) {
                 recording = false
                 Toast.makeText(context, "录音已达到 120 秒，正在识别", Toast.LENGTH_SHORT).show()
-                audio.stopRecording()?.path?.let { processRecording(it) }
+                processRecording()
             }
             delay(180)
         }
@@ -321,7 +342,7 @@ $recent"""
                         }
                     } else {
                         recording = false
-                        audio.stopRecording()?.path?.let { processRecording(it) }
+                        processRecording()
                     }
                 }
             ) {
@@ -342,7 +363,7 @@ $recent"""
                                 else Toast.makeText(context, "需要允许麦克风权限才能连续通话。", Toast.LENGTH_LONG).show()
                             }
                         } else autoMode = false
-                        if (!autoMode && recording) { recording = false; audio.stopRecording() }
+                        if (!autoMode && recording) { recording = false; audio.stopRecording()?.let { audio.deleteAudio(it.path) } }
                     }
                 ) {
                     Icon(Icons.Default.PhoneInTalk, null, modifier = Modifier.size(18.dp))

@@ -82,7 +82,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeout
 import org.koin.compose.koinInject
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -180,7 +179,7 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
         if (hasEnded) return
         hasEnded = true
         sleepSegmentStartedAt?.let { totalRestMillis += System.currentTimeMillis() - it }
-        if (recording) stopRecordingSafe()
+        if (recording) stopRecordingSafe()?.let { audio.deleteAudio(it.path) }
         recording = false
         cancelVoiceWork()
         audio.setSpeakerEnabled(false)
@@ -197,8 +196,8 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
         val tts = createTtsGateway(settings.ttsBaseUrl, ttsKey, settings.ttsModelName, settings.ttsProvider)
         Log.d("RHODES_AUDIO", "TTS实例类: ${tts::class.simpleName}")
         callState = com.rhodes.privatechat.shared.call.CallState.AiSpeaking
-        val bytes = withTimeout(SLEEP_TTS_TIMEOUT_MS) {
-            tts.synthesize(TtsRequest(text = speech, voiceId = voiceId, speed = operator.voiceSpeed.toDoubleOrNull() ?: 1.0)).audioBytes
+        val bytes = com.rhodes.privatechat.shared.voice.withVoiceDeadline(SLEEP_TTS_TIMEOUT_MS, "陪睡语音合成") {
+            tts.synthesize(TtsRequest(text = speech, voiceId = voiceId, speed = operator.voiceSpeed.toDoubleOrNull() ?: 1.0)).audioBytes ?: error("语音服务未返回音频")
         }
         if (requestId != voiceRequestId || hasEnded) return
         Log.d("RHODES_AUDIO", "synthesize返回: audioBytes=${bytes?.size}")
@@ -246,9 +245,10 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
                 throw e
             } catch (e: Exception) {
                 if (requestId == voiceRequestId) {
+                    inputMode = SleepInputMode.Manual
                     callState = com.rhodes.privatechat.shared.call.CallState.Failed
                     visualState = SleepVisualState.Idle
-                    Toast.makeText(context, "叫醒语音失败：${e.message?.take(40) ?: "未知错误"}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "叫醒语音失败：${e.message?.take(240) ?: "未知错误"}", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -257,7 +257,7 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
     fun triggerWake() {
         if (alarmRinging || hasEnded) return
         settleRestSegment()
-        if (recording) stopRecordingSafe()
+        if (recording) stopRecordingSafe()?.let { audio.deleteAudio(it.path) }
         recording = false
         userSpeechDetected = false
         dimmed = false
@@ -317,7 +317,7 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
             try {
                 callState = com.rhodes.privatechat.shared.call.CallState.Thinking
                 transcript = "正在识别..."
-                val pcm = audio.readPcmFromWav(recorded.path)
+                val pcm = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { audio.readPcmFromWav(recorded.path) }
                 val asr = createAsrGateway(settings.asrBaseUrl, settings.asrApiKey.ifBlank { settings.apiKey }, settings.asrModelName, settings.asrProvider)
                 val text = asr.transcribe(AsrRequest(pcm)).text.trim()
                 if (text.isBlank()) {
@@ -345,9 +345,10 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
                 throw e
             } catch (e: Exception) {
                 if (requestId == voiceRequestId) {
+                    inputMode = SleepInputMode.Manual
                     callState = com.rhodes.privatechat.shared.call.CallState.Failed
                     visualState = SleepVisualState.Idle
-                    Toast.makeText(context, "陪睡语音失败：${e.message?.take(40) ?: "未知错误"}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "陪睡语音失败：${e.message?.take(240) ?: "未知错误"}", Toast.LENGTH_SHORT).show()
                 }
             } finally {
                 audio.deleteAudio(recorded.path)
@@ -364,7 +365,7 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
         activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         audio.setSpeakerEnabled(true)
         onDispose {
-            if (recording) stopRecordingSafe()
+            if (recording) stopRecordingSafe()?.let { audio.deleteAudio(it.path) }
             cancelVoiceWork()
             audio.release()
             if (oldOrientation != null) activity.requestedOrientation = oldOrientation
@@ -386,7 +387,7 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
         while (recording) {
             level = audio.getCurrentRecordingLevel()
             if (level > 0.12f) userSpeechDetected = true
-            if (audio.hasReachedRecordingLimit()) {
+            if (audio.hasReachedRecordingLimit() || audio.hasRecordingStopped()) {
                 recording = false
                 Toast.makeText(context, "录音已达到 120 秒，正在识别", Toast.LENGTH_SHORT).show()
                 stopRecordingSafe()?.let { processAudio(it) }
@@ -423,7 +424,7 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
         while (inputMode == SleepInputMode.Auto) {
             val idleLongEnough = System.currentTimeMillis() - lastEffectiveUserSpeechAt >= sleepInactivityMinutes * 60 * 1000L
             if (idleLongEnough && callState != com.rhodes.privatechat.shared.call.CallState.Thinking && callState != com.rhodes.privatechat.shared.call.CallState.AiSpeaking) {
-                if (recording) stopRecordingSafe()
+                if (recording) stopRecordingSafe()?.let { audio.deleteAudio(it.path) }
                 recording = false
                 userSpeechDetected = false
                 inputMode = SleepInputMode.Sleeping

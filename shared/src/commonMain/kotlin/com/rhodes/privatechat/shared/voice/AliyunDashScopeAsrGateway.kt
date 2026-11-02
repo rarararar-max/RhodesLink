@@ -5,7 +5,6 @@ import io.ktor.client.HttpClient
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.client.request.header
-import io.ktor.http.encodeURLParameter
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
 import kotlinx.serialization.SerialName
@@ -20,99 +19,97 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlinx.coroutines.withTimeout
 
 class AliyunDashScopeAsrGateway(
     private val apiKey: String,
     private val modelName: String = DEFAULT_DASHSCOPE_ASR_MODEL_CONFIG,
     private val endpoint: String = DEFAULT_DASHSCOPE_ASR_ENDPOINT,
-    private val client: HttpClient = dashScopeAsrClient(),
+    private val client: HttpClient? = null,
 ) : AsrGateway {
     @OptIn(ExperimentalEncodingApi::class)
     override suspend fun transcribe(request: AsrRequest): AsrResult {
-        if (request.pcm16kMonoAudio.isEmpty()) return AsrResult(text = "")
-        var finalText = ""
-        var emotion: String? = null
-        val realtimeModel = parseRealtimeModel(modelName)
-        val transcriptionModel = parseTranscriptionModel(modelName)
-
+        if (request.pcm16kMonoAudio.isEmpty()) return AsrResult("")
+        validateAsrAudio(request)
+        require(request.sampleRate == 16000 && request.inputAudioFormat == "pcm") { "阿里实时识别需要16kHz单声道16位PCM录音" }
+        require(apiKey.isNotBlank()) { "请填写语音识别密钥" }
+        val url = io.ktor.http.URLBuilder(endpoint.trim()).apply {
+            require(protocol.name == "wss" || protocol.name == "ws") { "实时识别地址需要以 ws:// 或 wss:// 开头" }
+            parameters["model"] = parseRealtimeModel(modelName)
+        }.buildString()
+        val transport = client ?: dashScopeAsrClient()
+        val transcript = DashScopeTranscript()
         try {
-            client.webSocket(
-                urlString = "$endpoint?model=${realtimeModel.encodeURLParameter()}",
-                request = { header("Authorization", "Bearer $apiKey") },
-            ) {
-                send(Frame.Text(json.encodeToString(SessionUpdateEvent.manual(request, transcriptionModel))))
-
-                request.pcm16kMonoAudio.asList().chunked(ASR_CHUNK_SIZE).forEach { chunk ->
-                    send(Frame.Text(json.encodeToString(AppendAudioEvent(audio = Base64.encode(chunk.toByteArray())))))
-                }
-                send(Frame.Text(json.encodeToString(CommitAudioEvent())))
-
-                var finishSent = false
-                var sessionFinished = false
-                while (!sessionFinished) {
-                    val frame = if (finishSent) {
-                        withTimeoutOrNull(5_000) { incoming.receiveCatching().getOrNull() }
-                    } else {
-                        withTimeout(60_000) { incoming.receiveCatching().getOrNull() }
-                    } ?: break
-                    val text = (frame as? Frame.Text)?.readText() ?: continue
-                    val event = runCatching { json.decodeFromString(AsrEvent.serializer(), text) }.getOrNull() ?: continue
-                    val failure = event.failureDescription()
-                    if (failure != null) {
-                        // Once audio has been transcribed, a trailing server complaint (for example the
-                        // harmless rejection of session.finish) must not throw the transcript away.
-                        if (finalText.isNotBlank()) break
-                        error("$ASR_ERROR_PREFIX $failure")
+            val result = withTimeoutOrNull(90_000L) {
+                transport.webSocket(urlString = url, request = { header("Authorization", "Bearer ${apiKey.trim()}") }) {
+                    send(Frame.Text(json.encodeToString(SessionUpdateEvent.manual(request, parseTranscriptionModel(modelName)))))
+                    // Do not upload audio until the server has accepted this session configuration.
+                    while (true) {
+                        val frame = incoming.receiveCatching().getOrThrow()
+                            ?: error("语音连接在会话就绪前关闭，请检查密钥、模型和服务区域")
+                        if (frame is Frame.Text && transcript.accept(frame.readText()) == "session.updated") break
                     }
-                    when (event.type) {
-                        "conversation.item.input_audio_transcription.text" -> {
-                            finalText = event.text.orEmpty() + event.stash.orEmpty()
-                            emotion = event.emotion ?: emotion
-                        }
-                        "conversation.item.input_audio_transcription.delta" -> {
-                            finalText = event.text.orEmpty() + event.stash.orEmpty()
-                            emotion = event.emotion ?: emotion
-                        }
-                        "conversation.item.input_audio_transcription.completed" -> {
-                            finalText = event.transcript ?: finalText
-                            emotion = event.emotion ?: emotion
-                            if (!finishSent) {
-                                send(Frame.Text(json.encodeToString(FinishSessionEvent())))
-                                finishSent = true
-                            }
-                        }
-                        "session.finished" -> {
-                            sessionFinished = true
-                        }
-                        "input_audio_buffer.committed", "session.created", "session.updated" -> Unit
-                        "error" -> {
-                            if (finalText.isNotBlank()) break
-                            error("$ASR_ERROR_PREFIX ${event.message.orEmpty()}".trim())
-                        }
+                    var offset = 0
+                    while (offset < request.pcm16kMonoAudio.size) {
+                        val end = minOf(offset + ASR_CHUNK_SIZE, request.pcm16kMonoAudio.size)
+                        send(Frame.Text(json.encodeToString(AppendAudioEvent(audio = Base64.encode(request.pcm16kMonoAudio.copyOfRange(offset, end))))))
+                        offset = end
                     }
-                }
-                if (!finishSent && finalText.isNotBlank()) {
-                    send(Frame.Text(json.encodeToString(FinishSessionEvent())))
-                    withTimeoutOrNull(5_000) {
-                        while (true) {
-                            val trailing = incoming.receiveCatching().getOrNull() ?: break
-                            val trailingText = (trailing as? Frame.Text)?.readText() ?: continue
-                            val trailingEvent = runCatching { json.decodeFromString(AsrEvent.serializer(), trailingText) }.getOrNull()
-                            if (trailingEvent?.type == "session.finished") break
-                        }
+                    send(Frame.Text(json.encodeToString(CommitAudioEvent())))
+                    while (!transcript.completed) {
+                        val frame = incoming.receiveCatching().getOrThrow()
+                            ?: error("语音连接中断，未收到完整识别结果，请重试")
+                        if (frame is Frame.Text) transcript.accept(frame.readText())
                     }
+                    // Completion, including a final empty transcript (silence), is authoritative.
+                    // Do not add a five-second UI delay waiting for session.finished.
+                    try {
+                        send(Frame.Text(json.encodeToString(FinishSessionEvent())))
+                    } catch (e: CancellationException) { throw e }
+                    catch (_: Exception) { /* Final transcript already received. */ }
                 }
+                transcript.result()
             }
+            return result ?: throw IllegalStateException("语音识别超时，请检查网络后重试")
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            // A rejected handshake surfaces as an opaque "expected status code 101 but was 401".
-            // Turn it into something a user can act on instead of a bare "语音识别报错".
-            throw IllegalStateException(asrFailureMessage(e), e)
+            // A malformed peer close frame must not discard an already completed transcript.
+            if (transcript.completed) return transcript.result()
+            throw IllegalStateException(com.rhodes.privatechat.shared.network.ModelErrorMessages.redact(asrFailureMessage(e), apiKey), e)
+        } finally {
+            if (client == null) transport.close()
         }
+    }
+}
 
-        return AsrResult(text = finalText.trim(), emotion = emotion)
+/** Protocol state shared by every ASR entry point. Interim text is never a successful result. */
+class DashScopeTranscript {
+    var completed: Boolean = false
+        private set
+    private var finalText = ""
+    private var emotion: String? = null
+
+    fun accept(raw: String): String? {
+        val event = try { json.decodeFromString(AsrEvent.serializer(), raw) }
+            catch (_: Exception) { error("语音服务返回了无法解析的数据，请检查实时识别接口") }
+        event.failureDescription()?.let { error("$ASR_ERROR_PREFIX $it") }
+        if (event.type == "conversation.item.input_audio_transcription.completed") {
+            require(event.transcript != null) { "语音服务的完成事件缺少识别文字" }
+            finalText = event.transcript
+            emotion = event.emotion ?: emotion
+            completed = true
+        } else if (event.type == "conversation.item.input_audio_transcription.text" ||
+            event.type == "conversation.item.input_audio_transcription.delta") {
+            emotion = event.emotion ?: emotion
+        } else if (event.type == "session.finished" && !completed) {
+            error("语音会话提前结束，未收到完整识别结果，请重试")
+        }
+        return event.type
+    }
+
+    fun result(): AsrResult {
+        check(completed) { "语音识别未完成，请重试" }
+        return AsrResult(finalText.trim(), emotion)
     }
 }
 
@@ -186,11 +183,12 @@ private data class AsrEvent(
 ) {
     /** Readable failure text for this frame, or null when the frame is not an error. */
     fun failureDescription(): String? {
-        val element = error
+        val element = error?.takeUnless { it is kotlinx.serialization.json.JsonNull }
+        if (type != "error" && element == null && type != "conversation.item.input_audio_transcription.failed") return null
         val resolvedCode = code ?: element.stringField("code")
         val resolvedMessage = message ?: element.stringField("message") ?: element.asPlainString()
         if (resolvedCode == null && resolvedMessage == null) {
-            return element?.let { "unparsed=$it" }
+            return element?.let { "unparsed=$it" } ?: "语音服务返回错误但未提供原因"
         }
         return "code=${resolvedCode.orEmpty()} message=${resolvedMessage.orEmpty()}"
     }
@@ -209,9 +207,9 @@ private fun asrFailureMessage(error: Throwable): String {
     if (raw.startsWith(ASR_ERROR_PREFIX)) return raw
     val hint = when {
         raw.contains("Control frame must be less than 125", ignoreCase = true) ->
-            "实时语音连接关闭帧异常：通常是模型配置或结束会话流程不匹配。请确认使用 qwen3-asr-flash-realtime，并重试。"
+            "实时语音 WebSocket 控制帧异常（125字节限制）：请核对服务区域、密钥与模型是否匹配；这不是识别文字过长。"
         raw.contains("401") -> "语音识别鉴权失败(401)：语音识别需要阿里云百炼(DashScope)的 Key，不能与文本模型(如 DeepSeek)的 Key 混用。"
-        raw.contains("403") -> "语音识别鉴权失败(403)：该 Key 未开通实时语音(Realtime)权限，请在百炼控制台确认模型与业务空间。"
+        raw.contains("403") -> "语音识别鉴权失败(403)：请求被拒绝，请在百炼控制台核对模型权限、业务空间和服务区域。"
         raw.contains("404") -> "语音识别接口返回 404：请检查实时语音地址与模型配置。"
         raw.contains("101") -> "语音识别连接被拒绝：请检查地址、密钥与模型配置。"
         else -> null

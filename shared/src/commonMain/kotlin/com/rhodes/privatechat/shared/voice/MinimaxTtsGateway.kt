@@ -19,18 +19,20 @@ class MinimaxTtsGateway(
     private val endpoint: String,
     private val apiKey: String,
     private val modelName: String = "speech-2.8-hd",
-    private val client: HttpClient = createWsClient(),
+    private val client: HttpClient? = null,
 ) : TtsGateway {
     override suspend fun synthesize(request: TtsRequest): TtsResult {
         val speechText = prepareTtsSpeech(request.text, 800, "我在。")
         val chunks = mutableListOf<ByteArray>()
         println("RHODES_AUDIO MinimaxWS synthesize: endpoint=$endpoint model=$modelName voiceId=${request.voiceId} text前50=${speechText.take(50)}")
 
-        client.webSocket(
+        val transport = client ?: createWsClient()
+        try {
+        transport.webSocket(
             urlString = endpoint,
             request = { header("Authorization", "Bearer $apiKey") },
         ) {
-            val connected = incoming.receiveCatching().getOrNull() as? Frame.Text
+            val connected = incoming.receiveCatching().getOrThrow() as? Frame.Text
             val connectedEvent = connected?.readText().orEmpty()
             if (!connectedEvent.contains("connected_success")) {
                 println("RHODES_AUDIO MinimaxWS 连接失败: ${connectedEvent.ifBlank { "empty event" }}")
@@ -42,7 +44,7 @@ class MinimaxTtsGateway(
                 voiceSetting = MinimaxVoiceSetting(voiceId = request.voiceId.ifBlank { "male-qn-qingse" }, speed = request.speed),
                 audioSetting = MinimaxAudioSetting(format = request.format),
             ))))
-            val started = incoming.receiveCatching().getOrNull() as? Frame.Text
+            val started = incoming.receiveCatching().getOrThrow() as? Frame.Text
             val startedEvent = started?.readText().orEmpty()
             if (!startedEvent.contains("task_started")) {
                 println("RHODES_AUDIO MinimaxWS task_start 失败: ${startedEvent.ifBlank { "empty event" }}")
@@ -51,8 +53,9 @@ class MinimaxTtsGateway(
 
             send(Frame.Text(json.encodeToString(MinimaxTaskContinue(text = speechText))))
 
+            var finalReceived = false
             while (true) {
-                val frame = incoming.receiveCatching().getOrNull() ?: break
+                val frame = incoming.receiveCatching().getOrThrow() ?: break
                 val text = (frame as? Frame.Text)?.readText() ?: continue
                 if (text.contains("error", ignoreCase = true) || text.contains("failed", ignoreCase = true)) {
                     error(minimaxErrorMessage("MiniMax TTS 流错误", text))
@@ -61,13 +64,19 @@ class MinimaxTtsGateway(
                 event?.data?.audio?.takeIf { it.isNotBlank() }?.let { hex ->
                     chunks += hexToBytes(hex)
                 }
-                if (event?.isFinal == true) break
+                if (event?.isFinal == true) { finalReceived = true; break }
             }
 
-            send(Frame.Text(json.encodeToString(MinimaxTaskFinish())))
+            check(finalReceived) { "MiniMax 语音连接中断，未收到完整音频" }
+            try { send(Frame.Text(json.encodeToString(MinimaxTaskFinish()))) }
+            catch (e: kotlin.coroutines.cancellation.CancellationException) { throw e }
+            catch (_: Exception) { /* Final audio already received. */ }
         }
 
-        val audioBytes = chunks.fold(ByteArray(0)) { acc, bytes -> acc + bytes }
+        } finally { if (client == null) transport.close() }
+        val audioBytes = ByteArray(chunks.sumOf { it.size })
+        var offset = 0
+        chunks.forEach { it.copyInto(audioBytes, offset); offset += it.size }
         if (audioBytes.isEmpty()) error("Minimax TTS 返回空音频")
         val durationMs = (speechText.length.coerceAtLeast(1) * 180L).coerceAtMost(60_000L)
         println("RHODES_AUDIO MinimaxWS 成功: chunks=${chunks.size} bytes=${audioBytes.size} durationMs=$durationMs")
@@ -120,7 +129,8 @@ private data class MinimaxStreamData(val audio: String? = null)
 
 private fun hexToBytes(hex: String): ByteArray {
     val clean = hex.trim()
-    val normalized = if (clean.length % 2 == 1) "${clean}0" else clean
+    require(clean.length % 2 == 0) { "MiniMax 返回了损坏的音频数据" }
+    val normalized = clean
     return ByteArray(normalized.length / 2) { index ->
         normalized.substring(index * 2, index * 2 + 2).toInt(16).toByte()
     }

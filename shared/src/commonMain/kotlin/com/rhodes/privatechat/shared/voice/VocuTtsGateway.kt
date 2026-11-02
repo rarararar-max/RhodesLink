@@ -17,13 +17,14 @@ class VocuTtsGateway(
     private val endpoint: String,
     private val apiKey: String,
 ) : TtsGateway {
-    private val client = createHttpClient()
 
     override suspend fun synthesize(request: TtsRequest): TtsResult {
         require(request.voiceId.isNotBlank()) { "Vocu 需要在角色编辑页填写音色 ID" }
         val speechText = prepareTtsSpeech(request.text, 800, "我在。")
         // Vocu's value grows with duration, unlike the existing TTS speed setting.
         val speechRate = (1.0 / request.speed.coerceAtLeast(0.1)).coerceIn(0.5, 2.0)
+        val client = createHttpClient()
+        try {
         val response = client.post(endpoint) {
             bearerAuth(apiKey)
             contentType(ContentType.Application.Json)
@@ -42,6 +43,7 @@ class VocuTtsGateway(
         if (bytes.isEmpty()) error("Vocu TTS 返回空音频")
         val durationMs = (speechText.length.coerceAtLeast(1) * 180L * speechRate).toLong().coerceAtMost(60_000L)
         return TtsResult(audioBytes = bytes, durationMs = durationMs)
+        } finally { client.close() }
     }
 
     @Serializable private data class VocuTtsRequest(

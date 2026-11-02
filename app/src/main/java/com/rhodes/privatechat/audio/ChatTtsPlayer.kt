@@ -12,7 +12,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.supervisorScope
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -129,7 +128,7 @@ class ChatTtsPlayer(
 
     private suspend fun prepareSpeech(gateway: com.rhodes.privatechat.shared.voice.TtsGateway, speech: ChatSpeech): PreparedSpeech {
         val parts = splitSentences(speech.text)
-        val firstAudio = withTimeout(45_000) {
+        val firstAudio = com.rhodes.privatechat.shared.voice.withVoiceDeadline(45_000L, "语音合成") {
             gateway.synthesize(TtsRequest(text = parts.first(), voiceId = speech.voiceId, speed = speech.speed))
         }.audioBytes ?: error("TTS 未返回音频")
         return PreparedSpeech(speech, parts, firstAudio)
@@ -139,19 +138,23 @@ class ChatTtsPlayer(
         var currentAudio = prepared.firstAudio
         for (index in prepared.parts.indices) {
             val nextAudio = if (index + 1 < prepared.parts.size) async {
-                withTimeout(45_000) {
+                com.rhodes.privatechat.shared.voice.withVoiceDeadline(45_000L, "语音合成") {
                     gateway.synthesize(TtsRequest(text = prepared.parts[index + 1], voiceId = prepared.speech.voiceId, speed = prepared.speech.speed))
                 }.audioBytes ?: error("TTS 未返回音频")
             } else null
             val bytes = currentAudio
             val file = audio.saveTtsAudio(bytes) ?: error("无法保存 TTS 音频")
+            try {
             var complete = false
             var success = false
             audio.play(file.path, prepared.speech.volume) { played -> complete = true; success = played }
             var waited = 0L
             while (!complete && waited < 90_000L) { delay(100); waited += 100 }
-            audio.deleteAudio(file.path)
             if (!success) error("音频播放失败")
+            } finally {
+                audio.stopPlayback()
+                audio.deleteAudio(file.path)
+            }
             if (nextAudio != null) currentAudio = nextAudio.await()
         }
     }

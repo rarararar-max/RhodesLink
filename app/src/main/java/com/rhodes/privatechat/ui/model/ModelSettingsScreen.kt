@@ -50,6 +50,11 @@ import com.rhodes.privatechat.viewmodel.MainViewModel
 import org.koin.compose.koinInject
 import org.koin.compose.viewmodel.koinViewModel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import com.rhodes.privatechat.shared.network.ModelDiscoveryService
+import com.rhodes.privatechat.shared.network.normalizeChatEndpoint
 
 @Composable
 fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
@@ -122,6 +127,73 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     val isCustom = currentProviderId == "custom"
     val modelOptions = if (isCustom) listOf("自填") else currentConfig.models + "自填"
     val currentModelName = if (isCustom || selectedModelIdx >= currentConfig.models.size) customModelName.trim() else currentConfig.models[selectedModelIdx].trim()
+    val discoveryService = remember { ModelDiscoveryService() }
+    var discoveredModels by remember { mutableStateOf(emptyList<String>()) }
+    var discoveryMessage by remember { mutableStateOf("") }
+    var discoveryFailed by remember { mutableStateOf(false) }
+    var discovering by remember { mutableStateOf(false) }
+    var discoveryJob by remember { mutableStateOf<Job?>(null) }
+    var discoveryGeneration by remember { mutableLongStateOf(0L) }
+    var showModelPicker by remember { mutableStateOf(false) }
+    val discoverySignature = Triple(currentProviderId, if (isCustom) customUrl.trim() else currentConfig.baseUrl, apiKey.trim())
+    val latestDiscoverySignature by rememberUpdatedState(discoverySignature)
+    val latestModelName by rememberUpdatedState(currentModelName)
+    LaunchedEffect(discoverySignature) {
+        discoveryGeneration++
+        discoveryJob?.cancel()
+        discoveryJob = null
+        discovering = false
+        discoveredModels = emptyList()
+        discoveryMessage = ""
+        showModelPicker = false
+    }
+    LaunchedEffect(discoverySignature, currentModelName) { chatTestResult = "" }
+    fun fetchModels() {
+        if (discovering) return
+        val signature = discoverySignature
+        if (signature.third.isBlank()) {
+            discoveryFailed = true
+            discoveryMessage = "请先填写 API 密钥"
+            return
+        }
+        val generation = ++discoveryGeneration
+        discovering = true
+        discoveryFailed = false
+        discoveryMessage = ""
+        discoveryJob = scope.launch {
+            try {
+                val catalog = discoveryService.fetch(signature.first, signature.second, signature.third)
+                if (signature == latestDiscoverySignature && generation == discoveryGeneration) {
+                    discoveredModels = catalog.ids
+                    discoveryMessage = "已获取 ${catalog.ids.size} 个模型${if (catalog.truncated) "（列表较长，仅显示前一部分）" else ""}，选择后请测试连接。"
+                    showModelPicker = true
+                }
+            } catch (_: TimeoutCancellationException) {
+                if (signature != latestDiscoverySignature || generation != discoveryGeneration) return@launch
+                discoveryFailed = true
+                discoveryMessage = "获取模型超时，请重试或手动填写模型名称"
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (signature != latestDiscoverySignature || generation != discoveryGeneration) return@launch
+                discoveryFailed = true
+                discoveryMessage = com.rhodes.privatechat.shared.network.ModelErrorMessages.redact(error.message.orEmpty(), signature.third)
+                    .ifBlank { "获取失败，请重试或手动填写模型名称" }.take(300)
+            } finally { if (signature == latestDiscoverySignature && generation == discoveryGeneration) discovering = false }
+        }
+    }
+    if (showModelPicker) ModelPickerSheet(
+        models = discoveredModels, selected = currentModelName,
+        onDismiss = { showModelPicker = false },
+        onSelect = { id ->
+            customModelName = id
+            selectedModelIdx = currentConfig.models.size
+            errorText = ""
+            showModelPicker = false
+        },
+        onManual = { selectedModelIdx = currentConfig.models.size; showModelPicker = false },
+    )
+
     val hasChanges = currentProviderId != settings.provider || currentModelName != settings.modelName || customUrl.trim() != settings.customUrl || apiKey.trim() != settings.apiKey ||
         visionMode != settings.visionMode ||
         asrProfiles != settings.voiceProviderConfigurations("asr") || ttsProfiles != settings.voiceProviderConfigurations("tts") ||
@@ -172,6 +244,9 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             pendingVectorSignature = newVectorSignature
             showVectorChangeConfirm = true
             return false
+        }
+        if (isCustom && customUrl.isNotBlank()) {
+            customUrl = runCatching { normalizeChatEndpoint(customUrl) }.getOrDefault(customUrl.trim())
         }
         settings.saveModelConfiguration(
                 provider = currentProviderId,
@@ -224,17 +299,26 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         if (testing != null) return
         testing = "chat"
         chatTestResult = "正在测试..."
+        val testProvider = currentProviderId
+        val testModel = currentModelName
+        val testKey = apiKey.trim()
+        val testUrl = if (isCustom) runCatching { normalizeChatEndpoint(customUrl) }.getOrDefault(customUrl.trim()) else customUrl.trim()
+        val testSignature = discoverySignature
         scope.launch {
             try {
                 val validationError = validateSettings()
                 if (validationError != null) throw IllegalArgumentException(validationError)
                 val result = aiService.chat(
-                    apiKey.trim(), listOf(AiMessage("user", "只回复：连接成功")),
-                    currentProviderId, currentModelName, customUrl.trim(), temperature = 0.1
+                    testKey, listOf(AiMessage("user", "只回复：连接成功")),
+                    testProvider, testModel, testUrl, temperature = 0.1
                 )
+                if (testSignature != latestDiscoverySignature || testModel != latestModelName) return@launch
                 chatTestResult = if (result.content.isBlank()) "测试失败：服务没有返回内容" else "连接成功：${result.content.trim().take(60)}"
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
-                val detail = com.rhodes.privatechat.shared.network.ModelErrorMessages.redact(e.message?.trim().orEmpty(), apiKey.trim())
+                if (testSignature != latestDiscoverySignature || testModel != latestModelName) return@launch
+                val detail = com.rhodes.privatechat.shared.network.ModelErrorMessages.redact(e.message?.trim().orEmpty(), testKey)
                 chatTestResult = "测试失败：${detail.ifBlank { "请检查地址、模型和密钥" }.take(800)}"
             } finally { testing = null }
         }
@@ -373,6 +457,18 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             DropDown("厂商", providerNames, selectedProvider) { i -> selectedProvider = i; selectedModelIdx = 0; customModelName = ""; errorText = "" }
             Spacer(Modifier.height(12.dp))
 
+            // Custom URL
+            if (isCustom) {
+                LabeledField("API 地址（基础地址或完整聊天地址）") {
+                    Row { OutlinedTextField(value = customUrl, onValueChange = { customUrl = it; errorText = "" }, modifier = Modifier.weight(1f), singleLine = true, shape = RoundedCornerShape(8.dp), colors = fieldColors()); Spacer(Modifier.width(4.dp)); PasteBtn(ctx) { customUrl = it; errorText = "" } }
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+
+            LabeledField("API 密钥") {
+                SecretInput(apiKey, { apiKey = it; errorText = "" }, ctx)
+            }
+            Spacer(Modifier.height(12.dp))
             // Model
             if (!isCustom) DropDown("模型", modelOptions, selectedModelIdx.coerceIn(modelOptions.indices)) { selectedModelIdx = it; errorText = "" }
             Spacer(Modifier.height(12.dp))
@@ -383,14 +479,21 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 Spacer(Modifier.height(12.dp))
             }
 
-            // Custom URL
-            if (isCustom) {
-                LabeledField("完整 Chat Completions API 地址") {
-                    Row { OutlinedTextField(value = customUrl, onValueChange = { customUrl = it; errorText = "" }, modifier = Modifier.weight(1f), singleLine = true, shape = RoundedCornerShape(8.dp), colors = fieldColors()); Spacer(Modifier.width(4.dp)); PasteBtn(ctx) { customUrl = it; errorText = "" } }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedButton(onClick = ::fetchModels, enabled = !discovering) {
+                    if (discovering) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(if (discovering) "获取中…" else "获取模型")
                 }
-                Spacer(Modifier.height(12.dp))
+                if (discovering) TextButton(onClick = { discoveryGeneration++; discoveryJob?.cancel(); discovering = false }) { Text("取消") }
+                if (discoveredModels.isNotEmpty()) TextButton(onClick = { showModelPicker = true }) { Text("选择模型") }
             }
-
+            if (discoveryMessage.isNotBlank()) Text(discoveryMessage, fontSize = 12.sp,
+                color = if (discoveryFailed) MaterialTheme.colorScheme.error else TextSecondary)
+            Text("列表由服务商提供，不代表每个模型都能用于聊天；选定后可测试连接，也可手动填写。", fontSize = 11.sp, color = TextSecondary)
+            Spacer(Modifier.height(12.dp))
             val automaticImages = ModelCapabilities.supportsImages(currentProviderId, currentModelName)
             Text(if (automaticImages) {
                 if (visionMode == "auto") "此模型是多模态模型，已自动用于图片识别。图片聊天仍会分别调用识图和角色回复。"
@@ -416,10 +519,6 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 }
             }
 
-            // API Key
-            LabeledField("API 密钥") {
-                SecretInput(apiKey, { apiKey = it; errorText = "" }, ctx)
-            }
             if (errorText.isNotBlank()) {
                 Text(errorText, fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
             }

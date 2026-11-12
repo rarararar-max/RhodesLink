@@ -112,12 +112,12 @@ class NewspaperTest {
     @Test fun dateFilteringUsesBeijingCalendarRatherThanUtcDate() {
         assertTrue(sourceInWindow("2026-10-19T18:00:00Z", date, false))
         assertFalse(sourceInWindow("2026-10-20T18:00:00Z", date, false))
-        assertFalse(sourceInWindow("2026-10-19T10:00:00Z", date, false))
+        assertTrue(sourceInWindow("2026-10-19T10:00:00Z", date, false))
         assertTrue(sourceInWindow("2026-10-19T10:00:00Z", date, true))
     }
     @Test fun unknownDatesAndOldItemsAreNotAdvertisedAsToday() {
         assertFalse(sourceInWindow("", date, true))
-        assertFalse(sourceInWindow("2026-10-17T10:00:00Z", date, true))
+        assertFalse(sourceInWindow("2026-10-13T10:00:00Z", date, true))
         assertEquals(0, selectNewsSources(listOf(source(published = "")), date, false).size)
     }
     @Test fun urlAndTitleDuplicatesAreRemovedAndIdsAreReassigned() {
@@ -127,6 +127,27 @@ class NewspaperTest {
         val selected = selectNewsSources(listOf(original, duplicate, sameTitle, source(10)), date, false)
         assertEquals(listOf(1, 2), selected.map { it.id })
     }
+    @Test fun sevenDayWindowIncludesBothEdgesAndAcceptsExplicitDateFormats() {
+        listOf("2026-10-14", "2026/10/14", "2026-10-14 09:30:00", "2026-10-14T01:30:00+08:00").forEach {
+            assertTrue(it, sourceInWindow(it, date))
+        }
+        listOf("2026-10-13", "2026-10-21", "昨天", "2026/02/30", "2026-02-30", "").forEach {
+            assertFalse(it, sourceInWindow(it, date))
+        }
+    }
+    @Test fun sourcePoolIsBoundedAndPrefersDiversePublishers() {
+        val pool = (1..20).map { source(it) } + source(21).copy(url = "https://other.example.org/a")
+        val selected = selectNewsSources(pool, date)
+        assertEquals(NEWSPAPER_MAX_SOURCES, selected.size)
+        assertTrue(selected.any { it.url.contains("other.example.org") })
+        assertEquals((1..8).toList(), selected.map { it.id })
+    }
+    @Test fun noIssueCanContainMoreThanFourStories() {
+        val five = articles() + articles().first().copy(title = "第五篇额外新闻")
+        rejected { parseNewspaperArticles(raw(five), sources) }
+        assertEquals(3, parseNewspaperArticles(raw(articles().take(3)), sources).size)
+    }
+
     @Test fun unsafeLinksAreRejected() {
         listOf("file:///etc/passwd", "javascript:alert(1)", "https://name:pass@example.org", "http://localhost",
             "http://127.0.0.1/a", "http://192.168.1.2/a", "http://10.0.0.1", "http://172.16.1.1").forEach {

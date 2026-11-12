@@ -40,3 +40,17 @@ data class ChatArchiveContext(
     val previousSummary: String = "",
     val sourceMessagesJson: String = "",
 )
+
+/** Kept separate from prompt history limits: saving more rounds must not grow every request. */
+object ChatArchivePolicy {
+    const val RAW_ROUNDS = 30
+    fun completedRounds(messages: List<ChatMessage>): List<List<ChatMessage>> {
+        val rounds = mutableListOf<MutableList<ChatMessage>>()
+        messages.forEach { message ->
+            if (message.isMe || rounds.isEmpty()) rounds.add(mutableListOf())
+            rounds.last().add(message)
+        }
+        return rounds.filter { round -> round.any { it.isMe } && round.any { !it.isMe && it.type == "ai_json" } }
+    }
+    fun snapshot(messages: List<ChatMessage>): List<ChatMessage> = completedRounds(messages).takeLast(RAW_ROUNDS).flatten()
+}

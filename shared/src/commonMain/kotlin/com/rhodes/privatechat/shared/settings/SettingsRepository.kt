@@ -1,5 +1,7 @@
 package com.rhodes.privatechat.shared.settings
 
+import kotlinx.serialization.builtins.serializer
+
 import com.russhwolf.settings.ObservableSettings
 import com.russhwolf.settings.coroutines.toFlowSettings
 import kotlinx.coroutines.flow.Flow
@@ -719,6 +721,56 @@ class SettingsRepository(private val settings: ObservableSettings) {
         val balance = settings.getInt("lmb", 1000)
         if (balance > Int.MAX_VALUE - amount) return false
         return backend.commitSupportState(mapOf("support_conversation" to updatedTranscript), mapOf("lmb" to balance + amount))
+    }
+
+    // Wallet and transaction marker are committed together. The database card is a recoverable projection.
+    @Synchronized
+    fun reservePrivateRedPacket(packet: com.rhodes.privatechat.shared.model.PrivateRedPacket): Boolean {
+        if (!packet.valid() || packet.messageId <= 0 || packet.createdAt <= 0 || packet.status != "sent") return false
+        val key = "private_packet_${packet.id}"
+        val existing = settings.getString(key, "")
+        if (existing.isNotBlank()) return existing == com.rhodes.privatechat.shared.model.redPacketJson.encodeToString(
+            com.rhodes.privatechat.shared.model.PrivateRedPacket.serializer(), packet)
+        val pending = pendingPrivateRedPackets() ?: return false
+        val balance = settings.getInt("lmb", 1000)
+        if (balance < packet.amount) return false
+        val backend = settings as? AtomicSettingsBatch ?: return false
+        return backend.commitSupportState(mapOf(key to com.rhodes.privatechat.shared.model.redPacketJson.encodeToString(
+            com.rhodes.privatechat.shared.model.PrivateRedPacket.serializer(), packet),
+            "private_packet_pending" to com.rhodes.privatechat.shared.model.redPacketJson.encodeToString(
+                kotlinx.serialization.builtins.ListSerializer(String.serializer()), pending + packet.id)),
+            mapOf("lmb" to balance - packet.amount))
+    }
+
+    fun privateRedPacket(id: String): com.rhodes.privatechat.shared.model.PrivateRedPacket? =
+        com.rhodes.privatechat.shared.model.PrivateRedPacket.parse(settings.getString("private_packet_$id", ""))
+
+    fun pendingPrivateRedPackets(): List<String>? = runCatching {
+        com.rhodes.privatechat.shared.model.redPacketJson.decodeFromString(
+            kotlinx.serialization.builtins.ListSerializer(String.serializer()),
+            settings.getString("private_packet_pending", "[]").ifBlank { "[]" })
+    }.getOrNull()
+
+    @Synchronized
+    fun settlePrivateRedPacket(id: String, claim: Boolean, now: Long): com.rhodes.privatechat.shared.model.PrivateRedPacket? {
+        if (claim && now <= 0) return null
+        val current = privateRedPacket(id) ?: return null
+        if (current.status != "sent") return current.takeIf { it.status == if (claim) "claimed" else "refunded" }
+        val next = current.copy(status = if (claim) "claimed" else "refunded", claimedAt = if (claim) now else 0)
+        val backend = settings as? AtomicSettingsBatch ?: return null
+        val balance = settings.getInt("lmb", 1000)
+        if (!claim && balance > Int.MAX_VALUE - current.amount) return null
+        return next.takeIf { backend.commitSupportState(mapOf("private_packet_$id" to
+            com.rhodes.privatechat.shared.model.redPacketJson.encodeToString(com.rhodes.privatechat.shared.model.PrivateRedPacket.serializer(), next)),
+            if (claim) emptyMap() else mapOf("lmb" to balance + current.amount)) }
+    }
+
+    @Synchronized
+    fun acknowledgePrivateRedPacket(id: String): Boolean {
+        val pending = pendingPrivateRedPackets() ?: return false
+        val backend = settings as? AtomicSettingsBatch ?: return false
+        return backend.commitSupportState(mapOf("private_packet_pending" to com.rhodes.privatechat.shared.model.redPacketJson.encodeToString(
+            kotlinx.serialization.builtins.ListSerializer(String.serializer()), pending - id)), emptyMap())
     }
 
     val lmbFlow: Flow<Int> = flowSettings.getIntFlow("lmb", 1000)

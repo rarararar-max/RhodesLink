@@ -389,6 +389,10 @@ private fun MessageBubble(
     isSpeaking: Boolean,
 ) {
     val archivedAlpha = if (message.isArchived) 0.45f else 1f
+    if (message.redPacket != null) {
+        PrivateRedPacketCard(message, archivedAlpha, onRetry)
+        return
+    }
     if (message.isGift) {
         GiftMessageCard(message, showTime, archivedAlpha, onRetry = if (message.giftReplyFailed) onRetry else null)
         return
@@ -435,7 +439,7 @@ private fun MessageBubble(
     var showRetryConfirm by remember { mutableStateOf(false) }
     val isMe = message.isMe
     val bubbleColor = if (isMe) BubbleMine else BubbleOther
-    val bubbleShape = if (isFrostedGlass) RoundedCornerShape(24.dp) else if (isRhodesTerminal) TerminalPanelShape else if (isMe) RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp) else RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp)
+    val bubbleShape = if (isFrostedGlass || isLiquidGlass) RoundedCornerShape(24.dp) else if (isRhodesTerminal) TerminalPanelShape else if (isMe) RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp) else RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp)
 
     Column(modifier = Modifier.fillMaxWidth().alpha(archivedAlpha).padding(horizontal = 12.dp, vertical = 2.dp)) {
         if (showTime) {
@@ -621,3 +625,33 @@ private fun GiftMessageCard(message: ChatUiMessage, showTime: Boolean, alpha: Fl
     }
 }
 
+
+@Composable
+private fun PrivateRedPacketCard(message: ChatUiMessage, alpha: Float, onRetry: (() -> Unit)?) {
+    val packet = message.redPacket ?: return
+    var details by remember { mutableStateOf(false) }
+    val claimed = packet.status == "claimed"
+    val red = if (claimed) Color(0xFF9B453A) else Color(0xFFC64A36)
+    Column(Modifier.fillMaxWidth().alpha(alpha).padding(horizontal = 16.dp, vertical = 8.dp), horizontalAlignment = Alignment.End) {
+        Column(Modifier.widthIn(min = 220.dp, max = 285.dp).clip(RoundedCornerShape(15.dp))
+            .background(Brush.linearGradient(listOf(red, red.copy(alpha = 0.85f))))
+            .border(1.dp, Color(0xFFECC48D).copy(alpha = 0.5f), RoundedCornerShape(15.dp))
+            .clickable { details = true }.padding(16.dp)) {
+            Text("🧧  ${packet.amount} 龙门币", fontSize = 20.sp, color = Color(0xFFFFE2AE), fontWeight = FontWeight.Bold)
+            Text(packet.wish, modifier = Modifier.padding(top = 10.dp), color = Color.White, fontSize = 14.sp)
+            Text(when (packet.status) { "claimed" -> "已领取 · ${packet.recipientName}"; "refunded" -> "未送达 · 已退回"; else -> "等待领取" },
+                modifier = Modifier.padding(top = 15.dp), color = Color(0xFFFFE2AE), fontSize = 11.sp)
+        }
+        if (claimed) Text("${packet.recipientName}领取了你的红包", color = TextTertiary, fontSize = 11.sp,
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp), textAlign = TextAlign.Center)
+        if (message.isSendFailed && onRetry != null) Text("回复未完成 · 点击补回（不会重复扣币）", color = AccentOrange,
+            modifier = Modifier.padding(top = 6.dp).clickable { onRetry() }, fontSize = 12.sp)
+    }
+    if (details) AlertDialog(onDismissRequest = { details = false }, containerColor = ElevatedSurface,
+        title = { Text("发给${packet.recipientName}的红包", color = TextPrimary) },
+        text = { Column {
+            Text("${packet.amount} 龙门币", color = AccentOrange, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+            Text(packet.wish, modifier = Modifier.padding(vertical = 12.dp), color = TextPrimary)
+            Text(when (packet.status) { "claimed" -> "已领取，不能撤回。回复失败可重试，无需再发红包。"; "refunded" -> "红包未送达，龙门币已退回。"; else -> "红包已发送，正在等待领取。" }, color = TextSecondary)
+        } }, confirmButton = { TextButton(onClick = { details = false }) { Text("知道了", color = Primary) } })
+}

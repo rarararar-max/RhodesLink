@@ -39,6 +39,33 @@ import java.util.zip.ZipOutputStream
 import java.io.File
 
 class BackupFileContainerTest {
+    @Test fun explainsEmptyJsonDatabaseAndUnrecognizedFilesInsteadOfMissingManifest() {
+        val cases = listOf(
+            byteArrayOf() to "为空",
+            "{\"type\":\"full_backup\"}".encodeToByteArray() to "JSON",
+            "\uFEFF  {\"operator\":{}}".encodeToByteArray() to "JSON",
+            "SQLite format 3\u0000".encodeToByteArray() to "数据库",
+            "not a backup".encodeToByteArray() to "无法识别",
+        )
+        cases.forEach { (bytes, expected) ->
+            val result = BackupFileReader().validate(ByteArrayInputStream(bytes))
+            assertTrue(result is BackupValidationResult.Invalid)
+            assertTrue((result as BackupValidationResult.Invalid).reason, result.reason.contains(expected))
+        }
+    }
+
+    @Test fun explainsWrappedAndIncompleteZipWithoutAcceptingUnsafeRestore() {
+        fun packed(path: String): ByteArray = ByteArrayOutputStream().also { out ->
+            ZipOutputStream(out).use { zip -> zip.putNextEntry(ZipEntry(path)); zip.write("{}".encodeToByteArray()); zip.closeEntry() }
+        }.toByteArray()
+        val wrapped = BackupFileReader().validate(ByteArrayInputStream(packed("folder/manifest.json")))
+        assertTrue(wrapped is BackupValidationResult.Invalid)
+        assertTrue((wrapped as BackupValidationResult.Invalid).reason.contains("额外的文件夹"))
+        val incomplete = BackupFileReader().validate(ByteArrayInputStream(packed("data/backup.json")))
+        assertTrue(incomplete is BackupValidationResult.Invalid)
+        assertTrue((incomplete as BackupValidationResult.Invalid).reason.contains("缺少 manifest.json"))
+    }
+
     @Test
     fun writesPagedV2BackupAndReaderReassemblesPayload() {
         val messages = (1L..501L).map { id -> MessageExport(id, "s", senderName = "我", content = "m$id", isMe = true) }

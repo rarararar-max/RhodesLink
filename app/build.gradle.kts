@@ -29,8 +29,8 @@ android {
         applicationId = "com.buzidongshouhuoji.privatechat"
         minSdk = 26
         targetSdk = 35
-        versionCode = 74
-        versionName = "1.14.27"
+        versionCode = 77
+        versionName = "1.14.30"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -100,7 +100,9 @@ dependencies {
     implementation(libs.androidx.work.runtime)
     testImplementation(libs.junit)
     testImplementation(libs.multiplatform.settings)
+    androidTestImplementation(libs.androidx.security.crypto)
     androidTestImplementation(libs.sqldelight.android)
+    androidTestImplementation(libs.multiplatform.settings)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

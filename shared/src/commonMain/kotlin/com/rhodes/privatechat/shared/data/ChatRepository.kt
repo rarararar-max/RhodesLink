@@ -50,6 +50,10 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     val knowledgeBases = KnowledgeBaseRepository(wrapper)
     val replyTurns = ReplyTurnRepository(wrapper)
 
+    /** Backup owns a separate read handle; normal chat queries are unaffected. */
+    suspend fun <T> withBackupReader(block: suspend (ChatRepository) -> T): T =
+        wrapper.withBackupReader { block(ChatRepository(it)) }
+
     /** Reserved for destructive restore only. Callers must validate the backup before entering it. */
     suspend fun runRestoreTransaction(block: RhodesDatabase.() -> Unit) = withContext(Dispatchers.Default) {
         wrapper.database.transaction { block(wrapper.database) }
@@ -381,8 +385,9 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
     /** Applies a validated save point atomically so a failed read never leaves an empty chat. */
     suspend fun restoreChatArchive(sessionId: String, operatorId: String, history: ChatHistorySegment?, messagesToRestore: List<ChatMessage>, summary: Memory) = withContext(Dispatchers.Default) {
         val db = wrapper.database
-        memoryV2.invalidateDerivedBySession(sessionId)
+        // All history retention and restoration commits atomically.
         db.transaction {
+            memoryV2.retainDerivedArchiveTimeline(sessionId)
             if (history != null) {
                 db.chatArchivesQueries.insertHistorySegment(history.id, history.sessionId, history.title, history.reason, history.messagesJson, history.createdAt)
             }
@@ -390,13 +395,13 @@ class ChatRepository(private val wrapper: DatabaseWrapper, settings: SettingsRep
             db.chatMessagesQueries.deleteSessionMessages(sessionId)
             // The archived messages replace the whole session, so their reply turns must go with them.
             db.replyTurnsQueries.deleteReplyTurnsBySession(sessionId)
-            db.memoriesQueries.deleteMemoriesBySession(sessionId)
-            db.memoriesQueries.deleteLongTermByOperator(operatorId)
-            db.memoryAnchorsQueries.deleteAnchorsBySession(sessionId)
-            db.vectorMemoriesQueries.deleteVectorsForMemorySession(sessionId)
-            db.memoryItemsQueries.deleteMemoryItemsBySession(sessionId)
-            db.memorySourceQueueQueries.deleteMemorySourcesBySession(sessionId)
-            db.vectorMemoriesQueries.deleteVectorMemoriesBySourceId(sessionId)
+            val historyId = history?.id ?: "archive_history_${sessionId}_${summary.createdAt}"
+            db.vectorMemoriesQueries.retainArchiveTimelineVectors(sessionId)
+            db.memoryItemsQueries.retainArchiveTimelineItems(historyId, sessionId)
+            db.memoriesQueries.retainArchiveTimelineMemories(historyId, sessionId)
+            db.memoryAnchorsQueries.retainArchiveTimelineAnchors(historyId, sessionId)
+            val escapedSession = sessionId.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            db.memorySourceQueueQueries.retainArchiveTimelineSources(sessionId, "$escapedSession:%")
             db.memoriesQueries.insertMemory(summary.sessionId, summary.operatorId, summary.type.name, summary.content, summary.keywords, summary.preferences, summary.taboos, summary.createdAt, summary.expiresAt)
             messagesToRestore.forEach { message ->
                 db.chatMessagesQueries.insertMessage(message.id, sessionId, message.senderId, message.senderName, message.content, message.type, message.mode, message.emotion, message.activity, message.location, message.narration, message.segmentGroup, message.intimacyChange.toLong(), message.timestamp, if (message.isMe) 1L else 0L)

@@ -512,6 +512,7 @@ object ProblemChecker {
         return "settingsMode=${if (plainMode) "PLAIN_DIAGNOSTIC" else "ENCRYPTED"}," +
             "plainPrefsEntries=$entryCount,plainPrefsBytes=$prefsBytes,plainPrefsCommitMs=$commitMs," +
             "securePrefsEntries=$secureEntries,securePrefsBytes=$secureBytes,secureCommitMs=$secureCommitMs," +
+            "storageActive=${prefs.getString("settings_storage_active_v2", "legacy")},storageError=${prefs.getString("settings_storage_error", "none")}," +
             "dbBytes=${bytes(db)},dbWalBytes=${bytes(java.io.File(db.path + "-wal"))}," +
             "dbJournalBytes=${bytes(java.io.File(db.path + "-journal"))}," +
             "freeStorageMb=${stat.availableBytes / 1024 / 1024},totalStorageMb=${stat.totalBytes / 1024 / 1024}"

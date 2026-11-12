@@ -58,7 +58,7 @@ class BackupExportCoordinator(
         val snapshot = try {
             BackupContentFilter.apply(BackupSnapshotBuilder(repository, settings).build { name, elapsedMs ->
                 snapshotPart = name
-                DebugLogger.diagnostic("Backup/SnapshotRead", "part=$name,status=done,elapsedMs=$elapsedMs")
+                DebugLogger.diagnostic("Backup/SnapshotRead", "part=$name,status=${if (elapsedMs < 0) "start" else "done"},elapsedMs=${elapsedMs.coerceAtLeast(0)}")
             }, selection)
         } catch (error: Throwable) {
             DebugLogger.diagnostic("Backup/Export", "stage=snapshot,status=failed,part=$snapshotPart,elapsedMs=${android.os.SystemClock.elapsedRealtime() - snapshotStarted},errorClass=${error.javaClass.simpleName},errorMessage=${error.message?.replace('\n', ' ')?.take(160)}")

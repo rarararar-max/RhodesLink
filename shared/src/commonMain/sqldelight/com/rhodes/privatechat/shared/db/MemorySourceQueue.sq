@@ -148,3 +148,7 @@ CASE WHEN EXISTS (SELECT 1 FROM memory_items
     WHERE sourceKind = memory_source_queue.sourceKind AND sourceRefId = memory_source_queue.sourceRefId
     AND status = 'active' AND vectorId = '') THEN 0 ELSE 1 END
 WHERE processedL1 = 1 AND sourceKind = ? AND sourceRefId = ?;
+
+retainArchiveTimelineSources:
+UPDATE memory_source_queue SET status = 'archived_timeline', leaseUntil = 0, claimToken = ''
+WHERE sourceRefId = :sessionId OR sourceRefId LIKE :sourcePrefix ESCAPE '\';

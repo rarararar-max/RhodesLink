@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -68,6 +69,24 @@ fun ChatArchiveScreen(viewModel: MainViewModel, operator: Operator, onBack: () -
     var detailTarget by remember { mutableStateOf<ChatArchive?>(null) }
     var archiveActionRunning by remember { mutableStateOf(false) }
     var showHelp by remember { mutableStateOf(false) }
+    var detailLoading by remember { mutableStateOf(false) }
+    var archiveError by remember { mutableStateOf("") }
+    fun openArchive(archive: ChatArchive, forLoad: Boolean) {
+        if (detailLoading) return
+        detailLoading = true
+        archiveError = ""
+        scope.launch {
+            try {
+                val detail = viewModel.chatViewModel.getArchiveDetail(archive.id)
+                if (detail == null) archiveError = "该存档已不存在，请刷新后重试"
+                else if (forLoad) loadTarget = detail else detailTarget = detail
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                archiveError = "存档读取失败，请重试；原有聊天未作修改"
+            } finally { detailLoading = false }
+        }
+    }
     fun refresh() {
         scope.launch {
             runCatching { viewModel.getCurrentChatArchives() }.onSuccess { archives = it }
@@ -88,27 +107,29 @@ fun ChatArchiveScreen(viewModel: MainViewModel, operator: Operator, onBack: () -
                 Text("好感度提升可解锁更多位置", color = TextTertiary, fontSize = 12.sp)
             }
             Spacer(Modifier.height(10.dp))
-            Button(onClick = { showCreate = true }, enabled = archives.size < capacity, modifier = Modifier.fillMaxWidth()) { Text("保存当前进度") }
+            Button(onClick = { showCreate = true }, enabled = archives.size < capacity, modifier = Modifier.fillMaxWidth()) { Text("保存当前进度（最近 30 轮）") }
             Spacer(Modifier.height(12.dp))
+            if (detailLoading) Text("正在读取存档…", color = TextSecondary, fontSize = 12.sp)
+            if (archiveError.isNotBlank()) Text(archiveError, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (archives.isEmpty()) item { Text("完成一轮聊天后，可以在这里保存剧情进度。", color = TextTertiary, modifier = Modifier.padding(top = 28.dp)) }
+                if (archives.isEmpty()) item { Text("完成一轮聊天后，可以保存最近 30 个完整互动回合和更早剧情摘要。", color = TextTertiary, modifier = Modifier.padding(top = 28.dp)) }
                 items(archives, key = { it.id }) { archive ->
                     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Card).padding(14.dp)) {
                         Text(archive.title, color = TextPrimary, fontWeight = FontWeight.SemiBold)
                         Text("${archiveTime(archive.createdAt)} · ${modeName(archive.mode)}", color = TextSecondary, fontSize = 12.sp)
                         Spacer(Modifier.height(5.dp))
                         val description = when (archive.status) {
-                            ChatArchive.STATUS_PENDING -> "剧情整理中…"
-                            ChatArchive.STATUS_FAILED -> "剧情整理失败，暂时无法读取。"
-                            else -> archive.summary.take(70).ifBlank { "剧情简介已完成" }
+                            ChatArchive.STATUS_PENDING -> "对话已保存 · 前情整理中…"
+                            ChatArchive.STATUS_FAILED -> "对话已保存 · 前情整理失败，可重试"
+                            else -> "可读取 · " + archive.summary.take(70).ifBlank { "剧情简介已完成" }
                         }
                         Text(description, color = if (archive.status == ChatArchive.STATUS_FAILED) TextTertiary else TextSecondary, fontSize = 13.sp)
                         Spacer(Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            if (archive.status == ChatArchive.STATUS_READY) TextButton(onClick = { loadTarget = archive }, enabled = !archiveActionRunning) { Text("读取", color = Primary) }
+                            if (archive.status == ChatArchive.STATUS_READY) TextButton(onClick = { openArchive(archive, true) }, enabled = !archiveActionRunning) { Text("读取", color = Primary) }
                             else if (archive.status == ChatArchive.STATUS_FAILED) TextButton(onClick = { viewModel.retryArchiveSummary(archive.id) }, enabled = !archiveActionRunning) { Text("重新整理", color = Primary) }
                             else Text("整理完成后可读取", color = TextTertiary, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp))
-                            TextButton(onClick = { detailTarget = archive }) { Text("详情", color = TextSecondary) }
+                            TextButton(onClick = { openArchive(archive, false) }) { Text("详情", color = TextSecondary) }
                             TextButton(onClick = { deleteTarget = archive }) { Text("删除", color = TextSecondary) }
                         }
                     }
@@ -120,7 +141,7 @@ fun ChatArchiveScreen(viewModel: MainViewModel, operator: Operator, onBack: () -
         viewModel.createCurrentArchive(title, note) { showCreate = false; refresh() }
     }
     loadTarget?.let { archive ->
-        AlertDialog(onDismissRequest = { if (!archiveActionRunning) loadTarget = null }, title = { Text("读取「${archive.title}」") }, text = { Text("将恢复为保存时的${modeName(archive.mode)}和最近5个完整回合。当前聊天后续会保留在聊天记录中，仅供回看，不会再影响当前剧情。") }, confirmButton = { TextButton(onClick = { archiveActionRunning = true; viewModel.loadArchive(archive.id) { success -> archiveActionRunning = false; if (success) onBack() else loadTarget = null } }, enabled = !archiveActionRunning) { Text(if (archiveActionRunning) "读取中…" else "确认读取", color = Primary) } }, dismissButton = { TextButton(onClick = { loadTarget = null }, enabled = !archiveActionRunning) { Text("取消") } })
+        AlertDialog(onDismissRequest = { if (!archiveActionRunning) loadTarget = null }, title = { Text("读取「${archive.title}」") }, text = { Text("将恢复为保存时的${modeName(archive.mode)}和存档中的 ${archiveMessageCount(archive)} 个完整回合。当前聊天后续会保留在聊天记录中，仅供回看，不会再影响当前剧情。") }, confirmButton = { TextButton(onClick = { archiveActionRunning = true; viewModel.loadArchive(archive.id) { success -> archiveActionRunning = false; if (success) onBack() else loadTarget = null } }, enabled = !archiveActionRunning) { Text(if (archiveActionRunning) "读取中…" else "确认读取", color = Primary) } }, dismissButton = { TextButton(onClick = { loadTarget = null }, enabled = !archiveActionRunning) { Text("取消") } })
     }
     deleteTarget?.let { archive ->
         AlertDialog(onDismissRequest = { deleteTarget = null }, title = { Text("删除「${archive.title}」？") }, text = { Text("只会删除这个存档，不会影响当前聊天或其他存档。") }, confirmButton = { TextButton(onClick = { viewModel.deleteArchive(archive.id); deleteTarget = null; refresh() }) { Text("删除", color = TextSecondary) } }, dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("取消") } })
@@ -134,7 +155,7 @@ fun ChatArchiveScreen(viewModel: MainViewModel, operator: Operator, onBack: () -
             title = { Text(archive.title) },
             text = {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    item { Text("${archiveTime(archive.createdAt)} · ${modeName(archive.mode)}", color = TextSecondary, fontSize = 12.sp) }
+                    item { Text("${archiveTime(archive.createdAt)} · ${modeName(archive.mode)} · 原文 ${archiveMessageCount(archive)} 轮", color = TextSecondary, fontSize = 12.sp) }
                     if (archive.note.isNotBlank()) item { Text("续写备注\n${archive.note}", color = TextSecondary, fontSize = 13.sp) }
                     item { Text(if (archive.status == ChatArchive.STATUS_READY) archive.summary else if (archive.status == ChatArchive.STATUS_FAILED) "剧情整理失败，暂时无法读取。" else "剧情整理中…", color = TextPrimary, fontSize = 14.sp) }
                     item { Text("最近互动", color = TextSecondary, fontWeight = FontWeight.SemiBold) }
@@ -144,7 +165,7 @@ fun ChatArchiveScreen(viewModel: MainViewModel, operator: Operator, onBack: () -
             confirmButton = { TextButton(onClick = { detailTarget = null }) { Text("关闭", color = Primary) } }
         )
     }
-    if (showHelp) AlertDialog(onDismissRequest = { showHelp = false }, title = { Text("剧情存档位置") }, text = { Text("初始可保存3个存档，随着与角色的好感度提升逐步解锁，最多20个。\n\n0-199：3个\n200-399：5个\n400-599：8个\n600-799：12个\n800-999：16个\n1000：20个") }, confirmButton = { TextButton(onClick = { showHelp = false }) { Text("知道了") } })
+    if (showHelp) AlertDialog(onDismissRequest = { showHelp = false }, title = { Text("剧情存档位置") }, text = { Text("每个存档固定保留最近 30 个完整互动回合，更早内容整理为剧情前情。初始可保存3个存档，随着与角色的好感度提升逐步解锁，最多20个。\n\n0-199：3个\n200-399：5个\n400-599：8个\n600-799：12个\n800-999：16个\n1000：20个") }, confirmButton = { TextButton(onClick = { showHelp = false }) { Text("知道了") } })
 }
 
 @Composable
@@ -156,6 +177,8 @@ private fun ArchiveCreateDialog(onDismiss: () -> Unit, onSave: (String, String) 
             OutlinedTextField(title, { title = it.take(30) }, label = { Text("存档名称") }, placeholder = { Text("默认使用当前时间") }, modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(note, { note = it.take(120) }, label = { Text("续写备注（可选）") }, placeholder = { Text("例如：保留约好看日出的设定") }, modifier = Modifier.fillMaxWidth(), maxLines = 3)
+            Spacer(Modifier.height(8.dp))
+            Text("保存最近 30 轮完整对话，并整理更早的剧情前情；不足 30 轮时保存已有完整回合。", color = TextSecondary, fontSize = 12.sp)
         }
     }, confirmButton = { TextButton(onClick = { onSave(title, note) }) { Text("保存", color = Primary) } }, dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
 }
@@ -172,3 +195,8 @@ private fun ArchiveMessagePreview(message: ChatMessage) {
         Text(text, color = TextPrimary, fontSize = 13.sp, modifier = Modifier.padding(top = 3.dp))
     }
 }
+
+private fun archiveMessageCount(archive: ChatArchive): Int = runCatching {
+    val messages = Json { ignoreUnknownKeys = true }.decodeFromString(ListSerializer(ChatMessage.serializer()), archive.messagesJson)
+    com.rhodes.privatechat.shared.model.ChatArchivePolicy.completedRounds(messages).size
+}.getOrDefault(0)

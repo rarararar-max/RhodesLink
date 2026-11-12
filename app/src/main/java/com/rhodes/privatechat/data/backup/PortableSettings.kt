@@ -10,7 +10,7 @@ object PortableSettings {
         "memory_recall_mode", "personal_memory_reference_style", "context_mode",
         "status_location_pool", "status_activity_pool", "status_emotion_pool",
         "sleep_fixed_wake_text", "sleep_wake_text_mode",
-        "support_conversation",
+        "support_conversation", "private_packet_pending",
     )
     private val booleanKeys = setOf(
         "dark_mode", "source_aware_memory_enabled", "distinguish_private_memory", "unified_memory_enabled",
@@ -49,6 +49,10 @@ object PortableSettings {
     )
 
     suspend fun snapshot(repository: ChatRepository, settings: SettingsRepository): Map<String, String> = buildMap {
+        settings.pendingPrivateRedPackets().orEmpty().forEach { id ->
+            val key = "private_packet_$id"
+            put(key, "s:${settings.getString(key)}")
+        }
         stringKeys.forEach { put(it, "s:${settings.getString(it)}") }
         booleanKeys.forEach { put(it, "b:${settings.getBoolean(it)}") }
         intKeys.forEach { put(it, "i:${settings.getInt(it)}") }
@@ -102,6 +106,7 @@ object PortableSettings {
     }
 
     suspend fun clearForRestore(repository: ChatRepository, settings: SettingsRepository) {
+        settings.pendingPrivateRedPackets().orEmpty().forEach { settings.remove("private_packet_$it") }
         (stringKeys + booleanKeys + intKeys + "hidden_ids").forEach(settings::remove)
         repository.getAllOperatorsSync().forEach { operator ->
             val id = operator.id

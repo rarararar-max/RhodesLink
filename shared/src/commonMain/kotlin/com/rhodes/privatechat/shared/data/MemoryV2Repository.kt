@@ -389,6 +389,15 @@ class MemoryV2Repository(private val wrapper: DatabaseWrapper) {
         }
     }
 
+    /** Called inside the read-save transaction. Keep historical vector data but exclude it from recall. */
+    internal fun retainDerivedArchiveTimeline(sessionId: String) {
+        val pending = ArrayDeque<Long>()
+        db.memoryItemsQueries.getMemoryIdsBySession(sessionId).executeAsList().forEach(pending::addLast)
+        invalidateDescendantsInternal(pending).forEach { vectorId ->
+            db.vectorMemoriesQueries.retainArchiveDerivedVector(vectorId)
+        }
+    }
+
     suspend fun invalidateDerivedBySession(sessionId: String) = withContext(Dispatchers.Default) {
         db.transaction {
             val pending = ArrayDeque<Long>()

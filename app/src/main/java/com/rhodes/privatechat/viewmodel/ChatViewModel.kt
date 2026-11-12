@@ -1,5 +1,9 @@
 package com.rhodes.privatechat.viewmodel
 
+import com.rhodes.privatechat.shared.model.PrivateRedPacket
+import com.rhodes.privatechat.shared.model.isPrivateRedPacket
+import com.rhodes.privatechat.shared.model.encoded
+
 import com.rhodes.privatechat.shared.modelgateway.hasVisionConfiguration
 import android.app.Application
 import android.util.Log
@@ -78,10 +82,13 @@ import java.util.UUID
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.TimeSource
 
 private val json = Json { ignoreUnknownKeys = true }
+
+private val privatePacketProjectionMutex = kotlinx.coroutines.sync.Mutex()
 
 class ChatViewModel(
     application: Application,
@@ -238,7 +245,55 @@ class ChatViewModel(
         )
     }
 
+    private val packetDispatching = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val packetRecovery by lazy {
+        viewModelScope.launch(Dispatchers.IO) {
+            // Only unfinished projections are scanned; settled transactions never debit again.
+            privatePacketProjectionMutex.lock()
+            try { settings.pendingPrivateRedPackets().orEmpty().forEach { id ->
+                runCatching {
+                    val packet = settings.privateRedPacket(id) ?: return@runCatching
+                    val message = repository.getMessageById(packet.messageId)
+                    if (message == null) {
+                        if (packet.status == "sent") {
+                            if (settings.settlePrivateRedPacket(id, false, System.currentTimeMillis()) != null)
+                                settings.acknowledgePrivateRedPacket(id)
+                        } else settings.acknowledgePrivateRedPacket(id)
+                    } else if (message.sessionId == packet.sessionId && isPrivateRedPacket(message.type) && PrivateRedPacket.parse(message.content)?.id == packet.id) {
+                        val settled = settings.settlePrivateRedPacket(id, true, System.currentTimeMillis()) ?: return@runCatching
+                        repository.updateMessageContent(message.id, settled.encoded())
+                        settings.acknowledgePrivateRedPacket(id)
+                        com.rhodes.privatechat.automation.ManualReplyScheduler.scheduleTurn(getApplication(), "private:${message.sessionId}:${message.id}")
+                    }
+                }.onFailure { DebugLogger.diagnostic("RedPacket/Recovery", it.javaClass.simpleName) }
+            } } finally { privatePacketProjectionMutex.unlock() }
+        }
+    }
+
+    fun sendPrivateRedPacket(amount: Int, wish: String, onAccepted: () -> Unit = {}) {
+        val session = _currentSession.value ?: return
+        if (_loadingSessions.value.contains(session.id) || !packetDispatching.compareAndSet(false, true)) {
+            onShowToast("请等待当前回复完成后再发红包")
+            return
+        }
+        val packet = PrivateRedPacket(UUID.randomUUID().toString(), session.id, session.operatorId,
+            session.operatorName, amount, wish.trim().ifBlank { "一点心意，记得收下。" })
+        if (!packet.valid() || settings.lmb < amount) {
+            packetDispatching.set(false)
+            onShowToast("请填写1至20000龙门币、60字以内的附言，并确认余额充足")
+            return
+        }
+        sharedUtils.chatConfigurationError()?.let {
+            packetDispatching.set(false); onShowToast(it); return
+        }
+        onAccepted()
+        sendMessage(textOverride = packet.copy(status = "claimed").contextText(true), targetSession = session,
+            persistedContentOverride = packet.encoded(), messageTypeOverride = "red_packet",
+            onResponseComplete = { packetDispatching.set(false) })
+    }
+
     init {
+        packetRecovery.start()
         loadHypnosis()
         viewModelScope.launch {
             // Resume interrupted background work after the app process is recreated.
@@ -332,7 +387,7 @@ class ChatViewModel(
                 val all = currentChapterMessages(session.id).filter { it.type != "system" && it.type != "send_failed" && it.type != "gift_reply_failed" }
                 val rounds = all.chunkedByPrivateRound().filter { round -> round.any { it.isMe } && round.any { !it.isMe && it.type == "ai_json" } }
                 if (rounds.isEmpty()) { onShowToast("至少完成一轮聊天后才能保存存档"); return@launch }
-                val snapshot = rounds.takeLast(5).flatten()
+                val snapshot = com.rhodes.privatechat.shared.model.ChatArchivePolicy.snapshot(all)
                 val now = System.currentTimeMillis()
                 // A usable rolling summary covers earlier history. Without one, retain the full
                 // frozen chapter so the background compactor cannot silently lose early events.
@@ -381,6 +436,8 @@ class ChatViewModel(
             }
         }
     }
+
+    suspend fun getArchiveDetail(archiveId: String) = repository.getChatArchive(archiveId)
 
     fun retryArchiveSummary(archiveId: String) = summarizeArchive(archiveId)
 
@@ -448,12 +505,15 @@ class ChatViewModel(
     fun loadArchive(archiveId: String, onComplete: (Boolean) -> Unit = {}) {
         val session = _currentSession.value ?: return
         viewModelScope.launch {
+            try {
             archiveOperationMutex.withLock {
                 val archive = repository.getChatArchive(archiveId)
                 val snapshot = archive?.takeIf { it.sessionId == session.id && it.status == ChatArchive.STATUS_READY && it.summary.isNotBlank() }
                     ?.let { runCatching { json.decodeFromString(ListSerializer(ChatMessage.serializer()), it.messagesJson) }.getOrNull()?.let { messages -> it to messages } }
                 if (snapshot == null) { onShowToast("该存档尚未整理完成，暂时不能读取"); onComplete(false); return@withLock }
                 cancelSessionRequests(session.id)
+                privateMaintenanceJobs.remove(session.id)?.cancel()
+                privateMaintenancePending.remove(session.id)
                 settings.advanceMemoryTimelineEpoch(session.id)
                 val oldMessages = currentChapterMessages(session.id)
                 val history = oldMessages.takeIf { it.isNotEmpty() }?.let {
@@ -485,6 +545,13 @@ class ChatViewModel(
                 settings.putSessionRestartAt(session.id, 0L)
                 onShowToast("已读取存档「${snapshot.first.title}」")
                 onComplete(true)
+            }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.e("ChatArchive", "读取存档失败", error)
+                onShowToast("读取存档失败，请重试")
+                onComplete(false)
             }
         }
     }
@@ -1285,12 +1352,12 @@ ${text}"""
             if (message.type == "gift_hidden") {
                 DebugLogger.chatEvent("送礼", "私聊礼物", "回复失败", "session=$sessionId，messageId=${message.id}")
             }
-            repository.updateMessageType(message.id, if (message.type == "gift_hidden") "gift_reply_failed" else "send_failed")
+            repository.updateMessageType(message.id, if (isPrivateRedPacket(message.type)) "red_packet_reply_failed" else if (message.type == "gift_hidden") "gift_reply_failed" else "send_failed")
         }
         val undeliveredIds = undeliveredMessages.map { it.id }.toSet()
         _messages.value = _messages.value.map { message ->
             if (message.id in undeliveredIds) {
-                message.copy(type = if (message.type == "gift_hidden") "gift_reply_failed" else "send_failed")
+                message.copy(type = if (isPrivateRedPacket(message.type)) "red_packet_reply_failed" else if (message.type == "gift_hidden") "gift_reply_failed" else "send_failed")
             } else message
         }
     }
@@ -1332,6 +1399,8 @@ ${text}"""
             var msgId = retryMessageId ?: 0L
             var aiMsgId = 0L
             var mutexLocked = false
+            var packetProjectionLocked = false
+            var reservedPacket: PrivateRedPacket? = null
             var userMessagePersisted = false
             var responseStored = false
             var batchIds = emptySet<Long>()
@@ -1390,11 +1459,23 @@ ${text}"""
                     pipelineStage = "user_message_id"
                     msgId = withTimeout(MESSAGE_WRITE_TIMEOUT_MS) { repository.getNextMessageId() }
                 }
+                if (isPrivateRedPacket(messageTypeOverride.orEmpty())) {
+                    packetRecovery.join()
+                    privatePacketProjectionMutex.lock()
+                    packetProjectionLocked = true
+                }
                 val hiddenGift = messageTypeOverride == "gift_hidden"
+                if (messageTypeOverride == "red_packet" && retryMessageId == null) {
+                    val packet = requireNotNull(PrivateRedPacket.parse(persistedContentOverride.orEmpty()))
+                        .copy(messageId = msgId, createdAt = System.currentTimeMillis())
+                    check(packet.sessionId == session.id && packet.recipientId == session.operatorId) { "红包收件人与会话不一致" }
+                    check(withContext(Dispatchers.IO) { settings.reservePrivateRedPacket(packet) }) { "红包未发送：余额不足或本地保存失败" }
+                    reservedPacket = packet
+                }
                 val userMessageTimestamp = System.currentTimeMillis()
                 val userMessage = ChatMessage(
                     id = msgId, sessionId = session.id,
-                    senderName = "我", content = if (hiddenGift) persistedContentOverride ?: text else text,
+                    senderName = "我", content = reservedPacket?.encoded() ?: if (hiddenGift || isPrivateRedPacket(messageTypeOverride.orEmpty())) persistedContentOverride ?: text else text,
                     type = messageTypeOverride ?: "text", mode = mode,
                     timestamp = userMessageTimestamp, isMe = true
                 )
@@ -1434,6 +1515,20 @@ ${text}"""
                     }
                 }
                 userMessagePersisted = true
+                if (isPrivateRedPacket(messageTypeOverride.orEmpty())) {
+                    val packet = reservedPacket ?: repository.getMessageById(msgId)?.let { PrivateRedPacket.parse(it.content) }
+                    requireNotNull(packet) { "红包记录无法读取" }
+                    val claimed = if (packet.status == "claimed") packet else {
+                        kotlinx.coroutines.delay(450)
+                        withContext(Dispatchers.IO) { settings.settlePrivateRedPacket(packet.id, true, System.currentTimeMillis()) }
+                            ?: error("红包领取尚未保存，请稍后重试")
+                    }
+                    text = claimed.contextText(true)
+                    repository.updateMessageContent(msgId, claimed.encoded())
+                    withContext(Dispatchers.IO) { settings.acknowledgePrivateRedPacket(claimed.id) }
+                    _messages.value = _messages.value.map { if (it.id == msgId) it.copy(content = claimed.encoded()) else it }
+                }
+                if (packetProjectionLocked) { privatePacketProjectionMutex.unlock(); packetProjectionLocked = false }
                 replyLeaseToken = replyLeaseTokenOverride ?: UUID.randomUUID().toString()
                 // Schedule the recovery worker BEFORE claiming the lease. Claiming can be denied by a
                 // stale/orphaned reply_turn (for example when a reused message id collides with an old
@@ -1781,6 +1876,26 @@ ${text}"""
                     }
                     finishDebugRound(result, "模式=$mode，阶段=$pipelineStage，原因=$reason")
                 }
+                try {
+                    if (reservedPacket != null && !userMessagePersisted) {
+                        withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
+                            val packet = reservedPacket!!
+                            if (repository.getMessageById(packet.messageId) == null) {
+                                if (settings.settlePrivateRedPacket(packet.id, false, System.currentTimeMillis()) != null)
+                                    settings.acknowledgePrivateRedPacket(packet.id)
+                                _messages.value = _messages.value.filterNot { it.id == packet.messageId }
+                            }
+                        }
+                    }
+                } catch (error: Exception) {
+                    // Leave the durable pending marker intact for the next recovery attempt.
+                    DebugLogger.diagnostic("RedPacket/RefundDeferred", error.javaClass.simpleName)
+                } finally {
+                    if (packetProjectionLocked) privatePacketProjectionMutex.unlock()
+                }
+                if (isPrivateRedPacket(messageTypeOverride.orEmpty()) && msgId > 0 && !responseStored) {
+                    runCatching { com.rhodes.privatechat.automation.ManualReplyScheduler.scheduleTurn(getApplication(), "private:${session.id}:$msgId") }
+                }
                 retryMessageId?.let { retryingMessageIds.remove(it) }
                 finishLoading(session.id, requestId)
                 if (chatAiJobs[session.id] == coroutineContext[Job]) {
@@ -1801,14 +1916,14 @@ ${text}"""
                 onComplete(true)
                 return@launch
             }
-            repository.updateMessageType(messageId, if (message.type == "gift_reply_failed") "gift_hidden" else "text")
+            repository.updateMessageType(messageId, if (isPrivateRedPacket(message.type)) "red_packet" else if (message.type == "gift_reply_failed") "gift_hidden" else "text")
             val isGift = message.type == "gift_reply_failed" || message.type == "gift_hidden"
             sendMessage(
-                textOverride = if (isGift) giftPromptText(message.content) else message.content,
+                textOverride = if (isPrivateRedPacket(message.type)) PrivateRedPacket.parse(message.content)?.copy(status = "claimed")?.contextText(true) ?: "红包记录异常" else if (isGift) giftPromptText(message.content) else message.content,
                 targetSession = session,
                 targetMode = message.mode,
                 retryMessageId = messageId,
-                messageTypeOverride = if (isGift) "gift_hidden" else null,
+                messageTypeOverride = if (isPrivateRedPacket(message.type)) "red_packet" else if (isGift) "gift_hidden" else null,
                 replyTurnIdOverride = replyTurnId,
                 replyLeaseTokenOverride = replyLeaseToken,
                 onResponseComplete = onComplete
@@ -2082,6 +2197,7 @@ ${text}"""
 
     fun recallMessage(msgId: Long) {
         val message = _messages.value.firstOrNull { it.id == msgId } ?: return
+        if (isPrivateRedPacket(message.type)) { onShowToast("已发送的红包不能撤回，回复失败可以重试且不会重复扣币"); return }
         val sessionId = message.sessionId
         val session = _currentSession.value?.takeIf { it.id == sessionId }
         recalledSourceMessageIds.add(msgId)
@@ -2114,6 +2230,7 @@ ${text}"""
     }
 
     private fun messagePreviewForSession(message: ChatMessage): String = when {
+        isPrivateRedPacket(message.type) -> "[红包]"
         message.type == "image" -> "[图片]"
         message.type == "gift_hidden" || message.type == "gift_reply_failed" -> "[礼物]"
         message.type == "ai_json" -> runCatching { replyPreview(json.decodeFromString(com.rhodes.privatechat.shared.model.OfflineModeResponse.serializer(), message.content)) }.getOrDefault(message.content.take(50))
@@ -2150,7 +2267,7 @@ ${text}"""
     fun retryFailedMessage(msgId: Long) {
         if (!retryingMessageIds.add(msgId)) return
         val message = _messages.value.firstOrNull {
-            it.id == msgId && it.isMe && (it.type == "send_failed" || it.type == "gift_reply_failed")
+            it.id == msgId && it.isMe && (it.type == "send_failed" || it.type == "gift_reply_failed" || it.type == "red_packet_reply_failed")
         }
         val session = message?.let { _currentSession.value?.takeIf { session -> session.id == it.sessionId } }
         if (message == null || session == null) {
@@ -2161,11 +2278,11 @@ ${text}"""
         if (isGift) DebugLogger.chatEvent("送礼", "私聊礼物", "重试", "messageId=$msgId")
         else DebugLogger.chatEvent("私聊", "手动重试", "开始", "messageId=$msgId，mode=${message.mode}")
         sendMessage(
-            textOverride = if (isGift) giftPromptText(message.content) else message.content,
+            textOverride = if (isPrivateRedPacket(message.type)) PrivateRedPacket.parse(message.content)?.copy(status = "claimed")?.contextText(true) ?: "红包记录异常" else if (isGift) giftPromptText(message.content) else message.content,
             targetSession = session,
             targetMode = message.mode,
             retryMessageId = message.id,
-            messageTypeOverride = if (isGift) "gift_hidden" else null
+            messageTypeOverride = if (isPrivateRedPacket(message.type)) "red_packet" else if (isGift) "gift_hidden" else null
         )
     }
 
@@ -2528,7 +2645,7 @@ ${text}"""
                 val now = sharedUtils.beijingPromptTime()
                 val hour = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai")).get(java.util.Calendar.HOUR_OF_DAY)
                 val recent = _messages.value.takeLast(15).map { message ->
-                    val text = if (message.isMe) message.content else formatPrivateHistoryForPrompt(message)
+                    val text = if (message.isMe && !isPrivateRedPacket(message.type)) message.content else formatPrivateHistoryForPrompt(message)
                     text.takeIf { it.isNotBlank() }?.let { "${if (message.isMe) profile.nickname else message.senderName}：${it.take(60)}" }
                 }.filterNotNull().joinToString("\n")
                 val lastOpMsg = _messages.value.lastOrNull { !it.isMe }
@@ -2645,7 +2762,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         val recent = repository.getMessagesSync(session.id)
             .filter { restartAt <= 0L || it.timestamp >= restartAt }
             .takeLast(4).map { message ->
-            val text = if (message.isMe) message.content else formatPrivateHistoryForPrompt(message)
+            val text = if (message.isMe && !isPrivateRedPacket(message.type)) message.content else formatPrivateHistoryForPrompt(message)
             text.takeIf { it.isNotBlank() }?.let { "${if (message.isMe) "用户" else session.operatorName}：${it.take(100)}" }
         }.filterNotNull().joinToString("\n")
         val recallQuery = (recent + "\n" + userText).take(700)
@@ -2657,7 +2774,11 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             !needsRecall -> ""
             voiceRecallContext.isNotBlank() && voiceRecallSessionId == sessionId && voiceRecallSourcePolicy == sourcePolicy && voiceRecallQuery == recallQuery && now - voiceRecallAt < 5 * 60_000L -> voiceRecallContext
             else -> {
-                val personalMemories = memoryV2Pipeline.buildPrivateMemoryContext(
+                val personalMemories = if (archiveContextActive) memoryV2Pipeline.buildPrivateChatMemoryContext(
+                    session.operatorId, recallQuery,
+                    allowedSources = setOf(com.rhodes.privatechat.shared.model.MemorySourceKind.PRIVATE_CHAT.name),
+                    archiveSessionId = sessionId,
+                ) else memoryV2Pipeline.buildPrivateMemoryContext(
                     session.operatorId, limitL1 = 2, limitL2 = 1, limitL3 = 1, query = recallQuery,
                     applyPrivateSourceFilter = true,
                 )
@@ -2820,6 +2941,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
     }
 
     private fun formatPrivateHistoryForPrompt(msg: ChatMessage, includeStateCard: Boolean = false): String {
+        if (isPrivateRedPacket(msg.type)) return PrivateRedPacket.parse(msg.content)?.takeIf { it.status == "claimed" }?.contextText().orEmpty()
         if (msg.type == "gift_reply_failed") return ""
         if (msg.type == "gift_hidden") return giftPromptText(msg.content)
         if (msg.type == "image" && msg.isMe) return formatImageMessageForPrompt(msg)
@@ -2872,6 +2994,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
     }
 
     private fun formatPrivateMessageForMemory(msg: ChatMessage, limit: Int): String {
+        if (isPrivateRedPacket(msg.type)) return PrivateRedPacket.parse(msg.content)?.takeIf { it.status == "claimed" }?.contextText()?.take(limit).orEmpty()
         if (msg.type == "system") return ""
         if (msg.type == "gift_reply_failed") return ""
         if (msg.type == "gift_hidden") return giftPromptText(msg.content).take(limit)
@@ -3124,7 +3247,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
         // 本轮上下文引用记录：拼完提示词后落到操作详情与结果卡上，玩家不必再翻日志。
         var provenanceEntries: List<ContextProvenance.Entry> = emptyList()
         var provenanceMarkers: List<Pair<ContextProvenance.Entry, String>> = emptyList()
-        val stableImpression = if (allowPrivateRecall && settings.isMemoryInjectionAllowed("private_chat", "PRIVATE_CHAT")) optionalContextRead(
+        val stableImpression = if (!archiveContextActive && allowPrivateRecall && settings.isMemoryInjectionAllowed("private_chat", "PRIVATE_CHAT")) optionalContextRead(
             session.id, "stable_impression_read", "prompt_stable_impression", 10_000L,
             ::remainingPromptBudgetMs, "", onStage
         ) { memoryV2Pipeline.buildPrivateStableImpression(session.operatorId) } else ""
@@ -3135,6 +3258,7 @@ ${op.name}刚刚对用户说："${lastOpMsg}"
             memoryV2Pipeline.buildPrivateChatMemoryContext(
                 operatorId = session.operatorId,
                 query = recallQuery,
+                archiveSessionId = session.id.takeIf { archiveContextActive },
                 allowedSources = privateRecallSources,
                 allowPrivateVisualRecall = com.rhodes.privatechat.shared.model.MemorySourceKind.PRIVATE_CHAT.name in privateRecallSources,
             )

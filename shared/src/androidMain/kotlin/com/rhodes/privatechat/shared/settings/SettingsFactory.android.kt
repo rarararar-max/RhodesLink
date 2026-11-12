@@ -27,71 +27,71 @@ object AndroidSettingsFactory {
         }
     }
 
-    fun createSettings(): ObservableSettings {
-        val legacy = appContext.getSharedPreferences("rhodes_settings", Context.MODE_PRIVATE)
-        // Diagnostic A/B switch. When the plain store is selected, every settings read/write bypasses the
-        // Keystore-encrypted store. Motivation: a reply turn was observed stalled at "prompt_build_start"
-        // for 2115s while every database, storage and model probe stayed fast, and each encrypted commit
-        // re-encrypts and rewrites the whole 2201-entry file through Keystore, which no coroutine timeout
-        // can interrupt. If the app chats normally with this switch ON, the encrypted settings path is
-        // proven to be the blocker - and the switch doubles as a workaround for the affected user.
-        // The flag is read from the PLAIN store so it is always readable, whatever the encrypted store does.
-        if (legacy.getBoolean("diagnostic_use_plain_settings", false)) return atomicSettings(legacy)
-        return try {
-            val masterKey = MasterKey.Builder(appContext).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
-            val encrypted = EncryptedSharedPreferences.create(
-                appContext,
-                "rhodes_settings_secure",
-                masterKey,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-            )
-            if (legacy.all.isNotEmpty()) {
-                // Keep the legacy store intact until secure storage has a verified copy.
-                val encryptedValues = encrypted.all
-                val editor = encrypted.edit()
-                legacy.all.forEach { (key, value) ->
-                    val secureValue = encryptedValues[key]
-                    val restoreValue = key !in encryptedValues ||
-                        (secureValue is String && secureValue.isBlank() && value is String && value.isNotBlank())
-                    if (restoreValue) {
-                        when (value) {
-                            is String -> editor.putString(key, value)
-                            is Int -> editor.putInt(key, value)
-                            is Long -> editor.putLong(key, value)
-                            is Float -> editor.putFloat(key, value)
-                            is Boolean -> editor.putBoolean(key, value)
-                            is Set<*> -> editor.putStringSet(key, value.filterIsInstance<String>().toSet())
-                        }
-                    }
-                }
-                if (!editor.commit()) throw IllegalStateException("无法提交加密设置迁移")
-            }
-            atomicSettings(encrypted).also { settings ->
-                // A degraded Keystore can make every encrypted read/write block for seconds. Prompt
-                // assembly reads settings first, so on such a device no reply can ever be produced - it
-                // just times out. Time one real write; on a pathologically slow store fall back to the
-                // plain store for this process and record the fact for the diagnostic report.
-                val start = android.os.SystemClock.elapsedRealtime()
-                val usable = runCatching {
-                    settings.putLong("probe_keystore_latency_check", start)
-                    settings.remove("probe_keystore_latency_check")
-                    true
-                }.getOrDefault(false)
-                val elapsed = android.os.SystemClock.elapsedRealtime() - start
-                if (!usable || elapsed > SLOW_KEYSTORE_MS) {
-                    legacy.edit()
-                        .putBoolean("settings_plain_fallback_used", true)
-                        .putLong("settings_keystore_probe_ms", elapsed)
-                        .commit()
-                    throw IllegalStateException("encrypted settings too slow: ${elapsed}ms")
-                }
-            }
-        } catch (_: Exception) {
-            // Keystore failures must not make an upgraded user lose API configuration or UI state.
-            atomicSettings(legacy)
-        }
+    private var activePreferences: android.content.SharedPreferences? = null
+    private var cachedSettings: ObservableSettings? = null
+
+    private fun securePreferences(): android.content.SharedPreferences {
+        val masterKey = MasterKey.Builder(appContext).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+        return EncryptedSharedPreferences.create(appContext, "rhodes_settings_secure", masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM)
     }
+
+    @Synchronized
+    fun createSettings(): ObservableSettings {
+        cachedSettings?.let { return it }
+        val plain = appContext.getSharedPreferences("rhodes_settings", Context.MODE_PRIVATE)
+        val migration = SettingsStorageMigration(plain, ::securePreferences)
+        val selected = try {
+            migration.select()
+        } catch (error: Exception) {
+            // An unreadable encrypted store cannot be recovered by fabricating an empty store.
+            // Preserve both files and record only the error type (never credentials).
+            plain.edit().putString("settings_storage_error", error.javaClass.simpleName).commit()
+            val previous = plain.getString("settings_storage_active_v2", null)
+            val retained = if (previous == "secure") runCatching { securePreferences() }.getOrNull() else null
+            if (retained != null) {
+                plain.edit().putBoolean(SettingsStorageMigration.REQUEST_PLAIN, false).commit()
+                retained
+            } else {
+                // Keep recovery pending: do not label an empty/legacy view as migrated.
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    android.widget.Toast.makeText(appContext,
+                        "设置迁移或读取未完成，原数据已保留。请勿清除数据，可在调试日志中查看设置存储提示。",
+                        android.widget.Toast.LENGTH_LONG).show()
+                }
+                plain
+            }
+        }
+        var chosen = selected
+        if (selected !== plain) {
+            val start = android.os.SystemClock.elapsedRealtime()
+            val usable = runCatching {
+                check(selected.edit().putLong("probe_keystore_latency_check", start).commit())
+                check(selected.edit().remove("probe_keystore_latency_check").commit())
+            }.isSuccess
+            val elapsed = android.os.SystemClock.elapsedRealtime() - start
+            if (!usable || elapsed > SLOW_KEYSTORE_MS) {
+                // If migration fails, continue using the source rather than losing configuration.
+                chosen = runCatching { migration.fallback(selected) }.getOrElse {
+                    plain.edit().putString("settings_storage_error", it.javaClass.simpleName).commit()
+                    selected
+                }
+                plain.edit().putLong("settings_keystore_probe_ms", elapsed).commit()
+            }
+        }
+        activePreferences = chosen
+        return atomicSettings(chosen).also { cachedSettings = it }
+    }
+
+    @Synchronized
+    fun requestPlainSettings(usePlain: Boolean) {
+        createSettings()
+        val plain = appContext.getSharedPreferences("rhodes_settings", Context.MODE_PRIVATE)
+        check(!plain.contains("settings_storage_error") || plain.contains("settings_storage_active_v2")) { "设置恢复尚未完成，请保留原数据后重试，暂不切换设置库" }
+        SettingsStorageMigration(plain, ::securePreferences).request(usePlain, checkNotNull(activePreferences))
+    }
+
 }
 
 actual fun createPlatformSettings(): ObservableSettings = AndroidSettingsFactory.createSettings()

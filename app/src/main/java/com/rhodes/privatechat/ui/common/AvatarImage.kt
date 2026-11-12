@@ -19,6 +19,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import com.rhodes.privatechat.ui.theme.Primary
+import com.rhodes.privatechat.ui.theme.OnPrimary
+import com.rhodes.privatechat.ui.theme.isLiquidGlass
 
 @Composable
 fun OperatorAvatarImage(
@@ -57,7 +59,7 @@ fun OperatorAvatarImage(
         ) {
             Text(
                 if (emoji.isNotBlank()) emoji else name.take(1),
-                color = Color.White,
+                color = if (isLiquidGlass) OnPrimary else Color.White,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.Bold
             )

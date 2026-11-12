@@ -142,3 +142,12 @@ DELETE FROM vector_memories WHERE ownerType IN (?, ?, ?);
 getKnowledgeVectorPage:
 SELECT * FROM vector_memories WHERE ownerType = 'knowledge_base' AND ownerId = ?
 AND embeddingSignature = ? AND expiresAt > ? AND id > ? ORDER BY id ASC LIMIT ?;
+
+retainArchiveTimelineVectors:
+UPDATE vector_memories SET expiresAt = 0
+WHERE sourceId = :sessionId OR id IN (
+ SELECT vectorId FROM memory_items WHERE sessionId = :sessionId AND vectorId != ''
+);
+
+retainArchiveDerivedVector:
+UPDATE vector_memories SET expiresAt = 0 WHERE id = ?;

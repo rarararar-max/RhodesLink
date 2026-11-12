@@ -65,3 +65,6 @@ enforceAnchorRetain:
 DELETE FROM memory_anchors WHERE operatorId = ? AND id NOT IN (
     SELECT id FROM memory_anchors WHERE operatorId = ? ORDER BY createdAt DESC LIMIT ?
 );
+
+retainArchiveTimelineAnchors:
+UPDATE memory_anchors SET sessionId = :historyId WHERE sessionId = :sessionId;

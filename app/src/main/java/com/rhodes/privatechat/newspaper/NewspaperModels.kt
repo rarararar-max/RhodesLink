@@ -13,11 +13,17 @@ import kotlinx.serialization.json.intOrNull
 import java.net.URI
 import java.time.Instant
 import java.time.LocalDate
+import java.time.OffsetDateTime
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 import java.time.ZoneId
 
 internal val newspaperJson = Json { ignoreUnknownKeys = true }
 internal val beijingZone: ZoneId = ZoneId.of("Asia/Shanghai")
 internal fun newspaperToday(): String = LocalDate.now(beijingZone).toString()
+internal const val NEWSPAPER_WINDOW_DAYS = 7L
+internal const val NEWSPAPER_MAX_SOURCES = 8
+internal const val NEWSPAPER_MAX_ARTICLES = 4
 internal const val NEWSPAPER_RETENTION_DAYS = 30L
 internal const val NEWSPAPER_DISCLAIMER = "根据现实新闻改编的同人报刊，非官方剧情"
 
@@ -91,7 +97,7 @@ data class NewspaperEdition(
     val date: String, val articles: List<NewspaperArticle>, val sources: List<NewsSource>,
     val createdAt: Long, val expandedWindow: Boolean = false,
     val model: String = "deepseek-v4-flash", val inputTokens: Int = 0, val outputTokens: Int = 0,
-    val id: String = date, val topic: String = "GENERAL",
+    val id: String = date, val topic: String = "GENERAL", val windowDays: Int = 0,
 )
 
 @Serializable
@@ -99,6 +105,7 @@ internal data class NewspaperMaterials(
     val date: String, val expandedWindow: Boolean, val savedAt: Long, val sources: List<NewsSource>,
     val completedSearches: Int = 3,
     val topic: String = "GENERAL",
+    val selectionVersion: Int = 0,
 )
 
 internal fun safeNewsUrl(value: String): Boolean = runCatching {
@@ -109,17 +116,39 @@ internal fun safeNewsUrl(value: String): Boolean = runCatching {
         !(uri.host.startsWith("172.") && uri.host.split('.').getOrNull(1)?.toIntOrNull() in 16..31)
 }.getOrDefault(false)
 
-internal fun sourceInWindow(published: String, date: String, expanded: Boolean): Boolean = runCatching {
-    val day = Instant.parse(published).atZone(beijingZone).toLocalDate()
-    val target = LocalDate.parse(date)
-    day <= target && day >= if (expanded) target.minusDays(1) else target
-}.getOrDefault(false)
+/** Accept explicit publication dates only; never turn an undated result into today's news. */
+internal fun newsPublicationDay(published: String): LocalDate? {
+    val value = published.trim()
+    return runCatching { Instant.parse(value).atZone(beijingZone).toLocalDate() }.getOrNull()
+        ?: runCatching { OffsetDateTime.parse(value).atZoneSameInstant(beijingZone).toLocalDate() }.getOrNull()
+        ?: runCatching { LocalDate.parse(value, DateTimeFormatter.ISO_LOCAL_DATE) }.getOrNull()
+        ?: runCatching { LocalDateTime.parse(value.replace(' ', 'T')).toLocalDate() }.getOrNull()
+        ?: runCatching { LocalDate.parse(value, DateTimeFormatter.ofPattern("uuuu/MM/dd").withResolverStyle(java.time.format.ResolverStyle.STRICT)) }.getOrNull()
+}
 
-internal fun selectNewsSources(sources: List<NewsSource>, date: String, expanded: Boolean): List<NewsSource> =
-    sources.filter { safeNewsUrl(it.url) && sourceInWindow(it.publishedAt, date, expanded) && it.summary.length >= 60 }
+@Suppress("UNUSED_PARAMETER")
+internal fun sourceInWindow(published: String, date: String, expanded: Boolean = false): Boolean {
+    val day = newsPublicationDay(published) ?: return false
+    val target = runCatching { LocalDate.parse(date) }.getOrNull() ?: return false
+    return day in target.minusDays(NEWSPAPER_WINDOW_DAYS - 1)..target
+}
+
+@Suppress("UNUSED_PARAMETER")
+internal fun selectNewsSources(sources: List<NewsSource>, date: String, expanded: Boolean = false): List<NewsSource> {
+    val valid = sources.filter { safeNewsUrl(it.url) && sourceInWindow(it.publishedAt, date) &&
+        it.title.isNotBlank() && it.summary.length >= 40 }
         .distinctBy { it.url.substringBefore('#').trimEnd('/') }
         .distinctBy { it.title.filter(Char::isLetterOrDigit).lowercase() }
-        .take(8).mapIndexed { index, source -> source.copy(id = index + 1, summary = source.summary.take(900)) }
+        .sortedWith(compareByDescending<NewsSource> { newsPublicationDay(it.publishedAt) }.thenByDescending { it.summary.length })
+    // Round-robin publishers so one site's syndications cannot occupy every inspiration slot.
+    val groups = valid.groupBy { runCatching { URI(it.url).host.lowercase() }.getOrDefault(it.site) }
+        .values.map { it.toMutableList() }
+    val selected = mutableListOf<NewsSource>()
+    while (selected.size < NEWSPAPER_MAX_SOURCES && groups.any { it.isNotEmpty() }) {
+        for (group in groups) if (group.isNotEmpty() && selected.size < NEWSPAPER_MAX_SOURCES) selected += group.removeAt(0)
+    }
+    return selected.mapIndexed { index, source -> source.copy(id = index + 1, summary = source.summary.take(900)) }
+}
 
 /** Normalize harmless presentation differences locally; never repair truncated JSON or invent body text. */
 internal fun parseNewspaperArticles(raw: String, sources: List<NewsSource>, topic: NewspaperTopic = NewspaperTopic.GENERAL): List<NewspaperArticle> {
@@ -128,7 +157,7 @@ internal fun parseNewspaperArticles(raw: String, sources: List<NewsSource>, topi
     val root = newspaperJson.parseToJsonElement(cleaned)
     val rows = (if (root is JsonArray) root else root.jsonObject["articles"]?.jsonArray)
         ?: throw IllegalArgumentException("报纸内容缺少文章列表")
-    require(rows.size in 3..6) { "报纸文章数量不完整" }
+    require(rows.size in 3..NEWSPAPER_MAX_ARTICLES) { "报纸文章数量不完整" }
     val known = sources.map { it.id }.toSet()
     fun text(value: kotlinx.serialization.json.JsonElement?): String = (value as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim().orEmpty()
     val defaultSection = when (topic) {
@@ -183,9 +212,12 @@ internal const val NEWSPAPER_SYSTEM_PROMPT = """
 示例思路（不要照抄）：舞台设备故障可变成观众已散场，扩音回路仍高喊返场；承办方称是故障，黎博利技师却发现掌声提前录好，赞助商又要求保留录音。
 全期选题、地区、利益冲突和结尾要有变化，优先避开已读标题，不把同一事件换名写四遍。现实素材必须存在，但同人事件不要求与每条来源一一对应。
 本期日期由应用提供，不编泰拉纪年。不要声称虚构事件真的在现实今天发生。
+写作重点：让读者看见一个具体现场，而不是把现实摘要换几个泰拉名词。每篇有明确人物的诉求、一个可见的物件或动作、一句有身份口吻的短引语，以及有因果关系的转折或余波。细节必须推动事件，不堆设定名词。
+泰拉社会的商业利益、感染者处境、移动城市生活和不同地区文化可以自然影响人物选择；轻松故事可有冷幽默、反差与小小的温情，但不把所有人写成段子手，不靠灾难卖惨。
+选取适合改编的素材，仅取事件的矛盾和灵感，允许重构人物、经过和结局；不追求现实报道复述。宁可舍弃平淡或重复选题，不要把全部搜到的素材塞进报纸。
 只输出一个合法JSON对象，不要Markdown、HTML、格式解释或购报广告：
 {"articles":[{"section":"今日头条","title":"具体而有吸引力的新闻标题","subtitle":"可选的一句导语","paragraphs":["现场与事件","冲突、回应与转折","结果或余波"]}]}
-建议共4篇，第一篇是今日头条；其他栏目根据选题自由命名，如文娱现场、银幕内外、舞台风波、商业骑士、工造前线、街巷见闻。
+最多4篇（具体篇数服从本期要求），第一篇是今日头条；其他栏目根据选题自由命名，如文娱现场、银幕内外、舞台风波、商业骑士、工造前线、街巷见闻。
 标题4至32字，副标题可省略，每篇建议180至360字、2至4段，全期约900至1400字，短引语可单独成段。不要为了凑字数写空话。
 不必返回sourceIds或来源链接，程序另存整期现实灵感素材。提交前检查JSON完整、标题不重复、正文有具体人物和事情，保留完整结尾。
 """

@@ -492,6 +492,7 @@ class MemoryV2Pipeline(
         query: String,
         allowedSources: Set<String> = privateChatAllowedSources(),
         allowPrivateVisualRecall: Boolean = settings.privateRecallPrivateChatMemory,
+        archiveSessionId: String? = null,
     ): String {
         if (!settings.memoryV2Enabled) return ""
         if (query.isBlank()) return ""
@@ -516,7 +517,9 @@ class MemoryV2Pipeline(
             }
         }.distinctBy { it.id }
 
-        val ranked = candidates.mapNotNull { memory ->
+        val ranked = candidates.filter { memory ->
+            archiveSessionId == null || memory.sourceId.startsWith("$archiveSessionId:epoch${settings.getMemoryTimelineEpoch(archiveSessionId)}:")
+        }.mapNotNull { memory ->
             val type = memory.tags.split(',').getOrNull(1).orEmpty()
             val threshold = minimumPrivateSimilarity(memory.sourceType, type, query)
             if (memory.similarity < threshold) null else memory to privateRecallScore(memory, type, now)
@@ -743,6 +746,11 @@ class MemoryV2Pipeline(
     }
 
     private fun formatPrivateMessage(msg: ChatMessage): String {
+        if (com.rhodes.privatechat.shared.model.isPrivateRedPacket(msg.type)) {
+            return com.rhodes.privatechat.shared.model.PrivateRedPacket.parse(msg.content)
+                ?.takeIf { it.status == "claimed" }?.contextText().orEmpty()
+        }
+
         val time = if (msg.timestamp > 0) {
             val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
             sdf.timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")

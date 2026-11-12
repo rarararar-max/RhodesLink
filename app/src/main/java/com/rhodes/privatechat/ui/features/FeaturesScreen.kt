@@ -1,5 +1,6 @@
 package com.rhodes.privatechat.ui.features
 
+import com.rhodes.privatechat.ui.common.skinBackground
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -72,7 +73,7 @@ fun FeaturesScreen(
     onSleep: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    Column(modifier = modifier.fillMaxSize().background(BG)) {
+    Column(modifier = modifier.fillMaxSize().skinBackground()) {
         WechatTopBar("功能")
 
         Column(modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(top = 8.dp, bottom = 24.dp).navigationBarsPadding()) {

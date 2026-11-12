@@ -40,6 +40,8 @@ import com.rhodes.privatechat.ui.common.GradientHeader
 import com.rhodes.privatechat.ui.theme.AppearanceSkin
 import com.rhodes.privatechat.ui.theme.Card
 import com.rhodes.privatechat.ui.theme.Primary
+import com.rhodes.privatechat.ui.theme.OnPrimary
+import com.rhodes.privatechat.ui.theme.isLiquidGlass
 import com.rhodes.privatechat.ui.theme.Stroke
 import com.rhodes.privatechat.ui.theme.TextPrimary
 import com.rhodes.privatechat.ui.theme.TextSecondary
@@ -120,7 +122,7 @@ private fun SkinCard(skin: AppearanceSkin, selected: Boolean, onClick: () -> Uni
             Text(skin.title, modifier = Modifier.weight(1f), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (selected) {
                 Box(Modifier.size(20.dp).clip(RoundedCornerShape(5.dp)).background(Primary), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Default.Check, "使用中", tint = Color.White, modifier = Modifier.size(14.dp))
+                    Icon(Icons.Default.Check, "使用中", tint = if (isLiquidGlass) OnPrimary else Color.White, modifier = Modifier.size(14.dp))
                 }
             }
         }
@@ -136,7 +138,8 @@ private fun SkinPreview(skin: AppearanceSkin, selected: Boolean) {
         AppearanceSkin.ClassicDark -> PreviewColors(Color(0xFF1A1A1E), Color(0xFF2E2E32), Color(0xFF6B8CFF), Color(0xFF323238), Color(0xFFE8E8EC))
         AppearanceSkin.RhodesDay -> PreviewColors(Color(0xFFE7E9E8), Color(0xFFF9FAF7), Color(0xFFD96700), Color(0xFFE1E4E1), Color(0xFF1B2020))
         AppearanceSkin.RhodesNight -> PreviewColors(Color(0xFF15171C), Color(0xFF2A3039), Color(0xFFFF7800), Color(0xFF292F38), Color(0xFFE9ECE8))
-        AppearanceSkin.FrostedGlass -> PreviewColors(Color(0xFF101820), Color(0x9940505B), Color(0xFFFFA24A), Color(0x665B7180), Color(0xFFF1F6F7))
+        AppearanceSkin.FrostedGlass -> PreviewColors(Color(0xFF7C80D5), Color(0xBFE8E9FF), Color(0xFFFF5D45), Color(0xBFE8D7FF), Color(0xFF28305E))
+        AppearanceSkin.LiquidGlass -> PreviewColors(Color(0xFF0D152B), Color(0xE632405C), Color(0xFF9DDFFF), Color(0xF0325374), Color(0xFFF6F8FF))
     }
     Box(
         modifier = Modifier

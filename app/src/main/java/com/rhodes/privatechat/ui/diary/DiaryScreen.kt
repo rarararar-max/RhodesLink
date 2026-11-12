@@ -1,5 +1,6 @@
 package com.rhodes.privatechat.ui.diary
 
+import com.rhodes.privatechat.ui.common.skinBackground
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
@@ -179,7 +180,7 @@ fun DiaryScreen(
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-    Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
+    Column(modifier = Modifier.fillMaxSize().skinBackground().systemBarsPadding()) {
         Row(modifier = Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Text("干员日记", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = TextPrimary)

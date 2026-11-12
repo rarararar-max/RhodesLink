@@ -1,5 +1,6 @@
 package com.rhodes.privatechat.ui.contacts
 
+import com.rhodes.privatechat.ui.common.skinBackground
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -73,7 +74,7 @@ fun ContactsScreen(viewModel: MainViewModel, onOperatorClick: (OperatorEntity) -
     val filteredGroups = if (searchText.isBlank()) groups else groups.filter { it.operatorName.contains(searchText, ignoreCase = true) }
     val filtered = if (searchText.isBlank()) operators else operators.filter { it.name.contains(searchText, ignoreCase = true) || it.title.contains(searchText, ignoreCase = true) }
 
-    Column(modifier = modifier.fillMaxSize().background(BG)) {
+    Column(modifier = modifier.fillMaxSize().skinBackground()) {
         WechatTopBar("通讯录")
         SearchBar(text = searchText, onTextChange = { searchText = it })
         LazyColumn {
@@ -132,7 +133,7 @@ fun ContactsScreen(viewModel: MainViewModel, onOperatorClick: (OperatorEntity) -
         if (session.avatarUri.isNotBlank()) {
             AsyncImage(model = session.avatarUri, contentDescription = null, modifier = Modifier.size(40.dp).clip(CircleShape), contentScale = ContentScale.Crop)
         } else {
-            Box(modifier = Modifier.size(40.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) { Icon(Icons.Default.Groups, null, tint = Color.White, modifier = Modifier.size(20.dp)) }
+            Box(modifier = Modifier.size(40.dp).clip(CircleShape).background(Primary), contentAlignment = Alignment.Center) { Icon(Icons.Default.Groups, null, tint = if (isLiquidGlass) OnPrimary else Color.White, modifier = Modifier.size(20.dp)) }
         }
         Spacer(modifier = Modifier.width(10.dp))
         Column { Row(verticalAlignment = Alignment.CenterVertically) { Text(session.operatorName, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = TextPrimary); Spacer(modifier = Modifier.width(4.dp)); Text("群", fontSize = 9.sp, color = Primary, fontWeight = FontWeight.Bold, modifier = Modifier.clip(RoundedCornerShape(3.dp)).background(Primary.copy(alpha = 0.1f)).padding(horizontal = 4.dp, vertical = 1.dp)) } }

@@ -45,6 +45,13 @@ enum class AppearanceSkin(
         subtitle = "FROSTED GLASS / TERMINAL",
         description = "半透明磨砂玻璃面板，背景与聊天内容自然融合。",
         isDark = false,
+    ),
+    LiquidGlass(
+        storageValue = "liquid_glass",
+        title = "流光玻璃",
+        subtitle = "LIQUID GLASS / NIGHT",
+        description = "冷蓝流光、通透圆角与玻璃高光，清晰阅读的夜色界面。",
+        isDark = true,
     );
 
     companion object {
@@ -62,3 +69,6 @@ val isRhodesTerminal: Boolean
 
 val isFrostedGlass: Boolean
     get() = currentAppearanceSkin == AppearanceSkin.FrostedGlass
+
+val isLiquidGlass: Boolean
+    get() = currentAppearanceSkin == AppearanceSkin.LiquidGlass

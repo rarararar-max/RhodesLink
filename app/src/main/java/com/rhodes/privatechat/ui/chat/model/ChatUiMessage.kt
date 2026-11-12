@@ -25,6 +25,7 @@ data class ChatUiMessage(
     val isArchived: Boolean = false,
     val imageUri: String = "",
     val imageStatus: String = "",
+    val redPacket: com.rhodes.privatechat.shared.model.PrivateRedPacket? = null,
     val isGift: Boolean = false,
     val giftName: String = "",
     val giftRecipients: List<String> = emptyList(),

@@ -1,5 +1,6 @@
 package com.rhodes.privatechat.ui.sessions
 
+import com.rhodes.privatechat.ui.common.skinBackground
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -77,7 +78,7 @@ fun SessionListScreen(
     var showOverflowMenu by remember { mutableStateOf(false) }
     var showClearAllConfirm by remember { mutableStateOf(false) }
 
-    Column(modifier = modifier.fillMaxSize().background(BG)) {
+    Column(modifier = modifier.fillMaxSize().skinBackground()) {
         WechatTopBar("聊天", actions = {
             Box {
                 IconButton(onClick = { showOverflowMenu = true }) { Icon(Icons.Default.MoreVert, "菜单", tint = TextPrimary) }

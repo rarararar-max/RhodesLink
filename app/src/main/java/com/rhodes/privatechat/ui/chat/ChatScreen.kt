@@ -1,4 +1,5 @@
 package com.rhodes.privatechat.ui.chat
+import com.rhodes.privatechat.ui.common.skinBackground
 import com.rhodes.privatechat.shared.modelgateway.hasVisionConfiguration
 import com.rhodes.privatechat.shared.model.AiMessage
 import com.rhodes.privatechat.util.DebugLogger
@@ -342,6 +343,7 @@ fun ChatScreen(
     var showEraseConfirm by rememberSaveable { mutableStateOf(false) }
     val showModePicker = remember { mutableStateOf(false) }
     var showPropShop by rememberSaveable { mutableStateOf(false) }
+    var showRedPacketDialog by rememberSaveable { mutableStateOf(false) }
     var showGiftDialog by rememberSaveable { mutableStateOf(false) }
     var pendingImageUri by rememberSaveable { mutableStateOf("") }
     var imageSending by rememberSaveable { mutableStateOf(false) }
@@ -429,7 +431,7 @@ fun ChatScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-    Box(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
+    Box(modifier = Modifier.fillMaxSize().skinBackground().systemBarsPadding()) {
         bgUri?.let { AsyncImage(model = it, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.FillBounds) }
 
         Column(modifier = modifier.fillMaxSize()) {
@@ -604,6 +606,10 @@ fun ChatScreen(
                         MenuChip("🔄 模式", Primary) { showModePicker.value = true }
                          MenuChip("🎒 道具", AccentOrange) { showPropShop = true }
                          MenuChip("🎁 送礼", AccentOrange) { showGiftDialog = true }
+                         MenuChip("🧧 红包", AccentOrange) {
+                             if (isLoading) Toast.makeText(context, "请等待当前回复完成后再发红包", Toast.LENGTH_SHORT).show()
+                             else showRedPacketDialog = true
+                         }
                         MenuChip("🖼 相册", Primary) {
                             if (visionReady) MainActivity.pickImage { pendingImageUri = it }
                             else Toast.makeText(context, "图片聊天需要先设置识图模型，请在模型设置中填写识图地址、模型名和密钥。", Toast.LENGTH_LONG).show()
@@ -743,6 +749,14 @@ fun ChatScreen(
     )
     if (showPropShop) {
         PropShopDialog(viewModel = viewModel, context = context, scope = scope, onDismiss = { showPropShop = false })
+    }
+    if (showRedPacketDialog) {
+        PrivateRedPacketDialog(op.name, settings, onDismiss = { showRedPacketDialog = false }) { amount, wish ->
+            viewModel.chatViewModel.sendPrivateRedPacket(amount, wish) {
+                showRedPacketDialog = false
+                if (browsingHistory) viewModel.chatViewModel.returnToLatestMessages()
+            }
+        }
     }
     if (showGiftDialog) {
         GiftDialog(viewModel = viewModel, targets = listOf(GiftTarget(op.id, op.name)), onDismiss = { showGiftDialog = false }) { imageUri, giftName, _ ->

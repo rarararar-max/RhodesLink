@@ -185,3 +185,7 @@ WHEN v.embeddingSignature != :signature THEN 'stale'
 WHEN v.expiresAt <= :now THEN 'expired'
 ELSE 'ready' END AS indexState
 FROM memory_items m LEFT JOIN vector_memories v ON v.id = m.vectorId;
+
+retainArchiveTimelineItems:
+UPDATE memory_items SET status = 'archived_timeline', sessionId = :historyId
+WHERE sessionId = :sessionId;

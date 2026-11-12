@@ -1,5 +1,7 @@
 package com.rhodes.privatechat.ui.moments
 
+import com.rhodes.privatechat.ui.common.skinBackground
+import com.rhodes.privatechat.ui.common.glassSheen
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -116,7 +118,7 @@ fun MomentsScreen(viewModel: MainViewModel, onBack: () -> Unit, onOperatorClick:
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-    Column(modifier = Modifier.fillMaxSize().background(BG).systemBarsPadding()) {
+    Column(modifier = Modifier.fillMaxSize().skinBackground().systemBarsPadding()) {
         Row(Modifier.fillMaxWidth().background(Surface).padding(horizontal = 4.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = TextPrimary) }
             Text("罗德岛动态", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = TextPrimary, modifier = Modifier.weight(1f).padding(start = 4.dp))
@@ -236,7 +238,11 @@ private fun MomentCardWithInteraction(moment: MomentEntity, viewModel: MainViewM
     val liked = likes.any { it.operatorId == "user" }
     val operatorList by viewModel.operators.collectAsState()
     val momentOp = remember(moment, operatorList) { operatorList.find { it.name == moment.operatorName || it.id == moment.operatorId } }
-    Column(Modifier.fillMaxWidth().background(Surface).padding(start = 12.dp, end = 12.dp, top = 14.dp, bottom = 8.dp)) {
+    Column(Modifier.fillMaxWidth()
+        .then(if (isLiquidGlass) Modifier.padding(horizontal = 12.dp, vertical = 6.dp).clip(RoundedCornerShape(24.dp)) else Modifier)
+        .background(Surface)
+        .then(if (isLiquidGlass) Modifier.glassSheen(RoundedCornerShape(24.dp)) else Modifier)
+        .padding(start = 12.dp, end = 12.dp, top = 14.dp, bottom = 8.dp)) {
         Row(verticalAlignment = Alignment.Top) {
             if (moment.isUserPost && userProfile.avatarUri.isNotBlank()) {
                 coil3.compose.AsyncImage(model = userProfile.avatarUri, contentDescription = null, modifier = Modifier.size(44.dp).clip(CircleShape), contentScale = androidx.compose.ui.layout.ContentScale.Crop)

@@ -75,6 +75,11 @@ import com.rhodes.privatechat.util.DebugLogger.DebugOperation
 import com.rhodes.privatechat.util.ProblemChecker
 import com.rhodes.privatechat.viewmodel.shared.AppStateHolder
 import com.rhodes.privatechat.viewmodel.shared.SharedUtils
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import com.rhodes.privatechat.shared.settings.AndroidSettingsFactory
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -184,6 +189,13 @@ fun DebugLogScreen(onBack: () -> Unit) {
                     Text("记录完整模型请求和返回", fontSize = 11.sp, color = TextSecondary, modifier = Modifier.weight(1f))
                     Switch(checked = payloadsEnabled, enabled = loggingEnabled, onCheckedChange = { payloadsEnabled = it; settings.debugLogPayloadsEnabled = it; DebugLogger.allowSensitiveTrace = loggingEnabled && it })
                 }
+                val storageError = context.getSharedPreferences("rhodes_settings", android.content.Context.MODE_PRIVATE)
+                    .getString("settings_storage_error", null)
+                if (storageError != null) {
+                    Text("设置迁移或读取未完成，原设置库仍保留。请勿清除数据或卸载；保留诊断报告后联系开发者处理。", fontSize = 11.sp, color = AccentOrange)
+                }
+                val migrationScope = rememberCoroutineScope()
+                var migratingSettings by remember { mutableStateOf(false) }
                 var plainSettingsMode by remember {
                     mutableStateOf(context.getSharedPreferences("rhodes_settings", android.content.Context.MODE_PRIVATE).getBoolean("diagnostic_use_plain_settings", false))
                 }
@@ -191,15 +203,23 @@ fun DebugLogScreen(onBack: () -> Unit) {
                     Column(Modifier.weight(1f)) {
                         Text("诊断：设置改用明文存储", fontSize = 11.sp, color = TextSecondary)
                         Text(
-                            if (plainSettingsMode) "已开启，请完全退出并重开 App。若此时「发送后有回复了」，就证明加密设置库是卡死原因（可先这样用着）。"
-                            else "排查「发送后一直没回复」用。开启后必须完全退出并重新打开 App 才生效。",
+                            if (plainSettingsMode) "已准备切换到明文存储，请完全退出并重开 App。若聊天改善，可结合诊断日志排查设置读取耗时。明文存储不提供应用层加密。"
+                            else "仅用于排查设置读取异常。切换前会迁移并校验配置，失败时保持原设置；切换后请完全退出并重开 App。",
                             fontSize = 10.sp, color = if (plainSettingsMode) AccentOrange else TextSecondary
                         )
                     }
-                    Switch(checked = plainSettingsMode, onCheckedChange = { on ->
-                        plainSettingsMode = on
-                        context.getSharedPreferences("rhodes_settings", android.content.Context.MODE_PRIVATE).edit()
-                            .putBoolean("diagnostic_use_plain_settings", on).commit()
+                    Switch(checked = plainSettingsMode, enabled = !migratingSettings, onCheckedChange = { on ->
+                        migratingSettings = true
+                        migrationScope.launch {
+                            val result = withContext(Dispatchers.IO) { runCatching { AndroidSettingsFactory.requestPlainSettings(on) } }
+                            migratingSettings = false
+                            result.onSuccess {
+                                plainSettingsMode = on
+                                Toast.makeText(context, "配置已迁移并校验，请完全退出并重开 App", Toast.LENGTH_LONG).show()
+                            }.onFailure {
+                                Toast.makeText(context, "设置切换失败，当前配置保持不变，请保留数据后重试", Toast.LENGTH_LONG).show()
+                            }
+                        }
                     })
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {

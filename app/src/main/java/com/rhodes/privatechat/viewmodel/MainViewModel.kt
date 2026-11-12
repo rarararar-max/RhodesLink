@@ -725,15 +725,17 @@ class MainViewModel(
             // Give the first user interactions a clear runway before the backlog starts (see above).
             delay(STARTUP_BACKLOG_DELAY_MS)
             while (true) {
-                val cleanupBefore = logMemoryStartupSnapshot("before_cleanup")
-                dataViewModel.restorePermanentMemoryRetentionIfNeeded()
-                dataViewModel.cleanupAllExpired()
-                try { repository.cleanupExpiredData() } catch (_: Exception) { }
-                val cleanupAfter = logMemoryStartupSnapshot("after_cleanup")
-                if (cleanupAfter.total < cleanupBefore.total || cleanupAfter.privateItems < cleanupBefore.privateItems) {
-                    DebugLogger.diagnostic("Memory/StartupCountDrop", "beforeTotal=${cleanupBefore.total},afterTotal=${cleanupAfter.total},beforePrivate=${cleanupBefore.privateItems},afterPrivate=${cleanupAfter.privateItems}")
+                memoryCountMonitorMutex.withLock {
+                    val cleanupBefore = memoryStartupSnapshotLocked("before_cleanup")
+                    dataViewModel.restorePermanentMemoryRetentionIfNeeded()
+                    dataViewModel.cleanupAllExpired()
+                    try { repository.cleanupExpiredData() } catch (_: Exception) { }
+                    val cleanupAfter = memoryStartupSnapshotLocked("after_cleanup")
+                    if (cleanupAfter.total < cleanupBefore.total || cleanupAfter.privateItems < cleanupBefore.privateItems) {
+                        DebugLogger.log("Memory/CleanupCountChange", "beforeTotal=${cleanupBefore.total},afterTotal=${cleanupAfter.total},beforePrivate=${cleanupBefore.privateItems},afterPrivate=${cleanupAfter.privateItems},reason=observed_during_retention_cleanup")
+                    }
+                    settings.putString("memory_startup_snapshot_v1", "${cleanupAfter.total},${cleanupAfter.privateItems}")
                 }
-                settings.putString("memory_startup_snapshot_v1", "${cleanupAfter.total},${cleanupAfter.privateItems}")
                 recoverMissingMemoryIndexes(limit = 50)
                 memoryV2Pipeline.retryPendingSources(limit = 20)
                 // 每个干员保留最多 200 条锚点
@@ -763,9 +765,15 @@ class MainViewModel(
 
     private suspend fun refreshDailyLmb() = mahjongViewModel.refreshDailyLmb()
 
+    private val memoryCountMonitorMutex = Mutex()
+
     private data class MemoryStartupStats(val total: Int, val privateItems: Int)
 
-    private suspend fun logMemoryStartupSnapshot(stage: String): MemoryStartupStats {
+    private suspend fun logMemoryStartupSnapshot(stage: String): MemoryStartupStats = memoryCountMonitorMutex.withLock {
+        memoryStartupSnapshotLocked(stage)
+    }
+
+    private suspend fun memoryStartupSnapshotLocked(stage: String): MemoryStartupStats {
         val now = System.currentTimeMillis()
         val items = repository.getAllMemoryItems()
         val active = items.count { it.status == "active" }
@@ -1573,8 +1581,7 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     }
 
     suspend fun deleteAllCurrentImpressions() {
-        getCurrentImpressions()
-            .forEach { deleteOperatorMemoryItem(it) }
+        deleteUnifiedMemoryItems(getCurrentImpressions())
     }
 
     suspend fun getMemoryIndexStateLabels(): Map<Long, String> {
@@ -1591,24 +1598,57 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
 
     suspend fun getOperatorVectorMemories(operatorId: String) = memoryVectorService?.listMemories("operator", operatorId).orEmpty()
 
-    suspend fun deleteOperatorMemoryItem(item: MemoryItem) {
-        item.vectorId.takeIf { it.isNotBlank() }?.let { memoryVectorService?.deleteMemory(it) }
-        repository.deleteMemoryItem(item.id)
+    /** Count only target IDs actually removed, including partial batch failures. */
+    private suspend fun deleteMemoryWithCountTracking(
+        reason: String,
+        matches: (MemoryItem) -> Boolean,
+        delete: suspend () -> Unit,
+    ) = memoryCountMonitorMutex.withLock {
+        val candidates = repository.getAllMemoryItems().filter(matches)
+        // Finish accounting even if navigation cancels this operation after a database delete.
+        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+            try {
+                delete()
+            } finally {
+                val remaining = repository.getAllMemoryItems().mapTo(hashSetOf()) { it.id }
+                val removed = candidates.filter { it.id !in remaining }
+                val privateRemoved = removed.count { it.sourceKind == MemorySourceKind.PRIVATE_CHAT }
+                if (removed.isNotEmpty()) {
+                    MemoryCountBaseline.parse(settings.getString("memory_startup_snapshot_v1", ""))?.let { baseline ->
+                        settings.putString("memory_startup_snapshot_v1", baseline.afterDeletion(removed.size, privateRemoved).encode())
+                    }
+                }
+                DebugLogger.log("Memory/UserDeletion", "reason=$reason,requested=${candidates.size},deleted=${removed.size},privateDeleted=$privateRemoved,scope=matched_ids")
+            }
+        }
     }
+
+    suspend fun deleteOperatorMemoryItem(item: MemoryItem) = deleteUnifiedMemoryItems(listOf(item))
 
     suspend fun deleteUnifiedMemoryItem(item: MemoryItem) = deleteOperatorMemoryItem(item)
 
     suspend fun deleteUnifiedMemoryItems(items: List<MemoryItem>) {
-        items.forEach { deleteUnifiedMemoryItem(it) }
+        val ids = items.mapTo(hashSetOf()) { it.id }
+        if (ids.isEmpty()) return
+        deleteMemoryWithCountTracking("manual_items", { it.id in ids }) {
+            // Deduplicate selection and use current records rather than stale UI vector IDs.
+            repository.getAllMemoryItems().filter { it.id in ids }.forEach { item ->
+                item.vectorId.takeIf { it.isNotBlank() }?.let { memoryVectorService?.deleteMemory(it) }
+                repository.deleteMemoryItem(item.id)
+            }
+        }
     }
 
     suspend fun deleteOperatorMemorySource(item: MemoryItem) {
         if (item.sourceRefId.isBlank() || item.sourceKind == MemorySourceKind.GROUP_CHAT) {
-            // A group source is shared by the group and every member who heard it.  In an
-            // operator page, deleting "the source" must never erase everyone else's knowledge.
+            // Group sources are shared. Deleting here must retain other members' knowledge.
             deleteOperatorMemoryItem(item)
         } else {
-            repository.deleteMemoryV2BySource(item.sourceKind, item.sourceRefId)
+            deleteMemoryWithCountTracking("manual_source", {
+                it.sourceKind == item.sourceKind && it.sourceRefId == item.sourceRefId
+            }) {
+                repository.deleteMemoryV2BySource(item.sourceKind, item.sourceRefId)
+            }
         }
     }
 
@@ -2259,13 +2299,28 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
         ).ifBlank { "无" }
         return MomentMemoryContext(
             memories = memories,
-            sourceAwareMemories = "无",
+            sourceAwareMemories = if (mentionUser && settings.isMemoryInjectionAllowed("moment", "PRIVATE_CHAT"))
+                recentPrivatePacketReflection(op.id) else "无",
             recentSocialContext = sharedUtils.buildRecentSocialContext(setOf(op.id), op.name, surface = "moment")
         ).let { ctx ->
             if (mentionUser) ctx else ctx.copy(
                 sourceAwareMemories = "无",
             )
         }
+    }
+
+    /** Optional inspiration only: never auto-post a transfer or expose its exact amount publicly. */
+    private suspend fun recentPrivatePacketReflection(operatorId: String): String {
+        val session = repository.getAllSessionsSync().firstOrNull { it.operatorId == operatorId } ?: return "无"
+        val since = System.currentTimeMillis() - 3 * 86_400_000L
+        val packets = repository.getRecentMessagesSync(session.id, 50).filter {
+            it.timestamp >= since && com.rhodes.privatechat.shared.model.isPrivateRedPacket(it.type)
+        }.mapNotNull { com.rhodes.privatechat.shared.model.PrivateRedPacket.parse(it.content) }
+            .filter { it.status == "claimed" }.takeLast(2)
+        if (packets.isEmpty()) return "无"
+        return "近期私聊里，用户给你送过应用内龙门币红包并已领取。" +
+            "可以按人设偶尔含蓄表达收到心意的感受，不必每次提及；公开动态不得披露金额或私聊附言，" +
+            "不应把金额当作关系等级，也不能捏造已经完成的消费。"
     }
 
     private suspend fun buildCommenterMemoryContext(operatorId: String, surface: MemorySurface, query: String, includePrivateConversation: Boolean = false): Pair<String, String> {
@@ -3464,7 +3519,9 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
                         "diaryRelationEventCount" to settings.diaryRelationEventCount.toString()
                     )
                 )
-                val diaryMessages = buildContentGenerationMessages("diary", diaryTpl, dReplacements)
+                val diaryMessages = buildContentGenerationMessages("diary", diaryTpl, dReplacements).toMutableList()
+                if (includeDiaryPrivate && privateSummary.contains("应用事件·私聊红包")) diaryMessages += AiMessage("user",
+                    "红包事实仅作为昨天生活中的一件小事，按人设自然选择是否写入。可以写打算攒起来、用于补给或想回赠；金额不代表亲密度，不捏造未经聊天确认的实际购买，不写成账单，也不强制提及。")
                 DebugLogger.conversationStep(debugOperationId, "日记", "准备资料", "完成", "已准备日记上下文")
                 DebugLogger.attachOperationModule(debugOperationId, "完整请求", sharedUtils.logAiCallText(diaryMessages), sensitive = true)
                 Log.d("RHODES_DIARY", "请求消息数=${diaryMessages.size}")
@@ -3541,6 +3598,8 @@ ${recentTalk.takeLast(6).joinToString("\n").ifBlank { "暂无" }}
     }
 
     private fun visibleDiaryMessageContent(content: String, type: String): String {
+        if (com.rhodes.privatechat.shared.model.isPrivateRedPacket(type)) return com.rhodes.privatechat.shared.model.PrivateRedPacket.parse(content)?.takeIf { it.status == "claimed" }?.contextText().orEmpty()
+        if (type in setOf("send_failed", "gift_reply_failed")) return ""
         if (type != "ai_json") return content
         return runCatching {
             sharedUtils.aiService.parseOfflineResponse(content).segments.orEmpty()

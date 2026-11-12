@@ -1,5 +1,6 @@
 package com.rhodes.privatechat.ui.settings
 
+import com.rhodes.privatechat.ui.common.skinBackground
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
@@ -76,7 +77,7 @@ fun SettingsScreen(
     val settings: SettingsRepository = koinInject()
     val balance by settings.lmbFlow.collectAsState(initial = settings.lmb)
     var debugLogEnabled by remember { mutableStateOf(settings.debugLogEnabled) }
-    Column(modifier = modifier.fillMaxSize().background(BG)) {
+    Column(modifier = modifier.fillMaxSize().skinBackground()) {
         WechatTopBar("我", actions = {
             androidx.compose.material3.TextButton(onClick = onAiSupport) {
                 Icon(Icons.Default.SmartToy, contentDescription = "客服求助", tint = Primary)
@@ -89,7 +90,7 @@ fun SettingsScreen(
                 AsyncImage(model = userAvatarUri, contentDescription = null, modifier = Modifier.size(58.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
             } else {
                 Box(modifier = Modifier.size(58.dp).clip(RoundedCornerShape(8.dp)).background(Blue400), contentAlignment = Alignment.Center) {
-                    Text(userNickname.take(1), color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text(userNickname.take(1), color = if (isLiquidGlass) OnPrimary else Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 }
             }
             Spacer(modifier = Modifier.width(14.dp))
@@ -152,7 +153,7 @@ private fun DebugLogItem(enabled: Boolean, onEnabledChange: (Boolean) -> Unit, o
                 Text("调试日志", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
                 Text(if (enabled) "已开启：可在详情中查看模型请求、返回和错误" else "关闭：不保留调试信息", fontSize = 12.sp, color = TextSecondary)
             }
-            Switch(checked = enabled, onCheckedChange = onEnabledChange, colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Primary))
+            Switch(checked = enabled, onCheckedChange = onEnabledChange, colors = SwitchDefaults.colors(checkedThumbColor = if (isLiquidGlass) OnPrimary else Color.White, checkedTrackColor = Primary))
         }
         HorizontalDivider(color = Divider.copy(alpha = 0.45f), modifier = Modifier.padding(start = 68.dp))
     }

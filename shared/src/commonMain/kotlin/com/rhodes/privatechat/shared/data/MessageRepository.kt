@@ -178,6 +178,7 @@ class MessageRepository(
             val preview = when (message.type) {
                 "ai_json" -> previewFromAiJson(message.content)
                 "image" -> "[图片]"
+                "red_packet", "red_packet_reply_failed" -> "[红包]"
                 "gift_hidden", "gift_reply_failed" -> previewFromGiftPayload(message.content)
                 else -> message.content.take(50)
             }
@@ -202,7 +203,8 @@ class MessageRepository(
                     val preview = when (message.type) {
                         "ai_json" -> previewFromAiJson(message.content)
                         "image" -> "[图片]"
-                        "gift_hidden", "gift_reply_failed" -> previewFromGiftPayload(message.content)
+                        "red_packet", "red_packet_reply_failed" -> "[红包]"
+                "gift_hidden", "gift_reply_failed" -> previewFromGiftPayload(message.content)
                         else -> message.content.take(50)
                     }
                     db.chatSessionsQueries.updateLastMessageIfNotNewer(preview, ts, sessionId, ts)
@@ -264,6 +266,7 @@ class MessageRepository(
             val preview = when (latest.type) {
                 "ai_json" -> AiReplyPreview.extract(latest.content)
                 "image" -> "[图片]"
+                "red_packet", "red_packet_reply_failed" -> "[红包]"
                 "gift_hidden", "gift_reply_failed" -> previewFromGiftPayload(latest.content)
                 "system" -> null
                 else -> latest.content.take(50)

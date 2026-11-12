@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.sp
 import com.rhodes.privatechat.ui.theme.*
 import com.rhodes.privatechat.ui.common.softTextFieldColors
 import com.rhodes.privatechat.ui.common.TerminalPanelShape
+import com.rhodes.privatechat.ui.common.glassSheen
 
 /**
  * 私聊和群聊共用的输入栏。
@@ -100,9 +101,10 @@ fun ChatInputBar(
 
     val terminal = isRhodesTerminal
     Column(modifier = modifier.fillMaxWidth()
-        .clip(if (isFrostedGlass) RoundedCornerShape(28.dp) else RoundedCornerShape(0.dp))
+        .clip(if (isFrostedGlass || isLiquidGlass) RoundedCornerShape(28.dp) else RoundedCornerShape(0.dp))
         .background(if (isFrostedGlass) Brush.verticalGradient(listOf(Color(0xBFFFFFFF), Color(0x66FFFFFF))) else Brush.verticalGradient(listOf(ElevatedSurface.copy(alpha = 0.96f), ElevatedSurface.copy(alpha = 0.96f))))
-        .border(1.dp, Stroke)) {
+        .border(1.dp, Stroke, if (isLiquidGlass) RoundedCornerShape(28.dp) else RoundedCornerShape(0.dp))
+        .then(if (isLiquidGlass) Modifier.glassSheen(RoundedCornerShape(28.dp)) else Modifier)) {
         if (terminal) {
             Row(Modifier.fillMaxWidth().height(2.dp)) {
                 Box(Modifier.weight(0.18f).fillMaxWidth().background(Primary))

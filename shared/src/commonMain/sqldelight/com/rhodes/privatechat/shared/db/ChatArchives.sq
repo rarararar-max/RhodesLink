@@ -75,3 +75,11 @@ DELETE FROM chat_archives;
 
 deleteAllHistorySegments:
 DELETE FROM chat_history_segments;
+
+getArchiveMetadataBySession:
+SELECT id, sessionId, operatorId, title, note, mode, '' AS messagesJson, summary, '' AS stateJson, status, createdAt, updatedAt
+FROM chat_archives WHERE sessionId = ? ORDER BY createdAt DESC;
+
+getPendingArchiveMetadata:
+SELECT id, sessionId, operatorId, title, note, mode, '' AS messagesJson, summary, '' AS stateJson, status, createdAt, updatedAt
+FROM chat_archives WHERE status = 'pending' ORDER BY updatedAt ASC;

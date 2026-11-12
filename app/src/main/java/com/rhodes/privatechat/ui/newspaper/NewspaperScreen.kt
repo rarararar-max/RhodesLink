@@ -59,7 +59,7 @@ fun NewspaperScreen(settings: SettingsRepository, onBack: () -> Unit) {
     var previousIds by remember { mutableStateOf<Set<String>?>(null) }
     var wasRunning by remember { mutableStateOf(false) }
     val topic = NewspaperTopic.from(topicName)
-    var expandedWindow by rememberSaveable { mutableStateOf(false) }
+    val expandedWindow = false
     var fontSize by rememberSaveable { mutableIntStateOf(16) }
     var exportText by remember { mutableStateOf("") }
     var exportMessage by remember { mutableStateOf("") }
@@ -155,7 +155,7 @@ fun NewspaperScreen(settings: SettingsRepository, onBack: () -> Unit) {
                             verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             Text(if (current == null) "今日刊，待你开启" else "今日刊已送达",
                                 fontFamily = FontFamily.Serif, fontSize = 25.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
-                            Text("从现实世界的今日资讯出发，读一份发生在泰拉的新闻。", color = TextSecondary, fontSize = 14.sp, lineHeight = 23.sp)
+                            Text("从近七天的现实见闻出发，读一份更有烟火气的泰拉故事。", color = TextSecondary, fontSize = 14.sp, lineHeight = 23.sp)
                             Text("读见泰拉的城市与生活。已购报纸可反复阅读，也可再买一份。",
                                 color = TextSecondary, fontSize = 13.sp, lineHeight = 22.sp)
                             run {
@@ -165,12 +165,7 @@ fun NewspaperScreen(settings: SettingsRepository, onBack: () -> Unit) {
                                         NewspaperTopic.entries.forEach { choice -> DropdownMenuItem(text = { Text(choice.label) }, onClick = { topicName = choice.name; topicMenu = false }) }
                                     }
                                 }
-                                Row(Modifier.toggleable(value = expandedWindow, enabled = !state.running, role = Role.Checkbox,
-                                    onValueChange = { expandedWindow = it }), verticalAlignment = Alignment.CenterVertically) {
-                                    Checkbox(checked = expandedWindow, onCheckedChange = null, enabled = !state.running,
-                                        colors = CheckboxDefaults.colors(checkedColor = Primary))
-                                    Text("允许采用昨日资讯（本期会明确标注）", color = TextSecondary, fontSize = 12.sp)
-                                }
+                                Text("默认精选近七天素材，每期最多四篇泰拉故事", color = TextSecondary, fontSize = 12.sp)
                             }
                             Button(
                                 onClick = {
@@ -266,7 +261,7 @@ fun NewspaperScreen(settings: SettingsRepository, onBack: () -> Unit) {
                             }) { Text("导出", color = Primary) }
                         }
                         if (exportMessage.isNotBlank()) Text(exportMessage, color = TextSecondary, fontSize = 12.sp)
-                        Text(if (edition.expandedWindow) "资讯取材范围：本期日期及前一日（北京时间）" else "资讯取材范围：本期日期（北京时间）",
+                        Text(if (edition.windowDays == 7) "资讯取材范围：近七天（含本期日期，北京时间）" else if (edition.expandedWindow) "资讯取材范围：本期日期及前一日（北京时间）" else "资讯取材范围：本期日期（北京时间）",
                             color = TextTertiary, fontSize = 11.sp)
                     }
                     itemsIndexed(edition.articles, key = { index, _ -> "${edition.id}-$index" }) { index, article ->
@@ -371,7 +366,7 @@ private fun formatPaperDate(date: String): String = runCatching {
 private fun exportNewspaper(edition: NewspaperEdition): String = buildString {
     appendLine("泰拉见闻报 · ${edition.date} 刊")
     appendLine(NEWSPAPER_DISCLAIMER)
-    appendLine(if (edition.expandedWindow) "取材范围：本日与前一日" else "取材范围：本日")
+    appendLine(if (edition.windowDays == 7) "取材范围：近七天（含本期日期）" else if (edition.expandedWindow) "取材范围：本日与前一日" else "取材范围：本日")
     edition.articles.forEach {
         appendLine("\n【${it.section}】${it.title}\n${it.subtitle}\n")
         appendLine(it.paragraphs.joinToString("\n\n"))

@@ -72,3 +72,6 @@ DELETE FROM memories WHERE operatorId = ? AND type = 'LONG_TERM';
 
 deleteAllMemories:
 DELETE FROM memories;
+
+retainArchiveTimelineMemories:
+UPDATE memories SET sessionId = :historyId WHERE sessionId = :sessionId;

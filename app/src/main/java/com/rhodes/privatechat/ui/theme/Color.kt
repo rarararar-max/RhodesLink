@@ -233,3 +233,41 @@ fun applyFrostedGlassTheme() {
     WarningContainer = Color(0x80FFE3B8)
     SuccessContainer = Color(0x80C8F1E2)
 }
+
+/** Dark translucent surfaces retain a readable backing even over a bright wallpaper. */
+fun applyLiquidGlassTheme() {
+    applyRhodesNightTheme()
+    BG = Color(0xFF0D152B)
+    Surface = Color(0xF0202C47)
+    Card = Color(0xF02A3853)
+    ElevatedSurface = Color(0xEC293853)
+    InputBg = Color(0xF022304A)
+    SurfaceVariant = Color(0xFF33435F)
+    Divider = Color(0xFF52617A)
+    TextPrimary = Color(0xFFF6F8FF)
+    TextSecondary = Color(0xFFCFD9EB)
+    TextTertiary = Color(0xFFCBD7E9)
+    Gray500 = TextTertiary
+    Primary = Color(0xFF9DDFFF)
+    PrimaryContainer = Color(0xFF294B67)
+    OnPrimary = Color(0xFF102536)
+    AccentBlue = Primary
+    Blue400 = Primary
+    AccentPurple = Color(0xFFCBB9FF)
+    AccentGreen = Color(0xFFA3E4D0)
+    AccentOrange = Color(0xFFFFC28D)
+    ErrorRed = Color(0xFFFFADB0)
+    Gray100 = InputBg
+    NavBarBg = Surface
+    Stroke = Color(0x659DDFFF)
+    StrokeStrong = Color(0x99D5EDFF)
+    Glow = Color(0x335FAFFF)
+    Scrim = Color(0xCC060D20)
+    HeaderStart = Color(0xF0334263)
+    HeaderEnd = Color(0xEE182740)
+    BubbleMine = Color(0xF027405C)
+    BubbleMineEnd = Color(0xF0323D59)
+    BubbleOther = Color(0xF02A3853)
+    WarningContainer = Color(0xFF4C3C32)
+    SuccessContainer = Color(0xFF26483F)
+}

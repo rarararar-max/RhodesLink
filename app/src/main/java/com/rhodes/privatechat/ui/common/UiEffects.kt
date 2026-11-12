@@ -75,6 +75,10 @@ private fun Modifier.terminalGrid() = drawBehind {
 
 @Composable
 fun AppBackground(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    if (isLiquidGlass) {
+        LiquidGlassBackground(modifier, content)
+        return
+    }
     Box(modifier = modifier.fillMaxSize().background(
         if (isFrostedGlass) Brush.radialGradient(listOf(Color(0xFFE5B8F4), Color(0xFF747BD0), Color(0xFF5B62B7)))
         else Brush.verticalGradient(listOf(HeaderEnd.copy(alpha = 0.75f), BG, BG))
@@ -96,6 +100,7 @@ fun SoftCard(
             .then(if (shadow) Modifier.shadow(if (isRhodesTerminal) 3.dp else 8.dp, actualShape, clip = false, ambientColor = Glow, spotColor = Glow) else Modifier)
             .clip(actualShape)
             .background(color)
+            .then(if (isLiquidGlass) Modifier.glassSheen(actualShape) else Modifier)
             .border(1.dp, borderColor, actualShape)
     ) { content() }
 }
@@ -277,6 +282,7 @@ fun WechatTopBar(
             .fillMaxWidth()
             .statusBarsPadding()
             .background(Surface)
+            .then(if (isLiquidGlass) Modifier.glassSheen(RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp)) else Modifier)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -288,6 +294,12 @@ fun WechatTopBar(
 
 @Composable
 fun WechatListGroup(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    if (isLiquidGlass) {
+        SoftCard(modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            shape = RoundedCornerShape(24.dp), color = Surface) { Column { content() } }
+        return
+    }
+
     if (isRhodesTerminal) {
         Column(
             modifier = modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 5.dp)
@@ -333,7 +345,7 @@ fun WechatIconTile(icon: ImageVector, color: Color, modifier: Modifier = Modifie
     Box(
         modifier = modifier.size(38.dp).clip(RoundedCornerShape(8.dp)).background(color),
         contentAlignment = Alignment.Center
-    ) { Icon(icon, null, tint = Color.White, modifier = Modifier.size(21.dp)) }
+    ) { Icon(icon, null, tint = if (isLiquidGlass) OnPrimary else Color.White, modifier = Modifier.size(21.dp)) }
 }
 
 @Composable

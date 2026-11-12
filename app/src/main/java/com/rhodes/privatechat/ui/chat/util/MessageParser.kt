@@ -55,6 +55,12 @@ object MessageParser {
                         emotionTracker, groupEmotionSeed, index == lastAiJsonIndex
                     )
                     msg.type == "ai_json" && !isGroup -> parsePrivateAiJson(msg, isOnline, aiName, aiAvatarUri, restartAt)
+                    com.rhodes.privatechat.shared.model.isPrivateRedPacket(msg.type) -> {
+                        val packet = com.rhodes.privatechat.shared.model.PrivateRedPacket.parse(msg.content)
+                        listOf(userMsg(msg, userAvatarUri, restartAt).copy(
+                            content = if (packet == null) "[红包记录无法读取]" else "[红包] ${packet.wish}",
+                            redPacket = packet, isSendFailed = msg.type == "red_packet_reply_failed"))
+                    }
                     msg.type == "gift_hidden" || msg.type == "gift_reply_failed" -> listOf(giftMsg(msg, userAvatarUri, restartAt))
                     msg.type == "send_failed" -> listOf(userMsg(msg, userAvatarUri, restartAt).copy(isSendFailed = true))
                     msg.type == "image" -> listOf(imageMsg(msg, if (msg.isMe) userAvatarUri else if (isGroup) senderAvatar(msg.senderName) else aiAvatarUri, if (isGroup) senderColor(msg.senderName) else Primary, restartAt))

@@ -21,6 +21,23 @@ class BackupFileReader(
     )
 
     fun read(input: InputStream): BackupArchive {
+        val buffered = input.buffered()
+        // ZipInputStream silently sees no entries for JSON/plain text. Identify these
+        // before ZIP parsing instead of misleading users with a missing-manifest error.
+        buffered.mark(64)
+        val signature = ByteArray(32)
+        val signatureSize = buffered.read(signature)
+        buffered.reset()
+        if (signatureSize < 0) throw BackupFormatException("所选文件为空，可能是备份失败留下的文件。请重新导出后再导入。")
+        val prefix = signature.copyOf(signatureSize).toString(Charsets.UTF_8).removePrefix("\uFEFF").trimStart()
+        if (prefix.startsWith("{") || prefix.startsWith("[")) {
+            throw BackupFormatException("所选文件是 JSON 数据，不是完整备份包。角色设定请使用“导入角色设定”；旧版数据文件请保留原文件，并按对应版本的迁移方式处理。")
+        }
+        if (prefix.startsWith("SQLite format 3")) throw BackupFormatException("所选文件是数据库原文件，不能在完整备份入口直接恢复。请使用 APP 导出的完整备份包。")
+        if (signatureSize < 4 || signature[0] != 0x50.toByte() || signature[1] != 0x4b.toByte() ||
+            (signature[2].toInt() to signature[3].toInt()) !in setOf(3 to 4, 5 to 6, 7 to 8)) {
+            throw BackupFormatException("无法识别所选文件的备份格式。请使用 APP 导出的完整备份包，修改文件后缀不能转换格式。")
+        }
         var entryCount = 0
         var totalBytes = 0L
         val entries = linkedMapOf<String, EntryDigest>()
@@ -29,7 +46,7 @@ class BackupFileReader(
         val pageBytes = linkedMapOf<String, ByteArray>()
         val paths = mutableSetOf<String>()
 
-        ZipInputStream(input.buffered()).use { zip ->
+        ZipInputStream(buffered).use { zip ->
             while (true) {
                 val entry = zip.nextEntry ?: break
                 entryCount++
@@ -54,8 +71,11 @@ class BackupFileReader(
             }
         }
 
-        val manifestContent = manifestBytes
-            ?: throw BackupFormatException("缺少 manifest.json")
+        val manifestContent = manifestBytes ?: when {
+            paths.any { it.endsWith("/manifest.json") } -> throw BackupFormatException("备份清单位于额外的文件夹内。请选用 APP 直接导出的原始备份包，不要解压后重新压缩。")
+            entryCount == 0 -> throw BackupFormatException("所选压缩包为空或未完整写入，无法恢复。请重新导出或重新传输原始备份包。")
+            else -> throw BackupFormatException("缺少 manifest.json：所选压缩包不是完整备份，或导出、传输未完成。请保留原文件，重新导出并等待成功提示后再导入。")
+        }
         val manifest = runCatching { json.decodeFromString<BackupManifest>(manifestContent.decodeToString()) }
             .getOrElse { throw BackupFormatException("manifest.json 无法解析") }
         if (manifest.format != BackupFileWriter.FULL_FORMAT) throw BackupFormatException("不支持的备份类型：${manifest.format}")

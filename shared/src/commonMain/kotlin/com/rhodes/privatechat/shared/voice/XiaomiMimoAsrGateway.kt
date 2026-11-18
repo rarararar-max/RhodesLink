@@ -79,7 +79,7 @@ fun parseMimoAsrText(raw: String): String {
     return value.content.trim()
 }
 
-private fun pcm16ToWav(pcm: ByteArray, sampleRate: Int): ByteArray {
+internal fun pcm16ToWav(pcm: ByteArray, sampleRate: Int): ByteArray {
     val header = ByteArray(44)
     fun putAscii(offset: Int, value: String) = value.forEachIndexed { index, char -> header[offset + index] = char.code.toByte() }
     fun putInt(offset: Int, value: Int) { repeat(4) { index -> header[offset + index] = (value shr (8 * index)).toByte() } }

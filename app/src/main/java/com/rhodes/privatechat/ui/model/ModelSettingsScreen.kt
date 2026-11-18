@@ -107,6 +107,9 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
     var pendingVectorSignature by remember { mutableStateOf("") }
     var showVectorChangeConfirm by remember { mutableStateOf(false) }
     var asrBaseUrl by remember { mutableStateOf(settings.asrBaseUrl) }
+    var asrMode by remember { mutableStateOf(settings.asrMode) }
+    var verifiedDeepSeekKey by remember { mutableStateOf("") }
+    var verifiedDeepSeekModel by remember { mutableStateOf("") }
     var asrProvider by remember { mutableStateOf(settings.asrProvider) }
     var asrModelName by remember { mutableStateOf(settings.asrModelName) }
     var asrApiKey by remember { mutableStateOf(settings.asrApiKey) }
@@ -199,7 +202,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         asrProfiles != settings.voiceProviderConfigurations("asr") || ttsProfiles != settings.voiceProviderConfigurations("tts") ||
         visionProvider != settings.visionProvider || visionBaseUrl.trim() != settings.visionBaseUrl || visionModelName.trim() != settings.visionModelName || visionApiKey.trim() != settings.visionApiKey ||
         vectorProviderMode != settings.vectorProviderMode || vectorProvider != settings.vectorProvider || vectorProtocol != settings.vectorProtocol || vectorBaseUrl.trim() != settings.vectorBaseUrl || vectorModelName.trim() != settings.vectorModelName || vectorApiKey.trim() != settings.vectorApiKey ||
-        asrProvider != settings.asrProvider || asrBaseUrl.trim() != settings.asrBaseUrl || asrModelName.trim() != settings.asrModelName || asrApiKey.trim() != settings.asrApiKey ||
+        asrMode != settings.asrMode || asrProvider != settings.asrProvider || asrBaseUrl.trim() != settings.asrBaseUrl || asrModelName.trim() != settings.asrModelName || asrApiKey.trim() != settings.asrApiKey ||
         ttsProvider != settings.ttsProvider || ttsBaseUrl.trim() != settings.ttsBaseUrl || ttsModelName.trim() != settings.ttsModelName || ttsApiKey.trim() != settings.ttsApiKey
 
     fun validateSettings(): String? {
@@ -272,9 +275,13 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                 ttsModelName = ttsModelName.trim(),
                 ttsApiKey = ttsApiKey.trim(),
                 visionMode = visionMode,
+                asrMode = asrMode,
                 asrConfigurations = asrProfiles.toMap(),
                 ttsConfigurations = ttsProfiles.toMap(),
         )
+        if (currentProviderId == "deepseek" && apiKey.trim() == verifiedDeepSeekKey && currentModelName == verifiedDeepSeekModel && verifiedDeepSeekKey.isNotBlank()) {
+            settings.markDeepSeekChatVerified(verifiedDeepSeekKey, verifiedDeepSeekModel)
+        }
         if (firstTime) settings.vectorIndexSignature = newVectorSignature
         if (vectorSignatureChanged) {
             pendingVectorSignature = newVectorSignature
@@ -313,6 +320,10 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                     testProvider, testModel, testUrl, temperature = 0.1
                 )
                 if (testSignature != latestDiscoverySignature || testModel != latestModelName) return@launch
+                if (result.content.isNotBlank() && testProvider == "deepseek") {
+                    verifiedDeepSeekKey = testKey
+                    verifiedDeepSeekModel = testModel
+                } else { verifiedDeepSeekKey = ""; verifiedDeepSeekModel = "" }
                 chatTestResult = if (result.content.isBlank()) "测试失败：服务没有返回内容" else "连接成功：${result.content.trim().take(60)}"
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -418,12 +429,16 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
         asrTestResult = "正在测试..."
         scope.launch {
             try {
-                val key = asrApiKey.trim().ifBlank { apiKey.trim() }
-                require(if (asrProvider == "xiaomi") asrBaseUrl.trim().startsWith("http") else asrBaseUrl.trim().startsWith("ws")) { if (asrProvider == "xiaomi") "小米语音识别地址需要以 http:// 或 https:// 开头" else "语音识别地址需要以 ws:// 或 wss:// 开头" }
-                require(asrModelName.trim().isNotBlank()) { "请填写语音识别模型配置" }
+                val automatic = asrMode == "auto"
+                require(!automatic || (currentProviderId == "deepseek" && ((apiKey.trim() == verifiedDeepSeekKey && currentModelName == verifiedDeepSeekModel) || (settings.deepSeekAutoReady && apiKey.trim() == settings.apiKey && currentModelName == settings.modelName)))) { "请先测试成功 DeepSeek 聊天模型" }
+                val selectedAsrProvider = if (automatic) "deepseek" else asrProvider
+                val selectedAsrUrl = if (automatic) "https://api.deepseek.com/v1/tools/asr" else asrBaseUrl.trim()
+                val key = if (automatic) apiKey.trim() else asrApiKey.trim().ifBlank { apiKey.trim() }
+                require(if (selectedAsrProvider in listOf("xiaomi", "deepseek")) selectedAsrUrl.startsWith("https://") || selectedAsrUrl.startsWith("http://") else selectedAsrUrl.startsWith("wss://") || selectedAsrUrl.startsWith("ws://")) { "请检查语音识别接口地址与协议" }
+                require(selectedAsrProvider == "deepseek" || asrModelName.trim().isNotBlank()) { "请填写语音识别模型配置" }
                 require(key.isNotBlank()) { "请填写语音识别密钥，或先填写聊天密钥" }
                 val pcm = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { ctx.assets.open("diagnostics/asr_test_16k.pcm").use { it.readBytes() } }
-                val result = createAsrGateway(asrBaseUrl.trim(), key, asrModelName.trim(), asrProvider).transcribe(AsrRequest(pcm))
+                val result = createAsrGateway(selectedAsrUrl, key, asrModelName.trim(), selectedAsrProvider).transcribe(AsrRequest(pcm))
                 require(result.text.isNotBlank()) { "接口已返回，但未识别到文字；请检查模型和音频协议" }
                 val normalized = result.text.replace(Regex("[\\s，。！？、,.!?]"), "")
                 val expected = "今天下午三点请提醒我喝水"
@@ -618,20 +633,29 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
             }
 
             SettingsSection("语音识别 ASR") {
-                DropDown("服务商", listOf("阿里千问实时识别", "小米 MiMo", "自填（阿里兼容）"), when (asrProvider) { "ali" -> 0; "xiaomi" -> 1; else -> 2 }) { index ->
+                DropDown("使用方式", listOf("自动复用已验证的 DeepSeek 文本配置", "独立语音识别配置"), if (asrMode == "auto") 0 else 1) {
+                    asrMode = if (it == 0) "auto" else "independent"
+                    asrTestResult = ""
+                }
+                if (asrMode == "auto") {
+                    Text("保存后复用测试成功的 DeepSeek 文本密钥。录音结束后上传识别；独立配置仍保留。", fontSize = 12.sp, color = TextSecondary)
+                    TestButton("测试自动语音识别", testing == "asr", asrTestResult, onClick = ::testAsr)
+                } else {
+
+                DropDown("服务商", listOf("阿里千问实时识别", "小米 MiMo", "DeepSeek", "自填（阿里兼容）"), when (asrProvider) { "ali" -> 0; "xiaomi" -> 1; "deepseek" -> 2; else -> 3 }) { index ->
                     asrProfiles[asrProvider] = VoiceProviderConfiguration(asrBaseUrl, asrModelName, asrApiKey)
-                    asrProvider = listOf("ali", "xiaomi", "custom")[index]
+                    asrProvider = listOf("ali", "xiaomi", "deepseek", "custom")[index]
                     val config = asrProfiles[asrProvider] ?: defaultAsrConfiguration(asrProvider)
                     asrBaseUrl = config.endpoint
                     asrModelName = config.model
                     asrApiKey = config.key
                     asrTestResult = ""
                 }
-                Text(if (asrProvider == "xiaomi") "小米 MiMo 使用 HTTP 非流式识别，应用会将录音 PCM 自动封装为 WAV 后上传。" else "自填服务必须兼容阿里实时 WebSocket 协议与音频格式。", fontSize = 12.sp, color = TextSecondary)
+                Text(if (asrProvider == "deepseek") "DeepSeek 使用 HTTP 文件识别，录音最长120秒；自动封装 WAV，无需填写模型名。" else if (asrProvider == "xiaomi") "小米 MiMo 使用 HTTP 非流式识别，应用会将录音 PCM 自动封装为 WAV 后上传。" else "自填服务必须兼容阿里实时 WebSocket 协议与音频格式。", fontSize = 12.sp, color = TextSecondary)
                 Spacer(Modifier.height(10.dp))
-                LabeledField(if (asrProvider == "xiaomi") "API 地址" else "WebSocket 地址") { TextInput(asrBaseUrl, { asrBaseUrl = it }, ctx) }
+                LabeledField(if (asrProvider in listOf("xiaomi", "deepseek")) "API 地址" else "WebSocket 地址") { TextInput(asrBaseUrl, { asrBaseUrl = it }, ctx) }
                 Spacer(Modifier.height(10.dp))
-                LabeledField("模型配置") { TextInput(asrModelName, { asrModelName = it }, ctx, placeholder = "realtime|transcription") }
+                if (asrProvider != "deepseek") LabeledField("模型配置") { TextInput(asrModelName, { asrModelName = it }, ctx, placeholder = "realtime|transcription") }
                 Spacer(Modifier.height(10.dp))
                 LabeledField("API Key（空则复用聊天 API Key）") { SecretInput(asrApiKey, { asrApiKey = it }, ctx) }
                 asrKeyFallbackHint(asrBaseUrl.trim(), asrApiKey.trim(), apiKey.trim(), currentProviderId, asrProvider)?.let { hint ->
@@ -639,6 +663,7 @@ fun ModelSettingsScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
                     Text(hint, fontSize = 12.sp, color = if (hint.contains("401")) ErrorRed else TextSecondary)
                 }
                 TestButton("测试语音识别", testing == "asr", asrTestResult, onClick = ::testAsr)
+                }
             }
 
             SettingsSection("文字转语音 TTS") {

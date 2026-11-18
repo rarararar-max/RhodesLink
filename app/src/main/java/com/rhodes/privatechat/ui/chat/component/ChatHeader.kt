@@ -33,6 +33,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -210,9 +212,12 @@ fun ChatHeader(
                                 modifier = Modifier.size(18.dp))
                         }
                     }
-                    if (isLoading && !showGroupIcon) {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("输入中...", fontSize = 13.sp, color = Primary, fontStyle = FontStyle.Italic)
+                    if (!showGroupIcon) {
+                        // Reserve the same slot in both states; long titles and mode badges never shift.
+                        Box(Modifier.width(14.dp), contentAlignment = Alignment.Center) {
+                            if (isLoading) Box(Modifier.size(6.dp).clip(CircleShape).background(Primary)
+                                .semantics { contentDescription = "输入中" })
+                        }
                     }
                 }
                 if (subtitleText.isNotBlank()) {

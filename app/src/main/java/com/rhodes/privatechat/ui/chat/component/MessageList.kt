@@ -436,6 +436,15 @@ private fun MessageBubble(
 
     val context = LocalContext.current
     var showMenu by remember { mutableStateOf(false) }
+    var continuePending by remember { mutableStateOf(false) }
+    val latestContinue by androidx.compose.runtime.rememberUpdatedState(onContinue)
+    LaunchedEffect(continuePending) {
+        if (continuePending) {
+            // Material dropdown exit takes 120 ms. Let its popup disappear before loading updates.
+            delay(180)
+            try { latestContinue?.invoke() } finally { continuePending = false }
+        }
+    }
     var showRetryConfirm by remember { mutableStateOf(false) }
     val isMe = message.isMe
     val bubbleColor = if (isMe) BubbleMine else BubbleOther
@@ -559,7 +568,8 @@ private fun MessageBubble(
                 }
                 if (onContinue != null) {
                     DropdownMenuItem(text = { Row { Icon(Icons.Default.SkipNext, null, tint = Primary, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text("继续说", color = Primary) } },
-                        onClick = { onContinue(); showMenu = false })
+                        enabled = !continuePending,
+                        onClick = { showMenu = false; continuePending = true })
                 }
                 if (onPlay != null && !message.isMe && !message.isNarration && message.imageUri.isBlank()) {
                     DropdownMenuItem(text = { Row { Icon(Icons.Default.VolumeUp, null, tint = Primary, modifier = Modifier.size(16.dp)); Spacer(Modifier.width(8.dp)); Text("播放", color = Primary) } },

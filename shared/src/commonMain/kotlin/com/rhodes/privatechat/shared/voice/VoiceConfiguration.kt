@@ -6,6 +6,7 @@ import com.rhodes.privatechat.shared.settings.SettingsRepository
 data class VoiceProviderConfiguration(val endpoint: String, val model: String, val key: String = "")
 
 fun defaultAsrConfiguration(provider: String): VoiceProviderConfiguration = when (provider) {
+    "deepseek" -> VoiceProviderConfiguration("https://api.deepseek.com/v1/tools/asr", "deepseek-asr")
     "xiaomi" -> VoiceProviderConfiguration("https://api.xiaomimimo.com/v1/chat/completions", "mimo-v2.5-asr")
     "ali" -> VoiceProviderConfiguration("wss://dashscope.aliyuncs.com/api-ws/v1/realtime", "qwen3-asr-flash-realtime")
     else -> VoiceProviderConfiguration("", "")
@@ -20,7 +21,7 @@ fun defaultTtsConfiguration(provider: String): VoiceProviderConfiguration = when
 }
 
 fun SettingsRepository.hasAsrConfiguration(): Boolean =
-    asrBaseUrl.isNotBlank() && asrModelName.isNotBlank() && asrApiKey.ifBlank { apiKey }.isNotBlank()
+    effectiveAsrConfiguration().let { it.endpoint.isNotBlank() && it.key.isNotBlank() && (effectiveAsrProvider() == "deepseek" || it.model.isNotBlank()) }
 
 fun SettingsRepository.hasTtsConfiguration(): Boolean =
     ttsBaseUrl.isNotBlank() &&
@@ -76,8 +77,9 @@ fun createTtsGateway(endpoint: String, apiKey: String, modelName: String, provid
 }
 
 fun createAsrGateway(endpoint: String, apiKey: String, modelName: String, provider: String = ""): AsrGateway {
-    return if (endpoint.isNotBlank() && apiKey.isNotBlank() && modelName.isNotBlank()) {
-        if (provider == "xiaomi" || endpoint.contains("api.xiaomimimo.com")) XiaomiMimoAsrGateway(endpoint, apiKey, modelName)
+    return if (endpoint.isNotBlank() && apiKey.isNotBlank() && (provider == "deepseek" || modelName.isNotBlank())) {
+        if (provider == "deepseek") DeepSeekAsrGateway(endpoint, apiKey)
+        else if (provider == "xiaomi" || endpoint.contains("api.xiaomimimo.com")) XiaomiMimoAsrGateway(endpoint, apiKey, modelName)
         else AliyunDashScopeAsrGateway(endpoint = endpoint, apiKey = apiKey, modelName = modelName)
     } else {
         DisabledAsrGateway()
@@ -96,6 +98,11 @@ fun asrKeyFallbackHint(
     chatProvider: String = "",
     asrProvider: String = "",
 ): String? {
+    if (asrProvider == "deepseek") {
+        if (asrApiKey.isNotBlank() || chatApiKey.isBlank()) return null
+        return if (chatProvider == "deepseek") "未单独填写密钥，将复用 DeepSeek 文本密钥。"
+        else "请填写 DeepSeek 密钥；其他厂商的文本密钥不能用于 DeepSeek 语音识别。"
+    }
     if (asrProvider == "xiaomi" || endpoint.contains("api.xiaomimimo.com")) {
         if (asrApiKey.isNotBlank() || chatApiKey.isBlank()) return null
         return if (chatProvider == "xiaomi") "未单独填写语音识别密钥，将复用小米聊天密钥。"
@@ -108,4 +115,15 @@ fun asrKeyFallbackHint(
     } else {
         "未单独填写语音识别密钥，会复用聊天密钥；当前聊天服务商不是阿里云百炼，语音识别会返回 401，请在此单独填写百炼 Key。"
     }
+}
+
+fun SettingsRepository.effectiveAsrProvider(): String = if (asrMode == "auto") {
+    if (deepSeekAutoReady) "deepseek" else ""
+} else asrProvider
+fun SettingsRepository.effectiveAsrConfiguration(): VoiceProviderConfiguration = if (asrMode == "auto") {
+    if (deepSeekAutoReady) defaultAsrConfiguration("deepseek").copy(key=apiKey) else VoiceProviderConfiguration("", "")
+} else VoiceProviderConfiguration(asrBaseUrl, asrModelName, asrApiKey.ifBlank { apiKey })
+fun SettingsRepository.createConfiguredAsrGateway(): AsrGateway {
+    val c = effectiveAsrConfiguration()
+    return createAsrGateway(c.endpoint, c.key, c.model, effectiveAsrProvider())
 }

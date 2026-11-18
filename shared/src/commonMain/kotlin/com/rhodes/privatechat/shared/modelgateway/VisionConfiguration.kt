@@ -17,8 +17,11 @@ fun resolveVisionConfiguration(
     } else VisionConfiguration(chatProvider, "", "", "")
 } else VisionConfiguration(visionProvider, visionEndpoint, visionKey.ifBlank { chatKey }, visionModel)
 
-fun SettingsRepository.effectiveVisionConfiguration(): VisionConfiguration = resolveVisionConfiguration(
+fun SettingsRepository.effectiveVisionConfiguration(): VisionConfiguration {
+    if (visionMode == "auto" && provider == "deepseek" && !deepSeekAutoReady) return VisionConfiguration(provider, "", "", "")
+    return resolveVisionConfiguration(
     visionMode, provider, modelName, apiKey, visionProvider, visionBaseUrl, visionApiKey, visionModelName
 )
+}
 
 fun SettingsRepository.hasVisionConfiguration(): Boolean = effectiveVisionConfiguration().configured

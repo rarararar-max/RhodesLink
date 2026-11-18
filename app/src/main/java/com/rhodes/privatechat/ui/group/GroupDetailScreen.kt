@@ -1,5 +1,6 @@
 package com.rhodes.privatechat.ui.group
 
+import com.rhodes.privatechat.shared.voice.createConfiguredAsrGateway
 import com.rhodes.privatechat.shared.modelgateway.hasVisionConfiguration
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -108,7 +109,7 @@ fun GroupDetailScreen(viewModel: MainViewModel, groupName: String, onBack: () ->
                     return@launch
                 }
                 val pcm = withContext(Dispatchers.IO) { audioController.readPcmFromWav(clip.path) }
-                val asr = com.rhodes.privatechat.shared.voice.createAsrGateway(settings.asrBaseUrl, settings.asrApiKey.ifBlank { settings.apiKey }, settings.asrModelName, settings.asrProvider)
+                val asr = settings.createConfiguredAsrGateway()
                 val text = asr.transcribe(AsrRequest(pcm)).text.trim()
                 if (text.isBlank()) {
                     android.widget.Toast.makeText(ctx, "没有识别到文字", android.widget.Toast.LENGTH_SHORT).show()

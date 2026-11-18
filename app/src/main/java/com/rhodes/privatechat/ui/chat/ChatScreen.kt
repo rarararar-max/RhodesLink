@@ -1,4 +1,5 @@
 package com.rhodes.privatechat.ui.chat
+import com.rhodes.privatechat.shared.voice.createConfiguredAsrGateway
 import com.rhodes.privatechat.ui.common.skinBackground
 import com.rhodes.privatechat.shared.modelgateway.hasVisionConfiguration
 import com.rhodes.privatechat.shared.model.AiMessage
@@ -368,7 +369,7 @@ fun ChatScreen(
                     return@launch
                 }
                 val pcm = withContext(Dispatchers.IO) { audioController.readPcmFromWav(clip.path) }
-                val asr = com.rhodes.privatechat.shared.voice.createAsrGateway(settings.asrBaseUrl, settings.asrApiKey.ifBlank { settings.apiKey }, settings.asrModelName, settings.asrProvider)
+                val asr = settings.createConfiguredAsrGateway()
                 val text = asr.transcribe(AsrRequest(pcm)).text.trim()
                 if (text.isBlank()) {
                     Toast.makeText(context, "没有识别到文字", Toast.LENGTH_SHORT).show()

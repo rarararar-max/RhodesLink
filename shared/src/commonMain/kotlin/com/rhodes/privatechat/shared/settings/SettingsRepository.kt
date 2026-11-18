@@ -963,6 +963,20 @@ class SettingsRepository(private val settings: ObservableSettings) {
     }
 
     // Absence of this key must preserve legacy independent vision settings.
+    var asrMode: String
+        get() = getString("asr_mode", if (listOf("asr_provider", "asr_base_url", "asr_model_name", "asr_api_key").any { settings.hasKey(it) }) "independent" else "auto")
+        set(value) = putString("asr_mode", value)
+
+    // Kept in the same protected settings store as api_key; never logged or exported.
+    fun markDeepSeekChatVerified(key: String, model: String) {
+        settings.putString("deepseek_verified_key", key.trim())
+        settings.putString("deepseek_verified_model", model.trim())
+    }
+    val deepSeekAutoReady: Boolean
+        get() = provider == "deepseek" && apiKey.isNotBlank() &&
+            getString("deepseek_verified_key", "") == apiKey.trim() &&
+            getString("deepseek_verified_model", "") == modelName.trim()
+
     var visionMode: String
         get() = getString("vision_mode", if (settings.hasKey("provider") || settings.hasKey("api_key") ||
             settings.hasKey("model_name") || settings.hasKey("vision_provider") ||
@@ -1486,13 +1500,14 @@ class SettingsRepository(private val settings: ObservableSettings) {
         asrConfigurations: Map<String, com.rhodes.privatechat.shared.voice.VoiceProviderConfiguration> = emptyMap(),
         ttsConfigurations: Map<String, com.rhodes.privatechat.shared.voice.VoiceProviderConfiguration> = emptyMap(),
         vectorProtocol: String = this.vectorProtocol,
+        asrMode: String = this.asrMode,
     ) {
         val asrProfiles = voiceProviderConfigurations("asr") + asrConfigurations +
             (asrProvider to com.rhodes.privatechat.shared.voice.VoiceProviderConfiguration(asrBaseUrl, asrModelName, asrApiKey))
         val ttsProfiles = voiceProviderConfigurations("tts") + ttsConfigurations +
             (ttsProvider to com.rhodes.privatechat.shared.voice.VoiceProviderConfiguration(ttsBaseUrl, ttsModelName, ttsApiKey))
         val values = mapOf(
-            "vision_mode" to visionMode,
+            "vision_mode" to visionMode, "asr_mode" to asrMode,
             "asr_provider_configurations" to Json.encodeToString(asrProfiles),
             "tts_provider_configurations" to Json.encodeToString(ttsProfiles),
             "provider" to provider, "model_name" to normalizeDeepSeekModel(provider, modelName), "custom_url" to customUrl, "api_key" to apiKey,

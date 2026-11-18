@@ -1,5 +1,6 @@
 package com.rhodes.privatechat.shared.di
 
+import com.rhodes.privatechat.shared.voice.createConfiguredAsrGateway
 import com.rhodes.privatechat.shared.data.ChatRepository
 import com.rhodes.privatechat.shared.db.DatabaseWrapper
 import com.rhodes.privatechat.shared.knowledge.KnowledgeBaseImportService
@@ -51,8 +52,10 @@ fun sharedModule(databaseWrapper: DatabaseWrapper) = module {
     }
     single<AsrGateway> {
         val settings: SettingsRepository = get()
-        val key = settings.asrApiKey.ifBlank { settings.apiKey }
-        com.rhodes.privatechat.shared.voice.createAsrGateway(settings.asrBaseUrl, key, settings.asrModelName, settings.asrProvider)
+        object : AsrGateway {
+            override suspend fun transcribe(request: com.rhodes.privatechat.shared.voice.AsrRequest): com.rhodes.privatechat.shared.voice.AsrResult =
+                settings.createConfiguredAsrGateway().transcribe(request)
+        }
     }
     single { AIService(deepseekThinking = { get<SettingsRepository>().deepseekThinkingEnabled }) }
 }

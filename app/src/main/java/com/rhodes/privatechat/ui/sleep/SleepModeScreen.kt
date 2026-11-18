@@ -1,5 +1,6 @@
 package com.rhodes.privatechat.ui.sleep
 
+import com.rhodes.privatechat.shared.voice.createConfiguredAsrGateway
 import android.app.Activity
 import android.content.pm.ActivityInfo
 import android.util.Log
@@ -318,7 +319,7 @@ fun SleepModeScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
                 callState = com.rhodes.privatechat.shared.call.CallState.Thinking
                 transcript = "正在识别..."
                 val pcm = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { audio.readPcmFromWav(recorded.path) }
-                val asr = createAsrGateway(settings.asrBaseUrl, settings.asrApiKey.ifBlank { settings.apiKey }, settings.asrModelName, settings.asrProvider)
+                val asr = settings.createConfiguredAsrGateway()
                 val text = asr.transcribe(AsrRequest(pcm)).text.trim()
                 if (text.isBlank()) {
                     transcript = "未能识别，请重试"

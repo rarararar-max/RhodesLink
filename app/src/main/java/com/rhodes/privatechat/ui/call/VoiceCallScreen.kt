@@ -1,5 +1,6 @@
 package com.rhodes.privatechat.ui.call
 
+import com.rhodes.privatechat.shared.voice.createConfiguredAsrGateway
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -181,8 +182,7 @@ fun VoiceCallScreen(viewModel: MainViewModel, operator: Operator, sessionId: Str
                 transcript = "正在识别你说的话..."
                 val pcmBytes = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { audio.readPcmFromWav(path) }
                 Log.d("RHODES_DEBUG", "[VoiceCall] PCM 数据大小=${pcmBytes.size}")
-                val asrKey = settings.asrApiKey.ifBlank { settings.apiKey }
-                val text = com.rhodes.privatechat.shared.voice.createAsrGateway(settings.asrBaseUrl, asrKey, settings.asrModelName, settings.asrProvider).transcribe(AsrRequest(pcmBytes)).text.trim()
+                val text = settings.createConfiguredAsrGateway().transcribe(AsrRequest(pcmBytes)).text.trim()
                 Log.d("RHODES_DEBUG", "[VoiceCall] ASR 识别完成: length=${text.length}")
                 if (text.isBlank()) {
                     Log.w("RHODES_DEBUG", "[VoiceCall] ASR 结果为空")

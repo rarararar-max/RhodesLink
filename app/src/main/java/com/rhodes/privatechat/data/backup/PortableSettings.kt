@@ -6,7 +6,7 @@ import com.rhodes.privatechat.shared.settings.SettingsRepository
 /** Non-secret settings that define the user's experience and can safely move between devices. */
 object PortableSettings {
     private val stringKeys = setOf(
-        "user_name", "user_gender", "user_signature", "user_avatar_uri", "appearance_skin",
+        "user_name", "user_gender", "user_signature", "user_avatar_uri", "appearance_skin", "asr_mode",
         "memory_recall_mode", "personal_memory_reference_style", "context_mode",
         "status_location_pool", "status_activity_pool", "status_emotion_pool",
         "sleep_fixed_wake_text", "sleep_wake_text_mode",
